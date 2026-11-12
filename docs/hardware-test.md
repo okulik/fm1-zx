@@ -48,8 +48,8 @@ screen. It is not part of this plan and is written first when the device arrives
 
 - [ ] Install `build/fm1/fmzx.fwsc` from the stock firmware through a community installer
       (`docs/install.md`) **[owner's yes]**. The FM-1 restarts into the game picker.
-- [ ] The picker shows the four built-in games in the right colours (RGB444), all on black: the
-      "FM-1 ZX" title in bright yellow, the names and the "1/4" counter in white, the selected
+- [ ] The picker shows the three built-in games in the right colours (RGB444), all on black: the
+      "FM-1 ZX" title in bright yellow, the names and the "1/3" counter in white, the selected
       name in black on a bright-cyan bar; no scrambled pixels.
 
 ### LCD speed
@@ -67,7 +67,7 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] The border test plays a steady tone (about 976 Hz): no crackle, no dropouts, no drift in
       pitch over a minute.
 - [ ] MASTER changes the volume smoothly, down to silence.
-- [ ] Moon Caves's title music and Castaway's effects sound right, at every LCD speed.
+- [ ] Castaway's effects sound right, at every LCD speed.
 
 ### Controls
 

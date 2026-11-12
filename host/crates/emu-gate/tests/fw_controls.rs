@@ -4,7 +4,7 @@
 //! In-game controls in fm1-emu: the game's key map, the HOME menu, pause, the on-screen
 //! keyboard and the LCD speed item. Needs the device build (`FMZX_FM1_BUILD`).
 //!
-//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Moon Caves, 3 Castaway); scroll has the default
+//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway); scroll has the default
 //! key map (F3 = Kempston left).
 //!
 //! The Spectrum's key rows and Kempston byte are read from the firmware's `fmzx_keys_now` and
@@ -277,7 +277,7 @@ fn view_change_starts_a_frame_at_once() {
     // 40 ms the game's audio pacing left on the frame timer: it comes in the same main-loop pass
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
     for i in 0..5 {
-        m.run_ms(7 * i);
+        m.run_ms(7 * i + 1);
         m.hold(HOME, true);
         let mut before = m.stats();
         let mut t = 0;

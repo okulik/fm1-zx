@@ -60,16 +60,7 @@ with the games' attributions. Nothing in the repository itself is under the Apac
 
 ## The built-in games
 
-Both games are unmodified files with their licence texts and statements next to them.
-
-**Moon Caves** by Eugeny Novikov (2019), `third_party/games/mooncaves/`: code under MIT, art under
-CC-BY-SA 3.0 (SPDX `MIT AND CC-BY-SA-3.0`). Attribution: Moon Caves, code and graphics by Eugeny
-Novikov, <https://github.com/EugenyN/Moon Caves>.
-*Open question for the owner:* the game's own credits also name additional art by Lorc and
-Delapouite, a font from the NES game "I can remember", tiles from other retro games, the beeper
-title music "Grandstand Theme" by Chris Cowley and sound effects by Shiru. The repository states
-no separate licence for those parts; whether its MIT/CC-BY-SA statement covers them (or what
-their own terms are) is not settled.
+The game is an unmodified file with its licence texts and statements next to it.
 
 **Castaway** by Juan J. Martínez (2016), `third_party/games/castaway/`. Three licence statements
 exist:

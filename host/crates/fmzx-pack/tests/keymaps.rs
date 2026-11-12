@@ -46,13 +46,13 @@ fn games_toml_keymaps() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/games.toml");
     let m = parse_manifest(&std::fs::read_to_string(path).unwrap()).unwrap();
     let json = keymaps_json(&m).unwrap();
-    let ids: Vec<usize> = ["scroll", "border", "mooncaves", "castaway"].iter().map(|g| json.find(&format!("\"id\":\"{g}\"")).unwrap()).collect();
+    let ids: Vec<usize> = ["scroll", "border", "castaway"].iter().map(|g| json.find(&format!("\"id\":\"{g}\"")).unwrap()).collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "game order");
-    assert_eq!(json.matches("\"id\":").count(), 4);
+    assert_eq!(json.matches("\"id\":").count(), 3);
     assert!(entry(&json, "scroll", "note.F3").unwrap().ends_with("\"actions\":[\"kempston.left\"]}"));
     assert!(entry(&json, "castaway", "note.F3").unwrap().ends_with("\"actions\":[\"key.O\"]}"));
     assert!(entry(&json, "castaway", "note.G3").is_none());
-    assert!(entry(&json, "mooncaves", "note.B3").unwrap().ends_with("\"actions\":[\"key.M\"]}"));
+    assert!(entry(&json, "castaway", "note.B3").unwrap().ends_with("\"actions\":[\"key.H\"]}"));
     assert!(!json.contains("button.HOME") && !json.contains("button.PLAY"));
 }
 

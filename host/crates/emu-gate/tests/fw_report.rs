@@ -197,22 +197,17 @@ fn display_fps() {
     assert!(misses.is_empty(), "budgets missed: {misses:#?}");
 }
 
-/// The gameplay check is not vacuous: Moon Caves stopped at its map menu and Castaway at its title
-/// menu (the demos cut short) are in the game but send nothing, and the check rejects them.
+/// The gameplay check is not vacuous: Castaway stopped at its title menu (the demo cut short) is
+/// in the game but sends nothing, and the check rejects it.
 #[test]
 fn title_screens_are_not_gameplay() {
     let fw = Firmware::load(&build_dir());
     let pack = fmzx_pack::pack::build_pack(&repo().join("games/games.toml")).expect("build the game pack");
     let fw = fw.with_pack(&pack);
     let opt = BootOpt { rgb565: false, divider: 1 };
-    let (mooncaves, castaway) = std::thread::scope(|s| {
-        let g = s.spawn(|| measure(&fw, opt, 2, &parse_demo("button.OCT-@8000").unwrap(), SETTLE_MS, 10_000));
-        let c = s.spawn(|| measure(&fw, opt, 3, &parse_demo("button.OCT-@12000").unwrap(), SETTLE_MS, 10_000));
-        (g.join().unwrap(), c.join().unwrap())
-    });
-    for (id, m) in [("mooncaves map menu", mooncaves), ("castaway menu", castaway)] {
-        println!("{id}: rows per second {:?}", m.rows_per_second);
-        assert!(m.in_game, "{id}: not in the game view");
-        assert!(active_share(&m) < GAMEPLAY_MIN_SHARE, "{id} would pass as gameplay: {:?}", m.rows_per_second);
-    }
+    let m = measure(&fw, opt, 2, &parse_demo("button.OCT-@12000").unwrap(), SETTLE_MS, 10_000);
+    let id = "castaway menu";
+    println!("{id}: rows per second {:?}", m.rows_per_second);
+    assert!(m.in_game, "{id}: not in the game view");
+    assert!(active_share(&m) < GAMEPLAY_MIN_SHARE, "{id} would pass as gameplay: {:?}", m.rows_per_second);
 }

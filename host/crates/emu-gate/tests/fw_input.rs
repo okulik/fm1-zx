@@ -76,9 +76,9 @@ fn oct_buttons_scroll() {
 fn play_starts_game() {
     let mut m = boot();
     assert_eq!(m.stats().view, zx_sys::view::PICKER as u32);
-    m.turn(SELECT, 3);
+    m.turn(SELECT, 2);
     m.run_ms(200);
-    assert_eq!(play(&mut m), 3);
+    assert_eq!(play(&mut m), 2);
 }
 
 #[test]

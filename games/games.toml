@@ -15,37 +15,6 @@ id = "border"
 name = "Border and tone test"
 file = "test/border.sna"
 
-# Moon Caves: press 1 for keyboard control (OCT-). Player 1 W/A/S/D + F fire, player 2
-# I/J/K/L + O fire, N pause, M exit.
-# demo = "<key>@<ms after the game started>[+<hold ms>],...": the budget report's scripted input
-# (emu-gate budgets::parse_demo). Here: control menu 1 (keyboard), map menu 0 (begin), then
-# player 1 walks and fires.
-[[game]]
-id = "mooncaves"
-name = "Moon Caves"
-file = "../third_party/games/mooncaves/mooncaves48.tap"
-demo = "button.OCT-@8000, button.ARP@10000, note.A3@13000+1500, note.F3@16000+1500, note.G3@19000+1200, note.F#3@22000+1200, note.A3@25000+1500, note.C5@27000+200, note.F3@29000+1500, note.G3@32000+1200, note.A3@35000+1500"
-
-[game.keys]
-"note.F3" = "key.A"                     # player 1 left
-"note.F#3" = "key.W"                    # player 1 up
-"note.G3" = "key.S"                     # player 1 down
-"note.G#3" = "key.W"                    # player 1 up
-"note.A3" = "key.D"                     # player 1 right
-"note.C5" = "key.F"                     # player 1 fire
-"note.D5" = "key.F"
-"note.E5" = "key.F"
-"note.F5" = "key.F"
-"note.G5" = "key.F"
-"note.G4" = "key.J"                     # player 2 left
-"note.G#4" = "key.I"                    # player 2 up
-"note.A4" = "key.K"                     # player 2 down
-"note.A#4" = "key.I"                    # player 2 up
-"note.B4" = "key.L"                     # player 2 right
-"note.C#5" = "key.O"                    # player 2 fire
-"note.D#5" = "key.O"
-"note.B3" = "key.M"                     # exit game (N, pause, stays on F4)
-
 # Castaway: press 1 for keyboard control (OCT-). O/P left/right, Q jump, SPACE fire, H pause;
 # CAPS SHIFT + 0 (SEQ + ARP) ends the game.
 # demo: any key past the title, 1 (keyboard), then every second a short step left and right on

@@ -40,16 +40,6 @@ SPDX-License-Identifier = "0BSD"
 # Built-in games: unmodified files with their upstream licence texts; licence
 # statements quoted in each README.md.
 [[annotations]]
-path = [
-  "third_party/games/mooncaves/mooncaves48.tap",
-  "third_party/games/mooncaves/LICENSE",
-  "third_party/games/mooncaves/README.upstream.md",
-]
-precedence = "override"
-SPDX-FileCopyrightText = "2019 Eugeny Novikov"
-SPDX-License-Identifier = "MIT AND CC-BY-SA-3.0"
-
-[[annotations]]
 path = "third_party/games/castaway/castawy.tap"
 precedence = "override"
 SPDX-FileCopyrightText = "2016 Juan J. Martinez"

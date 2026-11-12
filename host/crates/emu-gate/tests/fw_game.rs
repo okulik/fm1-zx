@@ -4,7 +4,7 @@
 //! Running a game in fm1-emu: frame pacing, the LCD's picture of the Spectrum screen, and a
 //! game that fails to load. Needs the device build (`FMZX_FM1_BUILD`).
 //!
-//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Moon Caves, 3 Castaway).
+//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway).
 
 use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
 use fm1_core::Bus as _;
