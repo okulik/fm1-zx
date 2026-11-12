@@ -17,6 +17,8 @@ section:has(#h-play-from),
 #midi-in,
 #plugin,
 #stock,
+footer a[href="smk37/"],
+footer a[href="fm1-sid/"],
 .hint {
   display: none !important;
 }

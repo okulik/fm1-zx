@@ -38,6 +38,12 @@ edit 'new Float32Array(mem(), ui.panel_leds(), 41).set(frame.leds);' 'view(Float
 # no SMK-37 catalog next to this page (we drop smk37/): skip the twin lookup
 edit '    for (const s of (await (await fetch("smk37/firmwares.json")).json()).firmwares) if (s.fm1) twins.set(s.fm1, s.id);
 ' ''
+# the fresh package is never saved either: no snapshot of it goes to the IndexedDB store
+edit 'persistedSectors: record?.sectors || [], entry: DEV.key + f.id,' 'fresh: !!f.fresh, persistedSectors: record?.sectors || [], entry: DEV.key + f.id,'
+edit 'function saveSnapshot(session, flash, flashRevision) {
+' 'function saveSnapshot(session, flash, flashRevision) {
+  if (session.fresh) return Promise.resolve();
+'
 edit 'let mhz = Number(params.get("mhz") || stored("fm1.mhz") || 100);' 'let mhz = 240;'
 
 # index.html: our stylesheet and script

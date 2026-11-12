@@ -75,6 +75,10 @@ target builds (8,216 bytes, `third_party/felucca-loader/VENDORED.md`).
 
 ## Trying it in the browser first
 
+`tools/web-demo` runs the release package itself in a local browser page, with sound and the
+correct colours (see BUILDING.md, "Browser demo"). The rest of this section is the quick way
+with fm1-emu's public page and the preview package.
+
 fm1-emu's web page (<https://joakimeriksson.github.io/fm1-emu/>) can open a local package: use
 its control for opening your own `.fwsc` file (at the time of writing something like "open a
 local package"; the label may differ) and pick `build/fm1/fmzx-preview.fwsc`. The file is read in your browser;

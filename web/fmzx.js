@@ -157,6 +157,7 @@ export function install(win, doc) {
       select.addEventListener("change", () => {
         try { win.localStorage.setItem("fmzx.game", select.value); } catch { /* storage blocked */ }
         fill();
+        select.blur(); // back to playing from the keyboard (upstream's keydown skips selects)
       });
       fill();
     })

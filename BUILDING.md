@@ -103,12 +103,19 @@ fm1-emu's own web page: the emulator compiled to WebAssembly, with our one-entry
 (`web/firmwares.json`), the key maps (`fmzx-pack keymaps`) and the licences beside it. It fetches
 fm1-emu from `https://github.com/joakimeriksson/fm1-emu`, at the revision
 `host/crates/emu-gate/Cargo.toml` pins, into `build/fm1-emu` (a shallow fetch, repeated only when
-that revision changes), patches the fetched copy (`web/patch-emu.sh`: the stock audio PLL, so the
-firmware plays sound) and builds it with upstream's `web/build.sh` into `build/web`. Nothing from
-fm1-emu is committed. The server (`web/serve.py`) listens on 127.0.0.1 only and sends every file
-with `Cache-Control: no-store`. The smoke test boots the built page's wasm in node at 240 MHz and
-checks that the package boots, the picker draws and the border-and-tone test sounds; it needs
-node.
+that revision changes), patches the fetched copy and builds it with upstream's `web/build.sh` into
+`build/web`. Nothing from fm1-emu is committed. Every patch is exact text that must occur once, so a
+changed upstream fails the build loudly (`web/patch-edit.sh`). In the emulator (`web/patch-emu.sh`): the
+stock audio PLL, so the firmware plays sound, and an LCD that honours COLMOD, so RGB444 shows. In the
+page (`web/patch-page.sh`): the fresh package is never read from or saved to the browser's IndexedDB,
+the clock is pinned at 240 MHz, input hooks let our keyboard layer (`web/fmzx.js`, with the controls
+panel that lists a game's key map from `keymaps.json`) claim keys, the draw loop takes the panel
+pointer before the memory buffer, and the SMK-37 catalog is not fetched; `web/fmzx.css` hides the
+upstream extras (other devices, firmware list, MIDI, plugin and the like). The server (`web/serve.py`)
+listens on 127.0.0.1 only and sends every file with `Cache-Control: no-store`. `--check` runs the node
+unit tests (`web/fmzx.test.mjs`) and the smoke test (`web/check.mjs`), which boots the built wasm at
+240 MHz and checks that the package boots, the picker draws, the border-and-tone test sounds, the
+colours match the preview package, and every page patch is in place; it needs node.
 
 The wasm build uses the active Rust toolchain (`rustc --print sysroot` in `host/`), which needs
 the `wasm32-unknown-unknown` target. The script stops if it is missing and never installs

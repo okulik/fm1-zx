@@ -128,13 +128,12 @@ running above it.
 The game's other mapped inputs keep working under the keyboard; PLAY, SAVE, REC and the SELECT
 and ALGORITHM encoders belong to the keyboard while it is open.
 
-
 ## Computer keyboard (browser page)
 
 The browser test bench (`tools/web-demo`) maps the computer keyboard onto the FM-1 keys. The keys
 below are claimed by this project and win over fm1-emu's page; the arrows also turn SELECT and
 ALGORITHM, and Space is a note key (C5), not PLAY, so it can be the fire button. The page's side
-panel lists the active game's key map with the computer key for each FM-1 input.
+panel lists the key map of the game picked in it (it cannot see the running game), with the computer key for each FM-1 input.
 
 | Key | FM-1 input | Also |
 |-----|------------|------|

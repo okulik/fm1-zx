@@ -15,4 +15,5 @@ if ! command -v node >/dev/null 2>&1; then
     echo "web/check.sh: node not found; the smoke test needs Node.js (https://nodejs.org)" >&2
     exit 1
 fi
+node --test "$(dirname "$0")/fmzx.test.mjs"
 exec node "$(dirname "$0")/check.mjs" "$1" "$2"

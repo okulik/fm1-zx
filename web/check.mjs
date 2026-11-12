@@ -8,6 +8,8 @@
 // reference for the release package's RGB444.
 //   node web/check.mjs build/web build/fm1/fmzx-preview.fwsc
 import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const RATE = 44100;
 const QUANTUM = 128;
@@ -152,12 +154,14 @@ console.log(`speed: ${speed} emulated s / wall s (${span})`);
     [js, "if (window.fmzxKey?.(e, false)) return;"],
     [js, "const kept = f.fresh ? null : await keptEntry(f.id);"],
     [js, "let mhz = 240;"],
+    [js, "fresh: !!f.fresh, persistedSectors:"],
+    [js, "if (session.fresh) return Promise.resolve();"],
     [html, '<link rel="stylesheet" href="fmzx.css">'],
     [html, '<script type="module" src="fmzx.js"></script>'],
   ];
   const problems = want.filter(([s, t]) => count(s, t) !== 1).map(([, t]) => `not once: ${t}`);
   if (js.includes("smk37/firmwares.json")) problems.push("the SMK-37 catalog is still fetched");
-  if (js.includes("ui.memory.buffer, ui.panel")) problems.push("the memory buffer is read before the panel pointer");
+  if (js.includes("new Uint16Array(mem(), ui.panel_lcd()")) problems.push("the memory buffer is read before the panel pointer");
   if (js.includes('stored("fm1.mhz") || 100')) problems.push("the stored clock is still read");
   const fw = JSON.parse(text("firmwares.json"));
   const list = Array.isArray(fw) ? fw : fw.firmwares;
@@ -175,6 +179,11 @@ console.log(`speed: ${speed} emulated s / wall s (${span})`);
     }
   }
   if (existsSync(new URL("smk37", dir))) problems.push("smk37 is still there");
+  // the served package is the release one, not the preview colour reference
+  const served = readFileSync(new URL("fmzx.fwsc", dir));
+  if (served.equals(readFileSync(previewPath))) problems.push("fmzx.fwsc is the preview package");
+  const release = new URL("fmzx.fwsc", pathToFileURL(resolve(previewPath)));
+  if (existsSync(release) && !served.equals(readFileSync(release))) problems.push("fmzx.fwsc is not build/fm1/fmzx.fwsc");
   report("page", problems.length === 0, problems.join("; ") || "patches in place");
 }
 
