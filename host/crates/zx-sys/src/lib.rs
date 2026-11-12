@@ -136,7 +136,11 @@ impl Machine {
     pub fn load_sna(&mut self, data: &[u8]) -> Result<(), i32> {
         // SAFETY: the pointer and length describe `data`.
         match unsafe { sys::zx_load_sna(&mut *self.raw, data.as_ptr(), data.len() as u32) } {
-            0 => Ok(()),
+            0 => {
+                // the C side ejected the tape; free the buffer it was reading
+                self.tape = None;
+                Ok(())
+            }
             e => Err(e),
         }
     }
@@ -145,7 +149,11 @@ impl Machine {
     pub fn load_z80(&mut self, data: &[u8]) -> Result<(), i32> {
         // SAFETY: the pointer and length describe `data`.
         match unsafe { sys::zx_load_z80(&mut *self.raw, data.as_ptr(), data.len() as u32) } {
-            0 => Ok(()),
+            0 => {
+                // the C side ejected the tape; free the buffer it was reading
+                self.tape = None;
+                Ok(())
+            }
             e => Err(e),
         }
     }
@@ -165,6 +173,11 @@ impl Machine {
             }
             e => Err(e),
         }
+    }
+
+    /// True while the machine owns a tape buffer.
+    pub fn has_tape_buffer(&self) -> bool {
+        self.tape.is_some()
     }
 
     /// Removes the tape and drops the buffer the machine was reading.

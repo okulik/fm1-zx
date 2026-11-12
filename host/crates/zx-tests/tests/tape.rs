@@ -241,3 +241,13 @@ fn eject_restores_the_rom_routine() {
         assert!((0x0556..0x0600).contains(&pc), "real ROM routine runs, no trap: {pc:04X}");
     }
 }
+
+#[test]
+fn snapshot_load_drops_tape_buffer() {
+    let mut m = Machine::new();
+    m.tape_insert(&tap_block(0xFF, &[1, 2, 3])).unwrap();
+    assert!(m.has_tape_buffer());
+    let ram = vec![0u8; 0xC000];
+    m.load_sna(&make_sna(&sample_regs(), &ram, 3)).unwrap();
+    assert!(!m.has_tape_buffer(), "snapshot load ejects the tape and frees its buffer");
+}

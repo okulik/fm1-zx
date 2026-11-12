@@ -3,6 +3,11 @@
 
 # Bare-metal Z80 benchmark image, run later in the fm1-emu emulator.
 
+file(SIZE "${PROJECT_SOURCE_DIR}/third_party/zx-rom/48.rom" _zx_rom_size)
+if(NOT _zx_rom_size EQUAL 16384)
+  message(FATAL_ERROR "third_party/zx-rom/48.rom must be exactly 16384 bytes (found ${_zx_rom_size})")
+endif()
+
 fmzx_embed("${PROJECT_SOURCE_DIR}/third_party/zx-rom/48.rom" zx_rom_data
            "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c")
 

@@ -18,7 +18,7 @@ the z80test and `.tap` tests fail without it), then, from the repository root:
 
     cd host && cargo clippy --workspace --all-targets
 
-This needs a C compiler, libclang (for bindgen) and Rust 1.88 or newer. The
+This needs a C compiler, libclang (for bindgen) and Rust 1.88 or newer (1.99 for `emu-gate`). The
 Docker image below carries all of them.
 
 To run a test under AddressSanitizer and UBSan (macOS clang):
@@ -47,8 +47,10 @@ Outputs are under `build/fm1`:
 - `bench/fm1/zx_bench.{elf,bin,dis}`: the bare-metal Z80 benchmark image, run
   later in the fm1-emu emulator. The result block is at `0x01C80000`.
 
-Size of `zx_core` (Release, pi32v2): `.text` 13,478 bytes, plus 13,696 bytes of
-read-only data (contention and flag tables). The benchmark image is 43,564 bytes.
+Size of `zx_core` (Release, pi32v2, summed over the sections of `libzx_core.a`):
+`.text` 12,752 bytes plus 4,160 bytes of read-only data (the Z80 library's
+extra-clock table is 4,096 of them); it has no `.data` or `.bss`. The benchmark
+image (`zx_bench.bin`) is 45,320 bytes.
 
 The first image build can take several minutes (the toolchain and Rust are
 downloaded; on Apple silicon the image runs under amd64 emulation).
@@ -71,7 +73,7 @@ Pinned now: `jieli-linux-toolchains-20260730.1`.
 
 | Date | Commit | Measurement | Figure |
 | --- | --- | --- | --- |
-| 2026-11-12 | 2626e96 | Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.81 instructions per T-state |
-| 2026-11-12 | final-review fixes | same, after the fix wave | 13.90 instructions per T-state |
+| 2026-11-12 | 6c1f0e6 | Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.81 instructions per T-state |
+| 2026-11-12 | n/a | same, after the final-review fix wave | 13.90 instructions per T-state |
 
 Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate -- --ignored --nocapture`.

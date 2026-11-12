@@ -131,7 +131,7 @@ enum { ZX_OK = 0, ZX_ERR_FORMAT = -1, ZX_ERR_UNSUPPORTED = -2 };
 int zx_load_sna(zx_machine *m, const uint8_t *data, uint32_t len);
 int zx_load_z80(zx_machine *m, const uint8_t *data, uint32_t len);
 /* A successful load starts a clean game: it cancels a pending autostart
- * (releasing any keys it injected), ejects the tape, and makes the next frame
+ * (releasing all keys, injected or held), ejects the tape, and makes the next frame
  * report every screen line dirty. */
 
 /* Tape (tape.c). The whole .tap is validated by insert (every block's 2-byte
