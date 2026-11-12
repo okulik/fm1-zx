@@ -18,7 +18,7 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use sys::{zx_edge, zx_regs, ZX_ERR_FORMAT, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_ERR_FORMAT, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
 
 static ROM_48: &[u8; ZX_ROM_SIZE as usize] = include_bytes!("../../../../third_party/zx-rom/48.rom");
 
@@ -128,6 +128,14 @@ impl Machine {
         let mut out = [0u8; 256];
         // SAFETY: `out` is 256 bytes.
         unsafe { sys::zx_screen_line(&*self.raw, y as u32, out.as_mut_ptr()) };
+        out
+    }
+
+    /// LCD row `row` (0-239) as palette indices, cropped at `crop_x`.
+    pub fn compose_row(&self, row: usize, crop_x: usize) -> [u8; 240] {
+        let mut out = [0u8; 240];
+        // SAFETY: `raw` was initialised by zx_init; `out` is LCD_W bytes.
+        unsafe { sys::pix_compose_zx(&*self.raw, row as u32, crop_x as u32, out.as_mut_ptr()) };
         out
     }
 
@@ -270,5 +278,94 @@ impl Beeper {
     pub fn test_dc_block(&mut self, on: bool) {
         // SAFETY: `raw` was initialised by zx_beeper_init.
         unsafe { sys::zx_beeper_test_dc_block(&mut *self.raw, on as i32) }
+    }
+}
+
+/// Pixel formats of the LCD.
+#[derive(Clone, Copy)]
+pub enum PixFormat {
+    Rgb444,
+    Rgb565,
+}
+
+impl PixFormat {
+    fn raw(self) -> i32 {
+        match self {
+            PixFormat::Rgb444 => sys::PIX_RGB444 as i32,
+            PixFormat::Rgb565 => sys::PIX_RGB565 as i32,
+        }
+    }
+
+    /// Bytes of one 240-pixel row.
+    pub fn row_bytes(self) -> usize {
+        // SAFETY: pure function.
+        unsafe { sys::pix_row_bytes(self.raw()) as usize }
+    }
+
+    /// Packs 240 palette indices into panel bytes.
+    pub fn pack(self, idx: &[u8; 240]) -> Vec<u8> {
+        let mut out = vec![0u8; self.row_bytes()];
+        // SAFETY: `idx` is LCD_W bytes and `out` holds one packed row.
+        unsafe { sys::pix_pack(self.raw(), idx.as_ptr(), out.as_mut_ptr()) };
+        out
+    }
+}
+
+/// `150000 / (divider + 1)` bytes per frame.
+pub fn lcd_budget_bytes(divider: u32) -> u32 {
+    // SAFETY: pure function.
+    unsafe { sys::lcd_budget_bytes(divider) }
+}
+
+/// The LCD row scheduler.
+pub struct Sched {
+    raw: Box<sys::lcd_sched>,
+}
+
+impl Sched {
+    pub fn new(fmt: PixFormat) -> Self {
+        // SAFETY: lcd_sched is plain integers and arrays; all-zero is valid and
+        // lcd_sched_init sets it up.
+        let mut raw: Box<sys::lcd_sched> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        // SAFETY: `raw` is a valid lcd_sched.
+        unsafe { sys::lcd_sched_init(&mut *raw, fmt.row_bytes() as u32) };
+        Sched { raw }
+    }
+
+    pub fn mark(&mut self, row: usize, frame: u32) {
+        // SAFETY: `raw` was initialised by lcd_sched_init; out-of-range rows are ignored.
+        unsafe { sys::lcd_sched_mark(&mut *self.raw, row as u32, frame) }
+    }
+
+    pub fn mark_all(&mut self, frame: u32) {
+        // SAFETY: `raw` was initialised by lcd_sched_init.
+        unsafe { sys::lcd_sched_mark_all(&mut *self.raw, frame) }
+    }
+
+    pub fn begin_frame(&mut self, frame: u32, budget: u32) {
+        // SAFETY: `raw` was initialised by lcd_sched_init.
+        unsafe { sys::lcd_sched_begin_frame(&mut *self.raw, frame, budget) }
+    }
+
+    /// The next band as `(row0, rows)`, or `None` when nothing fits.
+    pub fn next_band(&mut self) -> Option<(usize, usize)> {
+        let (mut row0, mut rows) = (0u32, 0u32);
+        // SAFETY: `raw` was initialised by lcd_sched_init; both outputs are valid.
+        let got = unsafe { sys::lcd_sched_next_band(&mut *self.raw, &mut row0, &mut rows) };
+        (got != 0).then_some((row0 as usize, rows as usize))
+    }
+
+    pub fn pending(&self) -> usize {
+        // SAFETY: `raw` was initialised by lcd_sched_init.
+        unsafe { sys::lcd_sched_pending(&*self.raw) as usize }
+    }
+
+    /// The frame a row has been pending since, if it is pending.
+    pub fn pending_since(&self, row: usize) -> Option<u32> {
+        (self.raw.pending[row] != 0).then_some(self.raw.pending_since[row])
+    }
+
+    pub fn stats(&self) -> lcd_stats {
+        self.raw.stats
     }
 }

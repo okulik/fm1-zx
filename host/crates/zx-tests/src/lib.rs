@@ -3,7 +3,7 @@
 
 //! Shared fixtures for the machine tests.
 
-pub use zx_sys::{zx_edge, zx_regs, Beeper, Machine};
+pub use zx_sys::{lcd_budget_bytes, zx_edge, zx_regs, Beeper, Machine, PixFormat, Sched};
 
 /// Pokes `bytes` into the machine starting at `addr`.
 pub fn load(m: &mut Machine, addr: u16, bytes: &[u8]) {

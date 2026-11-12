@@ -21,9 +21,11 @@ const DEFINES: &[(&str, Option<&str>)] = &[
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let core_zx = root.join("core/zx");
+    let app = root.join("app");
     let includes = [
         root.join("core/z80"),
         core_zx.clone(),
+        app.clone(),
         root.join("third_party/Z80/API"),
         root.join("third_party/Z80InsnClock/API"),
     ];
@@ -86,6 +88,7 @@ fn main() {
 
     // Our code is held to -Werror; the vendored libraries are built as they are.
     build(c_files(&core_zx), "zxcore", true);
+    build(c_files(&app), "fmzxapp", true);
     build(
         vec![
             root.join("third_party/Z80/sources/Z80.c"),
@@ -97,6 +100,7 @@ fn main() {
 
     for dir in [
         core_zx.clone(),
+        app.clone(),
         root.join("core/z80"),
         root.join("third_party/Z80/API"),
         root.join("third_party/Z80InsnClock/API"),
@@ -106,9 +110,11 @@ fn main() {
 
     let mut gen = bindgen::Builder::default()
         .header(core_zx.join("zx.h").to_string_lossy())
-        .allowlist_function("zx_.*")
-        .allowlist_type("zx_.*")
-        .allowlist_var("ZX_.*")
+        .header(app.join("pixels.h").to_string_lossy())
+        .header(app.join("lcdsched.h").to_string_lossy())
+        .allowlist_function("(zx|pix|lcd)_.*")
+        .allowlist_type("(zx|pix|lcd)_.*")
+        .allowlist_var("(ZX|LCD|PIX)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {
