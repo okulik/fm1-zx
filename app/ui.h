@@ -24,6 +24,9 @@ void ui_text(unsigned col, unsigned row, const char *s, uint8_t ink, uint8_t pap
 void ui_get_text(unsigned row, char out[UI_COLS + 1u]);
 /* 240 palette indices of LCD row `lcd_row` (0-239). */
 void ui_compose_row(unsigned lcd_row, uint8_t idx[LCD_W]);
+/* Makes every LCD row count as changed at the next ui_dirty_rows, for when the LCD no longer
+ * shows the grid (the game was drawn over it). menu.c calls it on every view change. */
+void ui_invalidate(void);
 /* Bitmap of LCD rows changed since the last call (bit y&7 of byte y>>3); returns how many.
  * A row is changed when its text cell differs from what the previous call reported. */
 uint32_t ui_dirty_rows(uint8_t rows[LCD_ROWS / 8u]);

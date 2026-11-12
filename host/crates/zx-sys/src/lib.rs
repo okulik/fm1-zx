@@ -708,6 +708,11 @@ impl Menu {
         unsafe { sys::menu_set_divider(&mut *self.raw, d) }
     }
 
+    pub fn runs_game(&self) -> bool {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_runs_game(&*self.raw) != 0 }
+    }
+
     pub fn row_is_ui(&self, lcd_row: usize) -> bool {
         // SAFETY: `raw` was initialised by menu_init.
         unsafe { sys::menu_row_is_ui(&*self.raw, lcd_row as u32) != 0 }

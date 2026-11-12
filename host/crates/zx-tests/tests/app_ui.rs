@@ -304,3 +304,63 @@ fn golden_picker_hash() {
     }
     golden("picker_3_games", &format!("{:08x}", fnv1a(&all)));
 }
+
+fn draw_and_count(ui: &mut Ui, m: &Menu) -> u32 {
+    ui.draw(m, None);
+    ui.dirty_rows().0
+}
+
+#[test]
+fn view_changes_repaint_everything() {
+    let mut ui = Ui::new();
+    let mut m = Menu::new(1);
+    // menu: resume, HOME again
+    m.set_view(view::MENU);
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+    assert_eq!(draw_and_count(&mut ui, &m), 0);
+    m.event(ev::OK); // resume
+    assert_eq!(m.view(), view::GAME);
+    m.event(ev::HOME);
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+    // paused off and on
+    m.event(ev::HOME); // resume
+    assert_eq!(m.view(), view::GAME);
+    m.event(ev::PAUSE);
+    assert_eq!(m.view(), view::PAUSED);
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+    m.event(ev::PAUSE);
+    m.event(ev::PAUSE);
+    assert_eq!(m.view(), view::PAUSED);
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+    // OSK close and reopen
+    m.set_view(view::OSK);
+    draw_and_count(&mut ui, &m);
+    m.event(ev::HOME);
+    m.set_view(view::OSK);
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+    // leave back to the same picker state, and a message
+    m.set_view(view::PICKER);
+    draw_and_count(&mut ui, &m);
+    m.set_view(view::GAME);
+    m.set_view(view::PICKER);
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+    m.message("Load failed");
+    assert_eq!(draw_and_count(&mut ui, &m), 240);
+}
+
+#[test]
+fn runs_game_only_in_game_and_osk() {
+    let mut m = Menu::new(1);
+    for (v, runs) in [
+        (view::PICKER, false),
+        (view::GAME, true),
+        (view::PAUSED, false),
+        (view::MENU, false),
+        (view::KEYS, false),
+        (view::OSK, true),
+        (view::MESSAGE, false),
+    ] {
+        m.set_view(v);
+        assert_eq!(m.runs_game(), runs, "view {v}");
+    }
+}

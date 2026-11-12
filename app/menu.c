@@ -86,6 +86,7 @@ int menu_view(const menu *mn)
 
 void menu_set_view(menu *mn, int view)
 {
+    ui_invalidate();
     mn->view = (uint8_t)view;
     if (view == VIEW_MENU) {
         mn->item = 0;
@@ -105,12 +106,18 @@ void menu_message(menu *mn, const char *text)
         i++;
     }
     mn->msg[i] = '\0';
+    ui_invalidate();
     mn->view = VIEW_MESSAGE;
 }
 
 void menu_set_divider(menu *mn, unsigned d)
 {
     mn->divider = (uint8_t)d;
+}
+
+int menu_runs_game(const menu *mn)
+{
+    return mn->view == VIEW_GAME || mn->view == VIEW_OSK;
 }
 
 int menu_row_is_ui(const menu *mn, unsigned lcd_row)
@@ -274,7 +281,7 @@ static unsigned next_divider(unsigned d)
     return d == 0u ? 4u : d >= 3u ? 2u : d - 1u;
 }
 
-int menu_event(menu *mn, int ev, uint32_t *arg)
+static int event_inner(menu *mn, int ev, uint32_t *arg)
 {
     *arg = 0;
     switch (mn->view) {
@@ -389,6 +396,16 @@ int menu_event(menu *mn, int ev, uint32_t *arg)
         }
         return CMD_NONE;
     }
+}
+
+int menu_event(menu *mn, int ev, uint32_t *arg)
+{
+    uint8_t before = mn->view;
+    int c = event_inner(mn, ev, arg);
+    if (mn->view != before) {
+        ui_invalidate();
+    }
+    return c;
 }
 
 /* ---- drawing ---- */

@@ -70,6 +70,11 @@ void ui_compose_row(unsigned lcd_row, uint8_t idx[LCD_W])
     }
 }
 
+void ui_invalidate(void)
+{
+    memset(shown_ch, 0, sizeof shown_ch);
+}
+
 uint32_t ui_dirty_rows(uint8_t rows[LCD_ROWS / 8u])
 {
     uint32_t n = 0;

@@ -31,6 +31,11 @@ void menu_set_view(menu *mn, int view);
 void menu_message(menu *mn, const char *text);
 /* The LCD speed shown in the menu; CMD_DIVIDER cycles from it 4 -> 2 -> 1 -> 0 -> 4. */
 void menu_set_divider(menu *mn, unsigned d);
+/* Nonzero only in VIEW_GAME and VIEW_OSK. The device runs Spectrum frames only while this is
+ * nonzero and releases all Spectrum keys and Kempston whenever it is zero (state-based, so no
+ * transition can be missed). Every view change also invalidates the ui grid (ui_invalidate), so
+ * the next draw repaints even when its content is identical to the last one. */
+int menu_runs_game(const menu *mn);
 /* Nonzero when LCD row 0-239 shows the UI grid: picker/menu/keys/message every row, game none,
  * paused rows 0-23, OSK rows 200-239. */
 int menu_row_is_ui(const menu *mn, unsigned lcd_row);
