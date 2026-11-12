@@ -158,6 +158,18 @@ console.log(`speed: ${speed} emulated s / wall s (${span})`);
   const fw = JSON.parse(text("firmwares.json"));
   const list = Array.isArray(fw) ? fw : fw.firmwares;
   if (!list?.some((f) => f.id === "fmzx" && f.fresh === true)) problems.push("fmzx is not fresh");
+  for (const id of ["limits", "how", "credits"]) {
+    if (!html.includes(`id="${id}"`)) problems.push(`no #${id} in index.html`);
+  }
+  if (!existsSync(new URL("fmzx.js", dir))) problems.push("no fmzx.js");
+  if (!existsSync(new URL("fmzx.css", dir))) problems.push("no fmzx.css");
+  else {
+    // the parts to keep (#guide holds them) are never a selector of their own
+    const sel = text("fmzx.css").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\{[^}]*\}/g, ",");
+    for (const s of sel.split(",").map((t) => t.trim())) {
+      if (["#guide", "#limits", "#how", "#credits"].includes(s)) problems.push(`css hides ${s}`);
+    }
+  }
   if (existsSync(new URL("smk37", dir))) problems.push("smk37 is still there");
   report("page", problems.length === 0, problems.join("; ") || "patches in place");
 }
