@@ -48,9 +48,9 @@ screen. It is not part of this plan and is written first when the device arrives
 
 - [ ] Install `build/fm1/fmzx.fwsc` from the stock firmware through a community installer
       (`docs/install.md`) **[owner's yes]**. The FM-1 restarts into the game picker.
-- [ ] The picker shows the four built-in games in the right colours (RGB444): the yellow "FM-1
-      ZX" title on blue, the names in white on black, the selected one on cyan; no scrambled
-      pixels.
+- [ ] The picker shows the four built-in games in the right colours (RGB444), all on black: the
+      "FM-1 ZX" title in bright yellow, the names and the "1/4" counter in white, the selected
+      name in black on a bright-cyan bar; no scrambled pixels.
 
 ### LCD speed
 
