@@ -7,7 +7,7 @@
 // all pass, 1 otherwise. The preview package (RGB565) boots in a second instance as the colour
 // reference for the release package's RGB444.
 //   node web/check.mjs build/web build/fm1/fmzx-preview.fwsc
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const RATE = 44100;
 const QUANTUM = 128;
@@ -136,6 +136,30 @@ console.log(`speed: ${speed} emulated s / wall s (${span})`);
       `${zeroMismatch} pixels lit in only one package, worst |dR5| ${worst[0]} |dG6| ${worst[1]} |dB5| ${worst[2]}, ${seen.size} distinct colours`,
     );
   }
+}
+
+// page: the text patches of web/patch-page.sh are all in place (each once)
+{
+  const text = (f) => readFileSync(new URL(f, dir), "utf8");
+  const js = text("main.js");
+  const html = text("index.html");
+  const count = (s, t) => s.split(t).length - 1;
+  const want = [
+    [js, "window.fmzxInput = {"],
+    [js, "if (window.fmzxKey?.(e, true)) return;"],
+    [js, "if (window.fmzxKey?.(e, false)) return;"],
+    [js, "const kept = f.fresh ? null : await keptEntry(f.id);"],
+    [js, "let mhz = 240;"],
+    [html, '<link rel="stylesheet" href="fmzx.css">'],
+    [html, '<script type="module" src="fmzx.js"></script>'],
+  ];
+  const problems = want.filter(([s, t]) => count(s, t) !== 1).map(([, t]) => `not once: ${t}`);
+  if (js.includes('stored("fm1.mhz") || 100')) problems.push("the stored clock is still read");
+  const fw = JSON.parse(text("firmwares.json"));
+  const list = Array.isArray(fw) ? fw : fw.firmwares;
+  if (!list?.some((f) => f.id === "fmzx" && f.fresh === true)) problems.push("fmzx is not fresh");
+  if (existsSync(new URL("smk37", dir))) problems.push("smk37 is still there");
+  report("page", problems.length === 0, problems.join("; ") || "patches in place");
 }
 
 process.exit(failed ? 1 : 0);

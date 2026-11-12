@@ -1,0 +1,19 @@
+/* SPDX-FileCopyrightText: 2026 FM-1 ZX contributors */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* What the demo hides of upstream's page: it runs one firmware at one clock. */
+.devices,
+.sitenav,
+#fwlabel,
+label:has(#mhz),
+.file,
+#perfwarn-fix,
+section:has(#h-save),
+section:has(#h-play-from),
+#firmwares,
+#guide,
+#plugin,
+#stock,
+.hint {
+  display: none !important;
+}

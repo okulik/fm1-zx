@@ -115,6 +115,7 @@ sed "s/@VERSION@/$short/" "$root/web/firmwares.json" >"$out/firmwares.json"
 printf '{"commit":"%s","short":"%s","commit_date":"%s","dirty":%s,"built":"%s","fm1_emu":"%s"}\n' \
     "$commit" "$short" "$commit_date" "$dirty" "$built" "$rev" >"$out/version.json"
 "$root/host/target/release/fmzx-pack" keymaps "$root/games/games.toml" -o "$out/keymaps.json"
+cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
 "$root/web/patch-page.sh" "$out"
 mkdir -p "$out/licenses"
 cp "$root/LICENSES/GPL-3.0-or-later.txt" "$out/licenses/GPL-3.0-or-later.txt"
