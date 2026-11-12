@@ -364,3 +364,24 @@ fn runs_game_only_in_game_and_osk() {
         assert_eq!(m.runs_game(), runs, "view {v}");
     }
 }
+
+#[test]
+fn menu_calls_wait_for_the_ui() {
+    // A Menu on another thread (another test) must not invalidate the grid while a Ui is held:
+    // its set_view waits until the Ui is dropped.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut ui = Ui::new();
+    assert_eq!(ui.dirty_rows().0, 240);
+    let other = std::thread::spawn(move || {
+        rx.recv().unwrap();
+        Menu::new(1).set_view(view::MENU);
+    });
+    tx.send(()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(ui.dirty_rows().0, 0, "another thread's menu call invalidated the held grid");
+    drop(ui);
+    other.join().unwrap();
+    // the same thread may use a Ui and a Menu together
+    let _ui = Ui::new();
+    Menu::new(1).set_view(view::MENU);
+}

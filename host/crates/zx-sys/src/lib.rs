@@ -600,8 +600,26 @@ pub mod cmd {
 pub const UI_COLS: usize = sys::UI_COLS as usize;
 pub const UI_ROWS: usize = sys::UI_ROWS as usize;
 
-/// The C side has one text grid; the lock serialises users of it (tests run in parallel).
+/// The C side has one text grid, which `Ui` and the menu calls that invalidate it (`menu_event`,
+/// `menu_set_view`, `menu_message`) all touch; the lock serialises them (tests run in parallel).
+/// A `Ui` holds it for its lifetime; every `Menu` call holds it for the call, unless its thread
+/// already holds a `Ui` (UI_HELD), so a test can use a `Ui` and a `Menu` together.
 static UI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+thread_local! {
+    /// This thread holds a `Ui` (and so UI_LOCK). `Ui` is not `Send`: it stays on this thread.
+    static UI_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` holding UI_LOCK: taken for the call, or already held by this thread's `Ui`.
+fn with_ui_lock<R>(f: impl FnOnce() -> R) -> R {
+    if UI_HELD.with(|h| h.get()) {
+        f()
+    } else {
+        let _guard = UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+}
 
 /// Exclusive access to the text grid. Taking it re-initialises the grid.
 pub struct Ui {
@@ -609,8 +627,11 @@ pub struct Ui {
 }
 
 impl Ui {
+    /// Panics if this thread already holds a `Ui` (waiting for it would never end).
     pub fn new() -> Self {
+        assert!(!UI_HELD.with(|h| h.get()), "this thread already holds the Ui");
         let guard = UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        UI_HELD.with(|h| h.set(true));
         // SAFETY: the ROM is a full 16 KiB image.
         unsafe { sys::ui_init(ROM_48.as_ptr()) };
         Ui { _guard: guard }
@@ -665,7 +686,14 @@ impl Default for Ui {
     }
 }
 
-/// The menu state machine.
+impl Drop for Ui {
+    fn drop(&mut self) {
+        // runs before `_guard` is dropped, so UI_HELD never claims a lock this thread lacks
+        UI_HELD.with(|h| h.set(false));
+    }
+}
+
+/// The menu state machine. Its calls hold UI_LOCK (see there): some of them invalidate the grid.
 pub struct Menu {
     raw: Box<sys::menu>,
 }
@@ -682,8 +710,8 @@ impl Menu {
     /// Feeds an event; returns `(command, arg)`.
     pub fn event(&mut self, ev: i32) -> (i32, u32) {
         let mut arg = 0u32;
-        // SAFETY: both pointers are valid.
-        let c = unsafe { sys::menu_event(&mut *self.raw, ev, &mut arg) };
+        // SAFETY: both pointers are valid; the lock covers the grid menu_event may invalidate.
+        let c = with_ui_lock(|| unsafe { sys::menu_event(&mut *self.raw, ev, &mut arg) });
         (c, arg)
     }
 
@@ -693,14 +721,14 @@ impl Menu {
     }
 
     pub fn set_view(&mut self, v: i32) {
-        // SAFETY: `raw` was initialised by menu_init.
-        unsafe { sys::menu_set_view(&mut *self.raw, v) }
+        // SAFETY: `raw` was initialised by menu_init; the lock covers the grid it invalidates.
+        with_ui_lock(|| unsafe { sys::menu_set_view(&mut *self.raw, v) })
     }
 
     pub fn message(&mut self, text: &str) {
         let c = std::ffi::CString::new(text).expect("no NUL in text");
-        // SAFETY: `c` is NUL-terminated.
-        unsafe { sys::menu_message(&mut *self.raw, c.as_ptr()) }
+        // SAFETY: `c` is NUL-terminated; the lock covers the grid menu_message invalidates.
+        with_ui_lock(|| unsafe { sys::menu_message(&mut *self.raw, c.as_ptr()) })
     }
 
     pub fn set_divider(&mut self, d: u32) {
