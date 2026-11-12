@@ -38,6 +38,7 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
     cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release --workspace
 
     tools/make-packages                                           # build/fm1/fmzx.fwsc, fmzx-preview.fwsc
+    tools/web-demo                                                # the release package in fm1-emu's web page
 
 ## Documents
 

@@ -1,0 +1,1 @@
+{"default":"fmzx","firmwares":[{"id":"fmzx","name":"FM-1 ZX","version":"@VERSION@","author":"FM-1 ZX contributors","license":"GPL-3.0-or-later","about":"A ZX Spectrum 48K for the FM-1: the game picker, then play.","repo":"https://github.com/okulik/fm1-zx","package":"fmzx.fwsc","fresh":true}]}

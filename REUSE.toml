@@ -11,6 +11,7 @@ path = [
   "games/test/scroll.sna",
   "games/test/border.sna",
   "docs/superpowers/**",
+  "web/*.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 FM-1 ZX contributors"

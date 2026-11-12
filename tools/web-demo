@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The browser demo: our release package (build/fm1/fmzx.fwsc) in fm1-emu's web page, built into
+# build/web and served on 127.0.0.1 (BUILDING.md, "Browser demo").
+#   tools/web-demo                  build everything into build/web and serve on 127.0.0.1:8642
+#   tools/web-demo --check          build, then run the smoke test (web/check.sh) and exit with it
+#   tools/web-demo --no-serve       build only
+#   tools/web-demo --skip-firmware  no device builds (Docker): repack build/fm1's firmware offline
+#   tools/web-demo --port N         serve on another port
+# Steps: the packages (tools/make-packages); fm1-emu fetched at the revision
+# host/crates/emu-gate/Cargo.toml pins into build/fm1-emu (shallow, only when HEAD differs),
+# restored to pristine and patched (web/patch-emu.sh); upstream's web/build.sh with the active
+# Rust toolchain (it needs the wasm32-unknown-unknown target); our files on top, the page
+# patched (web/patch-page.sh); then serve (web/serve.py) or check.
+set -eu -o pipefail
+
+usage() {
+    sed -n '5,11s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+}
+
+check=0
+serve=1
+skip_firmware=0
+port=8642
+while [ $# -gt 0 ]; do
+    case $1 in
+    --check) check=1 ;;
+    --no-serve) serve=0 ;;
+    --skip-firmware) skip_firmware=1 ;;
+    --port)
+        [ $# -ge 2 ] || usage
+        port=$2
+        shift
+        ;;
+    -h | --help) usage ;;
+    *)
+        echo "tools/web-demo: unknown option: $1" >&2
+        usage
+        ;;
+    esac
+    shift
+done
+case $port in
+'' | *[!0-9]*)
+    echo "tools/web-demo: --port takes a number, not '$port'" >&2
+    exit 2
+    ;;
+esac
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+emu="$root/build/fm1-emu"
+out="$root/build/web"
+fm1="$root/build/fm1"
+repo_url=https://github.com/joakimeriksson/fm1-emu
+
+die() {
+    echo "tools/web-demo: $*" >&2
+    exit 1
+}
+
+# 1. the packages (the release one is served; with --skip-firmware the device builds are reused)
+if [ "$skip_firmware" = 1 ]; then
+    FMZX_SKIP_DEVICE_BUILD=1 "$root/tools/make-packages" --offline
+else
+    "$root/tools/make-packages"
+fi
+
+# 2. fm1-emu at the revision emu-gate pins
+revs=$(sed -n 's|.*"https://github.com/joakimeriksson/fm1-emu", rev = "\([0-9a-f]\{40\}\)".*|\1|p' \
+    "$root/host/crates/emu-gate/Cargo.toml" | sort -u)
+[ -n "$revs" ] || die "no fm1-emu rev in host/crates/emu-gate/Cargo.toml"
+[ "$(printf '%s\n' "$revs" | wc -l)" -eq 1 ] ||
+    die "several fm1-emu revs in host/crates/emu-gate/Cargo.toml"
+rev=$revs
+if [ ! -d "$emu/.git" ]; then
+    git init -q "$emu"
+    git -C "$emu" remote add origin "$repo_url"
+fi
+if [ "$(git -C "$emu" rev-parse -q --verify HEAD || true)" != "$rev" ]; then
+    echo "fetching fm1-emu $rev from $repo_url"
+    git -C "$emu" fetch -q --depth 1 origin "$rev"
+    git -C "$emu" checkout -q -f --detach FETCH_HEAD
+fi
+[ "$(git -C "$emu" rev-parse HEAD)" = "$rev" ] || die "build/fm1-emu: HEAD is not $rev"
+# pristine sources (ignored files, such as cargo's target/, stay), then our patches
+git -C "$emu" checkout -q -f
+git -C "$emu" clean -q -fd
+"$root/web/patch-emu.sh" "$emu"
+
+# 3. upstream's build with the active toolchain
+tc=$(cd "$root/host" && rustc --print sysroot)
+[ -d "$tc/lib/rustlib/wasm32-unknown-unknown" ] ||
+    die "the Rust toolchain at $tc has no wasm32-unknown-unknown target;" \
+        "add it with: rustup target add wasm32-unknown-unknown"
+# (upstream's own warnings off: nothing for us to act on)
+RUSTUP_TC="$tc" RUSTFLAGS="${RUSTFLAGS:-} -Awarnings" bash "$emu/web/build.sh" "$out" >/dev/null
+rm -rf "$out/smk37" "$out/og.png"
+
+# 4. our files on top
+commit=$(git -C "$root" rev-parse HEAD)
+short=$(git -C "$root" rev-parse --short HEAD)
+commit_date=$(git -C "$root" log -1 --format=%cI)
+dirty=false
+if [ -n "$(git -C "$root" status --porcelain)" ]; then
+    dirty=true
+    short="$short+dirty"
+fi
+built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+cp "$fm1/fmzx.fwsc" "$out/fmzx.fwsc"
+sed "s/@VERSION@/$short/" "$root/web/firmwares.json" >"$out/firmwares.json"
+printf '{"commit":"%s","short":"%s","commit_date":"%s","dirty":%s,"built":"%s","fm1_emu":"%s"}\n' \
+    "$commit" "$short" "$commit_date" "$dirty" "$built" "$rev" >"$out/version.json"
+"$root/host/target/release/fmzx-pack" keymaps "$root/games/games.toml" -o "$out/keymaps.json"
+"$root/web/patch-page.sh" "$out"
+mkdir -p "$out/licenses"
+cp "$root/LICENSES/GPL-3.0-or-later.txt" "$out/licenses/GPL-3.0-or-later.txt"
+cp "$emu/LICENSE" "$out/licenses/fm1-emu-MIT.txt"
+echo "$out: fm1-emu $rev with FM-1 ZX $short"
+
+# 5. check or serve
+if [ "$check" = 1 ]; then
+    exec "$root/web/check.sh" "$out"
+fi
+if [ "$serve" = 1 ]; then
+    exec python3 "$root/web/serve.py" "$out" "$port"
+fi

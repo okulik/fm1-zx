@@ -90,6 +90,34 @@ image (`zx_bench.bin`) is 45,320 bytes.
 The first image build can take several minutes (the toolchain and Rust are
 downloaded; on Apple silicon the image runs under amd64 emulation).
 
+## Browser demo
+
+    tools/web-demo                  # build into build/web, serve on http://127.0.0.1:8642
+    tools/web-demo --check          # build, then run the headless smoke test (web/check.sh)
+    tools/web-demo --no-serve       # build only
+    tools/web-demo --skip-firmware  # no Docker: repack build/fm1's device build offline
+    tools/web-demo --port N         # serve on another port
+
+puts the release package (`build/fm1/fmzx.fwsc`, as `tools/make-packages` makes it) into
+fm1-emu's own web page: the emulator compiled to WebAssembly, with our one-entry catalog
+(`web/firmwares.json`), the key maps (`fmzx-pack keymaps`) and the licences beside it. It fetches
+fm1-emu from `https://github.com/joakimeriksson/fm1-emu`, at the revision
+`host/crates/emu-gate/Cargo.toml` pins, into `build/fm1-emu` (a shallow fetch, repeated only when
+that revision changes), patches the fetched copy (`web/patch-emu.sh`: the stock audio PLL, so the
+firmware plays sound) and builds it with upstream's `web/build.sh` into `build/web`. Nothing from
+fm1-emu is committed. The server (`web/serve.py`) listens on 127.0.0.1 only and sends every file
+with `Cache-Control: no-store`. The smoke test boots the built page's wasm in node at 240 MHz and
+checks that the package boots, the picker draws and the border-and-tone test sounds; it needs
+node.
+
+The wasm build uses the active Rust toolchain (`rustc --print sysroot` in `host/`), which needs
+the `wasm32-unknown-unknown` target. The script stops if it is missing and never installs
+anything; add it with `rustup target add wasm32-unknown-unknown`.
+
+Speed: the smoke test prints emulated seconds per wall second (about 1.7 in node on the picker
+and the tone test, 2026-11-12). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
+a browser, and games cost more than the picker: the page is a preview, not a promise of real time.
+
 ## Toolchain pin
 
 The JieLi toolchain comes from `https://pkgman.jieliapp.com/s/linux-toolchain`
