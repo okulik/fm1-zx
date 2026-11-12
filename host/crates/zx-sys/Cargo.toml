@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "zx-sys"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[build-dependencies]
+bindgen = "0.71"
+cc = "1"
+
+[lints]
+workspace = true
