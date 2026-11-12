@@ -90,12 +90,27 @@ static km_state kms;
 static struct {
     uint8_t loaded;      /* fmzx_machine holds a game */
     uint8_t crop_x;
-    uint8_t keys[8];     /* applied before each frame (zx_set_keys) */
-    uint8_t kempston;
+    uint8_t rows[8];     /* Spectrum key rows, applied before each frame (zx_set_keys) */
+    uint8_t kempston;    /* applied before each frame (zx_set_kempston) */
+    keymap keys;         /* the game's key map, from its pack entry */
     uint32_t index;      /* pack entry */
     uint32_t frames;
     uint8_t dirty[LCD_ROWS / 8u]; /* LCD rows the last frame changed */
 } game;
+/* The FM-1 inputs for the next frame's km_apply: the held masks of the last poll and the encoder
+ * detents of every poll since the last frame (the ones the keyboard uses left out). */
+static km_input held_in;
+static uint8_t play_held; /* PLAY, which never reaches km_apply, held at the last poll */
+/* The on-screen keyboard's key (CMD_OSK_KEY): its rows, OR-ed into the frame's rows from the
+ * frame after PLAY pressed it until the frame after PLAY is released (one frame at least). */
+static uint8_t osk_rows[8];
+static uint8_t osk_down;
+
+/* What the Spectrum reads now, copied from fmzx_machine.keys and .kempston after zx_set_keys and
+ * zx_set_kempston, for emu-gate (zx_machine's layout differs between the host and the device). */
+uint8_t fmzx_keys_now[8] __attribute__((aligned(4)));
+uint32_t fmzx_kempston_now;
+
 /* The border colour each LCD row last went out with (NO_COLOUR: not a border picture). */
 static uint8_t border_sent[LCD_ROWS];
 
@@ -206,8 +221,11 @@ static void RAMTEXT game_step(void)
     zx_machine *m = &fmzx_machine;
     const zx_edge *e;
     uint32_t n, y, r;
-    zx_set_keys(m, game.keys);
+    zx_set_keys(m, game.rows);
     zx_set_kempston(m, game.kempston);
+    for (r = 0; r < 8u; r++)
+        fmzx_keys_now[r] = m->keys[r];
+    fmzx_kempston_now = m->kempston;
     zx_run_frame(m);
     zx_beeper_set_level(&beeper, zx_edges_start_level(m));
     e = zx_edges(m, &n);
@@ -231,12 +249,16 @@ static void RAMTEXT game_step(void)
 /* Leaving the game running: every Spectrum key and Kempston bit up. */
 static void RAMTEXT game_release(void)
 {
+    zx_machine *m = &fmzx_machine;
     unsigned i;
     for (i = 0; i < 8u; i++)
-        game.keys[i] = 0;
+        game.rows[i] = 0;
     game.kempston = 0;
-    zx_set_keys(&fmzx_machine, game.keys);
-    zx_set_kempston(&fmzx_machine, 0);
+    zx_set_keys(m, game.rows);
+    zx_set_kempston(m, 0);
+    for (i = 0; i < 8u; i++)
+        fmzx_keys_now[i] = m->keys[i];
+    fmzx_kempston_now = m->kempston;
 }
 
 /* The RAMTEXT code XIP calls (ramcalls.h). */
@@ -283,6 +305,8 @@ static int game_start(uint32_t index)
     for (i = 0; i < LCD_ROWS; i++)
         border_sent[i] = NO_COLOUR;
     game.crop_x = g.crop_x;
+    game.keys = g.keys;
+    km_reset(&kms);
     game.loaded = 1;
     audio_set_gain(gain_q10(fmzx_master));
     lcd_mark_all(lcd_frame);
@@ -327,6 +351,41 @@ static uint32_t open_pack(void)
 
 extern void isr_timer5(void);
 
+#define BTN(b) (1u << (b))
+#define BTN_SAVE 9u
+#define BTN_REC 13u
+#define ENC_SELECT 0u
+#define ENC_ALGORITHM 1u
+/* What the on-screen keyboard takes from the key map: PLAY (OK), SAVE (CAPS SHIFT), REC (SYMBOL
+ * SHIFT) and the SELECT and ALGORITHM encoders (the cursor). */
+#define OSK_BUTTONS (BTN(KM_BTN_PLAY) | BTN(BTN_SAVE) | BTN(BTN_REC))
+
+/* The keyboard's key and its sticky shifts (CMD_OSK_KEY's arg) as Spectrum rows. */
+static void osk_press(uint32_t arg)
+{
+    unsigned k = arg & 0xFFu;
+    memset(osk_rows, 0, sizeof osk_rows);
+    if (k < 40u)
+        osk_rows[k / 5u] |= (uint8_t)(1u << (k % 5u));
+    if (arg & (1u << 8))
+        osk_rows[0] |= 1u; /* CAPS SHIFT = key 0 */
+    if (arg & (1u << 9))
+        osk_rows[7] |= 2u; /* SYMBOL SHIFT = key 36 */
+    osk_down = 1;
+}
+
+/* Back to the picker: the game stops, silent and released. */
+static void game_leave(void)
+{
+    audio_mute(1);
+    audio_flush();
+    if (game.loaded)
+        fmzx_ram.game_release();
+    km_reset(&kms);
+    osk_down = 0;
+    game.loaded = 0;
+}
+
 static void handle_event(int ev)
 {
     uint32_t arg = 0;
@@ -343,30 +402,41 @@ static void handle_event(int ev)
         if (game_start(game.index) != ZX_OK)
             menu_message(&mn, "Load failed");
         break;
+    case CMD_LEAVE:
+        game_leave();
+        break;
     case CMD_DIVIDER:
         divider = arg;
         lcd_set_divider(divider);
         budget = lcd_budget_bytes(divider);
+        fmzx_stats.divider = divider;
+        fmzx_stats.budget = budget;
         break;
-    default:
+    case CMD_OSK_KEY:
+        osk_press(arg);
+        break;
+    default: /* CMD_RESUME: the run rule in fmzx_main does the rest */
         break;
     }
 }
 
-/* Menu-style controls (picker, HOME menu, key page, keyboard, message): SELECT and ALGORITHM
- * turns and OCT-/OCT+ move, PLAY is OK, HOME is BACK. */
+/* `n` detents of an encoder as `n` events: ccw (negative) `ccw`, cw `cw`. */
+static void enc_events(int32_t n, int ccw, int cw)
+{
+    int32_t i;
+    for (i = 0; i < (n < 0 ? -n : n); i++)
+        handle_event(n > 0 ? cw : ccw);
+}
+
+/* Menu-style controls (picker, HOME menu, key page, message): SELECT and ALGORITHM turns and
+ * OCT-/OCT+ move, PLAY is OK, HOME is BACK. */
 static void menu_controls(const km_input *in, uint32_t pressed)
 {
-    uint32_t e;
-    int32_t n, i;
-    for (e = 0; e < 2u; e++) {
-        n = in->enc[e];
-        for (i = 0; i < (n < 0 ? -n : n); i++)
-            handle_event(n > 0 ? EV_DOWN : EV_UP);
-    }
-    if (pressed & (1u << KM_BTN_PLAY))
+    enc_events(in->enc[ENC_SELECT], EV_UP, EV_DOWN);
+    enc_events(in->enc[ENC_ALGORITHM], EV_UP, EV_DOWN);
+    if (pressed & BTN(KM_BTN_PLAY))
         handle_event(EV_OK);
-    else if (pressed & (1u << KM_BTN_HOME))
+    else if (pressed & BTN(KM_BTN_HOME))
         handle_event(EV_BACK);
     else if (pressed & 1u) /* OCT- */
         handle_event(EV_UP);
@@ -374,22 +444,73 @@ static void menu_controls(const km_input *in, uint32_t pressed)
         handle_event(EV_DOWN);
 }
 
-/* One poll. In the game and while paused, PLAY pauses / resumes and HOME opens the menu (the
- * game's own controls come with the key mapping). */
+/* The on-screen keyboard: SELECT moves left/right, ALGORITHM up/down, SAVE and REC toggle CAPS
+ * and SYMBOL SHIFT for the next key, PLAY presses the key, HOME closes. */
+static void osk_controls(const km_input *in, uint32_t pressed)
+{
+    enc_events(in->enc[ENC_SELECT], EV_LEFT, EV_RIGHT);
+    enc_events(in->enc[ENC_ALGORITHM], EV_UP, EV_DOWN);
+    if (pressed & BTN(BTN_SAVE))
+        handle_event(EV_CAPS);
+    if (pressed & BTN(BTN_REC))
+        handle_event(EV_SYM);
+    if (pressed & BTN(KM_BTN_PLAY))
+        handle_event(EV_OK);
+    if (pressed & BTN(KM_BTN_HOME))
+        handle_event(EV_HOME);
+}
+
+static int8_t enc_add(int8_t a, int8_t b)
+{
+    int32_t v = (int32_t)a + b;
+    return (int8_t)(v > 127 ? 127 : v < -128 ? -128 : v);
+}
+
+/* One poll. The held inputs are kept for the next frame's key mapping; the encoder detents add
+ * up until then. In the game and while paused, PLAY pauses / resumes and HOME opens the menu. */
 static void poll_input(void)
 {
     km_input in;
-    uint32_t pressed, notes;
+    uint32_t pressed, notes, e;
     int v;
     input_poll(&in, &pressed, &notes);
     v = menu_view(&mn);
+    held_in.buttons = in.buttons;
+    held_in.notes = in.notes;
+    play_held = (in.buttons & BTN(KM_BTN_PLAY)) != 0;
+    if (v == VIEW_GAME || v == VIEW_OSK)
+        for (e = v == VIEW_OSK ? 2u : 0u; e < KM_ENCODERS; e++)
+            held_in.enc[e] = enc_add(held_in.enc[e], in.enc[e]);
     if (v == VIEW_GAME || v == VIEW_PAUSED) {
-        if (pressed & (1u << KM_BTN_PLAY))
+        if (pressed & BTN(KM_BTN_PLAY))
             handle_event(EV_PAUSE);
-        else if (pressed & (1u << KM_BTN_HOME))
+        else if (pressed & BTN(KM_BTN_HOME))
             handle_event(EV_HOME);
+    } else if (v == VIEW_OSK) {
+        osk_controls(&in, pressed);
     } else {
         menu_controls(&in, pressed);
+    }
+}
+
+/* The next frame's Spectrum keys and Kempston: the held inputs through the game's key map (under
+ * the keyboard without the inputs it uses), plus the keyboard's key. */
+static void input_apply(void)
+{
+    km_input in = held_in;
+    unsigned i;
+    int osk = menu_view(&mn) == VIEW_OSK;
+    if (osk)
+        in.buttons &= ~OSK_BUTTONS;
+    km_apply(&game.keys, &kms, &in, game.rows, &game.kempston);
+    memset(held_in.enc, 0, sizeof held_in.enc);
+    if (osk && osk_down) {
+        for (i = 0; i < 8u; i++)
+            game.rows[i] |= osk_rows[i];
+        if (!play_held)
+            osk_down = 0; /* released: this was its last frame */
+    } else {
+        osk_down = 0;
     }
 }
 
@@ -429,6 +550,7 @@ static void game_frame(void)
     unsigned r;
     /* fmzx_stats as the frame finds it: `frames` run, `pending` LCD rows still to go */
     fmzx_stats.pending = lcd_unsent();
+    input_apply();
     fmzx_ram.game_step();
     game.frames++;
     fmzx_stats.frames = game.frames;
@@ -519,6 +641,8 @@ void fmzx_main(void)
             if (game.loaded)
                 fmzx_ram.game_release();
             km_reset(&kms);
+            memset(held_in.enc, 0, sizeof held_in.enc);
+            osk_down = 0;
             if (frame_due(&next)) {
                 /* what the last frame left: rows still pending, rows sent */
                 fmzx_stats.pending = lcd_unsent();
