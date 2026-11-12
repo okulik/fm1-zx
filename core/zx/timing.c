@@ -51,11 +51,35 @@ static inline void delay(zx_machine *m, uint32_t d)
 	}
 }
 
+/* `extra` internal T-states that follow an M-cycle of `length` T at the same
+ * (contended) address (Fuse's addr:1 x n): each is contended, and
+ * the next one starts 1 + delay later. `t` is the M-cycle's start. */
+static void contend_extra(zx_machine *m, uint32_t t, uint32_t length, uint8_t extra)
+{
+	uint32_t i;
+
+	t += length;
+	for (i = 0; i < extra; i++) {
+		uint32_t d = zx_contention(t);
+
+		delay(m, d);
+		t += d + 1u;
+	}
+}
+
 /* Memory M-cycle (operand fetch, read or write): contend, then step the clock. */
 static inline void mem_mcycle(zx_machine *m, uint16_t address)
 {
-	if (is_contended(address)) delay(m, zx_contention(mcycle_t(m)));
-	z80_insn_clock_extra_add_m(&m->clock, z80_insn_clock_extra_m(&m->clock));
+	uint8_t extra = z80_insn_clock_extra_m(&m->clock);
+
+	if (is_contended(address)) {
+		uint32_t t = mcycle_t(m);
+		uint32_t d = zx_contention(t);
+
+		delay(m, d);
+		if (extra) contend_extra(m, t + d, 3u, extra);
+	}
+	z80_insn_clock_extra_add_m(&m->clock, extra);
 }
 
 static uint8_t cpu_fetch_opcode(void *context, uint16_t address)
@@ -144,9 +168,14 @@ static uint32_t io_delay(uint32_t t, uint16_t port)
 
 static inline void io_mcycle(zx_machine *m, uint16_t port)
 {
-	delay(m, io_delay(mcycle_t(m), port));
-	(void)z80_insn_clock_extra_m(&m->clock);
+	uint32_t t = mcycle_t(m);
+	uint32_t d = io_delay(t, port);
+	uint8_t extra = z80_insn_clock_extra_m(&m->clock);
+
+	delay(m, d);
+	if (extra && is_contended(port)) contend_extra(m, t + d, 4u, extra);
 	z80_insn_clock_extra_add_in(&m->clock);
+	m->clock.cycles += extra;
 }
 
 static uint8_t cpu_in(void *context, uint16_t port)
@@ -183,6 +212,7 @@ void zx_timing_init(zx_machine *m)
 	m->cpu.in = cpu_in;
 	m->cpu.out = cpu_out;
 	m->cpu.inta = cpu_inta;
+	m->cpu.options = Z80_MODEL_ZILOG_NMOS;
 	z80_insn_clock_initialize(&m->clock, &m->cpu.af, &m->cpu.bc, &m->cpu.hl, m, clock_read);
 }
 

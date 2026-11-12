@@ -40,3 +40,18 @@ fn frame_overshoot_is_carried() {
     }
     assert_eq!(m.frame_count(), 3);
 }
+
+#[test]
+fn cpu_is_the_zilog_nmos_model() {
+    // NOP leaves Q = 0, so on NMOS (XQ/YQ) SCF's bits 3 and 5 are A | (F ^ Q):
+    // with A = 0 and F = 0x28 they stay set. Without the model they follow A only.
+    let mut m = Machine::new();
+    load(&mut m, 0x8000, &[0x00, 0x37]); // NOP; SCF
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.af = 0x0028;
+    m.set_regs(&r);
+    m.test_step();
+    m.test_step();
+    assert_eq!(m.regs().af & 0x28, 0x28);
+}
