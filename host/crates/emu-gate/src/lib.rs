@@ -44,7 +44,7 @@ pub struct CheckedBus<'a> {
 
 fn check(addr: u32, size: u32, what: &str) {
     let in_ram = (RAM_BASE..RAM_BASE + RAM_SIZE).contains(&addr);
-    assert!(!in_ram || addr % size == 0, "misaligned {what} at {addr:#010x}");
+    assert!(!in_ram || addr.is_multiple_of(size), "misaligned {what} at {addr:#010x}");
 }
 
 impl Bus for CheckedBus<'_> {
@@ -186,7 +186,7 @@ fn run_inner(build: &Path, name: &str, marks: usize, mut hist: Option<&mut HashM
         }
         step(&mut cpu, &mut soc);
         steps += 1;
-        if steps % 256 == 0 && result_words(&soc)[0] == MAGIC {
+        if steps.is_multiple_of(256) && result_words(&soc)[0] == MAGIC {
             break;
         }
         assert!(steps < MAX_STEPS, "bench did not finish in {MAX_STEPS} steps");

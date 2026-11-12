@@ -5,9 +5,18 @@
 
 ## Host (tests)
 
-The C core is built and tested from Rust. From the repository root:
+The C core is built and tested from Rust. Fetch the third-party test data once
+(it is checksummed by `tools/test-data.sha256` and lands in `build/test-data`;
+the z80test and `.tap` tests fail without it), then, from the repository root:
 
+    tools/fetch-test-data
     cd host && cargo test --workspace
+
+`[profile.test]` is optimised (opt-level 3), so the whole suite, including the
+`z80full` conformance run (about a second), is fast in a plain `cargo test`;
+`--release` gives the same. Lints:
+
+    cd host && cargo clippy --workspace --all-targets
 
 This needs a C compiler, libclang (for bindgen) and Rust 1.88 or newer. The
 Docker image below carries all of them.
@@ -63,5 +72,6 @@ Pinned now: `jieli-linux-toolchains-20260730.1`.
 | Date | Commit | Measurement | Figure |
 | --- | --- | --- | --- |
 | 2026-11-12 | 2626e96 | Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.81 instructions per T-state |
+| 2026-11-12 | final-review fixes | same, after the fix wave | 13.90 instructions per T-state |
 
 Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate -- --ignored --nocapture`.
