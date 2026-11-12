@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 const PLAY: u8 = 12;
+const HOME: u8 = 8;
+const OCT_UP: u8 = 1;
 const SELECT: u8 = 0;
 const SCROLL: u32 = 0;
 const BORDER: u32 = 1;
@@ -200,4 +202,63 @@ fn load_failed_message() {
     m.run_ms(100);
     assert_eq!(m.stats().view, zx_sys::view::PICKER as u32);
     assert_eq!(m.stats().frames, 0);
+}
+
+/// Presses `key` and waits (up to 300 ms) until fmzx_stats.view is `view`.
+fn press_to(m: &mut Machine, key: u8, view: i32) {
+    m.press(key, 30);
+    for _ in 0..300 {
+        if m.stats().view == view as u32 {
+            return;
+        }
+        m.run_ms(1);
+    }
+    panic!("view {} after pressing {key}, expected {view}", m.stats().view);
+}
+
+/// Spectrum frames keep coming at about 50 Hz for the next 300 ms.
+fn assert_frames_run(m: &mut Machine, what: &str) {
+    let f0 = m.stats().frames;
+    m.run_ms(300);
+    let f = m.stats().frames - f0;
+    assert!((13..=17).contains(&f), "{what}: {f} frames in 300 ms");
+}
+
+#[test]
+fn resumes_after_pause_and_menu() {
+    use zx_sys::view;
+    let mut m = start(&firmware().with_pack(pack()), BootOpt { rgb565: false, divider: 4 }, BORDER);
+    m.run_ms(500);
+    assert_frames_run(&mut m, "running");
+
+    press_to(&mut m, PLAY, view::PAUSED);
+    m.run_ms(100);
+    assert_eq!(m.stats().view, view::PAUSED as u32);
+    let f = m.stats().frames;
+    m.run_ms(200);
+    assert_eq!(m.stats().frames, f, "frames ran while paused");
+    press_to(&mut m, PLAY, view::GAME);
+    assert_frames_run(&mut m, "after PLAY resumed");
+
+    press_to(&mut m, HOME, view::MENU);
+    let f = m.stats().frames;
+    m.run_ms(300); // in the HOME menu: no frames, no underruns
+    assert_eq!(m.stats().frames, f, "frames ran in the HOME menu");
+    assert_eq!(m.stats().view, view::MENU as u32);
+    press_to(&mut m, PLAY, view::GAME); // OK on "Resume"
+    assert_frames_run(&mut m, "after HOME -> Resume");
+
+    press_to(&mut m, HOME, view::MENU);
+    m.run_ms(100);
+    m.press(OCT_UP, 30);
+    m.run_ms(50);
+    m.press(OCT_UP, 30); // down to "Keyboard"
+    m.run_ms(50);
+    press_to(&mut m, PLAY, view::OSK);
+    assert_frames_run(&mut m, "under the on-screen keyboard");
+    press_to(&mut m, HOME, view::GAME); // BACK leaves the keyboard
+    assert_frames_run(&mut m, "after the keyboard");
+
+    let s = m.stats();
+    assert_eq!((s.underruns, s.overflows), (0, 0), "{s:?}");
 }

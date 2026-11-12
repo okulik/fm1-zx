@@ -491,17 +491,28 @@ void fmzx_main(void)
         view = menu_view(&mn);
         if (view != last_view) { /* every view change repaints the whole panel */
             last_view = view;
+            fmzx_stats.view = (uint32_t)view;
             lcd_mark_all(lcd_frame);
         }
         if (menu_runs_game(&mn)) {
+            /* State-based like the release below: running means unmuted, so a resumed game's
+             * queued samples drain again. Only a game that has not yet queued its first frame
+             * stays muted (game_frame unmutes after that push), so a start is no underrun. */
+            if (game.frames)
+                audio_mute(0);
             /* paced by the audio out; by TIMER4 if it did not start */
             if (audio_on ? audio_fifo_level() < AUDIO_LOW : frame_due(&next)) {
                 game_frame();
                 if (!audio_on)
                     audio_flush();
+                else
+                    next = fm1_ticks() + 2u * FRAME_TICKS;
+            } else if (audio_on && frame_due(&next)) {
+                /* no Spectrum frame for 40 ms (a stalled audio out): the LCD and the UI still
+                 * get a frame every 20 ms */
+                fmzx_stats.pending = lcd_unsent();
+                lcd_frame_end();
             }
-            if (audio_on)
-                next = fm1_ticks();
         } else {
             /* state-based: whatever the way out of the game was, it is silent and released */
             audio_mute(1);

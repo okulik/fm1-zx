@@ -126,3 +126,26 @@ fn silent_when_paused() {
     assert_eq!(s.underruns, under, "underruns counted while paused");
     assert_eq!(s.frames, frames, "frames ran while paused");
 }
+
+#[test]
+fn tone_resumes_after_pause() {
+    let mut m = start_border();
+    m.run_ms(300);
+    for (key, want) in [(PLAY, zx_sys::view::PAUSED), (PLAY, zx_sys::view::GAME)] {
+        m.press(key, 30);
+        let mut waited = 0;
+        while m.stats().view != want as u32 {
+            m.run_ms(1);
+            waited += 1;
+            assert!(waited < 300, "view {} after PLAY", m.stats().view);
+        }
+        m.run_ms(200);
+    }
+    let a = m.audio_left();
+    let last = &a[a.len() - 4410..]; // the last 100 ms
+    assert!(last.iter().any(|x| x.unsigned_abs() > 1000), "no tone after resuming");
+    let hz = crossings(last) as f64 / 2.0 * RATE / last.len() as f64;
+    assert!((hz - BORDER_TONE_HZ).abs() <= BORDER_TONE_HZ * 0.02, "tone {hz:.1} Hz after resuming");
+    let s = m.stats();
+    assert_eq!((s.underruns, s.overflows), (0, 0), "{s:?}");
+}
