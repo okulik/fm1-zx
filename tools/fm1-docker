@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Run a command inside the pinned build image (or directly, when already inside it).
+set -eu
+
+if [ -n "${FMZX_BUILD_IMAGE:-}" ]; then
+    exec "$@"
+fi
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+docker build --quiet --platform linux/amd64 -t fmzx-build:local \
+    --build-arg TOOLCHAIN_SHA256="$(cat tools/docker/toolchain.sha256)" tools/docker >/dev/null
+
+exec docker run --rm --platform linux/amd64 -u "$(id -u):$(id -g)" \
+    -v "$root:$root" -w "$root" fmzx-build:local "$@"

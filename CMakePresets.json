@@ -1,0 +1,16 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "fm1",
+      "displayName": "JieLi pi32v2 (FM-1)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/fm1",
+      "toolchainFile": "${sourceDir}/cmake/pi32v2.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "fm1", "configurePreset": "fm1" }
+  ]
+}
