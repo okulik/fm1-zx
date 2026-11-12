@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 FM-1 ZX contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # ZX Spectrum 48K ROM
 
 `48.rom` is the unmodified 16 KB Spectrum 48K ROM, taken from `roms/48.rom` in the
