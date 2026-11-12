@@ -11,6 +11,7 @@ void lcd_sched_init(lcd_sched *s, unsigned row_bytes)
 	s->row_bytes = row_bytes;
 }
 
+/* Assumes frame numbers never decrease between calls. */
 void lcd_sched_mark(lcd_sched *s, unsigned row, uint32_t frame)
 {
 	if (row >= LCD_ROWS)

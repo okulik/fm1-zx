@@ -97,11 +97,16 @@ fn scroller_steady_fps() {
         for r in 24..216 {
             s.mark(r, frame);
         }
+        let since: Vec<Option<u32>> = (0..240).map(|r| s.pending_since(r)).collect();
         s.begin_frame(frame, budget);
         while s.next_band().is_some() {}
         for r in 24..216 {
-            if let Some(since) = s.pending_since(r) {
-                assert!(frame - since <= 4, "row {r} pending since {since} at frame {frame}");
+            let sent_since = since[r].unwrap();
+            if s.pending_since(r).is_none() {
+                // counted the way the stats count it
+                assert!(frame - sent_since + 1 <= 4, "row {r} sent at {frame}, pending since {sent_since}");
+            } else {
+                assert!(frame - sent_since < 4, "row {r} still pending since {sent_since} at {frame}");
             }
         }
     }
