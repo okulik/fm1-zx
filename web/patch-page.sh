@@ -27,6 +27,17 @@ edit 'addEventListener("keyup", (e) => {
   if (window.fmzxKey?.(e, false)) return;
 '
 edit 'const kept = await keptEntry(f.id);' 'const kept = f.fresh ? null : await keptEntry(f.id);'
+# the draw loop read the memory buffer before asking for the panel pointer, and the call can grow
+# (detach) the memory: take the pointer first
+edit '  const mem = () => ui.memory.buffer;
+' '  const mem = () => ui.memory.buffer;
+  const view = (T, ptr, n) => new T(mem(), ptr, n);
+'
+edit 'new Uint16Array(mem(), ui.panel_lcd(), 240 * 240).set(frame.lcd);' 'view(Uint16Array, ui.panel_lcd(), 240 * 240).set(frame.lcd);'
+edit 'new Float32Array(mem(), ui.panel_leds(), 41).set(frame.leds);' 'view(Float32Array, ui.panel_leds(), 41).set(frame.leds);'
+# no SMK-37 catalog next to this page (we drop smk37/): skip the twin lookup
+edit '    for (const s of (await (await fetch("smk37/firmwares.json")).json()).firmwares) if (s.fm1) twins.set(s.fm1, s.id);
+' ''
 edit 'let mhz = Number(params.get("mhz") || stored("fm1.mhz") || 100);' 'let mhz = 240;'
 
 # index.html: our stylesheet and script

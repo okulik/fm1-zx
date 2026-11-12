@@ -34,6 +34,7 @@ const UPSTREAM_ENC = { ",": { enc: 2, step: -1 }, ".": { enc: 2, step: 1 } };
 export function handle(e, down, input) {
   const actions = KEYMAP[e.key.length === 1 ? e.key.toLowerCase() : e.key];
   if (!actions) return false;
+  e.preventDefault?.(); // upstream's handler is skipped for claimed keys: no scrolling, no button activation
   for (const a of actions) {
     if ("key" in a) {
       if (down && e.repeat) continue;
@@ -126,7 +127,6 @@ export function install(win, doc) {
   const dl = el("dl");
   for (const [k, v] of FIXED) { el("dt", k, dl); el("dd", v, dl); }
   const msg = el("p");
-  if (!win.fmzxInput) msg.textContent = "Computer keyboard input is not available on this page.";
   side.insertBefore(box, side.firstChild);
 
   fetch("keymaps.json")

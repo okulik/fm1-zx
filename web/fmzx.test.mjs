@@ -67,3 +67,13 @@ test("castaway rows", () => {
   assert.deepEqual(rows[1], { computer: "Space / K", fm1: "C5", spectrum: "SPACE" });
   assert.deepEqual(rows[2], { computer: "—", fm1: "K1 cw", spectrum: "Kempston right + CAPS SHIFT" });
 });
+
+test("claimed keys prevent the browser default, unclaimed do not", () => {
+  let n = 0;
+  const e = (key) => ({ key, repeat: false, preventDefault: () => n++ });
+  handle(e("ArrowDown"), true, spy());
+  handle(e(" "), false, spy());
+  assert.equal(n, 2);
+  handle(e("a"), true, spy());
+  assert.equal(n, 2);
+});
