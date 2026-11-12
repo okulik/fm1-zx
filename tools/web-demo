@@ -5,7 +5,7 @@
 # The browser demo: our release package (build/fm1/fmzx.fwsc) in fm1-emu's web page, built into
 # build/web and served on 127.0.0.1 (BUILDING.md, "Browser demo").
 #   tools/web-demo                  build everything into build/web and serve on 127.0.0.1:8642
-#   tools/web-demo --check          build, then run the smoke test (web/check.sh) and exit with it
+#   tools/web-demo --check          build, then run the unit tests and the smoke test (web/check.sh) and exit with it
 #   tools/web-demo --no-serve       build only
 #   tools/web-demo --skip-firmware  no device builds (Docker): repack build/fm1's firmware offline
 #   tools/web-demo --port N         serve on another port
@@ -124,6 +124,7 @@ echo "$out: fm1-emu $rev with FM-1 ZX $short"
 
 # 5. check or serve
 if [ "$check" = 1 ]; then
+    node --test "$root/web/fmzx.test.mjs"
     exec "$root/web/check.sh" "$out" "$fm1/fmzx-preview.fwsc"
 fi
 if [ "$serve" = 1 ]; then

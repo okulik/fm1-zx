@@ -20,3 +20,14 @@ section:has(#h-play-from),
 .hint {
   display: none !important;
 }
+
+/* The controls panel */
+.fmzx h3 { margin: 0 0 8px; font-size: 15px; }
+.fmzx dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 14px; }
+.fmzx dt { color: var(--ink); font-weight: 600; }
+.fmzx dd { margin: 0; color: var(--dim); }
+.fmzx select { width: 100%; margin-bottom: 10px; }
+.fmzx p { color: var(--dim); font-size: 14px; margin: 0 0 8px; }
+.fmzx table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fmzx th { text-align: left; color: var(--dim); font-weight: 500; }
+.fmzx th, .fmzx td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--rule); }
