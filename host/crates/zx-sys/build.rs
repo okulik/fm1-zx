@@ -9,6 +9,8 @@ const DEFINES: &[(&str, Option<&str>)] = &[
     ("Z80_WITH_Q", None),
     ("Z80_WITH_ZILOG_NMOS_LD_A_IR_BUG", None),
     ("Z80_WITH_PRECOMPUTED_DAA", None),
+    ("Z80_WITH_VOLATILE_CYCLES", None),
+    ("ZX_TESTING", None),
     ("Z80_EXTERNAL_HEADER", Some("\"z_types.h\"")),
     ("Z80_INSN_CLOCK_EXTERNAL_HEADER", None),
     ("Z80_INSN_CLOCK_STATIC", None),
@@ -65,8 +67,14 @@ fn main() {
         false,
     );
 
-    println!("cargo:rerun-if-changed={}", core_zx.join("zx.h").display());
-    println!("cargo:rerun-if-changed={}", root.join("core/z80/z_types.h").display());
+    for dir in [
+        core_zx.clone(),
+        root.join("core/z80"),
+        root.join("third_party/Z80/API"),
+        root.join("third_party/Z80InsnClock/API"),
+    ] {
+        println!("cargo:rerun-if-changed={}", dir.display());
+    }
 
     let mut gen = bindgen::Builder::default()
         .header(core_zx.join("zx.h").to_string_lossy())

@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <Z80.h>
+#include <Z80InsnClock.h>
 
 #define ZX_ROM_SIZE 16384u
 #define ZX_RAM_SIZE 49152u
@@ -32,6 +33,13 @@ typedef struct zx_machine {
 	uint32_t ram_words[ZX_RAM_SIZE / 4u];     /* 0x4000-0xFFFF, word-aligned storage */
 	uint32_t frame_tstate;                    /* T-states already run into the next frame */
 	uint32_t frame_count;
+
+	/* Timing state (timing.c). All T-states are frame coordinates: 0 is INT. */
+	Z80InsnClock clock;                       /* M-cycle positions within the instruction */
+	uint32_t run_base;                        /* frame T-state at which the current z80_run began */
+	uint32_t insn_t0;                         /* frame T-state at which the current instruction began */
+	uint32_t wait;                            /* contention delay accumulated in the current instruction */
+	uint8_t insn_open;                        /* a prefix has been fetched; the instruction continues */
 } zx_machine;
 
 /* rom: ZX_ROM_SIZE bytes that outlive m. Leaves m in the power-on state. */
@@ -49,5 +57,14 @@ void zx_poke(zx_machine *m, uint16_t addr, uint8_t value);   /* ignores ROM */
 
 uint32_t zx_frame_tstate(const zx_machine *m);
 uint32_t zx_frame_count(const zx_machine *m);
+
+/* Delay for a contended access that starts at frame T-state `tstate`. */
+uint32_t zx_contention(uint32_t tstate);
+
+#ifdef ZX_TESTING
+/* Host tests only. */
+void zx_test_set_tstate(zx_machine *m, uint32_t t);   /* next instruction starts at frame T-state t */
+uint32_t zx_test_step(zx_machine *m);                 /* runs one instruction; T-states incl. contention */
+#endif
 
 #endif

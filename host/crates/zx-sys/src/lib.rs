@@ -79,6 +79,25 @@ impl Machine {
         // SAFETY: `raw` was initialised by zx_init.
         unsafe { sys::zx_frame_count(&*self.raw) }
     }
+
+    /// Host tests only: sets the frame T-state the next instruction starts at.
+    pub fn test_set_tstate(&mut self, t: u32) {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_test_set_tstate(&mut *self.raw, t) }
+    }
+
+    /// Host tests only: runs one instruction and returns its T-states,
+    /// contention included.
+    pub fn test_step(&mut self) -> u32 {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_test_step(&mut *self.raw) }
+    }
+}
+
+/// Delay, in T-states, of a contended access that starts at frame T-state `tstate`.
+pub fn contention(tstate: u32) -> u32 {
+    // SAFETY: pure function of its argument.
+    unsafe { sys::zx_contention(tstate) }
 }
 
 impl Default for Machine {
