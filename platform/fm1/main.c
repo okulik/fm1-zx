@@ -125,6 +125,10 @@ uint32_t fmzx_kempston_now;
 
 /* The border colour each LCD row last went out with (NO_COLOUR: not a border picture). */
 static uint8_t border_sent[LCD_ROWS];
+/* The LCD rows the current view shows the UI grid on (menu_row_is_ui), set at every view change:
+ * a running game's changes there are not sent (the keyboard covers them; the view change back
+ * repaints them). */
+static uint8_t ui_rows[LCD_ROWS / 8u];
 
 static unsigned divider = FMZX_LCD_DIVIDER;
 static uint32_t budget;    /* LCD bytes per frame */
@@ -556,8 +560,8 @@ static void lcd_frame_end(void)
     stats_update();
 }
 
-/* A Spectrum frame and everything it sends on: samples to the FIFO, changed rows to the LCD.
- * noinline: emu-gate counts its instructions (budgets) by its entry. */
+/* A Spectrum frame and everything it sends on: samples to the FIFO, changed rows to the LCD
+ * (those not under the UI). noinline: emu-gate counts its instructions (budgets) by its entry. */
 static __attribute__((noinline)) void game_frame(void)
 {
     unsigned r;
@@ -568,7 +572,7 @@ static __attribute__((noinline)) void game_frame(void)
     game.frames++;
     fmzx_stats.frames = game.frames;
     for (r = 0; r < LCD_ROWS; r++)
-        if (game.dirty[r >> 3] & (1u << (r & 7u)))
+        if (game.dirty[r >> 3] & ~ui_rows[r >> 3] & (1u << (r & 7u)))
             lcd_mark_row(r, lcd_frame + 1u);
     if (game.frames % GAIN_FRAMES == 0)
         audio_set_gain(gain_q10(fmzx_master));
@@ -625,8 +629,13 @@ void fmzx_main(void)
         }
         view = menu_view(&mn);
         if (view != last_view) { /* every view change repaints the whole panel */
+            unsigned r;
             last_view = view;
             fmzx_stats.view = (uint32_t)view;
+            memset(ui_rows, 0, sizeof ui_rows);
+            for (r = 0; r < LCD_ROWS; r++)
+                if (menu_row_is_ui(&mn, r))
+                    ui_rows[r >> 3] |= (uint8_t)(1u << (r & 7u));
             lcd_mark_all(lcd_frame);
         }
         if (menu_runs_game(&mn)) {

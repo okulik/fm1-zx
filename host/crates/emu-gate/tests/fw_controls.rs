@@ -26,6 +26,7 @@ const NOTE_F3: u8 = 14;
 const SELECT: u8 = 0;
 const ALGORITHM: u8 = 1;
 const SCROLL: u32 = 0;
+const BORDER: u32 = 1;
 const KEMPSTON_LEFT: u32 = 1 << 1;
 
 fn repo() -> PathBuf {
@@ -233,6 +234,41 @@ fn osk_types_key() {
 
     press_to(&mut m, HOME, view::GAME); // HOME closes the keyboard
     assert_frames_run(&mut m, "after the keyboard");
+}
+
+/// (Spectrum frames, LCD bytes sent) over the next `ms`.
+fn lcd_bytes_over(m: &mut Machine, ms: u64) -> (u32, u32) {
+    let s0 = m.stats();
+    m.run_ms(ms);
+    let s1 = m.stats();
+    (s1.frames - s0.frames, s1.lcd.bytes - s0.lcd.bytes)
+}
+
+#[test]
+fn osk_rows_not_resent() {
+    // border.sna paints the same border stripes every frame, so the game itself sends next to
+    // nothing. Under the keyboard, its 40 rows (paper rows 200-215, border rows 216-239) show
+    // the unchanged keyboard grid and must not go out again every frame: at 360 bytes a row
+    // (RGB444) the border rows alone would be 24 * 360 bytes a frame.
+    let mut m = start(BootOpt { rgb565: false, divider: 4 }, BORDER);
+    m.run_ms(500);
+    let (f, game) = lcd_bytes_over(&mut m, 1000);
+    let game_pf = game / f;
+    menu_item(&mut m, 2); // "Keyboard"
+    press_to(&mut m, PLAY, view::OSK);
+    m.run_ms(300);
+    let (f, osk) = lcd_bytes_over(&mut m, 1000);
+    let osk_pf = osk / f;
+    println!("LCD bytes a frame: game {game_pf}, under the keyboard {osk_pf}");
+    assert!(f >= 45, "{f} frames under the keyboard in 1 s");
+    assert!(osk_pf < game_pf + 24 * 360 / 4, "the keyboard rows go out again every frame: {osk_pf} bytes a frame, {game_pf} in the game");
+    // closing the keyboard repaints the whole panel, its rows with the game's picture
+    let b0 = m.stats().lcd.bytes;
+    press_to(&mut m, HOME, view::GAME);
+    m.run_ms(300);
+    let s = m.stats();
+    assert_eq!(s.pending, 0, "LCD rows still pending");
+    assert!(s.lcd.bytes - b0 >= 240 * 360, "no full repaint after the keyboard: {} bytes", s.lcd.bytes - b0);
 }
 
 #[test]
