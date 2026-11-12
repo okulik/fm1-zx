@@ -13,10 +13,9 @@ fmzx_embed("${PROJECT_SOURCE_DIR}/third_party/zx-rom/48.rom" zx_rom_data
            "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c")
 
 set(_bsp "${CMAKE_CURRENT_SOURCE_DIR}/bsp")
-set(_ours crt0.S main.c lcd.c libc_min.c)
+set(_ours crt0.S main.c lcd.c input.c libc_min.c)
 
-# fm1_isr.S joins when the first interrupt handler does (input and audio).
-add_executable(fmzx_app_image ${_ours} "${_bsp}/chip/fm1_vec.S" "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c")
+add_executable(fmzx_app_image ${_ours} "${_bsp}/chip/fm1_vec.S" "${_bsp}/chip/fm1_isr.S" "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c")
 set_target_properties(fmzx_app_image PROPERTIES OUTPUT_NAME fmzx_app SUFFIX .elf
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.ld")
 target_include_directories(fmzx_app_image PRIVATE "${_bsp}/chip" "${_bsp}/boards/fm1")

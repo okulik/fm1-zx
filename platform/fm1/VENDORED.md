@@ -25,7 +25,7 @@ Files, at the same paths as upstream under `bsp/`:
 | `chip/fm1_flash_access.h` | included by `fm1_cpu1_stop.h` |
 | `chip/fm1_gpio.h` | GPIO port registers |
 | `chip/fm1_irq.h` | interrupt and exception setup, the crash record, `fm1_fault` hook |
-| `chip/fm1_isr.S` | ISR entry wrappers (built from the input and audio tasks on) |
+| `chip/fm1_isr.S` | ISR entry wrappers (`isr_timer5`, `isr_alnk0`) |
 | `chip/fm1_vec.S` | the fatal-vector stubs |
 | `chip/fm1_sys.h` | watchdog, reboot, UBOOT entry, mailbox clear |
 | `chip/fm1_time.h` | TIMER4 time base and delays |

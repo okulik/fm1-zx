@@ -14,7 +14,9 @@
 #include "fm1_cpu1_stop.h"
 #include "fm1_gpio.h"
 #include "fm1_input.h"
+#include "fm1_timer.h"
 
+#include "input.h"
 #include "lcd.h"
 #include "lcdsched.h"
 #include "menu.h"
@@ -33,6 +35,8 @@
 #define FRAME_TICKS (20000u * FM1_TICKS_PER_US) /* 20 ms of TIMER4 */
 #define GESTURE_TICKS (1000000u * FM1_TICKS_PER_US)
 #define WDT_8S 0x0Du
+#define MASTER_MS 200u
+#define TIMER5_PRIO 4u
 
 /* Boot options from emu-gate (or anything that writes them before a reset): word 0 BOOTOPT_MAGIC,
  * word 1 bit 0 RGB565, bits 8-11 the LCD divider. First in NOINIT, never cleared by start-up;
@@ -69,11 +73,27 @@ static uint8_t row_idx[LCD_W];
 static menu mn;
 static const uint8_t *pack_base;
 
+/* The MASTER pot, 0-1023, refreshed every MASTER_MS (read by emu-gate and, later, the mixer). */
+volatile uint32_t fmzx_master;
+
 static void fm1_fault(const fm1_crash_t *c)
 {
     (void)c; /* the record stays in .noinit for the next boot */
     fm1_reboot();
 }
+
+/* ------------------------------------------------------------------ interrupts --- */
+
+void fm1_timer5_irq(void);
+void fm1_alnk0_irq(void);
+
+void fm1_timer5_irq(void)
+{
+    fm1_timer5_ack();
+    input_tick_isr();
+}
+
+void fm1_alnk0_irq(void) {} /* the audio task fills this in */
 
 /* A separate function so emu-gate can see the UBOOT entry (felucca-bsp's is static). */
 __attribute__((noinline)) void fmzx_enter_uboot(void)
@@ -178,6 +198,52 @@ static uint32_t open_pack(void)
     return 0;
 }
 
+extern void isr_timer5(void);
+
+/* The picker's controls: SELECT and ALGORITHM turns and OCT-/OCT+ scroll, PLAY is OK. */
+static int picker_event(const km_input *in, uint32_t pressed)
+{
+    int32_t turn = in->enc[0] + in->enc[1];
+    if (pressed & (1u << KM_BTN_PLAY))
+        return EV_OK;
+    if (pressed & 1u) /* OCT- */
+        return EV_UP;
+    if (pressed & 2u) /* OCT+ */
+        return EV_DOWN;
+    if (turn)
+        return turn > 0 ? EV_DOWN : EV_UP;
+    return EV_NONE;
+}
+
+static void handle_event(int ev)
+{
+    uint32_t arg = 0;
+    if (ev == EV_NONE)
+        return;
+    if (menu_event(&mn, ev, &arg) == CMD_START) {
+        fmzx_stats.game = arg;
+        menu_set_view(&mn, VIEW_GAME); /* the game itself starts with the emulator task */
+    }
+}
+
+/* One poll: encoder detents one event each, then the buttons' press edges. */
+static void poll_input(void)
+{
+    km_input in;
+    uint32_t pressed, notes, e;
+    int32_t n, i;
+    input_poll(&in, &pressed, &notes);
+    if (menu_view(&mn) != VIEW_PICKER)
+        return;
+    for (e = 0; e < 2u; e++) {
+        n = in.enc[e];
+        for (i = 0; i < (n < 0 ? -n : n); i++)
+            handle_event(n > 0 ? EV_DOWN : EV_UP);
+    }
+    in.enc[0] = in.enc[1] = 0;
+    handle_event(picker_event(&in, pressed));
+}
+
 static void ui_frame(uint32_t frame)
 {
     uint8_t dirty[LCD_ROWS / 8u];
@@ -193,7 +259,7 @@ void fmzx_main(void)
 {
     int fmt = PIX_RGB444;
     unsigned divider = FMZX_LCD_DIVIDER;
-    uint32_t frame = 0, next, budget;
+    uint32_t frame = 0, next, budget, master_at;
 
     if (fmzx_bootopt[0] == BOOTOPT_MAGIC) {
         fmt = (fmzx_bootopt[1] & 1u) ? PIX_RGB565 : PIX_RGB444;
@@ -210,8 +276,19 @@ void fmzx_main(void)
     menu_init(&mn, open_pack());
     menu_set_divider(&mn, divider);
 
+    input_init();
+    fmzx_master = input_master();
+    fm1_timer5_start(isr_timer5, TIMER5_PRIO);
+    fm1_irq_enable_all();
+
     next = fm1_ticks();
+    master_at = next;
     for (;;) {
+        poll_input();
+        if ((uint32_t)(fm1_ticks() - master_at) >= MASTER_MS * 1000u * FM1_TICKS_PER_US) {
+            master_at += MASTER_MS * 1000u * FM1_TICKS_PER_US;
+            fmzx_master = input_master();
+        }
         if ((int32_t)(fm1_ticks() - next) >= 0) {
             next += FRAME_TICKS;
             if ((int32_t)(fm1_ticks() - next) >= 0) /* fell behind: no catching up */

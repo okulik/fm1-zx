@@ -75,3 +75,17 @@ file = "games/cave-runner.sna"
 "enc.K1.cw" = "kempston.right"
 "enc.K1.ccw" = "kempston.left"
 ```
+
+## Key ids
+
+The ids fm1-emu (and the firmware's matrix scan) use, as in felucca-bsp's `FM1_KEYMAP`:
+
+| Ids | Input |
+|-----|-------|
+| 0-13 | buttons: OCT- 0, OCT+ 1, FX 2, SCL 3, ENV 4, LFO 5, EDIT 6, GLO 7, HOME 8, SAVE 9, ARP 10, SEQ 11, PLAY 12, REC 13 |
+| 14-40 | note keys, id = 14 + note (F3 = 14 ... G5 = 40) |
+| encoders 0-6 | SELECT, ALGORITHM, K1, K2, K3, K4, PRESETS (separate numbering, clockwise = positive) |
+
+In the game picker, SELECT and ALGORITHM turns and OCT-/OCT+ scroll (clockwise and OCT+ go to the
+next game) and PLAY starts the selected game. Buttons act on their press.
+
