@@ -100,6 +100,14 @@ void zx_screen_line(const zx_machine *m, unsigned y, uint8_t out[256]);
 /* Delay for a contended access that starts at frame T-state `tstate`. */
 uint32_t zx_contention(uint32_t tstate);
 
+enum { ZX_OK = 0, ZX_ERR_FORMAT = -1, ZX_ERR_UNSUPPORTED = -2 };
+
+/* Snapshot loading (snapshot.c). The whole file is validated before anything
+ * changes, so on an error the machine is untouched. Only 48K snapshots load:
+ * 128K ones give ZX_ERR_UNSUPPORTED, malformed or truncated ones ZX_ERR_FORMAT. */
+int zx_load_sna(zx_machine *m, const uint8_t *data, uint32_t len);
+int zx_load_z80(zx_machine *m, const uint8_t *data, uint32_t len);
+
 #ifdef ZX_TESTING
 /* Host tests only. */
 void zx_test_set_tstate(zx_machine *m, uint32_t t);   /* next instruction starts at frame T-state t */

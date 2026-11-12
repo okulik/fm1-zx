@@ -18,7 +18,7 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use sys::{zx_edge, zx_regs, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+pub use sys::{zx_edge, zx_regs, ZX_ERR_FORMAT, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
 
 static ROM_48: &[u8; ZX_ROM_SIZE as usize] = include_bytes!("../../../../third_party/zx-rom/48.rom");
 
@@ -120,6 +120,25 @@ impl Machine {
         // SAFETY: `out` is 256 bytes.
         unsafe { sys::zx_screen_line(&*self.raw, y as u32, out.as_mut_ptr()) };
         out
+    }
+
+    /// Loads a 48K `.sna` snapshot; `Err` carries the C error code and leaves
+    /// the machine unchanged.
+    pub fn load_sna(&mut self, data: &[u8]) -> Result<(), i32> {
+        // SAFETY: the pointer and length describe `data`.
+        match unsafe { sys::zx_load_sna(&mut *self.raw, data.as_ptr(), data.len() as u32) } {
+            0 => Ok(()),
+            e => Err(e),
+        }
+    }
+
+    /// Loads a 48K `.z80` snapshot (v1, v2 or v3); errors as [`Machine::load_sna`].
+    pub fn load_z80(&mut self, data: &[u8]) -> Result<(), i32> {
+        // SAFETY: the pointer and length describe `data`.
+        match unsafe { sys::zx_load_z80(&mut *self.raw, data.as_ptr(), data.len() as u32) } {
+            0 => Ok(()),
+            e => Err(e),
+        }
     }
 
     /// Host tests only: the current beeper level.

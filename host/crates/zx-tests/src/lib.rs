@@ -3,7 +3,7 @@
 
 //! Shared fixtures for the machine tests.
 
-pub use zx_sys::Machine;
+pub use zx_sys::{zx_regs, Machine};
 
 /// Pokes `bytes` into the machine starting at `addr`.
 pub fn load(m: &mut Machine, addr: u16, bytes: &[u8]) {
@@ -126,4 +126,165 @@ pub fn screen_text(m: &Machine, row: usize) -> String {
         });
     }
     text.trim_end().to_string()
+}
+
+// ---- snapshot fixtures -------------------------------------------------
+
+/// Registers used by the snapshot tests: every field distinct, IM 2, IFFs set,
+/// R with bit 7 set, PC nonzero.
+pub fn sample_regs() -> zx_sys::zx_regs {
+    zx_sys::zx_regs {
+        af: 0x1A2B,
+        bc: 0x3C4D,
+        de: 0x5E6F,
+        hl: 0x7081,
+        af_: 0x9293,
+        bc_: 0xA4B5,
+        de_: 0xC6D7,
+        hl_: 0xE8F9,
+        ix: 0x0A1B,
+        iy: 0x2C3D,
+        sp: 0xFF00,
+        pc: 0x8123,
+        i: 0x3F,
+        r: 0xA5,
+        iff1: 1,
+        iff2: 1,
+        im: 2,
+    }
+}
+
+/// 48 KB of RAM with runs, ED ED pairs and lone EDs, so the compressor has work.
+pub fn sample_ram() -> Vec<u8> {
+    let mut ram = vec![0u8; 49152];
+    for (i, b) in ram.iter_mut().enumerate() {
+        *b = ((i * 7) ^ (i >> 5)) as u8;
+    }
+    ram[100..1100].fill(0); // long zero run
+    ram[2000..2300].fill(0x55); // run longer than 255
+    ram[3000..3010].fill(0xED); // run of EDs
+    ram[3100] = 0xED; // lone ED then a would-be run
+    ram[3101..3110].fill(0x77);
+    ram[4000] = 0xED; // lone ED at a chunk edge
+    ram[4001] = 0xED;
+    ram[4002] = 0x01;
+    ram[10000..20000].fill(0x20);
+    ram[0x1800..0x1B00].fill(0x38); // attributes
+    ram[49151] = 0x42;
+    ram
+}
+
+/// ED ED nn bb run-length encoding of `data` (never ends with a lone ED).
+pub fn z80_compress(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let b = data[i];
+        let mut run = 1;
+        while i + run < data.len() && data[i + run] == b && run < 255 {
+            run += 1;
+        }
+        if run >= 5 || (b == 0xED && run >= 2) {
+            out.extend_from_slice(&[0xED, 0xED, run as u8, b]);
+            i += run;
+        } else if b == 0xED {
+            // a byte after a lone ED is never part of a run
+            out.push(0xED);
+            out.push(data[i + 1]);
+            i += 2;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// A 48K `.sna`: PC is pushed on the stack (SP - 2), border in the header.
+pub fn make_sna(regs: &zx_sys::zx_regs, ram: &[u8], border: u8) -> Vec<u8> {
+    let mut ram = ram.to_vec();
+    let sp = regs.sp.wrapping_sub(2);
+    for (k, b) in regs.pc.to_le_bytes().iter().enumerate() {
+        let a = sp.wrapping_add(k as u16);
+        if a >= 0x4000 {
+            ram[a as usize - 0x4000] = *b;
+        }
+    }
+    let mut h = vec![regs.i];
+    for w in [regs.hl_, regs.de_, regs.bc_, regs.af_, regs.hl, regs.de, regs.bc, regs.iy, regs.ix] {
+        h.extend_from_slice(&w.to_le_bytes());
+    }
+    h.push(regs.iff2 << 2);
+    h.push(regs.r);
+    h.extend_from_slice(&regs.af.to_le_bytes());
+    h.extend_from_slice(&sp.to_le_bytes());
+    h.push(regs.im);
+    h.push(border);
+    assert_eq!(h.len(), 27);
+    h.extend_from_slice(&ram);
+    h
+}
+
+fn z80_header(regs: &zx_sys::zx_regs, border: u8, pc: u16, compressed: bool) -> Vec<u8> {
+    let mut h = vec![(regs.af >> 8) as u8, regs.af as u8];
+    for w in [regs.bc, regs.hl, pc, regs.sp] {
+        h.extend_from_slice(&w.to_le_bytes());
+    }
+    h.push(regs.i);
+    h.push(regs.r & 0x7F);
+    h.push((regs.r >> 7) | (border << 1) | ((compressed as u8) << 5));
+    for w in [regs.de, regs.bc_, regs.de_, regs.hl_] {
+        h.extend_from_slice(&w.to_le_bytes());
+    }
+    h.push((regs.af_ >> 8) as u8);
+    h.push(regs.af_ as u8);
+    h.extend_from_slice(&regs.iy.to_le_bytes());
+    h.extend_from_slice(&regs.ix.to_le_bytes());
+    h.push(regs.iff1);
+    h.push(regs.iff2);
+    h.push(regs.im);
+    assert_eq!(h.len(), 30);
+    h
+}
+
+/// A version 1 `.z80`, border 3 (header byte 12 carries it).
+pub fn make_z80_v1(regs: &zx_sys::zx_regs, ram: &[u8], compressed: bool) -> Vec<u8> {
+    assert_ne!(regs.pc, 0);
+    let mut f = z80_header(regs, 3, regs.pc, compressed);
+    if compressed {
+        f.extend(z80_compress(ram));
+        f.extend_from_slice(&[0x00, 0xED, 0xED, 0x00]);
+    } else {
+        f.extend_from_slice(ram);
+    }
+    f
+}
+
+/// A version 2 (`version == 2`, header 23) or 3 (54) `.z80` with pages 8, 4, 5;
+/// page 4 is stored compressed, the others plain. Border 3.
+pub fn make_z80_vn(regs: &zx_sys::zx_regs, ram: &[u8], version: u8, hw_mode: u8) -> Vec<u8> {
+    let mut f = z80_header(regs, 3, 0, false);
+    let ext: u16 = if version == 2 { 23 } else { 54 };
+    f.extend_from_slice(&ext.to_le_bytes());
+    let mut e = vec![0u8; ext as usize];
+    e[0..2].copy_from_slice(&regs.pc.to_le_bytes());
+    e[2] = hw_mode;
+    f.extend(e);
+    for (page, base) in [(8u8, 0usize), (4, 0x4000), (5, 0x8000)] {
+        let data = &ram[base..base + 0x4000];
+        if page == 4 {
+            let c = z80_compress(data);
+            f.extend_from_slice(&(c.len() as u16).to_le_bytes());
+            f.push(page);
+            f.extend(c);
+        } else {
+            f.extend_from_slice(&[0xFF, 0xFF, page]);
+            f.extend_from_slice(data);
+        }
+    }
+    f
+}
+
+pub fn make_z80_v3(regs: &zx_sys::zx_regs, ram: &[u8], hw_mode: u8) -> Vec<u8> {
+    make_z80_vn(regs, ram, 3, hw_mode)
 }

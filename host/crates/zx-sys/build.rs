@@ -38,6 +38,31 @@ fn main() {
         v
     };
 
+    // ZX_SANITIZE=1 builds the C with AddressSanitizer and UBSan (host only).
+    println!("cargo:rerun-if-env-changed=ZX_SANITIZE");
+    let sanitize = std::env::var("ZX_SANITIZE").is_ok_and(|v| v == "1");
+    if sanitize {
+        // The runtime must be linked into the final (Rust) binary, and
+        // rustc-link-arg of a library crate does not reach its dependents, so
+        // link the sanitizer runtime as a library. macOS: the dynamic runtime
+        // in clang's resource dir also carries UBSan.
+        let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+        let dir = std::process::Command::new(&cc)
+            .arg("-print-resource-dir")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .expect("ZX_SANITIZE=1 needs a clang that supports -print-resource-dir");
+        // rustc adds OUT_DIR to the run-time search path of the binaries it
+        // links, so a copy of the runtime there is found when they start.
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+        let rt = "libclang_rt.asan_osx_dynamic.dylib";
+        std::fs::copy(format!("{dir}/lib/darwin/{rt}"), format!("{out_dir}/{rt}")).expect("copy the ASan runtime");
+        println!("cargo:rustc-link-search=native={out_dir}");
+        println!("cargo:rustc-link-lib=dylib=clang_rt.asan_osx_dynamic");
+    }
+
     let build = |files: Vec<PathBuf>, name: &str, strict: bool| {
         let mut b = cc::Build::new();
         b.files(&files).std("c11").warnings(false);
@@ -46,6 +71,9 @@ fn main() {
         }
         for (k, v) in DEFINES {
             b.define(k, *v);
+        }
+        if sanitize {
+            b.flag("-fsanitize=address,undefined").flag("-fno-omit-frame-pointer");
         }
         if strict {
             b.flag("-Wall").flag("-Wextra").flag("-Werror");

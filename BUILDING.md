@@ -12,6 +12,16 @@ The C core is built and tested from Rust. From the repository root:
 This needs a C compiler, libclang (for bindgen) and Rust 1.88 or newer. The
 Docker image below carries all of them.
 
+To run a test under AddressSanitizer and UBSan (macOS clang):
+
+    cd host && ZX_SANITIZE=1 cargo test -p zx-tests --test snapshot
+
+`ZX_SANITIZE=1` makes `zx-sys/build.rs` compile the C core with
+`-fsanitize=address,undefined`, copy clang's ASan runtime
+(`libclang_rt.asan_osx_dynamic.dylib`, which also carries UBSan) into the build
+output directory and link it into the test binaries. Switching the variable on
+or off rebuilds the C core. Not supported on Linux hosts yet.
+
 ## Firmware (pi32v2, in Docker)
 
 Docker must be running. `tools/fm1-docker` builds the pinned image
