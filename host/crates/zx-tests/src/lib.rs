@@ -288,3 +288,36 @@ pub fn make_z80_vn(regs: &zx_sys::zx_regs, ram: &[u8], version: u8, hw_mode: u8)
 pub fn make_z80_v3(regs: &zx_sys::zx_regs, ram: &[u8], hw_mode: u8) -> Vec<u8> {
     make_z80_vn(regs, ram, 3, hw_mode)
 }
+
+// ---- tape fixtures -----------------------------------------------------
+
+/// A `.tap` block: 2-byte length, flag, data, XOR checksum.
+pub fn tap_block(flag: u8, data: &[u8]) -> Vec<u8> {
+    let mut b = vec![flag];
+    b.extend_from_slice(data);
+    b.push(b.iter().fold(0u8, |x, &y| x ^ y));
+    let mut out = (b.len() as u16).to_le_bytes().to_vec();
+    out.extend(b);
+    out
+}
+
+/// A header block (flag 0): kind 0 program, 3 code; `name` is padded to 10.
+pub fn tap_header(kind: u8, name: &str, len: u16, p1: u16, p2: u16) -> Vec<u8> {
+    let mut d = vec![kind];
+    let mut n = name.as_bytes().to_vec();
+    n.resize(10, b' ');
+    d.extend(n);
+    for w in [len, p1, p2] {
+        d.extend_from_slice(&w.to_le_bytes());
+    }
+    tap_block(0x00, &d)
+}
+
+/// A tokenised BASIC line: number (big endian), length, `tokens`, ENTER.
+pub fn basic_line(n: u16, tokens: &[u8]) -> Vec<u8> {
+    let mut out = n.to_be_bytes().to_vec();
+    out.extend_from_slice(&((tokens.len() + 1) as u16).to_le_bytes());
+    out.extend_from_slice(tokens);
+    out.push(0x0D);
+    out
+}

@@ -34,6 +34,7 @@ void zx_run_frame(zx_machine *m)
 {
 	uint32_t t = m->frame_tstate;
 
+	zx_tape_frame(m);
 	zx_ula_new_frame(m);
 	zx_screen_new_frame(m);
 	z80_int(&m->cpu, 1);

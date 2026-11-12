@@ -86,8 +86,16 @@ static uint8_t cpu_fetch_opcode(void *context, uint16_t address)
 {
 	zx_machine *m = context;
 	uint8_t opcode = zx_mem_read(m, address);
+	uint8_t fetched = opcode;
 	uint8_t extra;
 	uint8_t start = 0;   /* clock offset of this M1 */
+
+	/* LD-BYTES trap: the CPU runs the hook, which loads the block and returns
+	 * RET to execute, so time the instruction as the RET it becomes. */
+	if (address == ZX_LD_BYTES && m->tape != NULL && !m->insn_open) {
+		fetched = Z80_HOOK;
+		opcode = 0xC9u;
+	}
 
 	if (m->insn_open) {
 		start = m->clock.cycles;
@@ -104,7 +112,7 @@ static uint8_t cpu_fetch_opcode(void *context, uint16_t address)
 
 	if (is_contended(address)) delay(m, zx_contention(mcycle_t(m)));
 	z80_insn_clock_extra_add_m1(&m->clock, extra);
-	return opcode;
+	return fetched;
 }
 
 static uint8_t cpu_mem_read(void *context, uint16_t address)
@@ -204,9 +212,10 @@ static uint8_t clock_read(void *context, uint16_t address)
 void zx_timing_init(zx_machine *m)
 {
 	/* Optional callbacks (halt, nop, nmia, int_fetch, ld_i_a, ld_r_a, reti,
-	 * retn, hook, illegal) stay NULL; a NULL nop means HALT_SKIP. */
+	 * retn, illegal) stay NULL; a NULL nop means HALT_SKIP. */
 	m->cpu.context = m;
 	m->cpu.fetch_opcode = cpu_fetch_opcode;
+	m->cpu.hook = zx_tape_hook;
 	m->cpu.fetch = cpu_mem_read;
 	m->cpu.read = cpu_mem_read;
 	m->cpu.write = cpu_mem_write;

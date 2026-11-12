@@ -25,6 +25,8 @@ static ROM_48: &[u8; ZX_ROM_SIZE as usize] = include_bytes!("../../../../third_p
 /// A 48K Spectrum. Not `Sync`: the C core has no locking.
 pub struct Machine {
     raw: Box<sys::zx_machine>,
+    /// The inserted .tap; the C core keeps a pointer into this heap buffer.
+    tape: Option<Box<[u8]>>,
     _not_sync: PhantomData<*const ()>,
 }
 
@@ -37,7 +39,7 @@ impl Machine {
         // SAFETY: the ROM is 'static, so it outlives the machine; `raw` is
         // boxed, so the CPU's context pointer to it stays valid.
         unsafe { sys::zx_init(&mut *raw, ROM_48.as_ptr()) };
-        Machine { raw, _not_sync: PhantomData }
+        Machine { raw, tape: None, _not_sync: PhantomData }
     }
 
     pub fn run_frame(&mut self) {
@@ -139,6 +141,29 @@ impl Machine {
             0 => Ok(()),
             e => Err(e),
         }
+    }
+
+    /// Inserts a `.tap` (the machine keeps its own copy). `Err` carries the C
+    /// error code (`ZX_ERR_FORMAT` for a block that overruns the data) and
+    /// leaves the previous tape, if any, in place.
+    pub fn tape_insert(&mut self, tap: &[u8]) -> Result<(), i32> {
+        let buf: Box<[u8]> = tap.into();
+        // SAFETY: the pointer and length describe `buf`, which `self.tape`
+        // keeps alive (heap storage does not move) for as long as the C side
+        // may read it; the C side only stores them on success.
+        match unsafe { sys::zx_tape_insert(&mut *self.raw, buf.as_ptr(), buf.len() as u32) } {
+            0 => {
+                self.tape = Some(buf);
+                Ok(())
+            }
+            e => Err(e),
+        }
+    }
+
+    /// Resets the machine and types `LOAD ""` + ENTER over the next frames.
+    pub fn tape_autostart(&mut self) {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_tape_autostart(&mut *self.raw) }
     }
 
     /// Host tests only: the current beeper level.

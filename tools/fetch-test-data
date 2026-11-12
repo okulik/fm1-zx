@@ -1,0 +1,36 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Fetch Patrik Rak's z80test 1.2a (MIT licensed) into build/test-data/ and
+# extract z80full.tap. The archive is checked against tools/test-data.sha256;
+# nothing fetched is committed (build/ is ignored).
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+dir="$root/build/test-data"
+zip=z80test-1.2a.zip
+url="https://github.com/raxoft/z80test/releases/download/v1.2a/$zip"
+mkdir -p "$dir"
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+want=$(awk -v f="$zip" '$2 == f { print $1 }' "$root/tools/test-data.sha256")
+[ -n "$want" ] || { echo "no pin for $zip in tools/test-data.sha256" >&2; exit 1; }
+
+if [ ! -f "$dir/$zip" ] || [ "$(sha256 "$dir/$zip")" != "$want" ]; then
+    curl -fsSL -o "$dir/$zip.part" "$url"
+    got=$(sha256 "$dir/$zip.part")
+    if [ "$got" != "$want" ]; then
+        rm -f "$dir/$zip.part"
+        echo "SHA-256 mismatch for $zip: expected $want, got $got" >&2
+        exit 1
+    fi
+    mv "$dir/$zip.part" "$dir/$zip"
+fi
+
+unzip -p "$dir/$zip" z80test-1.2a/z80full.tap > "$dir/z80full.tap.part"
+mv "$dir/z80full.tap.part" "$dir/z80full.tap"
+echo "z80full.tap ready in $dir"

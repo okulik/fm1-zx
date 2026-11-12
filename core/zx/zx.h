@@ -49,6 +49,12 @@ typedef struct zx_machine {
 	uint8_t insn_open;                        /* a prefix has been fetched; the instruction continues */
 	uint32_t io_t;                            /* frame T-state at which the current I/O cycle starts */
 
+	/* Tape state (tape.c). */
+	const uint8_t *tape;                      /* inserted .tap, owned by the caller; NULL when none */
+	uint32_t tape_len, tape_pos;              /* tape_pos: offset of the next block */
+	uint8_t auto_step;                        /* autostart progress, 0 = idle (tape.c) */
+	uint8_t auto_timer;                       /* frames left in the current autostart step */
+
 	/* ULA state (ula.c). */
 	uint8_t keys[8];                          /* row r = A(8+r); bit set = pressed */
 	uint8_t kempston;
@@ -107,6 +113,15 @@ enum { ZX_OK = 0, ZX_ERR_FORMAT = -1, ZX_ERR_UNSUPPORTED = -2 };
  * 128K ones give ZX_ERR_UNSUPPORTED, malformed or truncated ones ZX_ERR_FORMAT. */
 int zx_load_sna(zx_machine *m, const uint8_t *data, uint32_t len);
 int zx_load_z80(zx_machine *m, const uint8_t *data, uint32_t len);
+
+/* Tape (tape.c). The whole .tap is validated by insert (every block's 2-byte
+ * length must fit), then only the pointer is kept: `tap` must outlive its use.
+ * While a tape is inserted, LD-BYTES (0x0556) is trapped and loads the next
+ * block instantly; with none inserted the ROM routine runs. */
+int zx_tape_insert(zx_machine *m, const uint8_t *tap, uint32_t len);
+/* Resets the machine, then types LOAD "" + ENTER by itself over the frames
+ * that follow, starting once the ROM's editor is waiting for a key. */
+void zx_tape_autostart(zx_machine *m);
 
 #ifdef ZX_TESTING
 /* Host tests only. */

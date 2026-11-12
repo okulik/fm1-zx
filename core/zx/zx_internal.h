@@ -8,6 +8,8 @@
 
 #include "zx.h"
 
+#define ZX_LD_BYTES 0x0556u   /* ROM tape loading routine, trapped while a tape is inserted */
+
 /* Raw memory access, no timing: ROM below 0x4000, RAM above. */
 static inline uint8_t zx_mem_read(const zx_machine *m, uint16_t addr)
 {
@@ -51,5 +53,10 @@ void zx_screen_new_frame(zx_machine *m);
 
 /* Installs the CPU callbacks and the instruction clock (timing.c). */
 void zx_timing_init(zx_machine *m);
+
+/* The LD-BYTES trap (tape.c): the CPU's hook callback, and the autostart
+ * stepper run at the start of every frame. */
+uint8_t zx_tape_hook(void *context, uint16_t address);
+void zx_tape_frame(zx_machine *m);
 
 #endif
