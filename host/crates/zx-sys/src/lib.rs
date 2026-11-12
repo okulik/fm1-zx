@@ -555,3 +555,161 @@ pub fn pack_game_at(pack: &[u8], index: u32) -> Result<PackGame<'_>, i32> {
         e => Err(e),
     }
 }
+
+// ---- text UI and menus ---------------------------------------------------
+
+/// Events the device layer feeds the menus.
+pub mod ev {
+    use super::sys;
+    pub const UP: i32 = sys::EV_UP as i32;
+    pub const DOWN: i32 = sys::EV_DOWN as i32;
+    pub const LEFT: i32 = sys::EV_LEFT as i32;
+    pub const RIGHT: i32 = sys::EV_RIGHT as i32;
+    pub const OK: i32 = sys::EV_OK as i32;
+    pub const BACK: i32 = sys::EV_BACK as i32;
+    pub const HOME: i32 = sys::EV_HOME as i32;
+    pub const PAUSE: i32 = sys::EV_PAUSE as i32;
+    pub const CAPS: i32 = sys::EV_CAPS as i32;
+    pub const SYM: i32 = sys::EV_SYM as i32;
+}
+
+/// Views of the menu state machine.
+pub mod view {
+    use super::sys;
+    pub const PICKER: i32 = sys::VIEW_PICKER as i32;
+    pub const GAME: i32 = sys::VIEW_GAME as i32;
+    pub const MENU: i32 = sys::VIEW_MENU as i32;
+    pub const KEYS: i32 = sys::VIEW_KEYS as i32;
+    pub const OSK: i32 = sys::VIEW_OSK as i32;
+    pub const PAUSED: i32 = sys::VIEW_PAUSED as i32;
+    pub const MESSAGE: i32 = sys::VIEW_MESSAGE as i32;
+}
+
+/// Commands the menu state machine returns.
+pub mod cmd {
+    use super::sys;
+    pub const NONE: i32 = sys::CMD_NONE as i32;
+    pub const START: i32 = sys::CMD_START as i32;
+    pub const RESUME: i32 = sys::CMD_RESUME as i32;
+    pub const RESET: i32 = sys::CMD_RESET as i32;
+    pub const LEAVE: i32 = sys::CMD_LEAVE as i32;
+    pub const DIVIDER: i32 = sys::CMD_DIVIDER as i32;
+    pub const OSK_KEY: i32 = sys::CMD_OSK_KEY as i32;
+}
+
+pub const UI_COLS: usize = sys::UI_COLS as usize;
+pub const UI_ROWS: usize = sys::UI_ROWS as usize;
+
+/// The C side has one text grid; the lock serialises users of it (tests run in parallel).
+static UI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Exclusive access to the text grid. Taking it re-initialises the grid.
+pub struct Ui {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl Ui {
+    pub fn new() -> Self {
+        let guard = UI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: the ROM is a full 16 KiB image.
+        unsafe { sys::ui_init(ROM_48.as_ptr()) };
+        Ui { _guard: guard }
+    }
+
+    pub fn clear(&mut self, ink: u8, paper: u8) {
+        // SAFETY: the grid is initialised.
+        unsafe { sys::ui_clear(ink, paper) }
+    }
+
+    pub fn text(&mut self, col: usize, row: usize, s: &str, ink: u8, paper: u8) {
+        let c = std::ffi::CString::new(s).expect("no NUL in UI text");
+        // SAFETY: `c` is NUL-terminated.
+        unsafe { sys::ui_text(col as u32, row as u32, c.as_ptr(), ink, paper) }
+    }
+
+    /// The characters of grid row `row`, trailing spaces kept.
+    pub fn row_text(&self, row: usize) -> String {
+        let mut buf = [0i8; UI_COLS + 1];
+        // SAFETY: the buffer holds UI_COLS + 1 bytes.
+        unsafe { sys::ui_get_text(row as u32, buf.as_mut_ptr()) };
+        buf[..UI_COLS].iter().map(|&c| c as u8 as char).collect()
+    }
+
+    /// 240 palette indices of LCD row `row`.
+    pub fn compose_row(&self, row: usize) -> [u8; 240] {
+        let mut out = [0u8; 240];
+        // SAFETY: the buffer is LCD_W bytes.
+        unsafe { sys::ui_compose_row(row as u32, out.as_mut_ptr()) };
+        out
+    }
+
+    /// `(count, bitmap)` of the LCD rows changed since the last call.
+    pub fn dirty_rows(&mut self) -> (u32, [u8; 30]) {
+        let mut rows = [0u8; 30];
+        // SAFETY: the bitmap is LCD_ROWS / 8 bytes.
+        let n = unsafe { sys::ui_dirty_rows(rows.as_mut_ptr()) };
+        (n, rows)
+    }
+
+    /// Draws the menu's current view into the grid.
+    pub fn draw(&mut self, m: &Menu, pack: Option<&[u8]>) {
+        let p = pack.map_or(std::ptr::null(), |p| p.as_ptr());
+        // SAFETY: a non-null pack was validated by pack_open in the caller (the C side needs that).
+        unsafe { sys::menu_draw(&*m.raw, p) }
+    }
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The menu state machine.
+pub struct Menu {
+    raw: Box<sys::menu>,
+}
+
+impl Menu {
+    pub fn new(count: u32) -> Self {
+        // SAFETY: menu is plain integers and chars; all-zero is valid and menu_init sets it up.
+        let mut raw: Box<sys::menu> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        // SAFETY: `raw` is a valid menu.
+        unsafe { sys::menu_init(&mut *raw, count) };
+        Menu { raw }
+    }
+
+    /// Feeds an event; returns `(command, arg)`.
+    pub fn event(&mut self, ev: i32) -> (i32, u32) {
+        let mut arg = 0u32;
+        // SAFETY: both pointers are valid.
+        let c = unsafe { sys::menu_event(&mut *self.raw, ev, &mut arg) };
+        (c, arg)
+    }
+
+    pub fn view(&self) -> i32 {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_view(&*self.raw) }
+    }
+
+    pub fn set_view(&mut self, v: i32) {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_set_view(&mut *self.raw, v) }
+    }
+
+    pub fn message(&mut self, text: &str) {
+        let c = std::ffi::CString::new(text).expect("no NUL in text");
+        // SAFETY: `c` is NUL-terminated.
+        unsafe { sys::menu_message(&mut *self.raw, c.as_ptr()) }
+    }
+
+    pub fn set_divider(&mut self, d: u32) {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_set_divider(&mut *self.raw, d) }
+    }
+
+    pub fn row_is_ui(&self, lcd_row: usize) -> bool {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_row_is_ui(&*self.raw, lcd_row as u32) != 0 }
+    }
+}

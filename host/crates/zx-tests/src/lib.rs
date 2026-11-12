@@ -3,7 +3,7 @@
 
 //! Shared fixtures for the machine tests.
 
-pub use zx_sys::{km_default, KeyMapper, KmInput, KM_INPUTS, KM_NONE, KM_PULSE_FRAMES, lcd_budget_bytes, zx_edge, zx_regs, Beeper, Machine, PixFormat, Sched};
+pub use zx_sys::{cmd, ev, view, Menu, Ui, UI_COLS, UI_ROWS, km_default, KeyMapper, KmInput, KM_INPUTS, KM_NONE, KM_PULSE_FRAMES, lcd_budget_bytes, zx_edge, zx_regs, Beeper, Machine, PixFormat, Sched};
 
 /// Pokes `bytes` into the machine starting at `addr`.
 pub fn load(m: &mut Machine, addr: u16, bytes: &[u8]) {
@@ -315,4 +315,77 @@ pub fn basic_line(n: u16, tokens: &[u8]) -> Vec<u8> {
     out.extend_from_slice(tokens);
     out.push(0x0D);
     out
+}
+
+// ---- pack and golden-hash fixtures --------------------------------------
+
+fn put32(v: &mut [u8], at: usize, x: u32) {
+    v[at..at + 4].copy_from_slice(&x.to_le_bytes());
+}
+
+/// A valid pack of stored games named `names`, each with the default key map; built without the
+/// packer crate.
+pub fn build_pack(names: &[&str]) -> Vec<u8> {
+    let mut p = vec![0u8; 32 + 160 * names.len()];
+    p[..8].copy_from_slice(b"FMZXPACK");
+    p[8..10].copy_from_slice(&1u16.to_le_bytes());
+    p[10..12].copy_from_slice(&(names.len() as u16).to_le_bytes());
+    let keys = km_default();
+    for (i, name) in names.iter().enumerate() {
+        let e = 32 + 160 * i;
+        let raw = [i as u8; 16];
+        let off = p.len();
+        p.extend_from_slice(&raw);
+        p[e..e + name.len()].copy_from_slice(name.as_bytes());
+        p[e + 29] = zx_sys::PACK_SNA;
+        p[e + 30] = zx_sys::PACK_STORED;
+        p[e + 31] = 8;
+        put32(&mut p, e + 32, off as u32);
+        put32(&mut p, e + 36, raw.len() as u32);
+        put32(&mut p, e + 40, raw.len() as u32);
+        put32(&mut p, e + 44, zx_sys::pack_crc32(&raw));
+        for (k, a) in keys.iter().enumerate() {
+            p[e + 48 + 2 * k] = a[0];
+            p[e + 49 + 2 * k] = a[1];
+        }
+    }
+    let total = p.len() as u32;
+    put32(&mut p, 12, total);
+    let crc = zx_sys::pack_crc32(&p[32..]);
+    put32(&mut p, 16, crc);
+    p
+}
+
+/// FNV-1a (32 bit) of `data`.
+pub fn fnv1a(data: &[u8]) -> u32 {
+    data.iter().fold(0x811C_9DC5u32, |h, &b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+}
+
+/// Compares `hex` with the entry `name` of `tests/golden/hashes.txt` (`name = hex` lines), or
+/// rewrites the entry when `FMZX_GOLDEN_UPDATE=1`.
+pub fn golden(name: &str, hex: &str) {
+    use std::fmt::Write as _;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/hashes.txt");
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<(String, String)> = text
+        .lines()
+        .filter_map(|l| l.split_once(" = "))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    if std::env::var("FMZX_GOLDEN_UPDATE").is_ok_and(|v| v == "1") {
+        match lines.iter_mut().find(|(k, _)| k == name) {
+            Some(l) => l.1 = hex.to_string(),
+            None => lines.push((name.to_string(), hex.to_string())),
+        }
+        lines.sort();
+        let mut out = String::new();
+        for (k, v) in &lines {
+            writeln!(out, "{k} = {v}").unwrap();
+        }
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, out).unwrap();
+        return;
+    }
+    let want = lines.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+    assert_eq!(want, Some(hex), "golden hash {name} (FMZX_GOLDEN_UPDATE=1 rewrites it)");
 }

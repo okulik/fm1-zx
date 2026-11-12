@@ -6,6 +6,7 @@ path = [
   "tools/docker/toolchain.sha256",
   "tools/test-data.sha256",
   "host/Cargo.lock",
+  "host/crates/zx-tests/tests/golden/hashes.txt",
   "docs/superpowers/**",
 ]
 precedence = "aggregate"

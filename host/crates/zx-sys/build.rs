@@ -115,10 +115,13 @@ fn main() {
         .header(app.join("keymap.h").to_string_lossy())
         .header(app.join("lz4.h").to_string_lossy())
         .header(app.join("pack.h").to_string_lossy())
-        .allowlist_function("(zx|pix|lcd|km|pack|lz4)_.*")
+        .header(app.join("ui.h").to_string_lossy())
+        .header(app.join("menu.h").to_string_lossy())
+        .allowlist_function("(zx|pix|lcd|km|pack|lz4|ui|menu)_.*")
         .allowlist_type("(zx|pix|lcd|km|pack)_.*")
         .allowlist_type("keymap")
-        .allowlist_var("(ZX|LCD|PIX|KM|PACK)_.*")
+        .allowlist_type("menu")
+        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {
