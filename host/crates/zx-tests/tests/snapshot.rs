@@ -221,3 +221,95 @@ fn z80_v1_compressed_without_end_marker() {
     assert_loaded(&m, &regs, &ram);
     assert_eq!(m.border_line(0), 3);
 }
+
+fn run_dirty(m: &mut Machine) -> usize {
+    m.run_frame();
+    (0..192).filter(|&y| m.line_dirty(y)).count()
+}
+
+/// Snapshot code that spins with interrupts off: no screen writes.
+fn spin_snapshot() -> Vec<u8> {
+    let regs = zx_regs { pc: 0x8000, sp: 0xFF00, iff1: 0, iff2: 0, im: 1, ..sample_regs() };
+    let mut ram = sample_ram();
+    ram[0x4000..0x4003].copy_from_slice(&[0xF3, 0x18, 0xFE]); // DI; JR $
+    make_sna(&regs, &ram, 2)
+}
+
+#[test]
+fn load_then_first_frame_redraws_everything() {
+    let mut m = dirty_machine();
+    m.run_frame();
+    assert_eq!(run_dirty(&mut m), 0);
+    m.load_sna(&spin_snapshot()).unwrap();
+    assert_eq!(run_dirty(&mut m), 192, "first frame after a load reports every line");
+    assert_eq!(run_dirty(&mut m), 0, "the next only real changes");
+    m.poke(0x4100, 0x01);
+    assert_eq!((0..192).filter(|&y| m.line_dirty(y)).count(), 1);
+
+    let mut m = dirty_machine();
+    let regs = zx_regs { pc: 0x8000, sp: 0xFF00, iff1: 0, iff2: 0, im: 1, ..sample_regs() };
+    let mut ram = sample_ram();
+    ram[0x4000..0x4003].copy_from_slice(&[0xF3, 0x18, 0xFE]);
+    m.load_z80(&make_z80_v3(&regs, &ram, 0)).unwrap();
+    assert_eq!(run_dirty(&mut m), 192);
+    assert_eq!(run_dirty(&mut m), 0);
+}
+
+/// CALL 0556h; JR $ at 0x8000 as a snapshot.
+fn ld_bytes_snapshot() -> Vec<u8> {
+    let regs = zx_regs { pc: 0x8000, sp: 0xFF00, af: 0xFF01, ix: 0x9000, de: 4, iff1: 0, iff2: 0, im: 1, ..sample_regs() };
+    let mut ram = sample_ram();
+    ram[0x4000..0x4005].copy_from_slice(&[0xCD, 0x56, 0x05, 0x18, 0xFE]);
+    make_sna(&regs, &ram, 1)
+}
+
+#[test]
+fn load_cancels_autostart_and_ejects_the_tape() {
+    let tap = tap_block(0xFF, &[1, 2, 3, 4]);
+    let mut m = Machine::new();
+    m.tape_insert(&tap).unwrap();
+    m.tape_autostart();
+    // run until "LOAD" is being typed, so the stepper is mid-sequence
+    let mut frames = 0;
+    while !(22..24).any(|r| screen_text(&m, r).contains("LOAD")) {
+        m.run_frame();
+        frames += 1;
+        assert!(frames < 1000, "autostart never typed");
+    }
+    // a game that ORs every key it sees into 0xA000
+    let regs = zx_regs { pc: 0x8000, sp: 0xFF00, iff1: 0, iff2: 0, im: 1, ..sample_regs() };
+    let mut ram = sample_ram();
+    // LD BC,00FEh; IN A,(C); CPL; AND 1Fh; LD HL,A000h; OR (HL); LD (HL),A; JR loop
+    ram[0x4000..0x4010].copy_from_slice(&[
+        0xF3, 0x01, 0xFE, 0x00, 0xED, 0x78, 0x2F, 0xE6, 0x1F, 0x21, 0x00, 0xA0, 0xB6, 0x77, 0x18, 0xF1,
+    ]);
+    ram[0x6000] = 0; // the byte at 0xA000
+    m.load_sna(&make_sna(&regs, &ram, 0)).unwrap();
+    for _ in 0..100 {
+        m.run_frame();
+    }
+    assert_eq!(m.peek(0xA000), 0, "no autostart key reached the game");
+
+    // the tape is gone too: the ROM's own LD-BYTES runs
+    let mut m = Machine::new();
+    m.tape_insert(&tap).unwrap();
+    m.load_sna(&ld_bytes_snapshot()).unwrap();
+    m.run_frame();
+    let pc = m.regs().pc;
+    assert!((0x0556..0x0600).contains(&pc), "no trap after a load: {pc:04X}");
+}
+
+#[test]
+fn set_regs_resumes_a_halted_cpu() {
+    let mut m = Machine::new();
+    load(&mut m, 0x8000, &[0xF3, 0x76]); // DI; HALT
+    load(&mut m, 0x9000, &[0x3E, 0x77, 0x32, 0x00, 0xA0, 0x18, 0xFE]); // LD A,77h; LD (A000h),A; JR $
+    m.set_regs(&zx_regs { pc: 0x8000, sp: 0xFF00, iff1: 0, iff2: 0, ..sample_regs() });
+    m.run_frame();
+    assert_eq!(m.regs().pc, 0x8002, "halted");
+    let mut r = m.regs();
+    r.pc = 0x9000;
+    m.set_regs(&r);
+    m.run_frame();
+    assert_eq!(m.peek(0xA000), 0x77);
+}

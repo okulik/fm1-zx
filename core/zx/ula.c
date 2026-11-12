@@ -46,12 +46,14 @@ void zx_ula_new_frame(zx_machine *m)
 {
 	unsigned i;
 
+	m->start_level = m->base_level;
 	m->edge_count = 0;
 	m->border_filled = 0;   /* border_col is the colour in effect at the last frame's end */
 	for (i = 0; i < m->pend_border_count; i++)
 		border_apply(m, m->pend_borders[i].tstate, m->pend_borders[i].level);
 	for (i = 0; i < m->pend_edge_count; i++)
 		edge_apply(m, m->pend_edges[i].tstate, m->pend_edges[i].level);
+	for (i = 0; i < m->pend_edge_count; i++) m->base_level = m->pend_edges[i].level;
 	m->pend_border_count = 0;
 	m->pend_edge_count = 0;
 }
@@ -76,6 +78,7 @@ void zx_port_out(zx_machine *m, uint16_t port, uint8_t value)
 	if (level != m->level) {
 		m->level = level;
 		if (!late) {
+			m->base_level = level;
 			edge_apply(m, t, level);
 		} else if (m->pend_edge_count < 4u) {
 			m->pend_edges[m->pend_edge_count].tstate = t - ZX_FRAME_TSTATES;
@@ -139,6 +142,11 @@ const zx_edge *zx_edges(const zx_machine *m, uint32_t *count)
 {
 	*count = m->edge_count;
 	return m->edges;
+}
+
+uint8_t zx_edges_start_level(const zx_machine *m)
+{
+	return m->start_level;
 }
 
 uint8_t zx_border_line(const zx_machine *m, unsigned frame_line)

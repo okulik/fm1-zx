@@ -54,6 +54,11 @@ void zx_beeper_init(zx_beeper *b, uint32_t rate_num, uint32_t rate_den)
 	b->dc_on = 1;
 }
 
+void zx_beeper_set_level(zx_beeper *b, uint8_t level)
+{
+	b->level = level & 3u;
+}
+
 uint32_t zx_beeper_frame_samples(const zx_beeper *b)
 {
 	return (b->rem + b->num) / b->den;

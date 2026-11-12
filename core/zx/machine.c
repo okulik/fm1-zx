@@ -21,6 +21,7 @@ void zx_init(zx_machine *m, const uint8_t *rom)
 	memset(m, 0, sizeof *m);
 	m->rom = rom;
 	memset(m->dirty, 0xFF, sizeof m->dirty);
+	m->force_dirty = 1;
 
 	zx_timing_init(m);
 	zx_ula_init(m);
@@ -81,6 +82,13 @@ void zx_set_regs(zx_machine *m, const zx_regs *r)
 	c->i = r->i;          c->r = r->r;
 	c->iff1 = r->iff1;    c->iff2 = r->iff2;
 	c->im = r->im;
+	c->r7 = r->r;
+	c->halt_line = 0;
+	c->resume = 0;
+	c->request = 0;
+	c->int_line = 0;
+	c->q = 0;
+	Z80_MEMPTR(*c) = 0;
 	m->insn_open = 0;
 }
 

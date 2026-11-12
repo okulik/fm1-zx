@@ -104,6 +104,13 @@ impl Machine {
         }
     }
 
+    /// Beeper level in effect at the start of the current edge list; feed it
+    /// to [`Beeper::set_level`] before rendering that list.
+    pub fn edges_start_level(&self) -> u8 {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_edges_start_level(&*self.raw) }
+    }
+
     /// Border colour on a frame line (0-311).
     pub fn border_line(&self, line: usize) -> u8 {
         // SAFETY: `raw` was initialised by zx_init.
@@ -158,6 +165,13 @@ impl Machine {
             }
             e => Err(e),
         }
+    }
+
+    /// Removes the tape and drops the buffer the machine was reading.
+    pub fn tape_eject(&mut self) {
+        // SAFETY: `raw` was initialised by zx_init; the C side forgets the pointer first.
+        unsafe { sys::zx_tape_eject(&mut *self.raw) }
+        self.tape = None;
     }
 
     /// Resets the machine and types `LOAD ""` + ENTER over the next frames.
@@ -226,6 +240,17 @@ impl Beeper {
         let n = unsafe { sys::zx_beeper_render(&mut *self.raw, edges.as_ptr(), edges.len() as u32, out.as_mut_ptr()) };
         out.truncate(n as usize);
         out
+    }
+
+    /// Sets the level the next render starts from.
+    pub fn set_level(&mut self, level: u8) {
+        // SAFETY: `raw` was initialised by zx_beeper_init.
+        unsafe { sys::zx_beeper_set_level(&mut *self.raw, level) }
+    }
+
+    /// Host tests only: the renderer's current level.
+    pub fn test_level(&self) -> u8 {
+        self.raw.level
     }
 
     /// Host tests only: switches the DC blocker on or off.

@@ -3,6 +3,7 @@
 
 /* .tap blocks, the LD-BYTES trap and LOAD "" autostart. */
 
+#include <stddef.h>
 #include <string.h>
 
 #include "zx_internal.h"
@@ -22,6 +23,10 @@ int zx_tape_insert(zx_machine *m, const uint8_t *tap, uint32_t len)
 {
 	uint32_t pos = 0;
 
+	if (len == 0) {
+		zx_tape_eject(m);
+		return ZX_OK;
+	}
 	while (pos < len) {
 		if (len - pos < 2u) return ZX_ERR_FORMAT;
 		pos += 2u + ((uint32_t)tap[pos] | ((uint32_t)tap[pos + 1u] << 8));
@@ -31,6 +36,13 @@ int zx_tape_insert(zx_machine *m, const uint8_t *tap, uint32_t len)
 	m->tape_len = len;
 	m->tape_pos = 0;
 	return ZX_OK;
+}
+
+void zx_tape_eject(zx_machine *m)
+{
+	m->tape = NULL;
+	m->tape_len = 0;
+	m->tape_pos = 0;
 }
 
 /* LD-BYTES on entry: A = flag, IX = destination, DE = length, carry set for

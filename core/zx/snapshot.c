@@ -72,16 +72,11 @@ static int rle_decode(const uint8_t *src, uint32_t len, uint8_t *dst, uint32_t w
 
 /* Puts the machine in the state a freshly loaded snapshot has: new registers,
  * a clean CPU and clock, the next frame starting at T=0, the border colour in
- * effect from line 0, no pending beeper or border changes, all lines dirty. */
+ * effect from line 0, no pending beeper or border changes, all lines dirty (and
+ * again for the first frame run), autostart cancelled, tape ejected. */
 static void commit(zx_machine *m, const snap *s)
 {
-	zx_set_regs(m, &s->r);
-	m->cpu.halt_line = 0;
-	m->cpu.resume = 0;
-	m->cpu.request = 0;
-	m->cpu.int_line = 0;
-	m->cpu.q = 0;
-	m->cpu.r7 = s->r.r;
+	zx_set_regs(m, &s->r);   /* also clears halt, resume, request and MEMPTR */
 
 	m->frame_tstate = 0;
 	m->run_base = 0;
@@ -97,9 +92,18 @@ static void commit(zx_machine *m, const snap *s)
 	m->pend_edge_count = 0;
 	m->pend_border_count = 0;
 	m->level = 0;
+	m->base_level = 0;
+	m->start_level = 0;
 	m->ear_in = 0;
 
+	/* a loaded game starts clean: no autostart typing, no tape */
+	m->auto_step = 0;
+	m->auto_timer = 0;
+	memset(m->keys, 0, sizeof m->keys);
+	zx_tape_eject(m);
+
 	memset(m->dirty, 0xFF, sizeof m->dirty);
+	m->force_dirty = 1;
 }
 
 /* ---- .sna ---------------------------------------------------------------- */

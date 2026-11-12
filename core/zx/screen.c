@@ -13,6 +13,11 @@ void zx_screen_new_frame(zx_machine *m)
 {
 	unsigned i;
 
+	if (m->force_dirty) {
+		m->force_dirty = 0;
+		for (i = 0; i < sizeof m->dirty; i++) m->dirty[i] = 0xFF;
+		return;
+	}
 	for (i = 0; i < sizeof m->dirty; i++) m->dirty[i] = 0;
 	if (((m->frame_count + 1u) & 15u) != 0) return;
 	for (i = 0; i < 768u; i++) {

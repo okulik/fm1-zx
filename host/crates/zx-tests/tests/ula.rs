@@ -204,3 +204,110 @@ fn floating_bus() {
     assert_eq!(float_at(&mut m, 14335 + 192 * 224), 0xFF);
     assert_eq!(float_at(&mut m, 69000), 0xFF);
 }
+
+/// `EI; HALT; LD A,(A001h); INC A; LD (A001h),A; JR 0x8000` under IM `im`,
+/// with an IM 2 handler at 0x9000 that counts into 0xA000. IM 1 runs the ROM's
+/// own handler at 0x38 (it counts FRAMES at 0x5C78 and needs IY = ERR_NR).
+fn halt_loop(im: u8) -> Machine {
+    let mut m = Machine::new();
+    load(&mut m, 0x80FF, &[0x00, 0x90]); // IM 2 vector word for bus value 0xFF
+    // LD A,(A000h); INC A; LD (A000h),A; EI; RETI
+    load(&mut m, 0x9000, &[0x3A, 0x00, 0xA0, 0x3C, 0x32, 0x00, 0xA0, 0xFB, 0xED, 0x4D]);
+    load(&mut m, 0x8000, &[0xFB, 0x76, 0x3A, 0x01, 0xA0, 0x3C, 0x32, 0x01, 0xA0, 0x18, 0xF5]);
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.sp = 0xFFF0;
+    r.i = 0x80;
+    r.iy = 0x5C3A;
+    r.im = im;
+    m.set_regs(&r);
+    m
+}
+
+#[test]
+fn one_interrupt_per_frame_with_ei_halt() {
+    for im in [1u8, 2] {
+        let mut m = halt_loop(im);
+        for f in 1..=5u32 {
+            m.run_frame();
+            // the main loop gets past the HALT once per frame, so PC returned to just after it
+            assert_eq!(m.peek(0xA001) as u32, f, "IM {im}, frame {f}: HALT left once");
+            if im == 2 {
+                assert_eq!(m.peek(0xA000) as u32, f, "IM 2 handler runs once per frame");
+            } else {
+                assert_eq!(m.peek(0x5C78) as u32, f, "IM 1: the ROM handler bumps FRAMES once per frame");
+            }
+            assert_eq!(m.regs().pc, 0x8002, "parked at the HALT's successor loop head");
+        }
+    }
+}
+
+/// Renders the machine's current edge list the way a firmware would.
+fn render_frame(m: &Machine, b: &mut Beeper) {
+    b.set_level(m.edges_start_level());
+    b.render(m.edges());
+}
+
+#[test]
+fn renderer_level_resyncs_after_edge_overflow() {
+    let mut m = Machine::new();
+    let mut b = Beeper::new(48_000, 1);
+    // 5001 toggles overflow the list; the dropped ones leave a renderer one level behind.
+    let mut code = Vec::new();
+    for i in 0..5001 {
+        code.extend_from_slice(if i % 2 == 0 { &[0xED, 0x41] } else { &[0xED, 0x51] });
+    }
+    // then spin with no more output
+    code.extend_from_slice(&[0x18, 0xFE]);
+    load(&mut m, 0x8000, &code);
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.bc = 0x10FE;
+    r.sp = 0xFF00;
+    r.iff1 = 0;
+    m.set_regs(&r);
+    m.run_frame();
+    assert_eq!(m.edges_start_level(), 0);
+    render_frame(&m, &mut b);
+    assert_ne!(b.test_level(), m.test_level(), "the overflow left the renderer behind");
+    m.run_frame();
+    assert_eq!(m.edges_start_level(), m.test_level(), "no edges: the list starts at the machine's level");
+    render_frame(&m, &mut b);
+    assert_eq!(b.test_level(), m.test_level());
+}
+
+#[test]
+fn renderer_level_resyncs_after_a_snapshot_load() {
+    let mut m = Machine::new();
+    let mut b = Beeper::new(48_000, 1);
+    run_at(&mut m, &[0xD3, 0xFE], 0x10, 0, 0, 100);
+    assert_eq!(m.test_level(), 2);
+    b.set_level(2); // the renderer follows
+    let regs = zx_regs { pc: 0x8000, sp: 0xFF00, iff1: 0, iff2: 0, ..sample_regs() };
+    let mut ram = sample_ram();
+    ram[0x4000..0x4003].copy_from_slice(&[0xF3, 0x18, 0xFE]);
+    m.load_sna(&make_sna(&regs, &ram, 1)).unwrap();
+    assert_eq!(m.test_level(), 0, "the load resets the beeper level");
+    m.run_frame();
+    render_frame(&m, &mut b);
+    assert_eq!(b.test_level(), m.test_level());
+    assert_eq!(b.test_level(), 0);
+}
+
+#[test]
+fn start_level_follows_edges_across_frames() {
+    let mut m = Machine::new();
+    // OUT (FE),A with A = 0x10 near the end of frame 1, then idle
+    load(&mut m, 0x8000, &[0x3E, 0x10, 0xD3, 0xFE, 0x18, 0xFE]);
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.sp = 0xFF00;
+    r.iff1 = 0;
+    m.set_regs(&r);
+    m.run_frame();
+    assert_eq!(m.edges_start_level(), 0);
+    assert_eq!(m.edges().len(), 1);
+    m.run_frame();
+    assert_eq!(m.edges_start_level(), 2);
+    assert!(m.edges().is_empty());
+}

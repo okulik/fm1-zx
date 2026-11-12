@@ -12,6 +12,7 @@ fn idle() -> Machine {
     r.pc = 0x8000;
     r.sp = 0xFF00;
     m.set_regs(&r);
+    m.run_frame(); // the first frame reports every line dirty (one-shot redraw)
     m.run_frame();
     m
 }
@@ -94,6 +95,7 @@ fn dirty_marks() {
 #[test]
 fn cpu_writes_mark_lines() {
     let mut m = Machine::new();
+    m.run_frame(); // the one-shot full redraw
     // LD A,1; LD (4800h),A; LD (4800h),A; JR $ : line 64 once
     load(&mut m, 0x8000, &[0xF3, 0x3E, 0x01, 0x32, 0x00, 0x48, 0x32, 0x00, 0x48, 0x18, 0xFE]);
     let mut r = m.regs();
@@ -103,4 +105,16 @@ fn cpu_writes_mark_lines() {
     assert_eq!(dirty_lines(&m), vec![64]);
     m.run_frame();
     assert!(dirty_lines(&m).is_empty());
+}
+
+#[test]
+fn first_frame_after_init_redraws_everything() {
+    let mut m = Machine::new();
+    assert_eq!(dirty_lines(&m).len(), 192, "dirty right after init");
+    m.run_frame();
+    assert_eq!(dirty_lines(&m).len(), 192, "the first frame reports all lines");
+    m.run_frame();
+    assert!(dirty_lines(&m).is_empty(), "then only real changes");
+    m.poke(0x4000, 0xFF);
+    assert_eq!(dirty_lines(&m), vec![0]);
 }

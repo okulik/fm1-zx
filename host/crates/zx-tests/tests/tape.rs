@@ -180,7 +180,6 @@ fn rejects_malformed_tap() {
 }
 
 #[test]
-#[cfg_attr(debug_assertions, ignore = "slow; run with --release")]
 fn z80test_full_passes() {
     // CARGO_MANIFEST_DIR is host/crates/zx-tests.
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../build/test-data/z80full.tap");
@@ -217,4 +216,28 @@ fn z80test_full_passes() {
         "z80full did not report success after {frames} frames:\n{}",
         text.join("\n")
     );
+}
+
+#[test]
+fn eject_restores_the_rom_routine() {
+    for by_empty_insert in [false, true] {
+        let mut m = Machine::new();
+        m.tape_insert(&tap_block(0xFF, &[1, 2, 3, 4])).unwrap();
+        if by_empty_insert {
+            m.tape_insert(&[]).unwrap();
+        } else {
+            m.tape_eject();
+        }
+        load_code(&mut m);
+        let mut r = m.regs();
+        r.pc = 0x8000;
+        r.sp = 0xFF00;
+        r.af = 0xFF01;
+        r.ix = 0x9000;
+        r.de = 4;
+        m.set_regs(&r);
+        m.run_frame();
+        let pc = m.regs().pc;
+        assert!((0x0556..0x0600).contains(&pc), "real ROM routine runs, no trap: {pc:04X}");
+    }
 }

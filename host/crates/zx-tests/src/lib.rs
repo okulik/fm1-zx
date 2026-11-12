@@ -68,11 +68,6 @@ pub fn count_interrupts(frames: u32, di: bool) -> u8 {
     m.peek(0xA000)
 }
 
-/// Frame count times the frame length, plus the T-states into the current frame.
-pub fn total_tstates(m: &Machine) -> u64 {
-    m.frame_count() as u64 * zx_sys::ZX_FRAME_TSTATES as u64 + m.frame_tstate() as u64
-}
-
 /// Executes the instruction bytes at 0x8000 with `b`, `c`, `a` loaded and
 /// interrupts off, starting at frame T-state `t`. Returns the machine.
 pub fn run_at(m: &mut Machine, code: &[u8], a: u8, b: u8, c: u8, t: u32) {

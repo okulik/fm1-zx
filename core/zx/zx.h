@@ -40,6 +40,7 @@ typedef struct zx_machine {
 	uint32_t frame_tstate;                    /* T-states already run into the next frame */
 	uint32_t frame_count;
 	uint8_t dirty[ZX_SCREEN_LINES / 8u];      /* bit (y & 7) of byte y >> 3: line y changed (screen.c) */
+	uint8_t force_dirty;                      /* the next frame reports every line dirty */
 
 	/* Timing state (timing.c). All T-states are frame coordinates: 0 is INT. */
 	Z80InsnClock clock;                       /* M-cycle positions within the instruction */
@@ -60,6 +61,8 @@ typedef struct zx_machine {
 	uint8_t kempston;
 	uint8_t ear_in;                           /* bit 4 of the last OUT 0xFE */
 	uint8_t level;                            /* beeper level now, edges dropped or not */
+	uint8_t base_level;                       /* level at the end of the frame's own edges (pending ones excluded) */
+	uint8_t start_level;                      /* level at the start of the current edge list */
 	uint8_t border_col;                       /* colour applying from line border_filled on */
 	uint16_t border_filled;                   /* border_lines[0..border_filled) are final */
 	uint8_t border_lines[ZX_FRAME_LINES];
@@ -78,6 +81,8 @@ void zx_init(zx_machine *m, const uint8_t *rom);
 void zx_run_frame(zx_machine *m);
 
 void zx_get_regs(const zx_machine *m, zx_regs *r);
+/* Sets the registers and leaves a runnable CPU at r->pc: a halted CPU resumes,
+ * and any unfinished instruction or pending interrupt request is dropped. */
 void zx_set_regs(zx_machine *m, const zx_regs *r);
 
 uint8_t zx_peek(const zx_machine *m, uint16_t addr);
@@ -89,14 +94,26 @@ uint32_t zx_frame_count(const zx_machine *m);
 void zx_set_keys(zx_machine *m, const uint8_t rows[8]);   /* row r = address line A(8+r); bit set = pressed */
 void zx_set_kempston(zx_machine *m, uint8_t bits);        /* bit0 right, 1 left, 2 down, 3 up, 4 fire */
 
-/* Beeper level changes of the frame run last, in T-state order. */
+/* Beeper level changes of the frame run last, in T-state order. The buffer is
+ * valid until the next zx_run_frame, zx_init, zx_load_* or zx_tape_autostart.
+ * A firmware should render it into a sample FIFO in the main loop right after
+ * each frame; the audio ISR only drains that FIFO.
+ *
+ * The list is capped at ZX_MAX_EDGES, so after a frame that overflowed (and
+ * after a snapshot load) a renderer's level may differ from the machine's.
+ * zx_edges_start_level() is the level in effect at the start of that list:
+ * call zx_beeper_set_level() with it before rendering the list. */
 const zx_edge *zx_edges(const zx_machine *m, uint32_t *count);
+uint8_t zx_edges_start_level(const zx_machine *m);
 
 /* Border colour (0-7) on frame line 0-311 of the frame run last. */
 uint8_t zx_border_line(const zx_machine *m, unsigned frame_line);
 
 /* Nonzero when screen line y (0-191) changed since the start of the frame run
- * last; every line is dirty after zx_init until the next frame run. */
+ * last. After zx_init, a snapshot load or zx_tape_autostart every line is dirty
+ * at once, and the next zx_run_frame reports all 192 lines dirty again (a
+ * one-shot full redraw, so a "run frame, then send dirty lines" loop repaints a
+ * freshly loaded screen); the frame after that reports only real changes. */
 int zx_line_dirty(const zx_machine *m, unsigned y);
 
 /* Decodes screen line y to 256 palette indices: 0-7, plus 8 when BRIGHT.
@@ -113,12 +130,18 @@ enum { ZX_OK = 0, ZX_ERR_FORMAT = -1, ZX_ERR_UNSUPPORTED = -2 };
  * 128K ones give ZX_ERR_UNSUPPORTED, malformed or truncated ones ZX_ERR_FORMAT. */
 int zx_load_sna(zx_machine *m, const uint8_t *data, uint32_t len);
 int zx_load_z80(zx_machine *m, const uint8_t *data, uint32_t len);
+/* A successful load starts a clean game: it cancels a pending autostart
+ * (releasing any keys it injected), ejects the tape, and makes the next frame
+ * report every screen line dirty. */
 
 /* Tape (tape.c). The whole .tap is validated by insert (every block's 2-byte
  * length must fit), then only the pointer is kept: `tap` must outlive its use.
  * While a tape is inserted, LD-BYTES (0x0556) is trapped and loads the next
  * block instantly; with none inserted the ROM routine runs. */
 int zx_tape_insert(zx_machine *m, const uint8_t *tap, uint32_t len);
+/* Removes the tape (the ROM's LD-BYTES runs again). zx_tape_insert with len 0
+ * does the same, whatever the pointer. */
+void zx_tape_eject(zx_machine *m);
 /* Resets the machine, then types LOAD "" + ENTER by itself over the frames
  * that follow, starting once the ROM's editor is waiting for a key. */
 void zx_tape_autostart(zx_machine *m);
@@ -141,6 +164,8 @@ typedef struct zx_beeper {
 } zx_beeper;
 
 void zx_beeper_init(zx_beeper *b, uint32_t rate_num, uint32_t rate_den);   /* rate = num/den Hz */
+/* Forces the level the next render starts from (see zx_edges_start_level). */
+void zx_beeper_set_level(zx_beeper *b, uint8_t level);
 uint32_t zx_beeper_frame_samples(const zx_beeper *b);                      /* samples the next render writes */
 /* Renders one frame; `out` holds zx_beeper_frame_samples() entries. Edge T-states
  * must ascend and are clamped to the frame. Returns the sample count. */

@@ -12,8 +12,14 @@
  * to cpu.cycles with z80_wait (Z80_WITH_VOLATILE_CYCLES makes the library
  * re-read cpu.cycles after the instruction function returns).
  *
- * Only the start of each M-cycle is contended. The internal "extra" T-states
- * inside an M-cycle (e.g. the 5 after a JR operand) are not contended. */
+ * The start of each M-cycle is contended, and so are the internal "extra"
+ * T-states that follow a memory or I/O M-cycle (e.g. the 5 after a JR operand,
+ * which are contended at the operand's address). Only the extras of an M1/IR
+ * cycle are not contended. */
+
+#ifndef Z80_WITH_VOLATILE_CYCLES
+#error "timing.c needs Z80_WITH_VOLATILE_CYCLES: contention is added with z80_wait mid-instruction"
+#endif
 
 #include "zx.h"
 #include "zx_internal.h"
