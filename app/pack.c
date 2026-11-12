@@ -51,7 +51,7 @@ int pack_open(const uint8_t *base, uint32_t avail, uint32_t *count)
     }
     n = rd16(base + 10);
     total = rd32(base + 12);
-    if (total > avail || total < PACK_HEADER_SIZE || n * PACK_ENTRY_SIZE > total - PACK_HEADER_SIZE) {
+    if (total > avail || total < PACK_HEADER_SIZE || (total & 3u) != 0u || n == 0u || n * PACK_ENTRY_SIZE > total - PACK_HEADER_SIZE) {
         return ZX_ERR_FORMAT;
     }
     if (pack_crc32(base + PACK_HEADER_SIZE, total - PACK_HEADER_SIZE) != rd32(base + 16)) {

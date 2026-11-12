@@ -78,19 +78,19 @@ fn build_and_read_back() {
 #[test]
 fn validation_loads_each_game() {
     let (regs, ram) = (sample_regs(), sample_ram());
-    let cases: [(&str, Vec<u8>); 4] = [
-        ("bad.sna", make_sna(&regs, &ram, 0)[..1000].to_vec()),
-        ("bad.z80", vec![0u8; 20]),
-        ("bad.tap", vec![0x20, 0x00, 0x00]), // a block that overruns the data
-        ("bad.SNA", b"garbage".to_vec()),
+    let cases: [(&str, Vec<u8>, &str); 4] = [
+        ("bad.sna", make_sna(&regs, &ram, 0)[..1000].to_vec(), "not a loadable .sna"),
+        ("bad.z80", vec![0u8; 20], "not a loadable .z80"),
+        ("bad.tap", vec![0x20, 0x00, 0x00], "not a valid .tap"), // a block that overruns the data
+        ("bad.SNA", b"garbage".to_vec(), "not a loadable .sna"),
     ];
-    for (file, bytes) in cases {
+    for (file, bytes, cause) in cases {
         let d = Dir::new("invalid");
         d.file("ok.sna", &make_sna(&regs, &ram, 0));
         d.file(file, &bytes);
         let text = game("ok", "Good", "ok.sna", "") + &game("bad", "Bad", file, "");
         let e = build_pack(&d.manifest(&text)).unwrap_err();
-        assert!(e.contains(file), "{e}");
+        assert!(e.starts_with(&format!("{file}: {cause}")), "{e}");
     }
 }
 

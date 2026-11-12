@@ -457,6 +457,21 @@ pub fn pack_crc32(data: &[u8]) -> u32 {
 }
 
 /// Decodes one raw LZ4 block into at most `cap` bytes; `Err` carries the C error code.
+pub fn lz4_decode_raw_cap(src: &[u8], cap: u32) -> Result<(), i32> {
+    // Only for testing the cap limit: the output buffer is a single byte, and the decoder must
+    // refuse before touching it.
+    let mut out = [0u8; 1];
+    let mut len = 0u32;
+    // SAFETY: the decoder rejects any cap above its limit without writing; for a valid cap the
+    // caller must pass a buffer that large, so this is only used with an oversized cap.
+    assert!(cap > 0x7FFF_FFFF, "lz4_decode_raw_cap is for oversized caps only");
+    match unsafe { sys::lz4_block_decode(src.as_ptr(), src.len() as u32, out.as_mut_ptr(), cap, &mut len) } {
+        0 => Ok(()),
+        e => Err(e),
+    }
+}
+
+/// Decodes one raw LZ4 block into at most `cap` bytes; `Err` carries the C error code.
 pub fn lz4_decode(src: &[u8], cap: usize) -> Result<Vec<u8>, i32> {
     let mut out = vec![0u8; cap];
     let mut len = 0u32;

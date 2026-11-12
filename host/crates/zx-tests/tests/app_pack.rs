@@ -36,8 +36,19 @@ fn lz4_roundtrip() {
 
 #[test]
 fn lz4_known_good() {
-    // 1 literal 'a', match offset 1 length 4+0: "aaaaa"
+    // 1 literal 'a', match offset 1 length 4+0: "aaaaa"; a block that ends with a match
+    // (no trailing literals) is non-canonical, but the decoder tolerates it, memory-safely.
     assert_eq!(lz4_decode(&[0x10, b'a', 1, 0], 16).unwrap(), b"aaaaa");
+}
+
+#[test]
+fn lz4_tolerates_non_canonical_ending() {
+    assert_eq!(lz4_decode(&[0x10, b'a', 1, 0], 5).unwrap(), b"aaaaa");
+}
+
+#[test]
+fn lz4_rejects_huge_cap() {
+    assert_eq!(lz4_decode_raw_cap(&[0x10, b'a', 1, 0], 0x8000_0000), Err(ZX_ERR_FORMAT));
 }
 
 #[test]
@@ -87,7 +98,9 @@ fn lz4_fuzz_mutations() {
             ok += 1;
         }
     }
-    eprintln!("fuzz: {ok} of 10000 mutations still decoded");
+    // sanity: the mutations are neither all rejected nor all harmless
+    assert!(ok > 0 && ok < 10_000, "{ok} of 10000 mutations decoded");
+    eprintln!("lz4 fuzz: {ok} of 10000 mutations still decoded");
 }
 
 #[test]
@@ -112,7 +125,7 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
 
 fn fix_crc(p: &mut [u8]) {
     let total = u32::from_le_bytes(p[12..16].try_into().unwrap()) as usize;
-    let end = total.min(p.len());
+    let end = total.min(p.len()).max(32);
     let c = pack_crc32(&p[32..end]);
     put32(p, 16, c);
 }
@@ -171,7 +184,7 @@ fn pack_open_ok() {
         assert_eq!(g.keys()[3], [3, 0xFF]);
         assert_eq!(g.extract(s.raw.len()).unwrap(), s.raw);
     }
-    // one extra byte of room after the pack is fine
+    // extra room after the pack is fine
     let mut q = p.clone();
     q.extend([0u8; 100]);
     assert_eq!(pack_open(&q), Ok(2));
@@ -304,4 +317,74 @@ fn extract_lz4_length_mismatch() {
     fix_crc(&mut p);
     let g = pack_game_at(&p, 0).unwrap();
     assert_eq!(g.extract(specs[0].raw.len() + 1), Err(ZX_ERR_FORMAT));
+}
+
+#[test]
+fn entry_stored_len_near_u32_max() {
+    // a valid in-table offset with stored_len = 0xFFFFFFFC: `stored > total - offset`
+    entry_case(|p| put32(p, 32 + 36, 0xFFFF_FFFC));
+}
+
+#[test]
+fn header_needs_games_and_alignment() {
+    let (_, mut p) = two();
+    p[10] = 0;
+    p[11] = 0;
+    fix_crc(&mut p);
+    assert_eq!(pack_open(&p), Err(ZX_ERR_FORMAT), "count 0");
+    let (_, mut p) = two();
+    let n = p.len();
+    p.push(0);
+    put32(&mut p, 12, n as u32 + 1);
+    fix_crc(&mut p);
+    assert_eq!(pack_open(&p), Err(ZX_ERR_FORMAT), "total_len not a multiple of 4");
+}
+
+#[test]
+fn pack_fuzz_mutations() {
+    let mut rng = Rng(0x0bad_cafe_1234_5678);
+    let mut raws = vec![repetitive(6000), random(&mut rng, 700), vec![0x55; 9000]];
+    raws.push(Vec::new());
+    let specs: Vec<Spec> = raws
+        .into_iter()
+        .zip([1u8, 3, 2, 1])
+        .enumerate()
+        .map(|(i, (raw, kind))| Spec { name: ["One", "Two", "Three", "Four"][i], kind, codec: (i % 2) as u8, crop: 8, raw })
+        .collect();
+    let good = build(&specs[..3]);
+    assert_eq!(pack_open(&good), Ok(3));
+    let (mut opened, mut extracted) = (0, 0);
+    for i in 0..5000 {
+        let mut p = good.clone();
+        for _ in 0..1 + rng.next() % 4 {
+            let at = rng.next() as usize % p.len();
+            match rng.next() % 4 {
+                0 => p[at] ^= 1 << (rng.next() % 8),
+                1 => p[at] = rng.next() as u8,
+                2 => p.truncate(at.max(1)),
+                _ => {
+                    // length-field edits: header total/count, entry offset/stored/raw
+                    let f = [10usize, 12, 32 + 32, 32 + 36, 32 + 40, 32 + 160 + 32, 32 + 160 + 36, 32 + 160 + 40][rng.next() as usize % 8];
+                    if f + 4 <= p.len() {
+                        let v = [0u32, 1, 4, 0xFFFF_FFFC, 0xFFFF_FFFF, rng.next(), p.len() as u32][rng.next() as usize % 7];
+                        put32(&mut p, f, v);
+                    }
+                }
+            }
+        }
+        if i % 2 == 0 && p.len() >= 32 {
+            fix_crc(&mut p);
+        }
+        let Ok(count) = pack_open(&p) else { continue };
+        opened += 1;
+        for idx in 0..count {
+            let Ok(g) = pack_game_at(&p, idx) else { continue };
+            if let Ok(out) = g.extract(PACK_MAX_RAW as usize) {
+                assert_eq!(out.len(), g.raw_len() as usize);
+                extracted += 1;
+            }
+        }
+    }
+    assert!(opened > 100 && extracted > 100, "opened {opened}, extracted {extracted}");
+    eprintln!("pack fuzz: {opened} of 5000 mutated packs opened, {extracted} games extracted");
 }

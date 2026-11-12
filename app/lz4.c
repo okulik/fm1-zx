@@ -5,8 +5,8 @@
 #include "zx.h"
 #include <string.h>
 
-/* Reads the 255-run extension of a length; fails if it runs off the input or past `limit`
- * (so the sum cannot overflow: limit is at most cap, and each step adds at most 255). */
+/* Reads the 255-run extension of a length; fails if it runs off the input or past `limit`.
+ * The sum stays below limit + 256, which cannot wrap because the caller keeps cap <= LZ4_MAX_CAP. */
 static int read_len(const uint8_t *src, uint32_t n, uint32_t *ip, uint32_t *len, uint32_t limit)
 {
     uint8_t s;
@@ -27,7 +27,7 @@ int lz4_block_decode(const uint8_t *src, uint32_t n, uint8_t *dst, uint32_t cap,
 {
     uint32_t ip = 0, op = 0;
 
-    if (n == 0u) {
+    if (n == 0u || cap > LZ4_MAX_CAP) {
         return ZX_ERR_FORMAT;
     }
     while (ip < n) {
