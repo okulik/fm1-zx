@@ -178,7 +178,10 @@ fn rejects_truncated() {
     let v1 = make_z80_v1(&regs, &ram, false);
     let l = v1.len();
     check_prefixes("z80", &v1, |n| n < 64 || n + 64 > l || n % 7 == 0);
-    check_prefixes("z80", &make_z80_v1(&regs, &ram, true), |_| true);
+    // the prefix that drops exactly the end marker is a valid marker-less file
+    let packed = make_z80_v1(&regs, &ram, true);
+    let pl = packed.len();
+    check_prefixes("z80", &packed, |n| n != pl - 4);
     check_prefixes("z80", &make_z80_v3(&regs, &ram, 0), |_| true);
     check_prefixes("z80", &make_z80_vn(&regs, &ram, 2, 0), |_| true);
 }
@@ -193,13 +196,28 @@ fn rejects_run_past_48k() {
     f.extend_from_slice(&[0xED, 0xED, 200, 0x11, 0x00, 0xED, 0xED, 0x00]);
     let mut m = dirty_machine();
     assert_eq!(m.load_z80(&f), Err(ZX_ERR_FORMAT));
-    // a stream that ends exactly at 48 KB but with no end marker
+    // a stream that ends exactly at 48 KB with no end marker is accepted
     let mut g = make_z80_v1(&regs, &sample_ram(), true);
     let n = g.len();
     g.truncate(n - 4);
+    assert_eq!(m.load_z80(&g), Ok(()));
+    // other trailing bytes are still rejected
+    g.extend_from_slice(&[0x00, 0xED, 0xED, 0x01]);
     assert_eq!(m.load_z80(&g), Err(ZX_ERR_FORMAT));
     // a zero-length run
     let mut h = make_z80_v1(&regs, &sample_ram(), true);
     h.splice(30..30, [0xED, 0xED, 0x00, 0x01]);
     assert_eq!(m.load_z80(&h), Err(ZX_ERR_FORMAT));
+}
+
+#[test]
+fn z80_v1_compressed_without_end_marker() {
+    let regs = sample_regs();
+    let ram = sample_ram();
+    let mut f = make_z80_v1(&regs, &ram, true);
+    f.truncate(f.len() - 4);
+    let mut m = Machine::new();
+    m.load_z80(&f).unwrap();
+    assert_loaded(&m, &regs, &ram);
+    assert_eq!(m.border_line(0), 3);
 }

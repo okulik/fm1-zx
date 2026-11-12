@@ -37,7 +37,7 @@ static inline uint8_t *ram_bytes(zx_machine *m)
 
 /* Decodes the ED ED nn bb run-length stream src[0..len) into exactly `want`
  * bytes (dst may be NULL to only check). With `marker` the stream must be
- * followed by 00 ED ED 00 (version 1); without, it must end exactly there
+ * followed by 00 ED ED 00 or by nothing (version 1); without, it must end exactly there
  * (a version 2/3 page). Returns 0 or ZX_ERR_FORMAT. */
 static int rle_decode(const uint8_t *src, uint32_t len, uint8_t *dst, uint32_t want, int marker)
 {
@@ -61,6 +61,7 @@ static int rle_decode(const uint8_t *src, uint32_t len, uint8_t *dst, uint32_t w
 		}
 	}
 	if (marker) {
+		if (p == len) return 0;   /* some writers omit the end marker */
 		if (len - p < 4u) return ZX_ERR_FORMAT;
 		if (src[p] != 0x00u || src[p + 1u] != 0xEDu || src[p + 2u] != 0xEDu || src[p + 3u] != 0x00u)
 			return ZX_ERR_FORMAT;
