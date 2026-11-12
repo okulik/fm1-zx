@@ -61,7 +61,10 @@ int lcd_sched_next_band(lcd_sched *s, unsigned *row0, unsigned *rows)
 	s->budget -= cost;
 	for (r = first; r < first + n; r++) {
 		s->pending[r] = 0;
-		s->stats.pending_frames_sum += s->frame - s->pending_since[r] + 1u;
+		uint32_t age = s->frame - s->pending_since[r] + 1u;
+		s->stats.pending_frames_sum += age;
+		if (age > s->stats.max_age)
+			s->stats.max_age = age;
 	}
 	s->stats.row_sends += n;
 	s->stats.bytes += cost;

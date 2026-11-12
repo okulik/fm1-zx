@@ -16,6 +16,7 @@
 
 typedef struct {
 	uint32_t frames, row_sends, pending_frames_sum, bytes, bands;
+	uint32_t max_age; /* the longest a row waited, in frames (sent in its marking frame = 1) */
 } lcd_stats;
 
 typedef struct lcd_sched {

@@ -5,6 +5,7 @@
 //!
 //! [`fw`] boots the real firmware image; the functions here run the Plan 1 bench image.
 
+pub mod budgets;
 pub mod fw;
 
 use fm1_core::{Bus, Cpu, JitMem};

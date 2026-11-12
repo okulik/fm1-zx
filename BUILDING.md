@@ -90,3 +90,49 @@ Pinned now: `jieli-linux-toolchains-20260730.1`.
 | 2026-11-12 | n/a | same, after the final-review fix wave | 13.90 instructions per T-state |
 
 Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate -- --ignored --nocapture`.
+
+### Firmware budgets and the display frame-rate report
+
+Both need the device build (see Firmware above) and run in fm1-emu:
+
+    cd host
+    FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget -- --nocapture
+    FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_report -- --nocapture
+
+`fw_budget` (about 1.5 minutes) checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+<= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
+instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
+`lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
+`fw_report` (about 2.5 minutes, the 12 runs in parallel) boots every game in `games/games.toml`
+at LCD dividers 4, 2 and 1 in RGB444, plays the manifest's `demo` (`demo = "<key>@<ms>[+<hold ms>],..."`,
+keys as in the key syntax plus `PLAY`/`HOME`, ms after the game started), measures 20 s from
+second 16 on and prints the table below. It writes `build/fm1/fmzx-report.json` and asserts:
+scroll 20-23 fps at divider 4 and >= 49 at divider 1; every game with a changing screen >= 45
+fps at divider 1. fps is `50 * row_sends / pending_frames_sum` (how often a changed row reaches
+the panel; 50 = every changed row goes out in the frame that changed it); a static screen
+(`border`) sends nothing and has no rate.
+
+Latest report (2026-11-12, 20 s windows; CPU at divider 1; the instruction counts are what the
+emulator counts, one per instruction, interrupts excluded):
+
+| game | divider | fps | LCD bytes per frame | worst row age (frames) |
+| --- | --- | --- | --- | --- |
+| scroll | 4 | 21.4 | 29,641 | 4 |
+| scroll | 2 | 35.9 | 49,881 | 2 |
+| scroll | 1 | 50.0 | 69,384 | 1 |
+| border | 4, 2, 1 | static | 0 | 0 |
+| mooncaves | 4, 2, 1 | 50.0 | 432 | 1 |
+| castaway | 4 | 47.9 | 1,622 | 2 |
+| castaway | 2, 1 | 50.0 | 1,643 | 1 |
+
+| game | CPU per frame, max | CPU per frame, avg |
+| --- | --- | --- |
+| scroll | 1,448,804 | 1,430,713 |
+| border | 1,272,906 | 1,266,967 |
+| mooncaves | 1,289,705 | 503,967 |
+| castaway | 1,933,913 | 612,187 |
+
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 19,824 of 49,152 bytes. Image
+68,048 + pack 45,956 bytes, 115,300 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
+POOL 249,968 bytes, 118,672 below the user stack. Castaway's demo plays about 11 s before its
+energy runs out (game over, then the title); mooncaves plays throughout.

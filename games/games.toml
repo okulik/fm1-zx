@@ -17,10 +17,14 @@ file = "test/border.sna"
 
 # Moon Caves: press 1 for keyboard control (OCT-). Player 1 W/A/S/D + F fire, player 2
 # I/J/K/L + O fire, N pause, M exit.
+# demo = "<key>@<ms after the game started>[+<hold ms>],...": the budget report's scripted input
+# (emu-gate budgets::parse_demo). Here: control menu 1 (keyboard), map menu 0 (begin), then
+# player 1 walks and fires.
 [[game]]
 id = "mooncaves"
 name = "Moon Caves"
 file = "../third_party/games/mooncaves/mooncaves48.tap"
+demo = "button.OCT-@8000, button.ARP@10000, note.A3@13000+1500, note.F3@16000+1500, note.G3@19000+1200, note.F#3@22000+1200, note.A3@25000+1500, note.C5@27000+200, note.F3@29000+1500, note.G3@32000+1200, note.A3@35000+1500"
 
 [game.keys]
 "note.F3" = "key.A"                     # player 1 left
@@ -44,10 +48,12 @@ file = "../third_party/games/mooncaves/mooncaves48.tap"
 
 # Castaway: press 1 for keyboard control (OCT-). O/P left/right, Q jump, SPACE fire, H pause;
 # CAPS SHIFT + 0 (SEQ + ARP) ends the game.
+# demo: any key past the title, 1 (keyboard), then run right, jump, fire.
 [[game]]
 id = "castaway"
 name = "Castaway"
 file = "../third_party/games/castaway/castawy.tap"
+demo = "button.OCT-@12000, button.OCT-@14500, note.A3@16000+3000, note.F#3@20000+300, note.C5@21000, note.A3@22000+2000, note.F#3@25000+300, note.F3@26000+2000, note.C5@29000, note.A3@30000+2000, note.F3@33000+2000"
 
 [game.keys]
 "note.F3" = "key.O"                     # left

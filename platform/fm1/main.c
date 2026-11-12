@@ -60,7 +60,7 @@ struct fmzx_stats {
     uint32_t divider;   /* LCD SPI divider */
     uint32_t budget;    /* LCD bytes per 20 ms frame */
     uint32_t pending;   /* LCD rows waiting to be sent */
-    lcd_stats lcd;
+    lcd_stats lcd;      /* frames, row_sends, pending_frames_sum, bytes, bands, max_age */
 };
 struct fmzx_stats fmzx_stats;
 
@@ -544,8 +544,9 @@ static void lcd_frame_end(void)
     stats_update();
 }
 
-/* A Spectrum frame and everything it sends on: samples to the FIFO, changed rows to the LCD. */
-static void game_frame(void)
+/* A Spectrum frame and everything it sends on: samples to the FIFO, changed rows to the LCD.
+ * noinline: emu-gate counts its instructions (budgets) by its entry. */
+static __attribute__((noinline)) void game_frame(void)
 {
     unsigned r;
     /* fmzx_stats as the frame finds it: `frames` run, `pending` LCD rows still to go */

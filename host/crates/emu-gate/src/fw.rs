@@ -132,6 +132,8 @@ pub struct LcdStats {
     pub pending_frames_sum: u32,
     pub bytes: u32,
     pub bands: u32,
+    /// The longest a row waited before it was sent, in frames (1 = in its marking frame).
+    pub max_age: u32,
 }
 
 /// The firmware's `fmzx_stats`.
@@ -148,8 +150,11 @@ pub struct FwStats {
     pub lcd: LcdStats,
 }
 
-/// `fmzx_stats` is 13 words.
-const STATS_WORDS: u32 = 13;
+/// `fmzx_stats` is 14 words.
+const STATS_WORDS: u32 = 14;
+/// Byte offset of `lcd_stats` in the LCD driver's `lcd_sched` (`sched`): 240 `pending_since`
+/// words, 240 `pending` bytes, then `frame`, `budget`, `row_bytes`. Checked by [`Machine::reset_max_age`].
+const SCHED_STATS_OFFSET: u32 = 240 * 4 + 240 + 12;
 
 struct OpenCall {
     rets: u32,
@@ -165,6 +170,8 @@ struct Watch {
     first_hit_ms: Option<u64>,
     open: Option<OpenCall>,
     costs: Vec<u64>,
+    /// For each entry of `costs`: the order in which calls of all watched symbols completed.
+    seq: Vec<u64>,
 }
 
 /// A booted firmware in fm1-emu.
@@ -177,6 +184,8 @@ pub struct Machine {
     depth_steps: Vec<u64>,
     resets: u32,
     fault: Option<u32>,
+    /// Completed watched calls so far.
+    completions: u64,
 }
 
 impl Machine {
@@ -202,6 +211,7 @@ impl Machine {
             watches: Vec::new(),
             depth_steps: vec![0; 34],
             resets: 0,
+            completions: 0,
         }
     }
 
@@ -270,6 +280,8 @@ impl Machine {
             } else if let Some(o) = &w.open {
                 if o.depth == depth && pc == o.rets && cpu.sp >= o.sp {
                     w.costs.push(self.depth_steps[depth] - o.start);
+                    self.completions += 1;
+                    w.seq.push(self.completions);
                     w.open = None;
                 }
             }
@@ -285,7 +297,15 @@ impl Machine {
             return;
         }
         let entry = self.symbol(symbol);
-        self.watches.push(Watch { name: symbol.to_string(), entry, hits: 0, first_hit_ms: None, open: None, costs: Vec::new() });
+        self.watches.push(Watch {
+            name: symbol.to_string(),
+            entry,
+            hits: 0,
+            first_hit_ms: None,
+            open: None,
+            costs: Vec::new(),
+            seq: Vec::new(),
+        });
     }
 
     fn watched(&mut self, symbol: &str) -> &Watch {
@@ -299,6 +319,42 @@ impl Machine {
     /// call of `cost_of` for a symbol starts watching it (and returns nothing yet).
     pub fn cost_of(&mut self, symbol: &str) -> Vec<u64> {
         self.watched(symbol).costs.clone()
+    }
+
+    /// Instructions per `frame` call plus the `part` calls (completed) between it and the next
+    /// `frame` call: a frame's own work and the LCD bands composed before the next frame. The
+    /// calls after the last `frame` call are dropped (their frame is not over).
+    pub fn cost_with(&mut self, frame: &str, part: &str) -> Vec<u64> {
+        self.watch(frame);
+        self.watch(part);
+        let f = self.watches.iter().find(|w| w.name == frame).expect("watched");
+        let p = self.watches.iter().find(|w| w.name == part).expect("watched");
+        let mut out = Vec::new();
+        for (i, (&c, &at)) in f.costs.iter().zip(&f.seq).enumerate() {
+            let Some(&next) = f.seq.get(i + 1) else { break };
+            let parts: u64 = p.costs.iter().zip(&p.seq).filter(|(_, &s)| s > at && s < next).map(|(&c, _)| c).sum();
+            out.push(c + parts);
+        }
+        out
+    }
+
+    /// Forgets the calls counted so far (and keeps watching).
+    pub fn clear_costs(&mut self) {
+        for w in &mut self.watches {
+            w.costs.clear();
+            w.seq.clear();
+        }
+    }
+
+    /// Zeroes the firmware's `lcd_stats.max_age`, so that [`LcdStats::max_age`] covers what runs
+    /// from now on.
+    pub fn reset_max_age(&mut self) {
+        let a = self.symbol("sched") + SCHED_STATS_OFFSET;
+        assert!(
+            self.peek32(a).abs_diff(self.stats().lcd.frames) <= 1,
+            "lcd_sched is not laid out as SCHED_STATS_OFFSET says"
+        );
+        self.soc.write32(a + 20, 0);
     }
 
     /// Times execution reached `symbol`'s entry since it was first watched.
@@ -390,7 +446,14 @@ impl Machine {
             divider: w(5),
             budget: w(6),
             pending: w(7),
-            lcd: LcdStats { frames: w(8), row_sends: w(9), pending_frames_sum: w(10), bytes: w(11), bands: w(12) },
+            lcd: LcdStats {
+                frames: w(8),
+                row_sends: w(9),
+                pending_frames_sum: w(10),
+                bytes: w(11),
+                bands: w(12),
+                max_age: w(13),
+            },
         }
     }
 }
@@ -464,7 +527,10 @@ mod tests {
         };
         assert!(h.contains("#define FM1_AUDIO_PLL_CON0 FM1_AUDIO_REG(uint32_t, 0x119A0u)"));
         assert!(h.contains("#define FM1_AUDIO_PLL_CON1 FM1_AUDIO_REG(uint32_t, 0x119A4u)"));
-        assert_eq!(AUDIO_PLL_STOCK, [(0x119A0, value("FM1_AUDIO_PLL_STOCK0")), (0x119A4, value("FM1_AUDIO_PLL_STOCK1"))]);
+        assert_eq!(
+            AUDIO_PLL_STOCK,
+            [(0x119A0, value("FM1_AUDIO_PLL_STOCK0")), (0x119A4, value("FM1_AUDIO_PLL_STOCK1"))]
+        );
     }
 
     #[test]
