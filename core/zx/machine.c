@@ -16,27 +16,13 @@ void zx_poke(zx_machine *m, uint16_t addr, uint8_t value)
 	zx_mem_write(m, addr, value);
 }
 
-/* No port devices yet: reads float high, writes go nowhere. */
-uint8_t zx_port_in(zx_machine *m, uint16_t port)
-{
-	(void)m;
-	(void)port;
-	return 0xFF;
-}
-
-void zx_port_out(zx_machine *m, uint16_t port, uint8_t value)
-{
-	(void)m;
-	(void)port;
-	(void)value;
-}
-
 void zx_init(zx_machine *m, const uint8_t *rom)
 {
 	memset(m, 0, sizeof *m);
 	m->rom = rom;
 
 	zx_timing_init(m);
+	zx_ula_init(m);
 	z80_power(&m->cpu, 1);
 }
 
@@ -47,6 +33,7 @@ void zx_run_frame(zx_machine *m)
 {
 	uint32_t t = m->frame_tstate;
 
+	zx_ula_new_frame(m);
 	z80_int(&m->cpu, 1);
 	if (t < ZX_INT_TSTATES) {
 		m->run_base = t;

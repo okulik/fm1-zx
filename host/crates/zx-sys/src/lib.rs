@@ -18,7 +18,7 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use sys::{zx_regs, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+pub use sys::{zx_edge, zx_regs, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
 
 static ROM_48: &[u8; ZX_ROM_SIZE as usize] = include_bytes!("../../../../third_party/zx-rom/48.rom");
 
@@ -78,6 +78,40 @@ impl Machine {
     pub fn frame_count(&self) -> u32 {
         // SAFETY: `raw` was initialised by zx_init.
         unsafe { sys::zx_frame_count(&*self.raw) }
+    }
+
+    /// Row r is address line A(8+r); a set bit is a pressed key.
+    pub fn set_keys(&mut self, rows: [u8; 8]) {
+        // SAFETY: `rows` is 8 bytes.
+        unsafe { sys::zx_set_keys(&mut *self.raw, rows.as_ptr()) }
+    }
+
+    /// Bit 0 right, 1 left, 2 down, 3 up, 4 fire.
+    pub fn set_kempston(&mut self, bits: u8) {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_set_kempston(&mut *self.raw, bits) }
+    }
+
+    /// Beeper level changes of the frame run last.
+    pub fn edges(&self) -> &[zx_edge] {
+        let mut n = 0u32;
+        // SAFETY: the returned array holds `n` edges and lives as long as `self`.
+        unsafe {
+            let p = sys::zx_edges(&*self.raw, &mut n);
+            std::slice::from_raw_parts(p, n as usize)
+        }
+    }
+
+    /// Border colour on a frame line (0-311).
+    pub fn border_line(&self, line: usize) -> u8 {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_border_line(&*self.raw, line as u32) }
+    }
+
+    /// Host tests only: the current beeper level.
+    pub fn test_level(&self) -> u8 {
+        // SAFETY: `raw` was initialised by zx_init.
+        unsafe { sys::zx_test_level(&*self.raw) }
     }
 
     /// Host tests only: sets the frame T-state the next instruction starts at.

@@ -72,3 +72,24 @@ pub fn count_interrupts(frames: u32, di: bool) -> u8 {
 pub fn total_tstates(m: &Machine) -> u64 {
     m.frame_count() as u64 * zx_sys::ZX_FRAME_TSTATES as u64 + m.frame_tstate() as u64
 }
+
+/// Executes the instruction bytes at 0x8000 with `b`, `c`, `a` loaded and
+/// interrupts off, starting at frame T-state `t`. Returns the machine.
+pub fn run_at(m: &mut Machine, code: &[u8], a: u8, b: u8, c: u8, t: u32) {
+    load(m, 0x8000, code);
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.af = (r.af & 0x00FF) | ((a as u16) << 8);
+    r.bc = ((b as u16) << 8) | c as u16;
+    r.sp = 0xFF00;
+    r.iff1 = 0;
+    r.iff2 = 0;
+    m.set_regs(&r);
+    m.test_set_tstate(t);
+    m.test_step();
+}
+
+/// A as left by the last instruction.
+pub fn reg_a(m: &Machine) -> u8 {
+    (m.regs().af >> 8) as u8
+}

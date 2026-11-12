@@ -173,6 +173,7 @@ static inline void io_mcycle(zx_machine *m, uint16_t port)
 	uint8_t extra = z80_insn_clock_extra_m(&m->clock);
 
 	delay(m, d);
+	m->io_t = t + d;
 	if (extra && is_contended(port)) contend_extra(m, t + d, 4u, extra);
 	z80_insn_clock_extra_add_in(&m->clock);
 	m->clock.cycles += extra;
@@ -221,6 +222,11 @@ void zx_test_set_tstate(zx_machine *m, uint32_t t)
 {
 	m->frame_tstate = t;
 	m->insn_open = 0;
+}
+
+uint8_t zx_test_level(const zx_machine *m)
+{
+	return m->level;
 }
 
 uint32_t zx_test_step(zx_machine *m)

@@ -20,9 +20,14 @@ static inline void zx_mem_write(zx_machine *m, uint16_t addr, uint8_t value)
 	if (addr >= ZX_ROM_SIZE) ((uint8_t *)m->ram_words)[addr - ZX_ROM_SIZE] = value;
 }
 
-/* Port devices (machine.c); the timing glue calls them after applying contention. */
+/* Port devices (ula.c); the timing glue calls them after applying contention. */
 uint8_t zx_port_in(zx_machine *m, uint16_t port);
 void zx_port_out(zx_machine *m, uint16_t port, uint8_t value);
+
+/* Resets edges and border lines for a new frame (ula.c) and applies the
+ * changes the previous frame's last instruction made past its end. */
+void zx_ula_new_frame(zx_machine *m);
+void zx_ula_init(zx_machine *m);
 
 /* Installs the CPU callbacks and the instruction clock (timing.c). */
 void zx_timing_init(zx_machine *m);
