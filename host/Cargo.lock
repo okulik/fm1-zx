@@ -80,10 +80,41 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
+name = "emu-gate"
+version = "0.1.0"
+dependencies = [
+ "fm1-core",
+ "fm1-soc",
+ "object",
+ "zx-sys",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+
+[[package]]
+name = "fm1-core"
+version = "0.3.0"
+source = "git+https://github.com/joakimeriksson/fm1-emu?rev=93cb7ee3f7008b27959ba73073b864e37efd7289#93cb7ee3f7008b27959ba73073b864e37efd7289"
+dependencies = [
+ "fm1-isa",
+]
+
+[[package]]
+name = "fm1-isa"
+version = "0.3.0"
+source = "git+https://github.com/joakimeriksson/fm1-emu?rev=93cb7ee3f7008b27959ba73073b864e37efd7289#93cb7ee3f7008b27959ba73073b864e37efd7289"
+
+[[package]]
+name = "fm1-soc"
+version = "0.3.0"
+source = "git+https://github.com/joakimeriksson/fm1-emu?rev=93cb7ee3f7008b27959ba73073b864e37efd7289#93cb7ee3f7008b27959ba73073b864e37efd7289"
+dependencies = [
+ "fm1-core",
+]
 
 [[package]]
 name = "glob"
@@ -142,6 +173,15 @@ checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
 dependencies = [
  "memchr",
  "minimal-lexical",
+]
+
+[[package]]
+name = "object"
+version = "0.36.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62948e14d923ea95ea2c7c86c71013138b66525b86bdc08d2dcc262bdb497b87"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

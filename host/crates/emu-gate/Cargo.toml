@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "emu-gate"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+fm1-core = { git = "https://github.com/joakimeriksson/fm1-emu", rev = "93cb7ee3f7008b27959ba73073b864e37efd7289" }
+fm1-soc = { git = "https://github.com/joakimeriksson/fm1-emu", rev = "93cb7ee3f7008b27959ba73073b864e37efd7289" }
+object = { version = "0.36", default-features = false, features = ["read", "elf", "std"] }
+
+[dev-dependencies]
+zx-sys = { path = "../zx-sys" }
+
+[lints]
+workspace = true

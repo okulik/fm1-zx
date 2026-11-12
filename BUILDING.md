@@ -47,3 +47,11 @@ fails if the download does not match. If it fails:
    replace the hash on your own.
 
 Pinned now: `jieli-linux-toolchains-20260730.1`.
+
+## Measured budgets
+
+| Date | Commit | Measurement | Figure |
+| --- | --- | --- | --- |
+| 2026-11-12 | 2626e96 | Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.81 instructions per T-state |
+
+Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate -- --ignored --nocapture`.
