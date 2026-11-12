@@ -24,11 +24,11 @@ pub const NAME_MAX: usize = 28;
 pub const CROP_DEFAULT: u8 = 8;
 pub const CROP_MAX: u8 = 16;
 
-const BUTTONS: [&str; 14] = ["OCT-", "OCT+", "FX", "SCL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC"];
+pub const BUTTONS: [&str; 14] = ["OCT-", "OCT+", "FX", "SCL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC"];
 const RESERVED: [&str; 2] = ["HOME", "PLAY"];
-const ENCODERS: [&str; 7] = ["SELECT", "ALGORITHM", "K1", "K2", "K3", "K4", "PRESETS"];
-const BUTTON_COUNT: usize = 14;
-const NOTE_COUNT: usize = 27;
+pub const ENCODERS: [&str; 7] = ["SELECT", "ALGORITHM", "K1", "K2", "K3", "K4", "PRESETS"];
+pub const BUTTON_COUNT: usize = 14;
+pub const NOTE_COUNT: usize = 27;
 const PITCHES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /// Spectrum keys by index (row*5 + bit; row r = address line A(8+r)).
@@ -125,7 +125,7 @@ pub fn game_path(manifest_dir: &Path, game: &Game) -> PathBuf {
     manifest_dir.join(&game.file)
 }
 
-fn input_index(name: &str) -> Result<usize, String> {
+pub fn input_index(name: &str) -> Result<usize, String> {
     let bad = || format!("unknown input {name:?}");
     let (kind, rest) = name.split_once('.').ok_or_else(bad)?;
     match kind {
@@ -151,12 +151,12 @@ fn input_index(name: &str) -> Result<usize, String> {
 }
 
 /// Note 0 is F3.
-fn note_name(n: usize) -> String {
+pub fn note_name(n: usize) -> String {
     let s = n + 5; // semitones above C3
     format!("{}{}", PITCHES[s % 12], 3 + s / 12)
 }
 
-fn parse_action(a: &str) -> Result<u8, String> {
+pub fn parse_action(a: &str) -> Result<u8, String> {
     let bad = || format!("unknown action {a:?}");
     if a == "none" {
         return Ok(NONE);
@@ -166,6 +166,29 @@ fn parse_action(a: &str) -> Result<u8, String> {
         "key" => SPECTRUM_KEYS.iter().position(|k| *k == rest).map(|i| i as u8).ok_or_else(bad),
         "kempston" => KEMPSTON.iter().position(|k| *k == rest).map(|i| 0x40 | i as u8).ok_or_else(bad),
         _ => Err(bad()),
+    }
+}
+
+/// The inverse of [`input_index`]: `button.OCT-`, `note.F#3` or `enc.K1.cw`.
+pub fn input_name(i: usize) -> String {
+    if i < BUTTON_COUNT {
+        format!("button.{}", BUTTONS[i])
+    } else if i < BUTTON_COUNT + NOTE_COUNT {
+        format!("note.{}", note_name(i - BUTTON_COUNT))
+    } else {
+        let e = i - BUTTON_COUNT - NOTE_COUNT;
+        format!("enc.{}.{}", ENCODERS[e / 2], if e % 2 == 0 { "ccw" } else { "cw" })
+    }
+}
+
+/// The inverse of [`parse_action`]: `None` for [`NONE`], else `key.SPACE` or `kempston.left`.
+pub fn action_name(a: u8) -> Option<String> {
+    if a == NONE {
+        None
+    } else if a & 0x40 != 0 {
+        KEMPSTON.get((a & 0x3F) as usize).map(|k| format!("kempston.{k}"))
+    } else {
+        SPECTRUM_KEYS.get(a as usize).map(|k| format!("key.{k}"))
     }
 }
 
@@ -192,7 +215,7 @@ fn apply_keys(map: &mut [[u8; 2]; INPUTS], keys: &BTreeMap<String, String>) -> R
     Ok(())
 }
 
-const DEFAULTS: [(&str, &str); 26] = [
+pub const DEFAULTS: [(&str, &str); 26] = [
     ("note.F3", "kempston.left"),
     ("note.F#3", "kempston.up"),
     ("note.G3", "kempston.down"),

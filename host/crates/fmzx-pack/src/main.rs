@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `fmzx-pack games <manifest.toml> -o <pack.bin>`
+//! `fmzx-pack keymaps <manifest.toml> -o <keymaps.json>`
 //! `fmzx-pack testprogs <dir>` (writes `scroll.sna` and `border.sna`)
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
 //!     [--product FM-1_948] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_948]`
 
 use fmzx_pack::inputs::{check_loader, default_cache, load_sdk, sha256_hex, Pins};
+use fmzx_pack::keymaps::keymaps_json;
+use fmzx_pack::manifest::parse_manifest;
 use fmzx_pack::pack::build_pack;
 use fmzx_pack::package::{self, PRODUCT};
 use fmzx_pack::testprogs::write_all;
@@ -15,6 +18,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
+       fmzx-pack keymaps <manifest.toml> -o <keymaps.json>
        fmzx-pack testprogs <dir>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
                       [--product FM-1_948] [--cache DIR] [--offline]
@@ -113,6 +117,14 @@ fn run(args: &[String]) -> Result<(), String> {
             let pack = build_pack(&PathBuf::from(manifest))?;
             std::fs::write(out, &pack).map_err(|e| format!("{out}: {e}"))?;
             println!("{out}: {} bytes", pack.len());
+            Ok(())
+        }
+        [cmd, manifest, flag, out] if cmd == "keymaps" && flag == "-o" => {
+            let path = PathBuf::from(manifest);
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("{manifest}: {e}"))?;
+            let m = parse_manifest(&text)?;
+            std::fs::write(out, keymaps_json(&m)?).map_err(|e| format!("{out}: {e}"))?;
+            println!("{out}: {} games", m.game.len());
             Ok(())
         }
         [cmd, dir] if cmd == "testprogs" => {
