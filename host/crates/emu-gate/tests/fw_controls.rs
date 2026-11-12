@@ -313,6 +313,35 @@ fn divider_menu() {
 }
 
 #[test]
+fn note_key_held_through_the_picker() {
+    let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
+    m.hold(NOTE_F3, true);
+    m.run_ms(100);
+    assert_eq!(kempston(&m), KEMPSTON_LEFT);
+    press_to(&mut m, HOME, view::MENU);
+    m.turn(ALGORITHM, -1); // wraps to "Back to games"
+    m.run_ms(100);
+    press_to(&mut m, PLAY, view::PICKER);
+    for _ in 0..10 {
+        m.run_ms(30);
+        assert_eq!(kempston(&m), 0, "Kempston in the picker with F3 held");
+        assert_eq!(keys(&m), [0; 8], "Spectrum keys in the picker with F3 held");
+    }
+
+    // a new game with F3 still held: left only while F3 is down, released with it
+    press_to(&mut m, PLAY, view::GAME);
+    for _ in 0..5 {
+        m.run_ms(20);
+        assert!(matches!(kempston(&m), 0 | KEMPSTON_LEFT), "Kempston {:#x} with F3 held", kempston(&m));
+    }
+    m.hold(NOTE_F3, false);
+    m.run_ms(100);
+    assert_eq!(kempston(&m), 0, "F3 released in the new game");
+    assert_frames_run(&mut m, "the new game");
+    assert_eq!(kempston(&m), 0);
+}
+
+#[test]
 fn leave_and_restart() {
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
     assert_frames_run(&mut m, "running");
