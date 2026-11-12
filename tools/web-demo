@@ -123,7 +123,7 @@ echo "$out: fm1-emu $rev with FM-1 ZX $short"
 
 # 5. check or serve
 if [ "$check" = 1 ]; then
-    exec "$root/web/check.sh" "$out"
+    exec "$root/web/check.sh" "$out" "$fm1/fmzx-preview.fwsc"
 fi
 if [ "$serve" = 1 ]; then
     exec python3 "$root/web/serve.py" "$out" "$port"
