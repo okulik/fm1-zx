@@ -12,11 +12,11 @@ publish = false
 [dependencies]
 fm1-core = { git = "https://github.com/joakimeriksson/fm1-emu", rev = "93cb7ee3f7008b27959ba73073b864e37efd7289" }
 fm1-soc = { git = "https://github.com/joakimeriksson/fm1-emu", rev = "93cb7ee3f7008b27959ba73073b864e37efd7289" }
+fmzx-pack = { path = "../fmzx-pack" }
 object = { version = "0.36", default-features = false, features = ["read", "elf", "std"] }
 png = "0.18"
 
 [dev-dependencies]
-fmzx-pack = { path = "../fmzx-pack" }
 zx-sys = { path = "../zx-sys" }
 
 [lints]

@@ -30,6 +30,14 @@
 #ifndef FMZX_LCD_DIVIDER
 #define FMZX_LCD_DIVIDER 4
 #endif
+/* The colour mode without boot options: RGB444 on the panel (default), RGB565 for the emulator
+ * preview package (CMake FMZX_LCD_RGB565; fm1-emu's LCD shows RGB565 only). */
+#ifndef FMZX_LCD_RGB565
+#define FMZX_LCD_RGB565 0
+#endif
+#ifndef FMZX_PRODUCT
+#define FMZX_PRODUCT "FM-1_948"
+#endif
 
 #define POOL(tag) __attribute__((section(".pool." tag), aligned(4)))
 #define RAMTEXT __attribute__((section(".ram_text.game"), noinline))
@@ -63,6 +71,10 @@ struct fmzx_stats {
     lcd_stats lcd;      /* frames, row_sends, pending_frames_sum, bytes, bands, max_age */
 };
 struct fmzx_stats fmzx_stats;
+
+/* The product identity the update package carries in its markers (CMake FMZX_PRODUCT), kept in the
+ * image (app.ld) so that `fmzx-pack verify` can match the package against the image. */
+const char fmzx_product[] __attribute__((section(".rodata.fmzx_product"), used)) = FMZX_PRODUCT;
 
 extern const uint8_t zx_rom_data[];
 extern const uint8_t _app_image_end[], _app_slot_end[];
@@ -577,7 +589,7 @@ static int frame_due(uint32_t *next)
 
 void fmzx_main(void)
 {
-    int fmt = PIX_RGB444, view, last_view = -1;
+    int fmt = FMZX_LCD_RGB565 ? PIX_RGB565 : PIX_RGB444, view, last_view = -1;
     uint32_t next, master_at;
 
     if (fmzx_bootopt[0] == BOOTOPT_MAGIC) {

@@ -1,0 +1,40 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Build the two update packages:
+#   build/fm1/fmzx.fwsc          the release package (RGB444 on the panel)
+#   build/fm1/fmzx-preview.fwsc  the fm1-emu preview (RGB565 by default, CMake FMZX_LCD_RGB565)
+#
+# Runs both device builds (presets fm1 and fm1-preview, in Docker through tools/fm1-docker), then
+# fmzx-pack on the host: the game pack from games/games.toml, the packages, and a verify of each.
+# The JieLi AC79 SDK files the packages need are fetched once into build/ac79/ and checked by
+# SHA-256 (host/crates/fmzx-pack/inputs.toml). Arguments go to `fmzx-pack fwsc`, e.g.
+#   tools/make-packages --offline           (use build/ac79/ only, fetch nothing)
+#   tools/make-packages --cache DIR         (another cache directory)
+# FMZX_SKIP_DEVICE_BUILD=1 skips the device builds (they must be up to date).
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+b="$root/build/fm1"
+p="$root/build/fm1-preview"
+
+if [ "${FMZX_SKIP_DEVICE_BUILD:-0}" != 1 ]; then
+    for preset in fm1 fm1-preview; do
+        "$root/tools/fm1-docker" cmake --preset "$preset" >/dev/null
+        "$root/tools/fm1-docker" cmake --build --preset "$preset"
+    done
+fi
+
+cd "$root/host"
+cargo build --quiet --release -p fmzx-pack
+pack="$root/host/target/release/fmzx-pack"
+loader="$b/third_party/felucca-loader/loader.bin"
+
+"$pack" games "$root/games/games.toml" -o "$b/games.bin"
+"$pack" fwsc --app "$b/platform/fm1/fmzx_app.bin" --pack "$b/games.bin" --loader "$loader" \
+    -o "$b/fmzx.fwsc" "$@"
+"$pack" fwsc --app "$p/platform/fm1/fmzx_app.bin" --pack "$b/games.bin" --loader "$loader" \
+    -o "$b/fmzx-preview.fwsc" "$@"
+"$pack" verify "$b/fmzx.fwsc"
+"$pack" verify "$b/fmzx-preview.fwsc"

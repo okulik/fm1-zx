@@ -58,7 +58,29 @@ Outputs are under `build/fm1`:
 - `platform/fm1/fmzx_app.{elf,bin,dis,map}`: the firmware image (`fmzx_app.bin`
   is the bytes from `0x02000120`, the app slot's start). The game pack goes at the
   first 4 KiB boundary after it. `-DFMZX_LCD_DIVIDER=<0-15>` sets the LCD clock at
-  boot (default 4).
+  boot (default 4); `-DFMZX_PRODUCT=FM-1_<3 digits>` the product identity the image
+  carries (default `FM-1_948`, `fmzx_product`); `-DFMZX_LCD_RGB565=ON` makes RGB565
+  the colour mode when no boot option is set (default OFF: RGB444).
+- `third_party/felucca-loader/loader.bin`: Felucca 1.6.1's update loader (target
+  `felucca_loader`), built from `third_party/felucca-loader/` with Felucca's own commands;
+  the build fails unless it is 8,216 bytes with the pinned SHA-256
+  (`third_party/felucca-loader/VENDORED.md`).
+
+The preset `fm1-preview` builds the same firmware with `FMZX_LCD_RGB565=ON` into
+`build/fm1-preview` (for the fm1-emu preview package):
+
+    tools/fm1-docker cmake --preset fm1-preview
+    tools/fm1-docker cmake --build --preset fm1-preview
+
+## Update packages
+
+    tools/make-packages
+
+runs both device builds, then `fmzx-pack` on the host, and writes `build/fm1/fmzx.fwsc` (the
+release package) and `build/fm1/fmzx-preview.fwsc` (the preview for fm1-emu's web page), each
+checked with `fmzx-pack verify`. The first run fetches three pinned files of JieLi's AC79 SDK into
+`build/ac79/` (`--offline` fetches nothing). Details, and installing: `docs/install.md`.
+`emu-gate`'s `tests/fw_package.rs` boots both packages and needs them made first.
 
 Size of `zx_core` (Release, pi32v2, summed over the sections of `libzx_core.a`):
 `.text` 12,752 bytes plus 4,160 bytes of read-only data (the Z80 library's
@@ -81,6 +103,11 @@ fails if the download does not match. If it fails:
    replace the hash on your own.
 
 Pinned now: `jieli-linux-toolchains-20260730.1`.
+
+The base image is pinned by digest in `tools/docker/Dockerfile` (`ubuntu:24.04@sha256:2198e4c6…`,
+the multi-platform index). To move to a newer one, look up the digest with
+`docker buildx imagetools inspect ubuntu:24.04`, rebuild the image and rerun the device build and
+the test suite.
 
 ## Measured budgets
 

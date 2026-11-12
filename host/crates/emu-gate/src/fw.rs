@@ -15,11 +15,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Where the boot loader enters the app image (XIP).
-pub const APP_BASE: u32 = 0x0200_0120;
+pub const APP_BASE: u32 = fmzx_pack::layout::APP_XIP;
 /// The app slot's size: image and game pack together.
-pub const APP_SLOT: u32 = 0x8_DFBC;
+pub const APP_SLOT: u32 = fmzx_pack::layout::APP_SLOT;
 /// The game pack starts at the first 4 KiB boundary after the image.
-pub const PACK_ALIGN: u32 = 4096;
+pub const PACK_ALIGN: u32 = fmzx_pack::layout::PACK_ALIGN;
 /// `fmzx_bootopt` word 0 when the boot options are valid ("ZXOP").
 pub const BOOTOPT_MAGIC: u32 = 0x5A58_4F50;
 /// fm1-emu key id of the OCT- button.
@@ -96,9 +96,10 @@ impl Firmware {
         a..a + n
     }
 
-    /// The XIP address of the game pack: the first 4 KiB boundary after the image.
+    /// The XIP address of the game pack: the first 4 KiB boundary after the image, where the
+    /// update package puts it too (`fmzx_pack::layout`).
     pub fn pack_addr(&self) -> u32 {
-        (APP_BASE + self.image.len() as u32).next_multiple_of(PACK_ALIGN)
+        fmzx_pack::layout::pack_xip(self.image.len())
     }
 
     /// The XIP window from `XIP_BASE`: the boot area (zeros), the image, then the pack.
@@ -192,15 +193,39 @@ impl Machine {
     /// Starts the image as the FM-1's boot loader does: in user mode at [`APP_BASE`], the
     /// stock audio PLL running, `fmzx_bootopt` written.
     pub fn boot(fw: &Firmware, opt: BootOpt) -> Machine {
-        let mut soc = Soc::new(RAM_SIZE as usize, fw.xip());
+        let soc = Soc::new(RAM_SIZE as usize, fw.xip());
+        Machine::start(fw, soc, APP_BASE, Some(opt), true)
+    }
+
+    /// Starts an update package (`.fwsc`) the way fm1-emu's web page boots one
+    /// (`fm1_soc::stock_from_package`, `stock_boot`, board `Fm1`): the app area as the package
+    /// installs it, the flash chip with the package's flash image, the entry from its directory.
+    /// As on that page, the audio PLL is not set up (the firmware then runs without sound, its
+    /// frames paced by the timer). `fw` gives the symbols (the build the package was made from);
+    /// `opt` the boot options, or none, as on the web page and the device.
+    pub fn boot_package(fw: &Firmware, pkg: &[u8], opt: Option<BootOpt>) -> Machine {
+        let st = fm1_soc::stock_from_package(pkg, None).unwrap_or_else(|e| panic!("the package does not unpack: {e}"));
+        assert_eq!(st.board, fm1_soc::Board::Fm1, "the package is not for the FM-1 ({})", st.identity);
+        let mut soc = Soc::new(RAM_SIZE as usize, st.xip);
+        let params = RAM_BASE + 0x7_FC00;
+        soc.write32(params, params + 0x40);
+        fm1_soc::stock_boot(&mut soc, &st.flash, params, st.board);
+        Machine::start(fw, soc, st.entry, opt, false)
+    }
+
+    fn start(fw: &Firmware, mut soc: Soc, entry: u32, opt: Option<BootOpt>, stock_pll: bool) -> Machine {
         soc.periph.skip_idle = true;
-        for (reg, v) in AUDIO_PLL_STOCK {
-            soc.write32(reg, v);
+        if stock_pll {
+            for (reg, v) in AUDIO_PLL_STOCK {
+                soc.write32(reg, v);
+            }
         }
-        let bo = fw.symbol("fmzx_bootopt");
-        soc.write32(bo, BOOTOPT_MAGIC);
-        soc.write32(bo + 4, u32::from(opt.rgb565) | u32::from(opt.divider & 15) << 8);
-        let mut cpu = Cpu::new(APP_BASE);
+        if let Some(opt) = opt {
+            let bo = fw.symbol("fmzx_bootopt");
+            soc.write32(bo, BOOTOPT_MAGIC);
+            soc.write32(bo + 4, u32::from(opt.rgb565) | u32::from(opt.divider & 15) << 8);
+        }
+        let mut cpu = Cpu::new(entry);
         cpu.user = true;
         soc.take_boot(&cpu);
         Machine {

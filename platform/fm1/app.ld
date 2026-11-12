@@ -51,6 +51,7 @@ SECTIONS
     .text : ALIGN(4)
     {
         *(.text .text.*)
+        KEEP(*(.rodata.fmzx_product))
         *(EXCLUDE_FILE(*libzx_core.a:* *audio.c.obj) .rodata EXCLUDE_FILE(*libzx_core.a:* *audio.c.obj) .rodata.*)
         . = ALIGN(4);
         __init_array_start = .;
