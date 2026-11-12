@@ -369,3 +369,72 @@ impl Sched {
         self.raw.stats
     }
 }
+
+/// Number of FM-1 inputs the key map covers (buttons, notes, encoder directions).
+pub const KM_INPUTS: usize = sys::KM_INPUTS as usize;
+pub const KM_NONE: u8 = sys::KM_NONE as u8;
+pub const KM_PULSE_FRAMES: u32 = sys::KM_PULSE_FRAMES;
+
+/// The built-in key map: two action bytes per input.
+pub fn km_default() -> [[u8; 2]; KM_INPUTS] {
+    let mut k = MaybeUninit::<sys::keymap>::zeroed();
+    // SAFETY: km_default fills the whole table.
+    unsafe {
+        sys::km_default(k.as_mut_ptr());
+        k.assume_init().act
+    }
+}
+
+/// One poll of the FM-1 controls.
+#[derive(Clone, Copy, Default)]
+pub struct KmInput {
+    pub buttons: u32,
+    pub notes: u32,
+    pub enc: [i8; 7],
+}
+
+/// The key mapper: a table plus the encoder pulse timers.
+pub struct KeyMapper {
+    map: sys::keymap,
+    state: sys::km_state,
+}
+
+impl KeyMapper {
+    /// A mapper with the default table.
+    pub fn new() -> Self {
+        // SAFETY: both are plain byte arrays; all-zero is valid, and the C calls set them up.
+        let mut m = KeyMapper { map: unsafe { MaybeUninit::zeroed().assume_init() }, state: unsafe { MaybeUninit::zeroed().assume_init() } };
+        // SAFETY: both pointers are valid.
+        unsafe {
+            sys::km_default(&mut m.map);
+            sys::km_reset(&mut m.state);
+        }
+        m
+    }
+
+    /// Replaces the table.
+    pub fn set_map(&mut self, act: &[[u8; 2]; KM_INPUTS]) {
+        self.map.act = *act;
+    }
+
+    pub fn reset(&mut self) {
+        // SAFETY: the state is valid.
+        unsafe { sys::km_reset(&mut self.state) }
+    }
+
+    /// Returns `(rows, kempston)` for this poll.
+    pub fn apply(&mut self, input: &KmInput) -> ([u8; 8], u8) {
+        let inp = sys::km_input { buttons: input.buttons, notes: input.notes, enc: input.enc };
+        let mut rows = [0u8; 8];
+        let mut kemp = 0u8;
+        // SAFETY: all pointers are valid; rows holds 8 bytes.
+        unsafe { sys::km_apply(&self.map, &mut self.state, &inp, rows.as_mut_ptr(), &mut kemp) };
+        (rows, kemp)
+    }
+}
+
+impl Default for KeyMapper {
+    fn default() -> Self {
+        Self::new()
+    }
+}

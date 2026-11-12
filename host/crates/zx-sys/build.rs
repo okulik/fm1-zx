@@ -112,9 +112,11 @@ fn main() {
         .header(core_zx.join("zx.h").to_string_lossy())
         .header(app.join("pixels.h").to_string_lossy())
         .header(app.join("lcdsched.h").to_string_lossy())
-        .allowlist_function("(zx|pix|lcd)_.*")
-        .allowlist_type("(zx|pix|lcd)_.*")
-        .allowlist_var("(ZX|LCD|PIX)_.*")
+        .header(app.join("keymap.h").to_string_lossy())
+        .allowlist_function("(zx|pix|lcd|km)_.*")
+        .allowlist_type("(zx|pix|lcd|km)_.*")
+        .allowlist_type("keymap")
+        .allowlist_var("(ZX|LCD|PIX|KM)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {
