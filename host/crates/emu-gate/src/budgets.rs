@@ -141,6 +141,8 @@ pub struct Measure {
     pub cpu: Vec<u64>,
     /// `fm1_alnk0_irq` per call (interrupt time excluded from `cpu`).
     pub isr: Vec<u64>,
+    /// LCD rows sent in each 1-second sub-window of the window (a static screen sends none).
+    pub rows_per_second: Vec<u32>,
     /// Chip resets during the run.
     pub resets: u32,
     /// The game was still running (`fmzx_stats.view` = game) at the end.
@@ -193,6 +195,18 @@ impl Demo {
     }
 }
 
+/// Sub-windows (1 s) that must have sent at least [`GAMEPLAY_MIN_ROWS`] rows, as a share of all,
+/// for a demo game to count as being played: a title screen or a menu sends next to nothing.
+pub const GAMEPLAY_MIN_SHARE: f64 = 0.9;
+/// Rows a second of gameplay changes at least (a title's blinking cursor is a few rows).
+pub const GAMEPLAY_MIN_ROWS: u32 = 8;
+
+/// The share of the 1-second sub-windows in which at least [`GAMEPLAY_MIN_ROWS`] rows were sent.
+pub fn active_share(m: &Measure) -> f64 {
+    let n = m.rows_per_second.iter().filter(|&&r| r >= GAMEPLAY_MIN_ROWS).count();
+    n as f64 / m.rows_per_second.len().max(1) as f64
+}
+
 /// Starts game `index` and measures `window_ms` of it from `settle_ms` on, with the demo's keys
 /// pressed throughout.
 pub fn measure(fw: &Firmware, opt: BootOpt, index: u32, demo: &[DemoStep], settle_ms: u64, window_ms: u64) -> Measure {
@@ -206,13 +220,21 @@ pub fn measure(fw: &Firmware, opt: BootOpt, index: u32, demo: &[DemoStep], settl
     m.clear_costs();
     m.reset_max_age();
     let (s0, resets0) = (m.stats(), m.resets());
-    d.run_to(&mut m, t0, settle_ms + window_ms);
+    let mut rows_per_second = Vec::new();
+    let mut prev = s0.lcd.row_sends;
+    for i in 1..=window_ms.div_ceil(1000) {
+        d.run_to(&mut m, t0, settle_ms + (i * 1000).min(window_ms));
+        let now = m.stats().lcd.row_sends;
+        rows_per_second.push(now - prev);
+        prev = now;
+    }
     let s1 = m.stats();
     Measure {
         lcd: lcd_delta(&s0.lcd, &s1.lcd),
         frames: s1.frames - s0.frames,
         cpu: m.cost_with("game_frame", "lcd_compose_band"),
         isr: m.cost_of("fm1_alnk0_irq"),
+        rows_per_second,
         resets: m.resets() - resets0,
         in_game: s1.view == zx_view_game(),
     }

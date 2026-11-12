@@ -106,7 +106,10 @@ instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `fw_report` (about 2.5 minutes, the 12 runs in parallel) boots every game in `games/games.toml`
 at LCD dividers 4, 2 and 1 in RGB444, plays the manifest's `demo` (`demo = "<key>@<ms>[+<hold ms>],..."`,
 keys as in the key syntax plus `PLAY`/`HOME`, ms after the game started), measures 20 s from
-second 16 on and prints the table below. It writes `build/fm1/fmzx-report.json` and asserts:
+second 16 on and prints the table below. It also checks that each game with a demo is being
+played: rows must go out in at least 90% of the 1-second sub-windows (at least 8 rows each; gameplay
+sends 45-90 rows a second, a title, menu or game-over screen sends none), and a second test
+(`title_screens_are_not_gameplay`) shows that Moon Caves at its map menu and Castaway at its title menu fail it. It writes `build/fm1/fmzx-report.json` and asserts:
 scroll 20-23 fps at divider 4 and >= 49 at divider 1; every game with a changing screen >= 45
 fps at divider 1. fps is `50 * row_sends / pending_frames_sum` (how often a changed row reaches
 the panel; 50 = every changed row goes out in the frame that changed it); a static screen
@@ -122,17 +125,18 @@ emulator counts, one per instruction, interrupts excluded):
 | scroll | 1 | 50.0 | 69,384 | 1 |
 | border | 4, 2, 1 | static | 0 | 0 |
 | mooncaves | 4, 2, 1 | 50.0 | 432 | 1 |
-| castaway | 4 | 47.9 | 1,622 | 2 |
-| castaway | 2, 1 | 50.0 | 1,643 | 1 |
+| castaway | 4, 2, 1 | 50.0 | 1,488 | 1 |
 
 | game | CPU per frame, max | CPU per frame, avg |
 | --- | --- | --- |
 | scroll | 1,448,804 | 1,430,713 |
 | border | 1,272,906 | 1,266,967 |
 | mooncaves | 1,289,705 | 503,967 |
-| castaway | 1,933,913 | 612,187 |
+| castaway | 1,320,531 | 446,361 |
 
 Audio interrupt, max 1,574 instructions per block. RAMTEXT 19,824 of 49,152 bytes. Image
 68,048 + pack 45,956 bytes, 115,300 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
-POOL 249,968 bytes, 118,672 below the user stack. Castaway's demo plays about 11 s before its
-energy runs out (game over, then the title); mooncaves plays throughout.
+POOL 249,968 bytes, 118,672 below the user stack. Both demos play the whole 20 s window: Moon Caves
+(snail map, player 1 walks and fires while the TIME counts down; a few rows change a frame, so few bytes)
+and Castaway (the player steps left and right on the ship's platform, out of the crawler's reach, so
+the energy does not run out).

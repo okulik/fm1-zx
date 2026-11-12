@@ -48,12 +48,14 @@ demo = "button.OCT-@8000, button.ARP@10000, note.A3@13000+1500, note.F3@16000+15
 
 # Castaway: press 1 for keyboard control (OCT-). O/P left/right, Q jump, SPACE fire, H pause;
 # CAPS SHIFT + 0 (SEQ + ARP) ends the game.
-# demo: any key past the title, 1 (keyboard), then run right, jump, fire.
+# demo: any key past the title, 1 (keyboard), then every second a short step left and right on
+# the ship's platform (so the player stays out of the crawler's reach and the energy lasts) and
+# a shot every fourth second: 20 s of play with a moving player.
 [[game]]
 id = "castaway"
 name = "Castaway"
 file = "../third_party/games/castaway/castawy.tap"
-demo = "button.OCT-@12000, button.OCT-@14500, note.A3@16000+3000, note.F#3@20000+300, note.C5@21000, note.A3@22000+2000, note.F#3@25000+300, note.F3@26000+2000, note.C5@29000, note.A3@30000+2000, note.F3@33000+2000"
+demo = "button.OCT-@12000, button.OCT-@14500, note.F3@16000+300, note.A3@16600+200, note.F3@17000+300, note.A3@17600+200, note.F3@18000+300, note.A3@18600+200, note.F3@19000+300, note.A3@19600+200, note.C5@19850, note.F3@20000+300, note.A3@20600+200, note.F3@21000+300, note.A3@21600+200, note.F3@22000+300, note.A3@22600+200, note.F3@23000+300, note.A3@23600+200, note.C5@23850, note.F3@24000+300, note.A3@24600+200, note.F3@25000+300, note.A3@25600+200, note.F3@26000+300, note.A3@26600+200, note.F3@27000+300, note.A3@27600+200, note.C5@27850, note.F3@28000+300, note.A3@28600+200, note.F3@29000+300, note.A3@29600+200, note.F3@30000+300, note.A3@30600+200, note.F3@31000+300, note.A3@31600+200, note.C5@31850, note.F3@32000+300, note.A3@32600+200, note.F3@33000+300, note.A3@33600+200, note.F3@34000+300, note.A3@34600+200, note.F3@35000+300, note.A3@35600+200, note.C5@35850"
 
 [game.keys]
 "note.F3" = "key.O"                     # left
