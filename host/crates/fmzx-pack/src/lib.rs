@@ -5,3 +5,4 @@
 
 pub mod manifest;
 pub mod pack;
+pub mod testprogs;

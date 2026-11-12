@@ -1,1 +1,5 @@
+game_border_frame300 = a2417dc5
+game_castaway_frame1500 = 6f999e48
+game_mooncaves_frame1500 = 5c12f58d
+game_scroll_frame300 = 5fa53b45
 picker_3_games = 07241ec6

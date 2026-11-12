@@ -7,6 +7,8 @@ path = [
   "tools/test-data.sha256",
   "host/Cargo.lock",
   "host/crates/zx-tests/tests/golden/hashes.txt",
+  "games/test/scroll.sna",
+  "games/test/border.sna",
   "docs/superpowers/**",
 ]
 precedence = "aggregate"
@@ -32,3 +34,40 @@ path = "third_party/Z80InsnClock/**"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2021-2025 Sofía Ortega Sosa"
 SPDX-License-Identifier = "0BSD"
+
+# Built-in games: unmodified files with their upstream licence texts; licence
+# statements quoted in each README.md.
+[[annotations]]
+path = [
+  "third_party/games/mooncaves/mooncaves48.tap",
+  "third_party/games/mooncaves/LICENSE",
+  "third_party/games/mooncaves/README.upstream.md",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2019 Eugeny Novikov"
+SPDX-License-Identifier = "MIT AND CC-BY-SA-3.0"
+
+[[annotations]]
+path = "third_party/games/castaway/castawy.tap"
+precedence = "override"
+SPDX-FileCopyrightText = "2016 Juan J. Martinez"
+SPDX-License-Identifier = "MIT OR (GPL-3.0-only AND CC-BY-SA-2.0)"
+
+[[annotations]]
+path = "third_party/games/castaway/README.release.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "2016 Juan J. Martinez"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "third_party/games/castaway/README.upstream.md"
+precedence = "override"
+SPDX-FileCopyrightText = "2016 Juan J. Martinez"
+SPDX-License-Identifier = "GPL-3.0-only"
+
+# The GPL's own text, as shipped in the Castaway repository.
+[[annotations]]
+path = "third_party/games/castaway/gpl-3.0.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
+SPDX-License-Identifier = "GPL-3.0-only"
