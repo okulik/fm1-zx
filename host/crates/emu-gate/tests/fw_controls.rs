@@ -272,6 +272,33 @@ fn osk_rows_not_resent() {
 }
 
 #[test]
+fn view_change_starts_a_frame_at_once() {
+    // leaving the game, the menu's first LCD frame (and its UI rows) does not wait for the up to
+    // 40 ms the game's audio pacing left on the frame timer: it comes in the same main-loop pass
+    let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
+    for i in 0..5 {
+        m.run_ms(7 * i);
+        m.hold(HOME, true);
+        let mut before = m.stats();
+        let mut t = 0;
+        while m.stats().view == view::GAME as u32 {
+            assert!(t < 100, "HOME did not open the menu");
+            before = m.stats();
+            m.run_ms(1);
+            t += 1;
+        }
+        let s = m.stats();
+        m.run_ms(30);
+        m.hold(HOME, false);
+        m.run_ms(50);
+        assert_eq!(s.view, view::MENU as u32);
+        assert!(s.lcd.frames > before.lcd.frames, "no LCD frame within 1 ms of the menu (try {i})");
+        press_to(&mut m, HOME, view::GAME);
+        m.run_ms(100);
+    }
+}
+
+#[test]
 fn divider_menu() {
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
     assert_eq!((m.stats().divider, m.stats().budget), (4, 30_000));
