@@ -197,3 +197,40 @@ impl Default for Machine {
         Self::new()
     }
 }
+
+/// The beeper renderer: turns each frame's edge list into audio samples.
+pub struct Beeper {
+    raw: Box<sys::zx_beeper>,
+}
+
+impl Beeper {
+    /// A renderer for a sample rate of `num / den` Hz.
+    pub fn new(num: u32, den: u32) -> Self {
+        // SAFETY: zx_beeper is plain integers; all-zero is valid and zx_beeper_init sets it up.
+        let mut raw: Box<sys::zx_beeper> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        // SAFETY: `raw` is a valid, exclusively owned zx_beeper.
+        unsafe { sys::zx_beeper_init(&mut *raw, num, den) };
+        Beeper { raw }
+    }
+
+    /// Samples the next `render` call produces.
+    pub fn frame_samples(&self) -> u32 {
+        // SAFETY: `raw` was initialised by zx_beeper_init.
+        unsafe { sys::zx_beeper_frame_samples(&*self.raw) }
+    }
+
+    /// Renders one frame whose beeper level changes are `edges`.
+    pub fn render(&mut self, edges: &[zx_edge]) -> Vec<i16> {
+        let mut out = vec![0i16; self.frame_samples() as usize];
+        // SAFETY: `out` holds frame_samples() entries, which render writes at most.
+        let n = unsafe { sys::zx_beeper_render(&mut *self.raw, edges.as_ptr(), edges.len() as u32, out.as_mut_ptr()) };
+        out.truncate(n as usize);
+        out
+    }
+
+    /// Host tests only: switches the DC blocker on or off.
+    pub fn test_dc_block(&mut self, on: bool) {
+        // SAFETY: `raw` was initialised by zx_beeper_init.
+        unsafe { sys::zx_beeper_test_dc_block(&mut *self.raw, on as i32) }
+    }
+}

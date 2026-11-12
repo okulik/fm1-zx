@@ -123,11 +123,35 @@ int zx_tape_insert(zx_machine *m, const uint8_t *tap, uint32_t len);
  * that follow, starting once the ROM's editor is waiting for a key. */
 void zx_tape_autostart(zx_machine *m);
 
+/* Beeper renderer (beeper.c). Independent of zx_machine: each frame the caller
+ * passes that frame's edge list. A frame yields rate * 69888 / 3500000 samples,
+ * kept exact as a reduced fraction num/den with a carried remainder. Each sample
+ * is the time-weighted average of the level over its span (level -> amplitude
+ * 0, 1000, 12000, 13000), then a one-pole DC blocker (pole 0.995, Q15).
+ * Integer only; no 64-bit division. Precondition: after reduction the fraction
+ * fits 32 bits (true for any rate up to ~13 MHz / den). */
+typedef struct zx_beeper {
+	uint32_t num, den;     /* samples per frame = num / den, reduced */
+	uint32_t rem;          /* carried remainder, 0 <= rem < den */
+	uint64_t sum;          /* level-time integral of the partly filled sample */
+	uint64_t fill;         /* scaled time already in that sample */
+	int32_t prev_x, prev_y;
+	uint8_t level;         /* beeper level in effect */
+	uint8_t dc_on;
+} zx_beeper;
+
+void zx_beeper_init(zx_beeper *b, uint32_t rate_num, uint32_t rate_den);   /* rate = num/den Hz */
+uint32_t zx_beeper_frame_samples(const zx_beeper *b);                      /* samples the next render writes */
+/* Renders one frame; `out` holds zx_beeper_frame_samples() entries. Edge T-states
+ * must ascend and are clamped to the frame. Returns the sample count. */
+uint32_t zx_beeper_render(zx_beeper *b, const zx_edge *edges, uint32_t count, int16_t *out);
+
 #ifdef ZX_TESTING
 /* Host tests only. */
 void zx_test_set_tstate(zx_machine *m, uint32_t t);   /* next instruction starts at frame T-state t */
 uint32_t zx_test_step(zx_machine *m);                 /* runs one instruction; T-states incl. contention */
 uint8_t zx_test_level(const zx_machine *m);           /* current beeper level */
+void zx_beeper_test_dc_block(zx_beeper *b, int on);   /* DC blocker on (default) or off */
 #endif
 
 #endif
