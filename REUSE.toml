@@ -7,6 +7,7 @@ path = [
   "tools/test-data.sha256",
   "host/Cargo.lock",
   "host/crates/zx-tests/tests/golden/hashes.txt",
+  "host/crates/emu-gate/tests/golden/*.png",
   "games/test/scroll.sna",
   "games/test/border.sna",
   "docs/superpowers/**",
@@ -71,3 +72,10 @@ path = "third_party/games/castaway/gpl-3.0.txt"
 precedence = "override"
 SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
 SPDX-License-Identifier = "GPL-3.0-only"
+
+# felucca-bsp (platform/fm1/VENDORED.md): its licence text and NOTICE, unmodified.
+[[annotations]]
+path = ["platform/fm1/bsp/LICENSE", "platform/fm1/bsp/NOTICE"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments"
+SPDX-License-Identifier = "MPL-2.0"

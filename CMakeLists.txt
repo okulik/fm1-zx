@@ -19,4 +19,5 @@ add_subdirectory(app)
 
 if(CMAKE_CROSSCOMPILING)
   add_subdirectory(bench/fm1)
+  add_subdirectory(platform/fm1)
 endif()

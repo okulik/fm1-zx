@@ -10,7 +10,16 @@ The C core is built and tested from Rust. Fetch the third-party test data once
 the z80test and `.tap` tests fail without it), then, from the repository root:
 
     tools/fetch-test-data
-    cd host && cargo test --workspace
+    cd host && cargo test --workspace --exclude emu-gate
+
+`emu-gate`'s firmware tests (`tests/fw_*.rs`) boot the device image in fm1-emu: build
+the firmware first (below), then run the whole suite with
+
+    cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release --workspace
+
+Without `FMZX_FM1_BUILD` they fail with the build commands rather than skip.
+`FMZX_GOLDEN_UPDATE=1` rewrites their golden screens (`tests/golden/*.png`); on a
+mismatch the screen is written to `build/fm1/<name>.actual.png`.
 
 `[profile.test]` is optimised (opt-level 3), so the whole suite, including the
 `z80full` conformance run (about a second), is fast in a plain `cargo test`;
@@ -46,6 +55,10 @@ Outputs are under `build/fm1`:
 - `core/libzx_core.a`: the machine core and both vendored Z80 libraries.
 - `bench/fm1/zx_bench.{elf,bin,dis}`: the bare-metal Z80 benchmark image, run
   later in the fm1-emu emulator. The result block is at `0x01C80000`.
+- `platform/fm1/fmzx_app.{elf,bin,dis,map}`: the firmware image (`fmzx_app.bin`
+  is the bytes from `0x02000120`, the app slot's start). The game pack goes at the
+  first 4 KiB boundary after it. `-DFMZX_LCD_DIVIDER=<0-15>` sets the LCD clock at
+  boot (default 4).
 
 Size of `zx_core` (Release, pi32v2, summed over the sections of `libzx_core.a`):
 `.text` 12,752 bytes plus 4,160 bytes of read-only data (the Z80 library's

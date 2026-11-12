@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Runs bare-metal pi32v2 images in fm1-emu and counts instructions.
+//!
+//! [`fw`] boots the real firmware image; the functions here run the Plan 1 bench image.
+
+pub mod fw;
 
 use fm1_core::{Bus, Cpu, JitMem};
 use fm1_soc::{Soc, RAM_BASE, XIP_BASE};
@@ -37,14 +41,27 @@ pub fn build_dir() -> PathBuf {
     std::path::absolute(v).expect("absolute build dir")
 }
 
-/// A bus that forwards to the SoC and panics on a misaligned 16- or 32-bit RAM access.
+/// A bus that forwards to the SoC and panics on a misaligned 16- or 32-bit RAM access, which
+/// the FM-1 faults on. `pc` is the instruction's address, for the message.
 pub struct CheckedBus<'a> {
     pub soc: &'a mut Soc,
+    pub pc: u32,
 }
 
-fn check(addr: u32, size: u32, what: &str) {
+impl CheckedBus<'_> {
+    #[inline(always)]
+    fn check(&self, addr: u32, size: u32, what: &str) {
+        if !addr.is_multiple_of(size) {
+            misaligned(self.pc, addr, what);
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn misaligned(pc: u32, addr: u32, what: &str) {
     let in_ram = (RAM_BASE..RAM_BASE + RAM_SIZE).contains(&addr);
-    assert!(!in_ram || addr.is_multiple_of(size), "misaligned {what} at {addr:#010x}");
+    assert!(!in_ram, "pc {pc:#010x}: misaligned {what} at {addr:#010x}");
 }
 
 impl Bus for CheckedBus<'_> {
@@ -52,11 +69,11 @@ impl Bus for CheckedBus<'_> {
         self.soc.read8(a)
     }
     fn read16(&mut self, a: u32) -> u16 {
-        check(a, 2, "read16");
+        self.check(a, 2, "read16");
         self.soc.read16(a)
     }
     fn read32(&mut self, a: u32) -> u32 {
-        check(a, 4, "read32");
+        self.check(a, 4, "read32");
         self.soc.read32(a)
     }
     fn fetch32(&mut self, a: u32) -> u32 {
@@ -66,11 +83,11 @@ impl Bus for CheckedBus<'_> {
         self.soc.write8(a, v);
     }
     fn write16(&mut self, a: u32, v: u16) {
-        check(a, 2, "write16");
+        self.check(a, 2, "write16");
         self.soc.write16(a, v);
     }
     fn write32(&mut self, a: u32, v: u32) {
-        check(a, 4, "write32");
+        self.check(a, 4, "write32");
         self.soc.write32(a, v);
     }
     fn tick(&mut self) -> bool {
@@ -114,7 +131,7 @@ impl Bus for CheckedBus<'_> {
 
 /// Executes one instruction through the alignment-checking bus and services the SoC clock.
 pub fn step(cpu: &mut Cpu, soc: &mut Soc) {
-    let mut bus = CheckedBus { soc };
+    let mut bus = CheckedBus { soc, pc: cpu.pc };
     cpu.step(&mut bus).expect("cpu fault");
     if bus.tick() {
         soc.advance(0);
