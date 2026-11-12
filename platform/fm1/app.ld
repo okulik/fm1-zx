@@ -7,7 +7,9 @@
  * The game pack is not linked: it sits in the app slot at ALIGN(_app_image_end, 4096).
  *
  * SRAM code (RAMTEXT) and XIP code are out of each other's branch reach (+-4 MiB): calls
- * between them go through function pointers. */
+ * between them go through function pointers. check_reach.py (run after the link) fails the
+ * build on any direct call or jump between the two, and on RAMTEXT code taking an address in
+ * XIP (where some calls would still be in reach, the linker does not catch them). */
 
 ENTRY(_start)
 
@@ -30,12 +32,17 @@ SECTIONS
 {
     .entry : { KEEP(*(.entry)) } > XIP
 
-    /* The Z80 core, the audio ISR path and the LCD pump run from SRAM. */
+    /* The Z80 core (the device copy, platform/fm1/CMakeLists.txt) and what calls it directly
+     * (pix_compose_zx, the game step), the audio interrupt (felucca-bsp's isr_alnk0 wrapper,
+     * fm1_alnk0_irq) with the FIFO, the LCD pump, and the mem* copies they call. */
     .ram_text : ALIGN(4)
     {
         _ram_text_start = .;
         *(.ram_text .ram_text.*)
         *libzx_core.a:*(.text .text.*)
+        *(.text.pix_compose_zx)
+        *(.text.isr_alnk0)
+        *(.text.fmzx_rt_*)
         . = ALIGN(4);
         _ram_text_end = .;
     } > RAMTEXT AT > XIP
@@ -44,7 +51,7 @@ SECTIONS
     .text : ALIGN(4)
     {
         *(.text .text.*)
-        EXCLUDE_FILE(*libzx_core.a:) *(.rodata .rodata.*)
+        *(EXCLUDE_FILE(*libzx_core.a:* *audio.c.obj) .rodata EXCLUDE_FILE(*libzx_core.a:* *audio.c.obj) .rodata.*)
         . = ALIGN(4);
         __init_array_start = .;
         KEEP(*(SORT(.init_array.*)))
@@ -53,11 +60,13 @@ SECTIONS
         . = ALIGN(4);
     } > XIP
 
-    /* The core's tables (contention, flags) are read from SRAM. */
+    /* The core's tables (contention, flags) are read from SRAM, and the audio interrupt reads
+     * no flash. */
     .data : ALIGN(4)
     {
         _data_start = .;
         *libzx_core.a:*(.rodata .rodata.*)
+        *audio.c.obj(.rodata .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
         . = ALIGN(4);
@@ -76,7 +85,8 @@ SECTIONS
         _bss_end = .;
     } > RAM
 
-    /* Big buffers (section(".pool.*")): the ROM copy, the LCD bands, later the machine. */
+    /* Big buffers (section(".pool.*")): the ROM copy, the LCD bands, the machine, the game file,
+     * the audio FIFO and DMA halves. */
     .pool (NOLOAD) : ALIGN(4)
     {
         _pool_start = .;

@@ -13,7 +13,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   `LICENSES/MPL-2.0.txt`). The files carry no "Incompatible With Secondary Licenses" notice, so
   they combine with our GPL-3.0-or-later code under MPL-2.0 section 3.3.
 - Local changes: none. Every file is byte for byte as at the commit above; the firmware hooks
-  around it (`platform/fm1/main.c`, `platform/fm1/lcd.c`).
+  around it (`platform/fm1/main.c`, `platform/fm1/lcd.c`, `platform/fm1/audio.c`).
 
 Files, at the same paths as upstream under `bsp/`:
 

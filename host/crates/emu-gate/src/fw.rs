@@ -343,9 +343,32 @@ impl Machine {
         self.soc.lcd.display_on
     }
 
-    /// Audio played so far, interleaved L/R.
+    /// Audio played so far as fm1-emu captured it: both channels interleaved (L, R, L, R...),
+    /// each the 24-bit sample word >> 8. The firmware writes the same value to both channels.
     pub fn audio(&self) -> &[i16] {
         &self.soc.periph.audio
+    }
+
+    /// The left channel of [`Machine::audio`]: one entry per I2S frame (44,117.647 Hz).
+    pub fn audio_left(&self) -> Vec<i16> {
+        self.soc.periph.audio.iter().step_by(2).copied().collect()
+    }
+
+    /// Runs until execution reaches `symbol`'s entry (stopping there, before it runs), for at
+    /// most `max_ms` emulated milliseconds; false if it was not reached.
+    pub fn run_until(&mut self, symbol: &str, max_ms: u64) -> bool {
+        let entry = self.symbol(symbol);
+        let end = self.soc.periph.cycles + self.soc.periph.cycle_of_ms(max_ms);
+        if self.cpu.pc == entry {
+            self.step();
+        }
+        while self.soc.periph.cycles < end {
+            self.step();
+            if self.cpu.pc == entry {
+                return true;
+            }
+        }
+        false
     }
 
     /// A 32-bit word of RAM.

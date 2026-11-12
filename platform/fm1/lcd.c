@@ -8,7 +8,8 @@
  * runs while lcd_pump returns to the main loop.
  *
  * The pump runs from RAMTEXT: XIP code is out of its branch reach, so it reaches the
- * scheduler, the application's composer and the waits through the pointers in `far`. */
+ * scheduler, the application's composer and the waits through the pointers in `far`, and XIP
+ * reaches it through main.c's table (ramcalls.h). */
 
 #include "lcd.h"
 
@@ -17,6 +18,7 @@
 #include "fm1_sys.h"
 #include "fm1_lcd_hw.h"
 #include "pixels.h"
+#include "ramcalls.h"
 
 #ifndef FMZX_LCD_DIVIDER
 #define FMZX_LCD_DIVIDER 4
@@ -153,7 +155,7 @@ static void RAMTEXT send_ready(void)
     st.compose ^= 1u;
 }
 
-static void RAMTEXT pump(void)
+void RAMTEXT lcd_pump_ram(void)
 {
     if (st.sending) {
         if (!(FM1_LCD_SPI_CON & 0x8000u)) {
@@ -179,13 +181,9 @@ static void RAMTEXT pump(void)
     }
 }
 
-/* Called from XIP: the pump is out of branch reach. */
-extern void (*fmzx_lcd_pump_ram)(void);
-void (*fmzx_lcd_pump_ram)(void) = pump;
-
 void lcd_pump(void)
 {
-    fmzx_lcd_pump_ram();
+    fmzx_ram.lcd_pump();
 }
 
 int lcd_busy(void)
@@ -277,6 +275,11 @@ void lcd_begin_frame(uint32_t frame, uint32_t budget_bytes)
 unsigned lcd_pending(void)
 {
     return lcd_sched_pending(&sched);
+}
+
+unsigned lcd_unsent(void)
+{
+    return lcd_sched_pending(&sched) + (st.ready ? st.ready_rows : 0u) + (st.sending ? st.send_rows : 0u);
 }
 
 const lcd_stats *lcd_get_stats(void)

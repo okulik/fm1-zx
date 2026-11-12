@@ -30,6 +30,9 @@ void lcd_mark_row(unsigned row, uint32_t frame);
 void lcd_mark_all(uint32_t frame);
 void lcd_begin_frame(uint32_t frame, uint32_t budget_bytes);
 unsigned lcd_pending(void);
+/* Rows not yet on the panel: pending, plus a band composed or in flight (until lcd_pump has seen
+ * its DMA finish). 0: the panel shows every row as last composed. */
+unsigned lcd_unsent(void);
 const lcd_stats *lcd_get_stats(void);
 
 /* Supplied by the application, called from lcd_pump: composes LCD rows row0 .. row0 + rows - 1
