@@ -80,11 +80,48 @@ fn encoder_pulse() {
 #[test]
 fn release_all() {
     let mut km = KeyMapper::new();
-    km.apply(&KmInput { buttons: 0x3FFF, notes: 0x7FF_FFFF, enc: [1; 7] });
+    let mut map = km_default();
+    map[ENC0 + 1] = [5 * 5, 0x44]; // SELECT cw -> P + Kempston fire
+    km.set_map(&map);
+    let mut e = [0i8; 7];
+    e[0] = 3;
+    let (rows, k) = km.apply(&KmInput { buttons: 0x3FFF, notes: 0x7FF_FFFF, enc: e });
+    assert_ne!(rows[5] & 1, 0, "the pulse is running");
+    assert_ne!(k & 0x10, 0);
     km.reset();
     let (rows, k) = km.apply(&KmInput::default());
-    assert_eq!(rows, [0; 8]);
+    assert_eq!(rows, [0; 8], "reset cancels the pulse");
     assert_eq!(k, 0);
+}
+
+#[test]
+fn detents_accumulate_across_polls() {
+    let mut km = KeyMapper::new();
+    pulse_map(&mut km);
+    let mut e = [0i8; 7];
+    e[0] = 1;
+    let mut total = 0;
+    for poll in 0..40 {
+        let inp = if poll < 2 { KmInput { enc: e, ..Default::default() } } else { KmInput::default() };
+        let (rows, _) = km.apply(&inp);
+        total += usize::from(rows[5] & 1 != 0);
+    }
+    // the second detent arrives while the first pulse is still running; both are played
+    assert_eq!(total, 2 * KM_PULSE_FRAMES as usize);
+}
+
+#[test]
+fn encoder_ccw_mapped() {
+    let mut km = KeyMapper::new();
+    let mut map = [[KM_NONE; 2]; KM_INPUTS];
+    map[ENC0] = [5 * 5, KM_NONE]; // SELECT ccw -> P
+    km.set_map(&map);
+    let mut e = [0i8; 7];
+    e[0] = -2;
+    assert_eq!(p_calls(&mut km, KmInput { enc: e, ..Default::default() }), 2 * KM_PULSE_FRAMES as usize);
+    // the cw direction is not mapped
+    e[0] = 1;
+    assert_eq!(p_calls(&mut km, KmInput { enc: e, ..Default::default() }), 0);
 }
 
 #[test]

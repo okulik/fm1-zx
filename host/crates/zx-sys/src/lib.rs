@@ -438,3 +438,105 @@ impl Default for KeyMapper {
         Self::new()
     }
 }
+
+/// Largest raw game the pack holds.
+pub const PACK_MAX_RAW: u32 = sys::PACK_MAX_RAW;
+pub const PACK_HEADER_SIZE: usize = sys::PACK_HEADER_SIZE as usize;
+pub const PACK_ENTRY_SIZE: usize = sys::PACK_ENTRY_SIZE as usize;
+pub const PACK_NAME_LEN: usize = sys::PACK_NAME_LEN as usize;
+pub const PACK_SNA: u8 = sys::PACK_SNA as u8;
+pub const PACK_Z80: u8 = sys::PACK_Z80 as u8;
+pub const PACK_TAP: u8 = sys::PACK_TAP as u8;
+pub const PACK_STORED: u8 = sys::PACK_STORED as u8;
+pub const PACK_LZ4: u8 = sys::PACK_LZ4 as u8;
+
+/// CRC-32 (IEEE) as the pack uses it.
+pub fn pack_crc32(data: &[u8]) -> u32 {
+    // SAFETY: the pointer and length describe `data`.
+    unsafe { sys::pack_crc32(data.as_ptr(), data.len() as u32) }
+}
+
+/// Decodes one raw LZ4 block into at most `cap` bytes; `Err` carries the C error code.
+pub fn lz4_decode(src: &[u8], cap: usize) -> Result<Vec<u8>, i32> {
+    let mut out = vec![0u8; cap];
+    let mut len = 0u32;
+    // SAFETY: both buffers are valid for the lengths given; `out` holds `cap` bytes.
+    match unsafe { sys::lz4_block_decode(src.as_ptr(), src.len() as u32, out.as_mut_ptr(), cap as u32, &mut len) } {
+        0 => {
+            out.truncate(len as usize);
+            Ok(out)
+        }
+        e => Err(e),
+    }
+}
+
+/// Validates the header of a pack image and returns the game count.
+pub fn pack_open(pack: &[u8]) -> Result<u32, i32> {
+    let mut count = 0u32;
+    // SAFETY: the pointer and length describe `pack`.
+    match unsafe { sys::pack_open(pack.as_ptr(), pack.len() as u32, &mut count) } {
+        0 => Ok(count),
+        e => Err(e),
+    }
+}
+
+/// One pack entry, borrowing the image it was read from.
+pub struct PackGame<'a> {
+    raw: sys::pack_game,
+    _pack: PhantomData<&'a [u8]>,
+}
+
+impl PackGame<'_> {
+    pub fn name(&self) -> String {
+        let n = self.raw.name.iter().position(|&c| c == 0).unwrap_or(self.raw.name.len());
+        self.raw.name[..n].iter().map(|&c| c as u8 as char).collect()
+    }
+    pub fn kind(&self) -> u8 {
+        self.raw.kind
+    }
+    pub fn codec(&self) -> u8 {
+        self.raw.codec
+    }
+    pub fn crop_x(&self) -> u8 {
+        self.raw.crop_x
+    }
+    pub fn keys(&self) -> [[u8; 2]; KM_INPUTS] {
+        self.raw.keys.act
+    }
+    pub fn stored_len(&self) -> u32 {
+        self.raw.stored_len
+    }
+    pub fn raw_len(&self) -> u32 {
+        self.raw.raw_len
+    }
+    pub fn crc32(&self) -> u32 {
+        self.raw.crc32
+    }
+
+    /// Decompresses the game into a buffer of `cap` bytes.
+    pub fn extract(&self, cap: usize) -> Result<Vec<u8>, i32> {
+        let mut out = vec![0u8; cap];
+        let mut len = 0u32;
+        // SAFETY: `raw.data` points into the image `'a` borrows, for stored_len bytes (checked
+        // by pack_game_at); `out` holds `cap` bytes.
+        match unsafe { sys::pack_extract(&self.raw, out.as_mut_ptr(), cap as u32, &mut len) } {
+            0 => {
+                out.truncate(len as usize);
+                Ok(out)
+            }
+            e => Err(e),
+        }
+    }
+}
+
+/// Reads entry `index` of a pack image. Validates the header first (the C call needs that).
+pub fn pack_game_at(pack: &[u8], index: u32) -> Result<PackGame<'_>, i32> {
+    pack_open(pack)?;
+    // SAFETY: pack_game is plain data; all-zero is valid and pack_game_at fills it on success.
+    let mut raw: sys::pack_game = unsafe { MaybeUninit::zeroed().assume_init() };
+    // SAFETY: the header was validated against `pack.len()` just above.
+    match unsafe { sys::pack_game_at(pack.as_ptr(), index, &mut raw) } {
+        0 => Ok(PackGame { raw, _pack: PhantomData }),
+        e => Err(e),
+    }
+}

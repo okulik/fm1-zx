@@ -142,3 +142,21 @@ fn three_actions_rejected() {
 fn default_matches_c() {
     assert_eq!(default_keymap(), zx_sys::km_default());
 }
+
+#[test]
+fn rejects_empty_file() {
+    let e = parse_manifest("[[game]]\nid = \"a\"\nname = \"A\"\nfile = \"\"\n").unwrap_err();
+    assert!(e.contains("file") && e.contains("empty"), "{e}");
+}
+
+#[test]
+fn rejects_absolute_file() {
+    let e = parse_manifest("[[game]]\nid = \"a\"\nname = \"A\"\nfile = \"/etc/a.sna\"\n").unwrap_err();
+    assert!(e.contains("file") && e.contains("relative"), "{e}");
+}
+
+#[test]
+fn rejects_no_games() {
+    let e = parse_manifest("").unwrap_err();
+    assert!(e.contains("no games"), "{e}");
+}

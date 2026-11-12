@@ -105,8 +105,17 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
             Some(c) if (0..=CROP_MAX as i64).contains(&c) => c as u8,
             Some(c) => return Err(format!("game {id}: crop {c} is not in 0-{CROP_MAX}")),
         };
+        if g.file.is_empty() {
+            return Err(format!("game {id}: file is empty"));
+        }
+        if Path::new(&g.file).is_absolute() || g.file.starts_with('/') || g.file.starts_with('\\') {
+            return Err(format!("game {id}: file {:?} must be relative to the manifest", g.file));
+        }
         encode_keymap(&g.keys).map_err(|e| format!("game {id}: {e}"))?;
         game.push(Game { id, name: g.name, file: g.file, crop, keys: g.keys, demo: g.demo });
+    }
+    if game.is_empty() {
+        return Err("manifest: no games".to_string());
     }
     Ok(Manifest { game })
 }
