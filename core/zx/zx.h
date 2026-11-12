@@ -39,6 +39,7 @@ typedef struct zx_machine {
 	uint32_t ram_words[ZX_RAM_SIZE / 4u];     /* 0x4000-0xFFFF, word-aligned storage */
 	uint32_t frame_tstate;                    /* T-states already run into the next frame */
 	uint32_t frame_count;
+	uint8_t dirty[ZX_SCREEN_LINES / 8u];      /* bit (y & 7) of byte y >> 3: line y changed (screen.c) */
 
 	/* Timing state (timing.c). All T-states are frame coordinates: 0 is INT. */
 	Z80InsnClock clock;                       /* M-cycle positions within the instruction */
@@ -87,6 +88,14 @@ const zx_edge *zx_edges(const zx_machine *m, uint32_t *count);
 
 /* Border colour (0-7) on frame line 0-311 of the frame run last. */
 uint8_t zx_border_line(const zx_machine *m, unsigned frame_line);
+
+/* Nonzero when screen line y (0-191) changed since the start of the frame run
+ * last; every line is dirty after zx_init until the next frame run. */
+int zx_line_dirty(const zx_machine *m, unsigned y);
+
+/* Decodes screen line y to 256 palette indices: 0-7, plus 8 when BRIGHT.
+ * FLASH swaps ink and paper while (frame_count / 16) is odd. */
+void zx_screen_line(const zx_machine *m, unsigned y, uint8_t out[256]);
 
 /* Delay for a contended access that starts at frame T-state `tstate`. */
 uint32_t zx_contention(uint32_t tstate);

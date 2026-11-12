@@ -20,6 +20,7 @@ void zx_init(zx_machine *m, const uint8_t *rom)
 {
 	memset(m, 0, sizeof *m);
 	m->rom = rom;
+	memset(m->dirty, 0xFF, sizeof m->dirty);
 
 	zx_timing_init(m);
 	zx_ula_init(m);
@@ -34,6 +35,7 @@ void zx_run_frame(zx_machine *m)
 	uint32_t t = m->frame_tstate;
 
 	zx_ula_new_frame(m);
+	zx_screen_new_frame(m);
 	z80_int(&m->cpu, 1);
 	if (t < ZX_INT_TSTATES) {
 		m->run_base = t;

@@ -108,6 +108,20 @@ impl Machine {
         unsafe { sys::zx_border_line(&*self.raw, line as u32) }
     }
 
+    /// Whether screen line `y` (0-191) changed since the last frame began.
+    pub fn line_dirty(&self, y: usize) -> bool {
+        // SAFETY: `raw` was initialised by zx_init; out-of-range lines return 0.
+        unsafe { sys::zx_line_dirty(&*self.raw, y as u32) != 0 }
+    }
+
+    /// Palette indices (0-15, bright = +8) of screen line `y` (0-191).
+    pub fn screen_line(&self, y: usize) -> [u8; 256] {
+        let mut out = [0u8; 256];
+        // SAFETY: `out` is 256 bytes.
+        unsafe { sys::zx_screen_line(&*self.raw, y as u32, out.as_mut_ptr()) };
+        out
+    }
+
     /// Host tests only: the current beeper level.
     pub fn test_level(&self) -> u8 {
         // SAFETY: `raw` was initialised by zx_init.

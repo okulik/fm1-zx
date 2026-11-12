@@ -93,3 +93,37 @@ pub fn run_at(m: &mut Machine, code: &[u8], a: u8, b: u8, c: u8, t: u32) {
 pub fn reg_a(m: &Machine) -> u8 {
     (m.regs().af >> 8) as u8
 }
+
+/// Text of character row `row` (0-23): each 8x8 cell is matched against the ROM
+/// font (0x3D00, chars 0x20-0x7F, 0x7F is the copyright sign) by bitmap alone;
+/// `?` when nothing matches. Trailing spaces are trimmed.
+pub fn screen_text(m: &Machine, row: usize) -> String {
+    let lines: Vec<[u8; 256]> = (0..8).map(|l| m.screen_line(row * 8 + l)).collect();
+    let mut text = String::new();
+    for col in 0..32 {
+        // The cell's two colours are unknown (the ROM prints black on white),
+        // so accept the bitmap with either colour as the set bits.
+        let min = lines.iter().flat_map(|l| l[col * 8..col * 8 + 8].iter().copied()).min().unwrap_or(0);
+        let pattern = |set_is_min: bool| -> Vec<u8> {
+            lines
+                .iter()
+                .map(|l| {
+                    let px = &l[col * 8..col * 8 + 8];
+                    px.iter().fold(0u8, |b, &p| (b << 1) | u8::from((p == min) == set_is_min))
+                })
+                .collect()
+        };
+        let (a, b) = (pattern(false), pattern(true));
+        let found = (0x20u16..=0x7F).find(|&c| {
+            let base = 0x3D00 + (c - 0x20) * 8;
+            (0..8).all(|i| m.peek(base + i) == a[i as usize])
+                || (0..8).all(|i| m.peek(base + i) == b[i as usize])
+        });
+        text.push(match found {
+            Some(0x7F) => '\u{a9}',
+            Some(c) => c as u8 as char,
+            None => '?',
+        });
+    }
+    text.trim_end().to_string()
+}
