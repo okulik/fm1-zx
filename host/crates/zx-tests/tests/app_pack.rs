@@ -375,6 +375,8 @@ fn pack_fuzz_mutations() {
         if i % 2 == 0 && p.len() >= 32 {
             fix_crc(&mut p);
         }
+        // an exact-size allocation, so ASan sees any read past the (possibly truncated) end
+        let p: Box<[u8]> = p.into_boxed_slice();
         let Ok(count) = pack_open(&p) else { continue };
         opened += 1;
         for idx in 0..count {
