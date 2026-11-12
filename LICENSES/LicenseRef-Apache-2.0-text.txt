@@ -1,0 +1,10 @@
+The text of the Apache License, Version 2.0
+
+Copyright The Apache Software Foundation (https://www.apache.org/licenses/LICENSE-2.0).
+
+docs/third-party/AC79-SDK-Apache-2.0.txt is the unmodified text of the Apache License,
+Version 2.0, as the Apache Software Foundation publishes it for anyone who licenses a work
+under it. It is reproduced verbatim, as the licence of the three JieLi AC79 SDK files that the
+FM-1 ZX update packages carry (uboot.boot, cfg_tool.bin, cfg/eq_cfg_hw.bin; see LICENSING.md).
+It is not under the licence of the rest of this repository, and nothing in this repository is
+licensed under the Apache License.

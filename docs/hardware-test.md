@@ -92,8 +92,9 @@ or click.
 
 ### The way back
 
-- [ ] UBOOT gesture: switch off; hold OCT- while switching on and for one second. The screen
-      shows no picture and the computer sees the boot loader on USB.
+- [ ] UBOOT gesture: switch off; hold OCT- while switching on and for one second, with the FM-1
+      connected by USB **[owner's yes]** (it opens the USB connection, as in section 0). Expected,
+      untested: the screen shows no picture and the computer sees the boot loader on USB.
 - [ ] A short OCT- tap at power-on: FM-1 ZX starts normally.
 - [ ] From the update mode, back to stock with M-VAVE's workbench (or a community recovery
       tool) **[owner's yes]**. The stock firmware starts and plays its patches.

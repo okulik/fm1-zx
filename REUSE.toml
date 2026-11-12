@@ -79,3 +79,11 @@ path = ["platform/fm1/bsp/LICENSE", "platform/fm1/bsp/NOTICE"]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments"
 SPDX-License-Identifier = "MPL-2.0"
+
+# The licence text of the JieLi AC79 SDK files the update packages carry (not in the repository;
+# LICENSING.md), shipped next to the packages by tools/make-packages. Unmodified.
+[[annotations]]
+path = "docs/third-party/AC79-SDK-Apache-2.0.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "The Apache Software Foundation"
+SPDX-License-Identifier = "LicenseRef-Apache-2.0-text"

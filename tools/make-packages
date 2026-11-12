@@ -5,6 +5,7 @@
 # Build the two update packages:
 #   build/fm1/fmzx.fwsc          the release package (RGB444 on the panel)
 #   build/fm1/fmzx-preview.fwsc  the fm1-emu preview (RGB565 by default, CMake FMZX_LCD_RGB565)
+# and copies the SDK files' licence text next to them (build/fm1/AC79-SDK-Apache-2.0.txt).
 #
 # Runs both device builds (presets fm1 and fm1-preview, in Docker through tools/fm1-docker), then
 # fmzx-pack on the host: the game pack from games/games.toml, the packages, and a verify of each.
@@ -38,3 +39,6 @@ loader="$b/third_party/felucca-loader/loader.bin"
     -o "$b/fmzx-preview.fwsc" "$@"
 "$pack" verify "$b/fmzx.fwsc"
 "$pack" verify "$b/fmzx-preview.fwsc"
+# the SDK files' licence travels with the packages (LICENSING.md)
+cp "$root/docs/third-party/AC79-SDK-Apache-2.0.txt" "$b/AC79-SDK-Apache-2.0.txt"
+echo "$b/AC79-SDK-Apache-2.0.txt: the licence of the JieLi AC79 SDK files in the packages"

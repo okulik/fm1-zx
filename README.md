@@ -24,7 +24,8 @@ What works, in fm1-emu:
   the screen sent to the LCD by changed rows: 50 display frames a second at LCD divider 1;
 - an update package (`.fwsc`) with Felucca's update loader, and a preview package to try in
   fm1-emu's web page ([install and recovery](docs/install.md));
-- the UBOOT gesture (OCT- held at power-on) into the boot loader's update mode.
+- the UBOOT gesture: OCT- held at power-on calls the boot loader's update-mode entry
+  (`fmzx_enter_uboot`); what the FM-1 does then is untested.
 
 Not in v1: USB (so no in-app updates yet), uploading your own games.
 

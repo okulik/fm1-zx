@@ -3,7 +3,7 @@
 
 # Inputs of the update package that are not built here (fmzx-pack fwsc, src/inputs.rs).
 
-# Three files from JieLi's AC79 SDK (Apache-2.0, LICENSES/Apache-2.0.txt), version
+# Three files from JieLi's AC79 SDK (Apache-2.0, docs/third-party/AC79-SDK-Apache-2.0.txt), version
 # AC79NN_SDK_V1.2.1_2023-12-13. fmzx-pack fetches them with curl into build/ac79/ (the cache) and
 # uses a file only when its SHA-256 matches; nothing fetched is committed.
 [sdk]

@@ -5,10 +5,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Installing FM-1 ZX, and the way back
 
-> **FM-1 ZX has not run on a real FM-1 yet.** Everything below is proven in the emulator
-> (fm1-emu) only. Do not install it on a unit, and do not publish the package, until the first
-> device test (`docs/hardware-test.md`) has passed, including the way back to the stock firmware.
-> Installing any custom firmware is at your own risk.
+> **FM-1 ZX has not run on a real FM-1 yet.** The firmware is proven in the emulator (fm1-emu)
+> only. Nothing in the install, update-mode or recovery sections below has been tried on
+> hardware: those steps are the plan, marked *unverified*, not tested instructions. Do not
+> install FM-1 ZX on a unit, and do not publish the package, until the first device test
+> (`docs/hardware-test.md`) has passed, including the way back to the stock firmware. Installing
+> any custom firmware is at your own risk.
 
 ## The packages
 
@@ -41,7 +43,9 @@ You need Docker (for the device build, `BUILDING.md`), Rust and curl on the host
 
 It runs both device builds (`tools/fm1-docker cmake --preset fm1` and `--preset fm1-preview`,
 then `cmake --build`), builds the game pack from `games/games.toml`, and writes and verifies the
-two packages. The first run fetches three files of JieLi's AC79 SDK (Apache-2.0) with curl into
+two packages, and copies the SDK files' licence text next to them
+(`build/fm1/AC79-SDK-Apache-2.0.txt`, from `docs/third-party/`; pass it on with the packages). The
+first run fetches three files of JieLi's AC79 SDK (Apache-2.0) with curl into
 `build/ac79/`:
 
     https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK/raw/AC79NN_SDK_V1.2.1_2023-12-13/cpu/wl82/tools/
@@ -71,8 +75,9 @@ target builds (8,216 bytes, `third_party/felucca-loader/VENDORED.md`).
 
 ## Trying it in the browser first
 
-fm1-emu's web page (<https://joakimeriksson.github.io/fm1-emu/>) can open a local package: choose
-"open a local package" and pick `build/fm1/fmzx-preview.fwsc`. The file is read in your browser;
+fm1-emu's web page (<https://joakimeriksson.github.io/fm1-emu/>) can open a local package: use
+its control for opening your own `.fwsc` file (at the time of writing something like "open a
+local package"; the label may differ) and pick `build/fm1/fmzx-preview.fwsc`. The file is read in your browser;
 nothing is uploaded. The FM-1's keys are on the computer keyboard (the page shows the layout):
 the picker, the HOME menu and the games work as in `docs/controls.md`.
 
@@ -89,45 +94,51 @@ checks the game picker. Two things to know:
   revision the tests pin, `93cb7ee`) boots the package; if it does not, run fm1-emu's web build
   at that revision locally.
 
-## Installing on an FM-1 (after the first device test)
+## Installing on an FM-1 (after the first device test; unverified)
 
 FM-1 firmware is updated through the firmware that is running: the community installers (for
 example Felucca's web installer, or the FM-1 Firmware Hub) send a `.fwsc` over USB-MIDI to the
 running firmware, which hands it to the update loader in the package (`ota.bin`), which writes
-the app area. The stock firmware and Felucca both accept such packages.
+the app area. *Unverified:* that the stock firmware or Felucca accepts this package (identity
+`FM-1_948`, with Felucca's loader, which presents itself to update hosts as `ota-FM-1_900`), and
+that a given installer takes it. The first device test checks this.
 
 1. Start the FM-1 with its current firmware (stock or another community firmware) and connect
    it by USB.
 2. Open a community installer, choose "install a local file" (or the installer's equivalent)
    and pick `build/fm1/fmzx.fwsc`.
-3. Wait until the installer reports success and the FM-1 restarts into the game picker.
+3. Wait until the installer reports success and the FM-1 restarts into the game picker
+   (expected, unverified).
 
 **FM-1 ZX itself has no USB stack in this version.** Once it runs, the computer does not see
 the FM-1 as a MIDI device, so no installer can reach it while FM-1 ZX is running. To replace it
 (with a newer FM-1 ZX, another firmware or the stock firmware), use the update mode below. The
 in-app update over USB comes with a later version.
 
-## The update mode (UBOOT gesture)
+## The update mode (UBOOT gesture; unverified on hardware)
 
-Hold **OCT-** while switching the FM-1 on, and keep holding it for one second. FM-1 ZX then
-leaves for JieLi's boot loader update mode (`usb_update_mode`, felucca-bsp's
-`fm1_enter_uboot`) instead of starting: the screen shows no picture and the computer sees the FM-1's
-boot loader on USB. From there the community recovery and installer tools (for example
-FM-1-transporter, <https://github.com/kurogedelic/FM-1-transporter>, or M-flasher) can write a
-firmware. A short tap of OCT- at power-on does nothing: FM-1 ZX starts normally.
+Hold **OCT-** while switching the FM-1 on, and keep holding it for one second. FM-1 ZX then calls
+the boot loader's update-mode entry (`fmzx_enter_uboot`, which calls felucca-bsp's
+`fm1_enter_uboot`: it sets `usb_update_mode` and resets the chip) instead of starting. What is
+proven: in fm1-emu, `fmzx_enter_uboot` is reached just after one second with OCT- held, and a
+short tap of OCT- at power-on does not reach it (FM-1 ZX starts normally). *Unverified:* that the
+FM-1 then shows no picture, that the computer sees its boot loader on USB, and that the community
+recovery and installer tools (for example FM-1-transporter,
+<https://github.com/kurogedelic/FM-1-transporter>, or M-flasher) can write a firmware from there.
 
 If the FM-1 ZX image itself does not start at all, the gesture cannot run either. The chip's own
 update mode, below every firmware, is reported by the community to be reached by holding
-**OCT- and OCT+ together for about five seconds** at power-on; the same tools work from there.
+**OCT- and OCT+ together for about five seconds** at power-on, with the same tools working from
+there (community report, not tried by this project).
 
-## Back to the stock firmware
+## Back to the stock firmware (unverified)
 
 M-VAVE's workbench (their updater application) installs M-VAVE's stock package (`FM-1.fwsc`).
 With FM-1 ZX installed:
 
 1. Put the FM-1 into the update mode (UBOOT gesture above).
 2. Install the stock firmware with M-VAVE's workbench, or write M-VAVE's `FM-1.fwsc` with a
-   community recovery tool.
+   community recovery tool (unverified: whether the workbench works from this update mode).
 3. Switch the FM-1 off and on: the stock firmware starts.
 
 These steps are part of the first device test (`docs/hardware-test.md`) and are not verified

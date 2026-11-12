@@ -30,18 +30,12 @@ pub const FLASH_SIZE: usize = 0x93000;
 pub const AREA: usize = 0x4000;
 /// The chip key the app area is encrypted with.
 pub const KEY: u16 = 0x980F;
-// The header values are the defaults of JieLi's AC79 SDK, whose files are Apache-2.0; marked as
-// a snippet of it to be on the safe side.
-// SPDX-SnippetBegin
-// SPDX-SnippetCopyrightText: Zhuhai Jieli Technology Co., Ltd.
-// SPDX-License-Identifier: Apache-2.0
 /// The flash header: JieLi SDK defaults (burner_size 544, VID "0.01", flash_size 0xFF000, fs_ver
 /// 0x10, PID "AC791N_STORY"), plain, without its CRC.
 pub const FLASH_HDR: [u8; 30] = [
     0x20, 0x02, 0x2f, 0x10, 0x4c, 0xc9, 0x00, 0xf0, 0x0f, 0x00, 0x10, 0x10, 0xa4, 0xff, 0x4e, 0x5d, 0x0b, 0x41,
     0xe0, 0xcd, 0x78, 0x1d, 0xc8, 0x56, 0x41, 0x7f, 0xb3, 0x67, 0xcf, 0x9f,
 ];
-// SPDX-SnippetEnd
 /// The chip the UFW container is for.
 pub const UFW_CHIP: &[u8] = b"AC791N";
 /// Marker of an unused identity slot in the container's header blocks.
