@@ -84,6 +84,27 @@ demo = "button.OCT-@5000, button.OCT-@7000, note.A3@9000+1000, note.G3@10000+800
 "note.G5" = "key.SPACE"
 "note.B3" = "key.H"                     # pause
 
+# ZX Dino: any key starts a run (and restarts after a crash), SPACE or Q jumps, A or CAPS SHIFT ducks
+# under low birds. The game reads keys only, so the default Kempston notes are remapped: F#3/G#3 jump
+# (Q), C5-G5 jump (SPACE), G3 duck (A); SEQ is CAPS SHIFT and the other buttons start a run.
+# demo: OCT- starts a run past the title, then a jump every 1.1 s until 36 s (the report window ends
+# at 36 s); a crash only waits for the next jump to start a new run.
+[[game]]
+id = "dino"
+name = "ZX Dino"
+file = "../third_party/games/dino/dino.tap"
+demo = "button.OCT-@7000, note.F#3@9000+200, note.F#3@10100+200, note.F#3@11200+200, note.F#3@12300+200, note.F#3@13400+200, note.F#3@14500+200, note.F#3@15600+200, note.F#3@16700+200, note.F#3@17800+200, note.F#3@18900+200, note.F#3@20000+200, note.F#3@21100+200, note.F#3@22200+200, note.F#3@23300+200, note.F#3@24400+200, note.F#3@25500+200, note.F#3@26600+200, note.F#3@27700+200, note.F#3@28800+200, note.F#3@29900+200, note.F#3@31000+200, note.F#3@32100+200, note.F#3@33200+200, note.F#3@34300+200, note.F#3@35400+200"
+
+[game.keys]
+"note.F#3" = "key.Q"                    # jump
+"note.G#3" = "key.Q"
+"note.C5" = "key.SPACE"                 # jump
+"note.D5" = "key.SPACE"
+"note.E5" = "key.SPACE"
+"note.F5" = "key.SPACE"
+"note.G5" = "key.SPACE"
+"note.G3" = "key.A"                     # duck
+
 # Multi-load test: a tape that loads a screen image from its third block while it runs
 # (`fmzx-pack testprogs`). No keys.
 [[game]]

@@ -17,7 +17,7 @@ What works, in fm1-emu:
 
 - a game picker, a HOME menu (resume, reset, on-screen Spectrum keyboard, the key map, LCD speed,
   back to games) and pause;
-- built-in games: freely licensed Spectrum games (Castaway, ZX Sopwith, Escape from Colony 8) and test programs,
+- built-in games: freely licensed Spectrum games (Castaway, ZX Sopwith, Escape from Colony 8, ZX Dino) and test programs,
   each with its own mapping of the FM-1's notes, buttons and encoders to Spectrum keys or a
   Kempston joystick ([controls](docs/controls.md));
 - the Spectrum at its own speed (50 frames a second) with beeper sound, paced by the audio, and

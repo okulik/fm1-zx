@@ -84,6 +84,14 @@ z88dk (Small C+), so it holds z88dk start-up and runtime routines, which the Cla
 License does not extend to as compiled library output. No credits name any other author.
 Attribution: Escape from Colony 8 by Juan J. Martínez, <https://www.usebox.net/jjm/colony8/>.
 
+**ZX Dino** by Aleksey Kurepin / Kukovnikov Bonifas (2026), `third_party/games/dino/`. The repository's `LICENSE`
+("MIT License / Copyright © 2026 Kukovnikov Bonifas", `LICENSE.release`) and `README.md` ("MIT. See LICENSE.",
+`README.release.md`) carry the MIT licence. The file is `dino.tap` from commit 7dfad2b, unmodified (SPDX `MIT`).
+It is Z80 assembly with no library or compiler runtime; its twelve small sprites are the author's own
+pixel art (typed as text tables in the first commit, GIF files since the last), redrawn at the Spectrum's
+scale and not taken from the Chrome game's sprite sheet, and it points to the ROM's character set rather
+than copying it. Attribution: ZX Dino by Aleksey Kurepin / Kukovnikov Bonifas, <https://github.com/foxweb/zxdino>.
+
 **ZX Sopwith** by Neil Rackett (2026), `third_party/games/sopwith/`: a port of David L. Clark's Sopwith
 (GPL 2 or later, as the original-source repository confirms), released under GPL-3.0-or-later. The
 file is the release's `sopwith.sna`, unmodified. It holds sprite art and a ground profile from the
