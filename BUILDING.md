@@ -165,7 +165,7 @@ Both need the device build (see Firmware above) and run in fm1-emu:
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
-`fw_report` (about 2.5 minutes, the 9 runs in parallel) boots every game in `games/games.toml`
+`fw_report` (about 4 to 6 minutes, the 27 runs in parallel) boots every game in `games/games.toml`
 at LCD dividers 4, 2 and 1 in RGB444, plays the manifest's `demo` (`demo = "<key>@<ms>[+<hold ms>],..."`,
 keys as in the key syntax plus `PLAY`/`HOME`, ms after the game started), measures 20 s from
 second 16 on and prints the table below. It also checks that each game with a demo is being
@@ -186,16 +186,28 @@ emulator counts, one per instruction, interrupts excluded):
 | scroll | 2 | 35.9 | 49,881 | 2 |
 | scroll | 1 | 50.0 | 69,384 | 1 |
 | border | 4, 2, 1 | static | 0 | 0 |
-| castaway | 4, 2, 1 | 50.0 | 1,510 | 1 |
+| castaway | 4, 2, 1 | 50.0 | 1,488 | 1 |
+| sopwith | 4, 2, 1 | 50.0 | 2,090 | 1 |
+| colony8 | 4, 2, 1 | 50.0 | 1,222 | 1 |
+| dino | 4, 2, 1 | 50.0 | 16,122 | 1 |
+| oneway | 4, 2, 1 | 50.0 | 7,164 | 1 |
+| tape | 4, 2, 1 | static | 0 | 0 |
+| tune | 4, 2, 1 | static | 0 | 0 |
 
 | game | CPU per frame, max | CPU per frame, avg |
 | --- | --- | --- |
 | scroll | 1,449,284 | 1,431,206 |
 | border | 1,273,386 | 1,267,447 |
-| castaway | 1,322,195 | 445,715 |
+| castaway | 1,321,011 | 447,638 |
+| sopwith | 1,485,696 | 1,192,110 |
+| colony8 | 1,351,179 | 381,020 |
+| dino | 1,524,637 | 865,493 |
+| oneway | 674,414 | 597,720 |
+| tape | 784,491 | 778,640 |
+| tune | 875,913 | 851,379 |
 
 Audio interrupt, max 1,574 instructions per block. RAMTEXT 19,824 of 49,152 bytes. Image
-68,144 + pack 23,468 bytes, 92,812 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
-POOL 249,968 bytes, 118,672 below the user stack. The demo plays the whole 20 s window: Castaway
-(the player steps left and right on the ship's platform, out of the crawler's reach, so
-the energy does not run out).
+68,144 + pack 81,888 bytes, 151,232 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
+POOL 249,968 bytes, 118,672 below the user stack. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
+crashes through its five planes; ZX Dino jumps and restarts after each crash.

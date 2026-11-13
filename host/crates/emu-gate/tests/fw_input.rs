@@ -54,6 +54,21 @@ fn encoder_scrolls_picker() {
     assert_eq!(play(&mut m), 2);
 }
 
+/// The picker reaches its last entry (the list scrolls past the first screenful) and PLAY starts
+/// it: `tune`, found by id in the manifest.
+#[test]
+fn picker_reaches_last_game() {
+    let text = std::fs::read_to_string(repo().join("games/games.toml")).expect("read the manifest");
+    let manifest = fmzx_pack::manifest::parse_manifest(&text).expect("parse the manifest");
+    let last = manifest.game.len() as u32 - 1;
+    let tune = manifest.game.iter().position(|g| g.id == "tune").expect("no game tune") as u32;
+    assert_eq!(tune, last, "tune is the last game in the picker");
+    let mut m = boot();
+    m.turn(SELECT, last as i32);
+    m.run_ms(200);
+    assert_eq!(play(&mut m), tune);
+}
+
 #[test]
 fn algorithm_encoder_scrolls_back() {
     let mut m = boot();
