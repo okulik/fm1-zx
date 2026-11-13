@@ -78,8 +78,13 @@ it too (SPDX `MIT OR (GPL-3.0-only AND CC-BY-SA-2.0)`). Attribution: Castaway by
 **ZX Sopwith** by Neil Rackett (2026), `third_party/games/sopwith/`: a port of David L. Clark's Sopwith
 (GPL 2 or later, as the original-source repository confirms), released under GPL-3.0-or-later. The
 file is the release's `sopwith.sna`, unmodified. It holds sprite art and a ground profile from the
-original, the Spectrum ROM's font is not part of it, and it contains z88dk runtime code (Clarified
-Artistic License). Attribution: ZX Sopwith by Neil Rackett,
+original, the Spectrum ROM's font is not part of it, and it contains z88dk runtime code (whose
+Clarified Artistic License does not extend to compiled library output) and the ZX0 decompressor
+(BSD-3-Clause; notice reproduced below). The Corresponding Source, the repository at commit
+c1f39d2, is `zxspectrum-sopwith-c1f39d2.tar.gz` next to the file. ZX0: "Copyright (c) 2021, Einar
+Saukas. All rights reserved." Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the conditions in the full BSD 3-Clause text are met;
+that text, with its disclaimer, is in `third_party/games/sopwith/README.md`. Attribution: ZX Sopwith by Neil Rackett,
 <https://github.com/neilrackett/zxspectrum-sopwith>, after Sopwith by David L. Clark.
 
 ### Considered and left out

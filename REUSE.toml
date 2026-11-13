@@ -72,6 +72,14 @@ precedence = "override"
 SPDX-FileCopyrightText = "2026 Neil Rackett"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
+# The Corresponding Source of sopwith.sna: `git archive` of the repository at commit c1f39d2
+# (David L. Clark, Simon Howard and Neil Rackett's copyright notices are in its files).
+[[annotations]]
+path = "third_party/games/sopwith/zxspectrum-sopwith-c1f39d2.tar.gz"
+precedence = "override"
+SPDX-FileCopyrightText = ["1984-2000 David L. Clark", "2001-2005 Simon Howard", "2026 Neil Rackett"]
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
 [[annotations]]
 path = "third_party/games/sopwith/README.upstream.md"
 precedence = "override"

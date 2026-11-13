@@ -52,11 +52,57 @@ which is not part of the file; there is no loading screen, no music and no font 
 file is built with z88dk, so it contains z88dk's start-up code and a few runtime routines
 (for example the ZX0 decompressor for the ground). z88dk is distributed under the Clarified
 Artistic License (https://github.com/z88dk/z88dk/blob/master/LICENSE), which permits
-distributing programs built with it and their runtime library code; the author's repository does not
-list which routines the file holds.
+distributing programs built with it; the author's repository does not list which routines the file holds.
 
 Attribution: ZX Sopwith by Neil Rackett, https://github.com/neilrackett/zxspectrum-sopwith,
 after Sopwith by David L. Clark and the SDL port by Simon Howard.
+
+## Corresponding Source
+
+`zxspectrum-sopwith-c1f39d2.tar.gz` (64,760 bytes, SHA-256
+`c517f32162db4205d3871966673ba98c1996cd0b42688496e7f65dcd6c7abf52`) is the Corresponding Source of
+`sopwith.sna` (GPL 3 section 6): `git archive --prefix=zxspectrum-sopwith-c1f39d2/
+c1f39d265550c7092e49e7d8b3428e85c69e78e8 | gzip -n` of a clone of the repository. Provenance: the
+release's `latest` tag ref points at that commit (committed 2026-08-17 11:43 UTC; the release assets were
+uploaded 2026-08-17 18:55 UTC), and the next commit, `1aacf55` ("Fixed intermittent key input
+issue on menu", 2026-08-18), is later than the release and is not in this file.
+
+## ZX0 notice
+
+The ground profile is compressed with ZX0 and the file holds its decompressor, by Einar Saukas
+(BSD-3-Clause, https://github.com/einar-saukas/ZX0/blob/main/LICENSE):
+
+> BSD 3-Clause License
+>
+> Copyright (c) 2021, Einar Saukas
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this
+>    list of conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above copyright notice,
+>    this list of conditions and the following disclaimer in the documentation
+>    and/or other materials provided with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its
+>    contributors may be used to endorse or promote products derived from
+>    this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+> AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+> IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+> DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+> FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+> DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+> CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+> OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+> OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+z88dk's Clarified Artistic License does not extend to the compiled output of its library.
 
 ## The release and its other files
 
