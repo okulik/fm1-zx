@@ -139,6 +139,8 @@ Each game task follows these steps; the task itself gives the specifics.
 
 ### Task 7: The Legend of Traxtor (`traxtor`), fallback Micro INC (`microinc`)
 
+**Dropped by the owner, 2026-11-13** ("I think we have enough games"): not implemented.
+
 - Release: https://usebox.net/jjm/traxtor-zx/traxtor-zx.zip → `traxtor-zx.tap` (23,986 bytes). Fallback: https://www.usebox.net/jjm/micro-inc/microInc.zip → its `.tap` (22,573 bytes).
 - Licence: MIT in the zip's `README.txt`; same footer note as Task 4; SPDX `MIT`.
 - Controls: Traxtor O/P move, A beam, Q fire; Micro INC O/P/SPACE, H pause.

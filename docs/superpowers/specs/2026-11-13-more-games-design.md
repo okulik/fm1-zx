@@ -124,6 +124,8 @@ passed and reports which were dropped and why; it does not block.
 
 **The owner's**
 - The set above, the two test programs, and the exclusions (2026-11-13).
+- Stop at four new games (2026-11-13, during execution: "I think we have enough games"): The
+  Legend of Traxtor and its fallback Micro INC are not added.
 
 **The builder's calls made here (the owner may overrule)**
 - **Order in the picker**: unchanged at the top (`scroll`, `border`, `castaway`), new games after
