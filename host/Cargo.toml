@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/zx-sys", "crates/zx-tests", "crates/emu-gate", "crates/fmzx-pack"]
+members = ["crates/zx-sys", "crates/zx-tests", "crates/emu-gate", "crates/fmzx-pack", "crates/music"]
 
 [workspace.package]
 edition = "2021"

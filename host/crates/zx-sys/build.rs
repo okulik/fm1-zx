@@ -21,10 +21,12 @@ const DEFINES: &[(&str, Option<&str>)] = &[
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let core_zx = root.join("core/zx");
+    let core_sound = root.join("core/sound");
     let app = root.join("app");
     let includes = [
         root.join("core/z80"),
         core_zx.clone(),
+        core_sound.clone(),
         app.clone(),
         root.join("third_party/Z80/API"),
         root.join("third_party/Z80InsnClock/API"),
@@ -88,6 +90,7 @@ fn main() {
 
     // Our code is held to -Werror; the vendored libraries are built as they are.
     build(c_files(&core_zx), "zxcore", true);
+    build(c_files(&core_sound), "zxsound", true);
     build(c_files(&app), "fmzxapp", true);
     build(
         vec![
@@ -100,6 +103,7 @@ fn main() {
 
     for dir in [
         core_zx.clone(),
+        core_sound.clone(),
         app.clone(),
         root.join("core/z80"),
         root.join("third_party/Z80/API"),
@@ -110,6 +114,7 @@ fn main() {
 
     let mut gen = bindgen::Builder::default()
         .header(core_zx.join("zx.h").to_string_lossy())
+        .header(core_sound.join("sound.h").to_string_lossy())
         .header(app.join("pixels.h").to_string_lossy())
         .header(app.join("lcdsched.h").to_string_lossy())
         .header(app.join("keymap.h").to_string_lossy())
@@ -117,11 +122,11 @@ fn main() {
         .header(app.join("pack.h").to_string_lossy())
         .header(app.join("ui.h").to_string_lossy())
         .header(app.join("menu.h").to_string_lossy())
-        .allowlist_function("(zx|pix|lcd|km|pack|lz4|ui|menu)_.*")
-        .allowlist_type("(zx|pix|lcd|km|pack)_.*")
+        .allowlist_function("(zx|pix|lcd|km|pack|lz4|ui|menu|snd)_.*")
+        .allowlist_type("(zx|pix|lcd|km|pack|snd)_.*")
         .allowlist_type("keymap")
         .allowlist_type("menu")
-        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD)_.*")
+        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {

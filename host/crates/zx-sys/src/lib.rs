@@ -286,6 +286,162 @@ impl Beeper {
     }
 }
 
+// ---- FM music from the beeper (core/sound) -------------------------------
+
+/// The FM choice's fixed delay in frames (60 ms), also the decoder's look-ahead.
+pub const SND_DELAY_FRAMES: u32 = sys::SND_DELAY_FRAMES;
+/// Tonal voices in a [`SndFrame`] (plus one drum voice).
+pub const SND_TONAL: usize = sys::SND_TONAL as usize;
+/// Most samples a mixer frame may have.
+pub const SND_MAX_FRAME_SAMPLES: u32 = sys::SND_MAX_FRAME_SAMPLES;
+pub const SND_MODE_BEEPER: u8 = sys::snd_mode_SND_MODE_BEEPER as u8;
+pub const SND_MODE_FM_A: u8 = sys::snd_mode_SND_MODE_FM_A as u8;
+pub const SND_MODE_COUNT: u8 = sys::snd_mode_SND_MODE_COUNT as u8;
+pub const SND_STYLE_NONE: u8 = sys::snd_style_SND_STYLE_NONE as u8;
+pub const SND_STYLE_SLOTS: u8 = sys::snd_style_SND_STYLE_SLOTS as u8;
+pub const SND_STYLE_FLIPS: u8 = sys::snd_style_SND_STYLE_FLIPS as u8;
+pub const SND_STYLE_PULSES: u8 = sys::snd_style_SND_STYLE_PULSES as u8;
+
+/// One voice of a decoder decision (`snd_voice`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SndVoice {
+    /// Full period in T-states x 256; 0 = voice off. Frequency = 3,500,000 x 256 / period_q8.
+    pub period_q8: u32,
+    /// Loudness 0-255.
+    pub level: u8,
+}
+
+/// What the decoder concluded about one past frame (`snd_frame`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SndFrame {
+    pub tone: [SndVoice; SND_TONAL],
+    /// 0 = none, else drum strength 1-255.
+    pub drum: u8,
+    /// One of the `SND_STYLE_*` values.
+    pub style: u8,
+    /// 1 = play FM for this frame.
+    pub confident: u8,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<SndVoice>() == std::mem::size_of::<sys::snd_voice>());
+    assert!(std::mem::align_of::<SndVoice>() == std::mem::align_of::<sys::snd_voice>());
+    assert!(std::mem::size_of::<SndFrame>() == std::mem::size_of::<sys::snd_frame>());
+    assert!(std::mem::align_of::<SndFrame>() == std::mem::align_of::<sys::snd_frame>());
+    assert!(std::mem::offset_of!(SndFrame, drum) == std::mem::offset_of!(sys::snd_frame, drum));
+    assert!(std::mem::offset_of!(SndFrame, style) == std::mem::offset_of!(sys::snd_frame, style));
+    assert!(std::mem::offset_of!(SndFrame, confident) == std::mem::offset_of!(sys::snd_frame, confident));
+};
+
+/// Allocates a zeroed C struct on the heap.
+fn boxed_zeroed<T>() -> Box<T> {
+    // SAFETY: only used for the core/sound structs, which are plain integers and arrays: all-zero
+    // is a valid value, and their init functions set every field.
+    Box::new(unsafe { MaybeUninit::zeroed().assume_init() })
+}
+
+/// The beeper music decoder: feed it each frame's edges, get its decision about the frame
+/// `SND_DELAY_FRAMES` earlier.
+pub struct SndDecoder {
+    raw: Box<sys::snd_decoder>,
+}
+
+impl SndDecoder {
+    pub fn new() -> Self {
+        let mut raw: Box<sys::snd_decoder> = boxed_zeroed();
+        // SAFETY: `raw` is a valid, exclusively owned snd_decoder.
+        unsafe { sys::snd_decoder_init(&mut *raw) };
+        SndDecoder { raw }
+    }
+
+    /// Feeds frame t's edges (and the level they start from); returns the decision for frame
+    /// t - SND_DELAY_FRAMES.
+    pub fn frame(&mut self, edges: &[zx_edge], start_level: u8) -> SndFrame {
+        let mut out = SndFrame::default();
+        // SAFETY: `raw` was initialised by snd_decoder_init; the edge pointer and count describe
+        // `edges`; SndFrame has snd_frame's layout (checked above).
+        unsafe {
+            sys::snd_decoder_frame(
+                &mut *self.raw,
+                edges.as_ptr(),
+                edges.len() as u32,
+                start_level,
+                (&mut out as *mut SndFrame).cast(),
+            )
+        };
+        out
+    }
+}
+
+impl Default for SndDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The FM synth: three 2-operator tonal voices and a noise drum.
+pub struct SndFm {
+    raw: Box<sys::snd_fm>,
+}
+
+impl SndFm {
+    /// A synth for a sample rate of `num / den` Hz.
+    pub fn new(num: u32, den: u32) -> Self {
+        let mut raw: Box<sys::snd_fm> = boxed_zeroed();
+        // SAFETY: `raw` is a valid, exclusively owned snd_fm.
+        unsafe { sys::snd_fm_init(&mut *raw, num, den) };
+        SndFm { raw }
+    }
+
+    /// Renders `n` samples of the frame `fr`.
+    pub fn render(&mut self, fr: &SndFrame, n: usize) -> Vec<i16> {
+        let mut out = vec![0i16; n];
+        // SAFETY: `raw` was initialised by snd_fm_init; SndFrame has snd_frame's layout (checked
+        // above); `out` holds `n` samples.
+        unsafe { sys::snd_fm_render(&mut *self.raw, (fr as *const SndFrame).cast(), out.as_mut_ptr(), n as u32) };
+        out
+    }
+}
+
+/// The mixer: Beeper mode copies the beeper samples; an FM mode plays all sound 3 frames late,
+/// FM where the decoder is confident, the beeper elsewhere. Owns a decoder and a synth.
+pub struct SndMixer {
+    raw: Box<sys::snd_mixer>,
+}
+
+impl SndMixer {
+    /// A mixer for a sample rate of `num / den` Hz.
+    pub fn new(num: u32, den: u32) -> Self {
+        let mut raw: Box<sys::snd_mixer> = boxed_zeroed();
+        // SAFETY: `raw` is a valid, exclusively owned snd_mixer.
+        unsafe { sys::snd_mixer_init(&mut *raw, num, den) };
+        SndMixer { raw }
+    }
+
+    /// One frame: its edges, the level they start from, and its beeper samples (from
+    /// [`Beeper::render`]); returns as many output samples in `mode` (`SND_MODE_*`).
+    pub fn frame(&mut self, mode: u8, edges: &[zx_edge], start_level: u8, beeper: &[i16]) -> Vec<i16> {
+        let mut out = vec![0i16; beeper.len()];
+        // SAFETY: `raw` was initialised by snd_mixer_init; each pointer and count describes its
+        // slice, and `out` is as long as `beeper`.
+        unsafe {
+            sys::snd_mixer_frame(
+                &mut *self.raw,
+                mode,
+                edges.as_ptr(),
+                edges.len() as u32,
+                start_level,
+                beeper.as_ptr(),
+                beeper.len() as u32,
+                out.as_mut_ptr(),
+            )
+        };
+        out
+    }
+}
+
 /// Pixel formats of the LCD.
 #[derive(Clone, Copy)]
 pub enum PixFormat {

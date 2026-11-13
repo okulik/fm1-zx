@@ -32,3 +32,11 @@ target_compile_definitions(zx_core PUBLIC
   Z80_INSN_CLOCK_STATIC
   Z80_INSN_CLOCK_WITH_LOCAL_HEADER
   Z80_INSN_CLOCK=2)
+
+# FM music from the beeper (core/sound): portable fixed-point C beside the core, held to the same
+# warnings. The firmware links it when it plays FM.
+file(GLOB ZX_SOUND_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sound/*.c")
+add_library(zx_sound STATIC ${ZX_SOUND_SOURCES})
+target_compile_options(zx_sound PRIVATE -Wall -Wextra -Werror)
+target_include_directories(zx_sound PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/sound")
+target_link_libraries(zx_sound PUBLIC zx_core)
