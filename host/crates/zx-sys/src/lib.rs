@@ -294,6 +294,10 @@ pub const SND_DELAY_FRAMES: u32 = sys::SND_DELAY_FRAMES;
 pub const SND_TONAL: usize = sys::SND_TONAL as usize;
 /// Most samples a mixer frame may have.
 pub const SND_MAX_FRAME_SAMPLES: u32 = sys::SND_MAX_FRAME_SAMPLES;
+/// The mixer's hysteresis: FM after this many confident decisions in a row...
+pub const SND_ENTER_FRAMES: u32 = sys::SND_ENTER_FRAMES;
+/// ...and the beeper after this many unconfident ones.
+pub const SND_LEAVE_FRAMES: u32 = sys::SND_LEAVE_FRAMES;
 pub const SND_MODE_BEEPER: u8 = sys::snd_mode_SND_MODE_BEEPER as u8;
 pub const SND_MODE_FM_A: u8 = sys::snd_mode_SND_MODE_FM_A as u8;
 pub const SND_MODE_COUNT: u8 = sys::snd_mode_SND_MODE_COUNT as u8;

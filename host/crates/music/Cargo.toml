@@ -12,5 +12,8 @@ publish = false
 [dependencies]
 zx-sys = { path = "../zx-sys" }
 
+[dev-dependencies]
+fmzx-pack = { path = "../fmzx-pack" }
+
 [lints]
 workspace = true

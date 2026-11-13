@@ -319,6 +319,7 @@ dependencies = [
 name = "music"
 version = "0.1.0"
 dependencies = [
+ "fmzx-pack",
  "zx-sys",
 ]
 

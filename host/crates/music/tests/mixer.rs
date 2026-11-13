@@ -4,8 +4,12 @@
 //! The mixer (`core/sound/mixer.c`): Beeper mode is a plain copy, an FM mode delays all sound by
 //! 3 frames, and switching between them neither clicks nor repeats sound.
 
-use music::{capture, castaway, sample_rate, test_sna, Frame, RATE};
-use zx_sys::{Beeper, SndMixer, SND_DELAY_FRAMES, SND_MODE_BEEPER, SND_MODE_FM_A};
+use music::synthetic::{frame_loop, xor_loop, xor_tune, Drum, FrameNote, Stream, FRAME_T};
+use music::{capture, castaway, render_stream, sample_rate, test_sna, Frame, RATE};
+use zx_sys::{
+    zx_edge, Beeper, SndDecoder, SndFm, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_ENTER_FRAMES, SND_MODE_BEEPER,
+    SND_MODE_FM_A,
+};
 
 fn border(frames: usize) -> Vec<Frame> {
     capture(&mut test_sna("border.sna"), &mut Beeper::new(RATE.0, RATE.1), frames)
@@ -127,4 +131,148 @@ fn mode_switch_no_click() {
         assert!(own > 1000, "{what}: the tone sounds there");
         assert!(got <= own, "{what}: step {got} above the signals' own {own}");
     }
+}
+
+/// In an FM mode from the start: the output, the FM signal the mixer mixes in (rebuilt with a
+/// decoder and synth of our own: the decisions' voices when confident, silence otherwise), the
+/// delayed beeper, and the decisions (frame t's decision is about frame t - 3).
+fn fm_signals(frames: &[Frame]) -> (Vec<i16>, Vec<i16>, Vec<i16>, Vec<SndFrame>) {
+    let d = SND_DELAY_FRAMES as usize;
+    let out = mix(frames, |_| SND_MODE_FM_A).concat();
+    let (mut dec, mut fm) = (SndDecoder::new(), SndFm::new(RATE.0, RATE.1));
+    let mut fm_out = Vec::new();
+    let mut decisions = Vec::new();
+    for (t, f) in frames.iter().enumerate() {
+        let fr = dec.frame(&f.edges, f.start_level);
+        decisions.push(fr);
+        if t < d {
+            fm_out.extend(std::iter::repeat_n(0, f.beeper.len()));
+        } else {
+            let src = if fr.confident != 0 { fr } else { SndFrame::default() };
+            fm_out.extend(fm.render(&src, f.beeper.len()));
+        }
+    }
+    let b: Vec<i16> = frames.iter().flat_map(|f| f.beeper.iter().copied()).collect();
+    let delay = starts(frames)[d];
+    let bd: Vec<i16> = (0..b.len()).map(|p| if p < delay { 0 } else { b[p - delay] }).collect();
+    (out, fm_out, bd, decisions)
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Plays {
+    Fm,
+    Beeper,
+}
+
+/// Every switch between the FM and the delayed beeper: (last sample of the old sound, first of
+/// the new, the new sound). Samples where both are equal say nothing and are skipped.
+fn switches(out: &[i16], fm: &[i16], bd: &[i16], from: usize) -> Vec<(usize, usize, Plays)> {
+    let mut v = Vec::new();
+    let mut last: Option<(usize, Plays)> = None;
+    for p in from..out.len() {
+        if fm[p] == bd[p] {
+            continue;
+        }
+        let now = if out[p] == fm[p] {
+            Plays::Fm
+        } else if out[p] == bd[p] {
+            Plays::Beeper
+        } else {
+            continue; // fading
+        };
+        if let Some((q, was)) = last {
+            if was != now {
+                v.push((q, p, now));
+            }
+        }
+        last = Some((p, now));
+    }
+    v
+}
+
+/// The edges of `times` (T-states in the frame), alternating from `start_level`.
+fn edges_from(times: &[u32], start_level: u8) -> Vec<zx_edge> {
+    let mut level = start_level;
+    times
+        .iter()
+        .map(|&t| {
+            level ^= 2;
+            zx_edge { tstate: t, level }
+        })
+        .collect()
+}
+
+#[test]
+fn fm_beeper_crossfade_in_fm_mode() {
+    // music, then a noise effect, a pause, and music again
+    let tune = xor_tune(0);
+    let noise = vec![FrameNote::Drum(Drum::Noise); 25];
+    let s: Stream = xor_loop(&tune[..8])
+        .then(frame_loop(&noise))
+        .then(frame_loop(&[FrameNote::Silent; 10]))
+        .then(xor_loop(&tune[8..16]));
+    let frames = render_stream(&s);
+    let (out, fm, bd, _) = fm_signals(&frames);
+    let delay = starts(&frames)[SND_DELAY_FRAMES as usize];
+
+    // nothing repeated or dropped: every sample is a mix of the FM and the delayed beeper of
+    // the same moment
+    for p in delay..out.len() {
+        let (lo, hi) = (fm[p].min(bd[p]) as i32 - 1, fm[p].max(bd[p]) as i32 + 1);
+        assert!((lo..=hi).contains(&(out[p] as i32)), "sample {p}: {} is not between FM {} and beeper {}", out[p], fm[p], bd[p]);
+    }
+    let sw = switches(&out, &fm, &bd, delay);
+    println!("switches (from sample, to sample, to): {sw:?}");
+    assert!(sw.iter().any(|x| x.2 == Plays::Beeper), "the effect plays on the beeper");
+    assert!(sw.iter().filter(|x| x.2 == Plays::Fm).count() >= 2, "both tunes play in FM");
+    let w = ms(5.0);
+    for &(a, b, to) in &sw {
+        let fade = b - a - 1;
+        assert!(fade >= ms(2.0), "switch to {to:?} at sample {b}: a fade of {fade} samples");
+        let c = (a + b) / 2;
+        let own = max_step(&fm[c - w..c + w]).max(max_step(&bd[c - w..c + w]));
+        let got = max_step(&out[c - w..c + w]);
+        println!("to {to:?} at {c}: fade {fade} samples, largest step {got}, the signals' own {own}");
+        assert!(got <= own, "switch to {to:?} at sample {c}: step {got} above the signals' own {own}");
+    }
+}
+
+#[test]
+fn hysteresis_no_flutter() {
+    // music whose every other frame from frame 40 to 120 also carries stray short pulses (a third
+    // of its edges), so the decoder is sure of one frame and unsure of the next
+    let mut s = xor_loop(&xor_tune(0));
+    let mut level = s.start_level;
+    let mut seed = 0x1234_5678u32;
+    for (i, f) in s.frames.iter_mut().enumerate() {
+        let start = level;
+        if (40..120).contains(&i) && i % 2 == 1 && !f.is_empty() {
+            let mut times: Vec<u32> = f.iter().map(|e| e.tstate).collect();
+            for _ in 0..times.len() / 6 {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let t = seed % (FRAME_T as u32 - 100);
+                times.extend([t, t + 30]);
+            }
+            times.sort();
+            *f = edges_from(&times, start);
+        }
+        level = f.last().map_or(start, |e| e.level);
+    }
+    let frames = render_stream(&s);
+    let (out, fm, bd, dec) = fm_signals(&frames);
+    let d = SND_DELAY_FRAMES as usize;
+    // the decisions about frames 40-119 (made at frames 43-122) alternate
+    let conf: String = (40..120).map(|i| if dec[i + d].confident != 0 { 'C' } else { '.' }).collect();
+    println!("decisions about frames 40-119: {conf}");
+    let alternating = conf.as_bytes().windows(2).filter(|p| p[0] != p[1]).count();
+    assert!(alternating >= 70, "the decisions alternate ({alternating} changes)");
+    // the output does not follow them: at most one switch while they alternate (with the
+    // sound of frame t playing during frame t + 3)
+    let st = starts(&frames);
+    let (a, b) = (st[40 + d + SND_ENTER_FRAMES as usize], st[120 + d]);
+    let sw: Vec<_> = switches(&out, &fm, &bd, st[d]).into_iter().filter(|x| x.1 >= a && x.1 < b).collect();
+    println!("switches while the decisions alternate: {sw:?}");
+    assert!(sw.len() <= 1, "{} switches", sw.len());
 }

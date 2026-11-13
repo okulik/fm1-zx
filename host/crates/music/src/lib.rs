@@ -4,7 +4,10 @@
 //! Host side of the FM music library (`core/sound`): helpers shared by its tests and tools.
 
 use std::path::{Path, PathBuf};
-use zx_sys::{zx_edge, Beeper, Machine};
+use zx_sys::{zx_edge, Beeper, Machine, SndDecoder, SndFrame, SND_DELAY_FRAMES};
+
+pub mod score;
+pub mod synthetic;
 
 /// The FM-1's audio rate, 750000 / 17 Hz (24 MHz / 544).
 pub const RATE: (u32, u32) = (750_000, 17);
@@ -68,4 +71,62 @@ pub fn castaway() -> Machine {
     m.tape_insert(&tap).expect("inserts");
     m.tape_autostart();
     m
+}
+
+/// The beeper samples of a generated stream, frame by frame, rendered as the firmware does.
+pub fn render_stream(s: &synthetic::Stream) -> Vec<Frame> {
+    let mut beeper = Beeper::new(RATE.0, RATE.1);
+    beeper.set_level(s.start_level);
+    let mut level = s.start_level;
+    s.frames
+        .iter()
+        .map(|edges| {
+            let start_level = level;
+            level = edges.last().map_or(level, |e| e.level);
+            Frame { edges: edges.clone(), start_level, beeper: beeper.render(edges) }
+        })
+        .collect()
+}
+
+/// The decoder's decision about each frame of `frames` (edges and the level they start from):
+/// frame t's decision comes with frame t + SND_DELAY_FRAMES, so empty frames follow to flush it.
+pub fn decode<'a>(frames: impl IntoIterator<Item = (&'a [zx_edge], u8)>) -> Vec<SndFrame> {
+    let mut d = SndDecoder::new();
+    let mut out = Vec::new();
+    let mut level = 0;
+    for (edges, start_level) in frames {
+        out.push(d.frame(edges, start_level));
+        level = edges.last().map_or(start_level, |e| e.level);
+    }
+    for _ in 0..SND_DELAY_FRAMES {
+        out.push(d.frame(&[], level));
+    }
+    out.drain(..SND_DELAY_FRAMES as usize);
+    out
+}
+
+/// The decisions about a generated stream's frames.
+pub fn decode_stream(s: &synthetic::Stream) -> Vec<SndFrame> {
+    let mut level = s.start_level;
+    let starts: Vec<u8> = s
+        .frames
+        .iter()
+        .map(|e| {
+            let l = level;
+            level = e.last().map_or(level, |x| x.level);
+            l
+        })
+        .collect();
+    decode(s.frames.iter().zip(starts).map(|(e, l)| (e.as_slice(), l)))
+}
+
+/// The pitches (Hz) of a decision's sounding tonal voices.
+pub fn voices_hz(fr: &SndFrame) -> Vec<f64> {
+    fr.tone.iter().filter(|v| v.period_q8 != 0).map(|v| hz_of_period_q8(v.period_q8)).collect()
+}
+
+/// The pitches played in each frame: the voices of confident decisions only (the others play
+/// the beeper).
+pub fn played_hz(frames: &[SndFrame]) -> Vec<Vec<f64>> {
+    frames.iter().map(|f| if f.confident != 0 { voices_hz(f) } else { Vec::new() }).collect()
 }

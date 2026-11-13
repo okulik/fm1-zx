@@ -50,15 +50,61 @@ typedef struct {          /* what the decoder concluded about one past frame */
 	uint8_t confident;    /* 1 = play FM for this frame */
 } snd_frame;
 
-/* ---- decoder (decoder.c) ---------------------------------------------- */
+/* ---- decoder (decoder.c, flips.c) -------------------------------------- */
+
+#define SND_HIST (SND_DELAY_FRAMES + 1u)   /* frames of edge history: the decided frame and its look-ahead */
+#define SND_EDGES_MAX 256u                 /* speaker edges kept per frame; a busier frame is noise */
+
+/* What the decoder worked out about one frame of the history, when it arrived. */
+typedef struct {
+	uint32_t hp_q8[SND_TONAL];     /* voices of the frame alone (20 ms): half-period, T x 256, as found; 0 = none */
+	uint32_t pair_q8[SND_TONAL];   /* voices of this frame and the one before (40 ms) */
+	uint16_t n;                    /* speaker edges kept */
+	uint16_t expl;                 /* of them, explained by the frame's own voices */
+	uint8_t busy;                  /* more than SND_EDGES_MAX edges: noise, not decoded */
+	uint8_t clean;                 /* the frame alone decodes into voices that explain >= 90% of its edges */
+	uint8_t change;                /* a pitch change starts here (decoder.c) */
+} snd_slot;
 
 typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and per-style state */
-	uint32_t frames;           /* frames fed since init */
+	uint32_t frames;                       /* frames fed since init */
+	uint32_t t[SND_HIST][SND_EDGES_MAX];   /* the edge history: speaker edges' T-states in their frame */
+	snd_slot slot[SND_HIST];               /* per frame, at the same ring index (frame % SND_HIST) */
+	/* note timing: one note per frame (frame-aligned changes) or free-running long notes */
+	int8_t timing;                         /* votes, -3..3: > 0 pitch changes land on frame boundaries */
+	uint8_t frame_notes;                   /* the timing in use: 1 = one note per frame */
+	/* music context: pitch changes */
+	uint8_t have_clean, have_change;
+	uint32_t clean_frame;                  /* the last clean frame */
+	uint32_t clean_q8[SND_TONAL];          /* the reference: the voices of the last note */
+	uint32_t change_frame;                 /* the last pitch change in a frame already decided */
+	uint8_t have_busy;
+	uint32_t busy_frame;                   /* the last frame too busy to decode */
+	/* the decisions */
+	uint32_t out_q8[SND_TONAL];            /* the last decision's voices, by tone slot */
+	uint32_t since_tonal;                  /* decisions since the last confident one with voices */
+	uint8_t prev_conf;                     /* the last decision was confident */
+	/* scratch for flips.c */
+	uint32_t pool[2u * SND_EDGES_MAX];
+	uint16_t chain[2u * SND_EDGES_MAX];
+	uint8_t used[2u * SND_EDGES_MAX];
 } snd_decoder;
 
 void snd_decoder_init(snd_decoder *d);
 /* Feeds frame t's edges; fills *out with the decision for frame t - SND_DELAY_FRAMES. */
 void snd_decoder_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
+
+/* The speaker-flip decoder (flips.c), used by decoder.c. t: n edge times, ascending.
+ * snd_flips_decode finds up to SND_TONAL voices (half-periods, T x 256, in the order found,
+ * zeros after) in t, which it uses as scratch (t may be d->pool), and returns how many edges they
+ * explain. snd_flips_cover follows the voice of half-period hp_q8 through the edges t[0..m)
+ * not yet marked in d->used (chains of 3 or more edges, which may run on into t[m..n)), marks
+ * the edges it takes, returns their count and puts the time its chains span within t[0..m) in
+ * *extent. */
+uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_q8);
+/* Is the half-period p_q8 a whole multiple (2-32 times, within the link tolerance) of q_q8? */
+int snd_flips_multiple(uint32_t p_q8, uint32_t q_q8);
+uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t m, uint32_t hp_q8, uint32_t *extent);
 
 /* ---- FM synth (fm.c) ---------------------------------------------------
  *
