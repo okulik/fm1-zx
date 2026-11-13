@@ -15,8 +15,13 @@
 //!   routine to the next interrupt, so pitch changes land exactly on frame boundaries. Between
 //!   arpeggios come whole frames of drums (a fixed buzz waveform, a pulse sweep, noise) and
 //!   silent frames.
+//! - [`slots_loop`]: a time-slot (TDM) engine: one loop of 153 T plus I/O contention with an `OUT`
+//!   per channel, at 0, 34 and 83 T into it (slots of 34, 49 and 70 T), so each channel holds the
+//!   speaker for its own slot. Each channel is a 16-bit phase accumulator with a duty threshold:
+//!   it outputs 1 while the accumulator's high byte is below the threshold (0 = silent, 80h a
+//!   square wave). Rests keep the loop running with every channel silent.
 
-use zx_sys::zx_edge;
+use zx_sys::{contention, zx_edge};
 
 /// T-states per 50 Hz frame.
 pub const FRAME_T: u64 = 69_888;
@@ -301,4 +306,86 @@ pub fn frame_tune(beats: usize) -> Vec<FrameNote> {
         out.extend([FrameNote::Silent; 3]);
     }
     out
+}
+
+/// One note of [`slots_loop`]: each channel's accumulator step and duty threshold (0 = silent),
+/// for `frames` frames.
+#[derive(Clone, Copy, Debug)]
+pub struct SlotsNote {
+    pub step: [u16; 3],
+    pub thr: [u8; 3],
+    pub frames: u32,
+}
+
+/// The `OUT` offsets of [`slots_loop`]'s channels in its loop, and the loop's length (T).
+pub const SLOTS_AT: [u64; 3] = [0, 34, 83];
+pub const SLOTS_LOOP: u64 = 153;
+
+/// The time-slot engine (see the module notes). Truth: each sounding channel's pitch, from its
+/// step and the note's mean loop length (contention included).
+pub fn slots_loop(notes: &[SlotsNote]) -> Stream {
+    const GAP: u64 = 2_200; // between notes: the sequencer reads the next row
+    let mut b = Builder::new(0);
+    let mut t: u64 = FRAME_T / 3;
+    let mut level: u8 = 0;
+    let mut phase = [0u16; 3];
+    for note in notes {
+        let start = t;
+        let end = start + note.frames as u64 * FRAME_T;
+        let mut iters = 0u64;
+        while t < end {
+            let base = t;
+            for c in 0..3 {
+                phase[c] = phase[c].wrapping_add(note.step[c]);
+                let mut at = base + SLOTS_AT[c];
+                // the OUT's I/O contention delays it and everything after it
+                let delay = contention((at % FRAME_T) as u32) as u64;
+                at += delay;
+                t += delay;
+                let out = if ((phase[c] >> 8) as u8) < note.thr[c] { 2 } else { 0 };
+                if out != level {
+                    level = out;
+                    b.edges.push((at, level));
+                }
+            }
+            t += SLOTS_LOOP;
+            iters += 1;
+        }
+        let mean = (t - start) as f64 / iters as f64;
+        let hz: Vec<f64> =
+            (0..3).filter(|&c| note.thr[c] != 0 && note.step[c] != 0).map(|c| note.step[c] as f64 * CPU_HZ / (mean * 65536.0)).collect();
+        b.notes.push((start, t, hz));
+        t += GAP;
+    }
+    b.finish(t + 4 * FRAME_T)
+}
+
+/// The accumulator step of [`slots_loop`] for a frequency (at the loop's mean length with
+/// contention, about 156 T).
+pub fn slots_step(hz: f64) -> u16 {
+    (hz * 156.0 * 65536.0 / CPU_HZ).round() as u16
+}
+
+/// A 30-note tune for [`slots_loop`]: three voices (bass, middle, melody) with different duty
+/// thresholds, notes of 4 to 16 frames, some with one or two voices silent, and two rests.
+pub fn slots_tune() -> Vec<SlotsNote> {
+    let bass = [36, 36, 43, 43, 41, 41, 43, 0, 45, 45, 40, 40, 41, 41, 43, 43, 36, 38, 40, 41, 43, 0, 45, 47, 48, 43, 41, 40, 38, 36];
+    let mid = [60, 64, 64, 62, 60, 65, 62, 0, 57, 60, 64, 0, 60, 65, 59, 62, 0, 62, 64, 65, 67, 0, 64, 62, 60, 59, 57, 0, 55, 60];
+    let mel = [72, 74, 76, 79, 77, 76, 74, 0, 69, 72, 76, 74, 72, 71, 67, 71, 72, 74, 0, 77, 79, 0, 76, 74, 72, 71, 69, 67, 71, 72];
+    let lens = [8, 4, 6, 12, 5, 8, 16, 4, 6, 10];
+    let thr = [0x80u8, 0x40, 0xc0];
+    (0..30)
+        .map(|i| {
+            let ms = [bass[i], mid[i], mel[i]];
+            let mut step = [0u16; 3];
+            let mut th = [0u8; 3];
+            for c in 0..3 {
+                if ms[c] != 0 {
+                    step[c] = slots_step(hz_of_midi(ms[c] as f64));
+                    th[c] = thr[(c + i) % 3];
+                }
+            }
+            SlotsNote { step, thr: th, frames: lens[i % lens.len()] }
+        })
+        .collect()
 }

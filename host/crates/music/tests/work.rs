@@ -5,7 +5,7 @@
 //! every frame in every sound mode, so dense or adversarial edge streams must not cost more
 //! than a small multiple of real music.
 
-use music::synthetic::{frame_loop, frame_tune, xor_loop, xor_tune, FRAME_T};
+use music::synthetic::{frame_loop, frame_tune, slots_loop, slots_tune, xor_loop, xor_tune, FRAME_T, SLOTS_AT, SLOTS_LOOP};
 use music::{capture, test_sna, RATE};
 use zx_sys::{zx_edge, Beeper, SndDecoder, SND_WORK_MAX};
 
@@ -42,6 +42,28 @@ fn lattice(f: u64, period: u64) -> Vec<u32> {
         t += period;
     }
     v
+}
+
+/// A frame of a 3-slot loop of `len` T (`OUT`s at `SLOTS_AT` scaled to it) whose channel c
+/// outputs `bit(pass, c)` in pass `pass` of the frame.
+fn tdm(len: u64, mut bit: impl FnMut(u64, usize) -> bool) -> Vec<u32> {
+    let mut v = Vec::new();
+    let mut level = false;
+    let mut i = 0u64;
+    loop {
+        for (c, &at) in SLOTS_AT.iter().enumerate() {
+            let t = i * len + at * len / SLOTS_LOOP;
+            if t >= FRAME_T {
+                return v;
+            }
+            let b = bit(i, c);
+            if b != level {
+                level = b;
+                v.push(t as u32);
+            }
+        }
+        i += 1;
+    }
 }
 
 /// The adversarial streams: 200 frames each.
@@ -87,6 +109,18 @@ fn adversarial() -> Vec<(&'static str, Vec<Vec<zx_edge>>)> {
         }
         v
     });
+    // time-slot streams (a loop carrier: channel 0 always on, channel 1 always off, so every pass
+    // has a rising edge and the time-slot decoder runs on them), whose third channel
+    // takes random values every pass
+    gen("TDM random channel", &mut |_, r| tdm(SLOTS_LOOP, |_, c| c == 0 || (c == 2 && r.next() % 2 == 0)));
+    // toggles every pass (11 kHz: more rises than any voice, the rise rings overrun)
+    gen("TDM fast channel", &mut |_, _| tdm(SLOTS_LOOP, |i, c| c == 0 || (c == 2 && i % 2 == 0)));
+    // changes its period every pass (no run of periods ever agrees)
+    gen("TDM chirp", &mut |f, _| tdm(SLOTS_LOOP, |i, c| c == 0 || (c == 2 && ((i * i + f * 7) / 97) % 2 == 0)));
+    // the shortest loop (40 T: the most grid points a frame can have) with a random channel
+    gen("40 T loop, random channel", &mut |_, r| tdm(40, |_, c| c == 0 || (c == 2 && r.next() % 2 == 0)));
+    // the most edges a frame can hold, 17 T apart with jitter
+    gen("4096 dense edges", &mut |_, r| (0..4096u32).map(|i| i * 17 + r.next() % 9).filter(|&t| t < FRAME_T as u32).collect());
     // white-noise-like bursts: random lengths, places and spacing
     gen("noise bursts", &mut |_, r| {
         let mut v = Vec::new();
@@ -126,9 +160,15 @@ fn decoder_work_is_bounded() {
     let sna = |name: &str, n: usize| -> Vec<Vec<zx_edge>> {
         capture(&mut test_sna(name), &mut Beeper::new(RATE.0, RATE.1), n).into_iter().map(|f| f.edges).collect()
     };
+    let game = |mut m: zx_sys::Machine, n: usize| -> Vec<Vec<zx_edge>> {
+        capture(&mut m, &mut Beeper::new(RATE.0, RATE.1), n).into_iter().map(|f| f.edges).collect()
+    };
     let music = [
         ("xor tune", xor_loop(&xor_tune(0)).frames),
         ("frame tune", frame_loop(&frame_tune(40)).frames),
+        ("slots tune", slots_loop(&slots_tune()).frames),
+        ("castaway", game(music::castaway(), 2150)),
+        ("colony8", game(music::colony8(), 1550)),
         ("tune.sna", sna("tune.sna", 450)),
         ("border.sna", sna("border.sna", 200)),
     ];

@@ -50,11 +50,14 @@ typedef struct {          /* what the decoder concluded about one past frame */
 	uint8_t confident;    /* 1 = play FM for this frame */
 } snd_frame;
 
-/* ---- decoder (decoder.c, flips.c) -------------------------------------- */
+/* ---- decoder (decoder.c, flips.c, slots.c) ----------------------------- */
 
 #define SND_HIST (SND_DELAY_FRAMES + 1u)   /* frames of edge history: the decided frame and its look-ahead */
 #define SND_EDGES_MAX 256u                 /* speaker edges kept per frame; a busier frame is noise */
-#define SND_WORK_MAX 48000u                 /* decoder work units per frame (flips.c), see decoder.c */
+#define SND_WORK_MAX 48000u                 /* decoder work units per frame (flips.c, slots.c), see decoder.c */
+#define SND_SLOTS 3u                        /* most channels (time slots) of a time-slot loop */
+#define SND_RISES 128u                      /* rises kept per time-slot channel */
+#define SND_LEVEL_BINS 128u                 /* box-level histogram: levels in steps of 2/256 */
 
 /* What the decoder worked out about one frame of the history, when it arrived. */
 typedef struct {
@@ -65,7 +68,47 @@ typedef struct {
 	uint8_t busy;                  /* more than SND_EDGES_MAX edges: noise, not decoded */
 	uint8_t clean;                 /* the frame alone decodes into voices that explain >= 90% of its edges */
 	uint8_t change;                /* a pitch change starts here (decoder.c) */
+	/* time slots (slots.c) */
+	uint8_t carrier;               /* most rising edges repeat at one loop length (40-400 T) */
+	uint8_t tdm;                   /* decoded as time slots: a loop is known, its channels learned */
+	uint8_t fit;                   /* % of the frame's box levels a channel combination explains */
 } snd_slot;
+
+/* The time-slot decoder's state (slots.c): the loop, the box sampler running
+ * across frames, the channels' weights and each channel's rises. Times are
+ * absolute T-states (frame x ZX_FRAME_TSTATES + T-state, wrapping at 2^32);
+ * the sampler's are relative to the current frame's start. */
+typedef struct {
+	uint32_t loop_q8;                      /* the loop length P, T x 256; 0 = no loop */
+	uint32_t loop_frame;                   /* the last frame with a carrier at P */
+	uint32_t other_q8;                     /* a different carrier seen in the last carrier frame */
+	uint32_t bare;                         /* frames in a row with sound but no carrier */
+	/* the box sampler: grid points every P/2; a box spans two hops (P) */
+	int32_t grid_q8;                       /* the next grid point, T x 256 */
+	int32_t last_t;                        /* the last speaker edge */
+	uint32_t cum;                          /* speaker-high time up to last_t (wraps) */
+	uint32_t h[2];                         /* speaker-high time up to the last two grid points */
+	uint32_t recip;                        /* 2^24 / box length: high time to a level in 1/256 */
+	uint8_t running;                       /* the sampler has started (it starts with a loop) */
+	uint8_t level;                         /* the speaker level after last_t */
+	uint8_t primed;                        /* grid points evaluated since the sampler started, up to 2 */
+	uint16_t lv[2];                        /* the last two box levels (the plateau test) */
+	/* the channels' weights, learned from the box levels' plateaus */
+	uint16_t hist[SND_LEVEL_BINS];
+	uint32_t hist_total;
+	uint32_t learnt_frame;                 /* when the weights were last learned */
+	uint8_t k;                             /* channels */
+	uint8_t w[SND_SLOTS];                  /* their weights (slot / loop), 1/256, ascending */
+	uint8_t lut[257];                      /* box level -> channel states, | 0x80 if a combination fits */
+	/* the channels: debounced states and rise times */
+	uint8_t cur;                           /* debounced states, bit c = channel c */
+	uint8_t cand[SND_SLOTS], run[SND_SLOTS];
+	uint32_t rise[SND_SLOTS][SND_RISES];   /* a ring per channel */
+	uint8_t swing[SND_SLOTS][SND_RISES];   /* the rise came with every channel's (a full swing) */
+	uint32_t nrise[SND_SLOTS];             /* rises recorded since the channel was (re)set */
+	/* frame counters for the decision */
+	uint32_t good, samples;                /* this frame's box levels: fitting, all */
+} snd_slots;
 
 typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and per-style state */
 	uint32_t frames;                       /* frames fed since init */
@@ -86,6 +129,12 @@ typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and 
 	uint32_t out_q8[SND_TONAL];            /* the last decision's voices, by tone slot */
 	uint32_t since_tonal;                  /* decisions since the last confident one with voices */
 	uint8_t prev_conf;                     /* the last decision was confident */
+	/* time slots (slots.c) and their music context: pitch changes of the decoded voices */
+	snd_slots sl;
+	uint32_t sref_q8[SND_TONAL];           /* the reference: the voices of the last note (periods) */
+	uint32_t sref_frame, schange_frame;
+	uint8_t have_sref, have_schange;
+	uint8_t sbroken;                       /* undecodable sound since the last pitch change */
 	/* scratch for flips.c */
 	uint32_t pool[2u * SND_EDGES_MAX];
 	uint16_t chain[2u * SND_EDGES_MAX];
@@ -107,6 +156,24 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 /* Is the half-period p_q8 a whole multiple (2-32 times, within the link tolerance) of q_q8? */
 int snd_flips_multiple(uint32_t p_q8, uint32_t q_q8);
 uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t m, uint32_t hp_q8, uint32_t *extent);
+
+/* The time-slot decoder (slots.c), used by decoder.c. snd_slots_frame takes frame d->frames's
+ * edges: finds the loop carrier, runs the box sampler through the frame (decoding the channel
+ * states and recording each channel's rises) and fills fs->carrier, fs->tdm and fs->fit.
+ * Absolute times are frame x ZX_FRAME_TSTATES + T-state. keep_q8: the voices (periods, T x 256,
+ * 0 = none) a run of whole-speaker swings may continue (NULL: any run of them is a voice, as when
+ * the loop carrier is heard). snd_slots_voice gives channel c's period
+ * (T x 256) at the time `at` if a run of agreeing periods spans it, else 0; snd_slots_level its
+ * loudness; snd_slots_explained how many of the channels' rises in [from, to) belong to a voice's
+ * run (*rises: how many there are, *swings: how many came in full swings); snd_slots_drums the full swings in [from, to) that no run
+ * explains (another routine driving the speaker: a drum). */
+void snd_slots_reset(snd_slots *s);
+void snd_slots_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t start_level, snd_slot *fs);
+uint32_t snd_slots_voice(snd_decoder *d, uint32_t c, uint32_t at, const uint32_t *keep_q8);
+uint8_t snd_slots_level(const snd_slots *s, uint32_t c);
+uint32_t snd_slots_explained(snd_decoder *d, uint32_t from, uint32_t to, const uint32_t *keep_q8, uint32_t *rises,
+                             uint32_t *swings);
+uint32_t snd_slots_drums(snd_decoder *d, uint32_t from, uint32_t to);
 
 /* ---- FM synth (fm.c) ---------------------------------------------------
  *

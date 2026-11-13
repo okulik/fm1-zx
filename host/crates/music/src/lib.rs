@@ -8,6 +8,7 @@ use zx_sys::{zx_edge, Beeper, Machine, SndDecoder, SndFrame, SND_DELAY_FRAMES};
 
 pub mod score;
 pub mod synthetic;
+pub mod truth;
 
 /// The FM-1's audio rate, 750000 / 17 Hz (24 MHz / 544).
 pub const RATE: (u32, u32) = (750_000, 17);
@@ -66,7 +67,17 @@ pub fn test_sna(name: &str) -> Machine {
 
 /// A machine autostarting the pack's Castaway tape.
 pub fn castaway() -> Machine {
-    let tap = std::fs::read(repo().join("third_party/games/castaway/castawy.tap")).expect("castawy.tap");
+    pack_tape("castaway/castawy.tap")
+}
+
+/// A machine autostarting the pack's Escape from Colony 8 tape.
+pub fn colony8() -> Machine {
+    pack_tape("colony8/colony8.tap")
+}
+
+/// A machine autostarting the pack's tape `third_party/games/<path>`.
+pub fn pack_tape(path: &str) -> Machine {
+    let tap = std::fs::read(repo().join("third_party/games").join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
     let mut m = Machine::new();
     m.tape_insert(&tap).expect("inserts");
     m.tape_autostart();

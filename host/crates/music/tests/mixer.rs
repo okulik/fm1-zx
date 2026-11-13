@@ -64,18 +64,29 @@ fn fm_mode_delays_three_frames() {
         let s = starts(&frames);
         // the delay: the first three frames' samples (frames have 880 or 881 samples)
         let delay = s[d];
+        // where the music is decoded (Castaway's title, time slots) the FM voices play instead:
+        // check the frames whose decision, and the two before it, play the beeper
+        let dec = music::decode(frames.iter().map(|f| (f.edges.as_slice(), f.start_level)));
+        let beeper_path = |t: usize| (t.saturating_sub(d + 2)..=t - d).all(|k| dec[k].confident == 0);
+        let mut checked = 0;
         for (t, o) in out.iter().enumerate() {
             assert_eq!(o.len(), frames[t].beeper.len(), "{name}: frame {t} length");
             if t < d {
                 assert!(o.iter().all(|&x| x == 0), "{name}: frame {t} is silence");
                 continue;
             }
+            if !beeper_path(t) {
+                continue;
+            }
+            checked += 1;
             // frame t plays frame t - 3, starting within one sample of its first sample, and the
             // delayed stream is continuous: no sample repeated or dropped
             let from = s[t] - delay;
             assert!(from.abs_diff(s[t - d]) <= 1, "{name}: frame {t} starts {from}, frame {} at {}", t - d, s[t - d]);
             assert!(o[..] == beeper[from..from + o.len()], "{name}: frame {t} is not frame {}'s sound", t - d);
         }
+        println!("{name}: {checked} of {} frames on the beeper path checked", out.len());
+        assert!(checked >= 150, "{name}: {checked} frames checked");
     }
 }
 
