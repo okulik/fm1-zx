@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The decoder's work per frame is capped (`SND_WORK_MAX`), whatever the edges: it runs on
-//! every frame in every sound mode, so dense or adversarial edge streams must not cost more
-//! than a small multiple of real music.
+//! every frame in every sound mode, so dense or adversarial edge streams (speaker flips, time
+//! slots and short pulses) must not cost more than a small multiple of real music.
 
-use music::synthetic::{frame_loop, frame_tune, slots_loop, slots_tune, xor_loop, xor_tune, FRAME_T, SLOTS_AT, SLOTS_LOOP};
+use music::synthetic::{
+    frame_loop, frame_tune, pin_pulse, pin_tune, slots_loop, slots_tune, xor_loop, xor_tune, FRAME_T, PIN_ROW_T, SLOTS_AT, SLOTS_LOOP,
+};
 use music::{capture, test_sna, RATE};
 use zx_sys::{zx_edge, Beeper, SndDecoder, SND_WORK_MAX};
 
@@ -64,6 +66,30 @@ fn tdm(len: u64, mut bit: impl FnMut(u64, usize) -> bool) -> Vec<u32> {
         }
         i += 1;
     }
+}
+
+/// Edges of pulses `width` T wide starting at `starts` (OR-ed where they overlap), within a frame.
+fn pulse_edges(mut starts: Vec<u32>, width: u32) -> Vec<u32> {
+    starts.sort();
+    let mut v = Vec::new();
+    let mut cur: Option<(u32, u32)> = None;
+    for a in starts {
+        let b = a + width;
+        match cur {
+            Some((c0, c1)) if a <= c1 => cur = Some((c0, c1.max(b))),
+            Some((c0, c1)) => {
+                v.extend([c0, c1]);
+                cur = Some((a, b));
+            }
+            None => cur = Some((a, b)),
+        }
+    }
+    if let Some((c0, c1)) = cur {
+        v.extend([c0, c1]);
+    }
+    v.retain(|&t| t < FRAME_T as u32);
+    v.truncate(254);
+    v
 }
 
 /// The adversarial streams: 200 frames each.
@@ -135,6 +161,30 @@ fn adversarial() -> Vec<(&'static str, Vec<Vec<zx_edge>>)> {
         }
         v
     });
+    // short pulses (one width, the speaker high a few percent of the time: the short-pulse
+    // decoder runs on them): 127 at random places, just under the busy limit
+    gen("pulses random 127", &mut |_, r| pulse_edges((0..127).map(|_| r.next() % 69_600).collect(), 80));
+    // three pulse voices near 2.5 kHz, with the rises lost where they merge given back
+    gen("pulses 3 voices near 2.5 kHz", &mut |f, _| pulse_edges([1_401, 1_467, 1_539].iter().flat_map(|&p| lattice(f, p)).collect(), 60));
+    // pulses half of which merge with another 40 T later: every one gives a rise back
+    gen("pulses merging", &mut |_, r| {
+        let mut v = Vec::new();
+        let mut t = r.next() % 500;
+        while t < 69_000 && v.len() < 200 {
+            v.push(t);
+            if r.next() % 2 == 0 {
+                v.push(t + 40);
+            }
+            t += 500 + r.next() % 600;
+        }
+        pulse_edges(v, 100)
+    });
+    // a 60 Hz pulse bass under random pulses (long chains through dense rises)
+    gen("pulses bass + random", &mut |f, r| {
+        let mut v = lattice(f, 58_000);
+        v.extend((0..120).map(|_| r.next() % 69_600));
+        pulse_edges(v, 100)
+    });
     out
 }
 
@@ -167,6 +217,7 @@ fn decoder_work_is_bounded() {
         ("xor tune", xor_loop(&xor_tune(0)).frames),
         ("frame tune", frame_loop(&frame_tune(40)).frames),
         ("slots tune", slots_loop(&slots_tune()).frames),
+        ("pin-pulse tune", pin_pulse(&pin_tune(), PIN_ROW_T, true).frames),
         ("castaway", game(music::castaway(), 2150)),
         ("colony8", game(music::colony8(), 1550)),
         ("tune.sna", sna("tune.sna", 450)),

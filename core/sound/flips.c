@@ -24,7 +24,15 @@
  * hits where the window holds a change of note. The voice's half-period is
  * its chain's span over its steps; its edges, and any further 3-edge chains
  * of its period (stretches past two missing edges), leave the pool, and the
- * search repeats on the rest.
+ * search repeats on the rest. A voice drifts if the two halves of its chain
+ * (split at the edge nearest the middle) measure periods more than 1/128
+ * apart (about 0.14 semitone) plus 2 T: a pitch sweep, not a held note.
+ *
+ * The short-pulse decoder (pulses.c) runs the same search on rising edges
+ * only, where each step is a whole period (the shortest 1,400 T). There a
+ * multiple of a voice found is kept: that voice's rises have left the pool
+ * (a pulse is one voice's, never a part of two), so a chain at twice its
+ * period is another voice an octave below.
  *
  * Why the tolerances: XOR engines lose an edge where both counters wrap in
  * the same loop pass (the skip), and a reload in one counter stretches the
@@ -40,6 +48,19 @@
 #define TOL_MIN 28u
 #define MULT_MAX 32u   /* whole multiples of a voice's period checked */
 #define MIN_NODES 4u   /* edges of a voice found in a window (3 suffice to follow a known voice) */
+
+/* Short pulses (pulses.c): a step is a whole period, and the engine's work
+ * for its other voices can shift a pulse by tens of T, so 28 T or 1/64 of
+ * the step (a quarter of a semitone): with 1/256 a generated pin-pulse tune
+ * kept 47% of its voice-frames with pulses shifted by up to 20 T but only 14%
+ * up to 40 T; with 1/64, 54% and 49%, and none wrong. */
+#define TOL_DIV_P 64u
+
+static uint32_t tol_pulse(uint32_t step)
+{
+	uint32_t t = step / TOL_DIV_P;
+	return t > TOL_MIN ? t : TOL_MIN;
+}
 
 static uint32_t tol_of(uint32_t step)
 {
@@ -126,9 +147,9 @@ typedef struct {
  * `may_skip`) two steps on, with twice the tolerance since the error of two
  * half-periods adds up. Returns the edge (n if none) and the steps in *k. */
 static uint32_t link(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t cur, uint32_t est, int dir, int may_skip,
-                     const uint8_t *skip, uint32_t *k)
+                     const uint8_t *skip, int pulses, uint32_t *k)
 {
-	uint32_t tol = tol_of(est), j = n;
+	uint32_t tol = pulses ? tol_pulse(est) : tol_of(est), j = n;
 
 	*k = 1;
 	if (dir > 0) {
@@ -150,19 +171,22 @@ static uint32_t link(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t cur
 }
 
 /* Follows the chain of half-period `step` through edge `seed`, forward and
- * back, never through edges marked in `skip` (if given). */
+ * back, never through edges marked in `skip` (if given). pulses: a chain of
+ * skips alone is no chain (it would be a voice at twice the step: for short
+ * pulses, a voice an octave below, whose rises are no lost ones). */
 static void follow(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t seed, uint32_t step, const uint8_t *skip,
-                   chain_t *c)
+                   int pulses, chain_t *c)
 {
-	uint32_t cur = seed, est = step, k, j;
+	uint32_t cur = seed, est = step, k, j, singles = 0;
 	int skipped = 0;
 
 	c->nodes = 0;
 	c->steps = 0;
 	d->chain[c->nodes++] = (uint16_t)seed;
 	/* forward, re-estimating the step from the chain so far */
-	while ((j = link(d, t, n, cur, est, 1, !skipped, skip, &k)) != n) {
+	while ((j = link(d, t, n, cur, est, 1, !skipped, skip, pulses, &k)) != n) {
 		skipped = k == 2;
+		singles += k == 1;
 		c->steps += k;
 		cur = j;
 		d->chain[c->nodes++] = (uint16_t)j;
@@ -172,13 +196,19 @@ static void follow(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t seed,
 	/* backward, at the step the forward chain measured */
 	cur = seed;
 	skipped = 0;
-	while ((j = link(d, t, n, cur, est, -1, !skipped, skip, &k)) != n) {
+	while ((j = link(d, t, n, cur, est, -1, !skipped, skip, pulses, &k)) != n) {
 		skipped = k == 2;
+		singles += k == 1;
 		c->steps += k;
 		cur = j;
 		d->chain[c->nodes++] = (uint16_t)j;
 	}
 	c->first = cur;
+	if (pulses && !singles) {   /* skips alone: only the seed */
+		c->nodes = 1;
+		c->steps = 0;
+		c->first = c->last = seed;
+	}
 }
 
 int snd_flips_multiple(uint32_t p_q8, uint32_t q_q8)
@@ -192,8 +222,30 @@ int snd_flips_multiple(uint32_t p_q8, uint32_t q_q8)
 
 #define BASES 8u
 
-uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_q8)
+/* Do the two halves of chain c (step hp_q8) measure different periods? */
+static int drifts(snd_decoder *d, const uint32_t *t, const chain_t *c, uint32_t hp_q8)
 {
+	uint32_t ext = t[c->last] - t[c->first], mid = t[c->first] + ext / 2u, best = c->first, best_d = ext, i, k, a, b;
+
+	if (c->steps < 4u) return 0;   /* too short to split */
+	d->work += c->nodes;
+	for (i = 0; i < c->nodes; i++) {
+		uint32_t x = d->chain[i], dd = t[x] > mid ? t[x] - mid : mid - t[x];
+		if (dd < best_d) {
+			best_d = dd;
+			best = x;
+		}
+	}
+	k = ((t[best] - t[c->first]) * c->steps + ext / 2u) / ext;   /* steps before the split */
+	if (k == 0 || k >= c->steps) return 0;
+	a = ((t[best] - t[c->first]) << 8) / k;
+	b = ((t[c->last] - t[best]) << 8) / (c->steps - k);
+	return (a > b ? a - b : b - a) > (hp_q8 >> 7) + (2u << 8);
+}
+
+uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, int pulses, uint32_t *hp_q8, uint8_t *drift)
+{
+	uint32_t hmin = pulses ? 2u * HMIN : HMIN;
 	uint32_t cand[SEEDS * AHEAD];
 	uint16_t from[SEEDS * AHEAD];
 	uint32_t base[BASES];   /* periods (Q8) of voices found and of chains through 30% of the window */
@@ -201,6 +253,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 
 	for (v = 0; v < SND_TONAL; v++)
 		hp_q8[v] = 0;
+	if (drift) *drift = 0;
 	for (v = 0; v < SND_TONAL && n >= 3u && !spent(d); v++) {
 		uint32_t nc = 0, s, i, j, last_seed = n, span = t[n - 1u] - t[0];
 		chain_t c;
@@ -213,7 +266,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 			for (j = seed + 1u; j < n && j <= seed + AHEAD; j++) {
 				uint32_t gap = t[j] - t[seed];
 				if (gap > HMAX) break;
-				if (gap < HMIN) continue;
+				if (gap < hmin) continue;
 				/* insertion into ascending order */
 				for (i = nc; i > 0 && cand[i - 1u] > gap; i--) {
 					cand[i] = cand[i - 1u];
@@ -230,7 +283,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 			int mult = 0;
 			if (spent(d)) break;
 			if (i && cand[i] == cand[i - 1u] && from[i] == from[i - 1u]) continue;
-			follow(d, t, n, from[i], cand[i], 0, &c);
+			follow(d, t, n, from[i], cand[i], 0, pulses, &c);
 			if (c.nodes < MIN_NODES) continue;
 			ext = t[c.last] - t[c.first];
 			per = (ext << 8) / c.steps;
@@ -244,7 +297,8 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 		}
 		if (!found) break;
 		hp_q8[v] = ((t[c.last] - t[c.first]) << 8) / c.steps;
-		if (nb < BASES) base[nb++] = hp_q8[v];
+		if (drift && drifts(d, t, &c, hp_q8[v])) *drift = 1;
+		if (nb < BASES && !pulses) base[nb++] = hp_q8[v];
 		/* the voice's edges leave the pool: its chain, and the stretches of it the
 		 * chain did not reach (past two missing edges in a row) */
 		for (i = 0; i < n; i++)
@@ -254,7 +308,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 		explained += c.nodes;
 		for (i = 0; i < n && !spent(d); i++) {
 			if (d->used[i]) continue;
-			follow(d, t, n, i, hp_q8[v] >> 8, d->used, &c);
+			follow(d, t, n, i, hp_q8[v] >> 8, d->used, pulses, &c);
 			if (c.nodes < 3u) continue;
 			for (j = 0; j < c.nodes; j++)
 				d->used[d->chain[j]] = 1;
@@ -268,9 +322,10 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 	return explained;
 }
 
-uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t m, uint32_t hp_q8, uint32_t *extent)
+uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t m, uint32_t hp_q8, int pulses,
+                         uint32_t *extent)
 {
-	uint32_t hp = (hp_q8 + 128u) >> 8, i, j, k = 0, lo = 1, hi = 0;
+	uint32_t hp = (hp_q8 + 128u) >> 8, i, j, k = 0, lo = 1, hi = 0, lo_t = 0xffffffffu, hi_t = 0;
 	chain_t c;
 
 	*extent = 0;
@@ -279,7 +334,7 @@ uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t
 	for (i = 0; i < m && !spent(d); i++) {
 		uint32_t a, b;
 		if (d->used[i]) continue;
-		follow(d, t, n, i, hp, d->used, &c);
+		follow(d, t, n, i, hp, d->used, pulses, &c);
 		if (c.nodes < 3u) continue;
 		for (j = 0; j < c.nodes; j++) {
 			uint32_t x = d->chain[j];
@@ -297,7 +352,22 @@ uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t
 		}
 		if (a < lo) lo = a;
 		if (b > hi) hi = b;
+		if (pulses) {
+			/* short pulses: the time the pulse train sounds in the frame (t
+			 * from 0 to ZX_FRAME_TSTATES): from its first pulse there (from the
+			 * frame's start if that comes within a period: the one before fell
+			 * in the frame before) to a period after its last, or the frame's
+			 * end if it runs on */
+			uint32_t x = t[c.first] < hp ? 0 : t[c.first];
+			uint32_t y = c.last >= m || t[c.last] + hp > ZX_FRAME_TSTATES ? ZX_FRAME_TSTATES : t[c.last] + hp;
+			if (x < lo_t) lo_t = x;
+			if (y > hi_t) hi_t = y;
+		}
 	}
-	if (hi > lo && lo < m) *extent = t[hi] - t[lo];
+	if (pulses) {
+		if (hi_t > lo_t) *extent = hi_t - lo_t;
+	} else if (hi > lo && lo < m) {
+		*extent = t[hi] - t[lo];
+	}
 	return k;
 }

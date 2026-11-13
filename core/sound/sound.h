@@ -50,7 +50,7 @@ typedef struct {          /* what the decoder concluded about one past frame */
 	uint8_t confident;    /* 1 = play FM for this frame */
 } snd_frame;
 
-/* ---- decoder (decoder.c, flips.c, slots.c) ----------------------------- */
+/* ---- decoder (decoder.c, flips.c, slots.c, pulses.c) ------------------- */
 
 #define SND_HIST (SND_DELAY_FRAMES + 1u)   /* frames of edge history: the decided frame and its look-ahead */
 #define SND_EDGES_MAX 256u                 /* speaker edges kept per frame; a busier frame is noise */
@@ -62,12 +62,18 @@ typedef struct {          /* what the decoder concluded about one past frame */
 /* What the decoder worked out about one frame of the history, when it arrived. */
 typedef struct {
 	uint32_t hp_q8[SND_TONAL];     /* voices of the frame alone (20 ms): half-period, T x 256, as found; 0 = none */
-	uint32_t pair_q8[SND_TONAL];   /* voices of this frame and the one before (40 ms) */
+	uint32_t pair_q8[SND_TONAL];   /* voices of this frame and the one before (40 ms; short pulses: two before, 60 ms) */
 	uint16_t n;                    /* speaker edges kept */
 	uint16_t expl;                 /* of them, explained by the frame's own voices */
 	uint8_t busy;                  /* more than SND_EDGES_MAX edges: noise, not decoded */
-	uint8_t clean;                 /* the frame alone decodes into voices that explain >= 90% of its edges */
+	uint8_t clean;                 /* the frame alone decodes into voices that explain >= 90% of its edges (decoder.c) */
 	uint8_t change;                /* a pitch change starts here (decoder.c) */
+	uint8_t full;                  /* its edges (rises for short pulses) span most of the frame: a note, not a beep */
+	uint8_t steady;                /* none of its own voices drifts in pitch within it (flips.c) */
+	/* short pulses (pulses.c) */
+	uint8_t ear0;                  /* the speaker level at the frame's start: tells rising edges */
+	uint8_t pulse;                 /* analysed as short pulses (voices from rising edges, hp_q8 = period / 2) */
+	uint16_t width;                /* the engine's pulse width (T) in use for it; 0 = unknown */
 	/* time slots (slots.c) */
 	uint8_t carrier;               /* most rising edges repeat at the loop length in use (40-400 T) */
 	uint8_t tdm;                   /* decoded as time slots: a loop is known, its channels learned */
@@ -132,6 +138,16 @@ typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and 
 	uint32_t clean_q8[SND_TONAL];          /* the reference: the voices of the last note */
 	uint32_t change_frame;                 /* the last pitch change in a frame already decided */
 	uint8_t broken;                        /* a decided frame was undecodable since the last pitch change */
+	/* alternations: a return to the note before the reference is no pitch change */
+	uint32_t prev_q8[SND_TONAL];           /* the reference before the current one */
+	uint32_t ref_change_frame;             /* the pitch change that made the current reference */
+	uint8_t have_prev, ref_change;
+	uint8_t returns;                       /* returns in a row */
+	uint8_t alt;                           /* two returns in a row since the last pitch change: a siren, not music */
+	/* short pulses: the style in use (selector) and the styles of the reference and of the music context */
+	uint8_t pulse_style, clean_pulse, ctx_pulse;
+	uint16_t pulse_width;                  /* the commonest pulse width last measured (T) */
+	uint8_t busy_run;                      /* undecodable frames decided in a row, before this one */
 	/* work accounting (flips.c): units spent on this frame, and the cap */
 	uint32_t work, work_cap;
 	/* the decisions */
@@ -153,14 +169,17 @@ void snd_decoder_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t sta
 /* The speaker-flip decoder (flips.c), used by decoder.c. t: n edge times, ascending.
  * snd_flips_decode finds up to SND_TONAL voices (half-periods, T x 256, in the order found,
  * zeros after) in t, which it uses as scratch (t may be d->pool), and returns how many edges they
- * explain. snd_flips_cover follows the voice of half-period hp_q8 through the edges t[0..m)
- * not yet marked in d->used (chains of 3 or more edges, which may run on into t[m..n)), marks
- * the edges it takes, returns their count and puts the time its chains span within t[0..m) in
- * *extent. */
-uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_q8);
+ * explain; *drift (if given) is set if a voice drifts in pitch within t. pulses: t are rising
+ * edges of short pulses (pulses.c), each step a whole period (hp_q8 then holds the period).
+ * snd_flips_cover follows the voice of half-period hp_q8 through the edges t[0..m) not yet
+ * marked in d->used (chains of 3 or more edges, which may run on into t[m..n)), marks the edges
+ * it takes, returns their count and puts the time its chains span within t[0..m) in *extent
+ * (pulses: the time the pulse train sounds within the frame, t from 0 to ZX_FRAME_TSTATES). */
+uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, int pulses, uint32_t *hp_q8, uint8_t *drift);
 /* Is the half-period p_q8 a whole multiple (2-32 times, within the link tolerance) of q_q8? */
 int snd_flips_multiple(uint32_t p_q8, uint32_t q_q8);
-uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t m, uint32_t hp_q8, uint32_t *extent);
+uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t m, uint32_t hp_q8, int pulses,
+                         uint32_t *extent);
 
 /* The time-slot decoder (slots.c), used by decoder.c. snd_slots_frame takes frame d->frames's
  * edges: finds the loop carrier, runs the box sampler through the frame (decoding the channel
@@ -172,6 +191,19 @@ uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t
  * loudness; snd_slots_explained how many of the channels' rises in [from, to) belong to a voice's
  * run (*rises: how many there are, *swings: how many came in full swings); snd_slots_drums the full swings in [from, to) that no run
  * explains (another routine driving the speaker: a drum). */
+/* The short-pulse decoder (pulses.c), used by decoder.c. snd_pulses_style tells whether the n
+ * stored edges t of a frame starting at speaker level ear0 are short pulses (1, with the pulses'
+ * width in *width) or not (0): the speaker high under 20% of the busy time, the pulses of one
+ * width. snd_pulses_join puts the rising edges of frames f..f+count-1 of the
+ * history into d->pool on one time axis (with the rises lost in merged pulses) and returns their
+ * count (the first frame's in *first_n).
+ * snd_pulses_decode finds the voices of n rising edges t (scratch, as for snd_flips_decode) as
+ * half-periods (period / 2, so every style reports alike) and returns how many rises they
+ * explain. */
+int snd_pulses_style(snd_decoder *d, const uint32_t *t, uint32_t n, uint8_t ear0, uint32_t *width);
+uint32_t snd_pulses_join(snd_decoder *d, uint32_t f, uint32_t count, uint32_t *first_n);
+uint32_t snd_pulses_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_q8, uint8_t *drift);
+
 void snd_slots_reset(snd_slots *s);
 void snd_slots_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t start_level, snd_slot *fs);
 uint32_t snd_slots_voice(snd_decoder *d, uint32_t c, uint32_t at, const uint32_t *keep_q8);

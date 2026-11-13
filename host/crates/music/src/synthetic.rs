@@ -20,6 +20,12 @@
 //!   speaker for its own slot. Each channel is a 16-bit phase accumulator with a duty threshold:
 //!   it outputs 1 while the accumulator's high byte is below the threshold (0 = silent, 80h a
 //!   square wave). Rests keep the loop running with every channel silent.
+//! - [`pin_pulse`]: a pin-pulse engine: each voice fires a short pulse (200 T) once per period and
+//!   the pulses are OR-ed onto the speaker, so the speaker is high a few percent of the time;
+//!   where two voices' pulses overlap they merge and the later rise is lost. The engine's other
+//!   work shifts each pulse by up to 20 T. Rows of three voices (bass, chord tone, melody), each
+//!   note sounding for 85% of its row, and a 30 ms burst of noise (pulses at random spacing) at
+//!   the start of every other row.
 
 use zx_sys::{contention, zx_edge};
 
@@ -394,3 +400,78 @@ pub fn slots_tune() -> Vec<SlotsNote> {
         })
         .collect()
 }
+
+/// The pin-pulse engine (see the module notes): rows of `row_t` T-states, `notes[r]` the MIDI
+/// notes of row r's voices (0 = rest), noise bursts on even rows if `noise`. Truth: each
+/// sounding voice's pitch.
+pub fn pin_pulse(notes: &[[u32; 3]], row_t: u64, noise: bool) -> Stream {
+    const WIDTH: u64 = 200;
+    let mut b = Builder::new(0);
+    let mut pulses: Vec<(u64, u64)> = Vec::new();
+    let mut seed = 0x9e37_79b9u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let start = FRAME_T / 2;
+    for (r, row) in notes.iter().enumerate() {
+        let a = start + r as u64 * row_t;
+        let end = a + row_t * 85 / 100;
+        for (v, &m) in row.iter().enumerate() {
+            if m == 0 {
+                continue;
+            }
+            let hz = hz_of_midi(m as f64);
+            let per = CPU_HZ / hz;
+            let mut t = (a + v as u64 * 37) as f64;
+            while (t as u64) < end {
+                let p = t as u64 + (rnd() % 21) as u64;
+                pulses.push((p, p + WIDTH));
+                t += per;
+            }
+            b.notes.push((a, end, vec![hz]));
+        }
+        if noise && r % 2 == 0 {
+            let mut t = a;
+            while t < a + (0.03 * CPU_HZ) as u64 {
+                let w = 20 + (rnd() % 180) as u64;
+                pulses.push((t, t + w / 2));
+                t += w;
+            }
+            b.drums.push((a, a + (0.03 * CPU_HZ) as u64));
+        }
+    }
+    pulses.sort();
+    // OR the pulses onto the speaker
+    let mut cur: Option<(u64, u64)> = None;
+    for (p0, p1) in pulses {
+        match cur {
+            Some((c0, c1)) if p0 <= c1 => cur = Some((c0, c1.max(p1))),
+            Some((c0, c1)) => {
+                b.edges.push((c0, 2));
+                b.edges.push((c1, 0));
+                cur = Some((p0, p1));
+            }
+            None => cur = Some((p0, p1)),
+        }
+    }
+    if let Some((c0, c1)) = cur {
+        b.edges.push((c0, 2));
+        b.edges.push((c1, 0));
+    }
+    b.finish(start + notes.len() as u64 * row_t + 2 * FRAME_T)
+}
+
+/// A 30-row tune for [`pin_pulse`] (rows of 150 ms): a bass line, a chord tone on every other
+/// row and a melody, as MIDI notes.
+pub fn pin_tune() -> Vec<[u32; 3]> {
+    let bass = [36, 36, 43, 43, 41, 41, 43, 43, 45, 45, 40, 40, 41, 41, 43, 43];
+    let mid = [60, 0, 64, 0, 65, 0, 62, 0, 57, 0, 64, 0, 60, 0, 59, 0];
+    let mel = [72, 74, 76, 79, 77, 76, 74, 71, 69, 72, 76, 74, 72, 71, 67, 0];
+    (0..30).map(|r| [bass[r % 16], mid[r % 16], mel[r % 16]]).collect()
+}
+
+/// [`pin_tune`]'s row length: 150 ms.
+pub const PIN_ROW_T: u64 = 525_000;
