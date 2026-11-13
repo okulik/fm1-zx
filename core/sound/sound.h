@@ -54,6 +54,7 @@ typedef struct {          /* what the decoder concluded about one past frame */
 
 #define SND_HIST (SND_DELAY_FRAMES + 1u)   /* frames of edge history: the decided frame and its look-ahead */
 #define SND_EDGES_MAX 256u                 /* speaker edges kept per frame; a busier frame is noise */
+#define SND_WORK_MAX 48000u                 /* decoder work units per frame (flips.c), see decoder.c */
 
 /* What the decoder worked out about one frame of the history, when it arrived. */
 typedef struct {
@@ -78,8 +79,9 @@ typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and 
 	uint32_t clean_frame;                  /* the last clean frame */
 	uint32_t clean_q8[SND_TONAL];          /* the reference: the voices of the last note */
 	uint32_t change_frame;                 /* the last pitch change in a frame already decided */
-	uint8_t have_busy;
-	uint32_t busy_frame;                   /* the last frame too busy to decode */
+	uint8_t broken;                        /* a decided frame was undecodable since the last pitch change */
+	/* work accounting (flips.c): units spent on this frame, and the cap */
+	uint32_t work, work_cap;
 	/* the decisions */
 	uint32_t out_q8[SND_TONAL];            /* the last decision's voices, by tone slot */
 	uint32_t since_tonal;                  /* decisions since the last confident one with voices */

@@ -47,35 +47,72 @@ static uint32_t tol_of(uint32_t step)
 	return t > TOL_MIN ? t : TOL_MIN;
 }
 
-/* Index of the edge nearest to `target` within `tol`, searching forward from
- * index `from` (dir > 0) or backward from it (dir < 0), passing over edges
- * marked in `skip` (if given); n if none. */
-static uint32_t nearest(const uint32_t *t, uint32_t n, uint32_t from, uint32_t target, uint32_t tol, int dir,
-                        const uint8_t *skip)
+/* Work accounting: every binary-search step, every edge looked at, every
+ * candidate moved while sorting and every edge of a pass over the pool costs
+ * one unit. Once d->work reaches d->work_cap the searches find nothing, so
+ * the decoder stops; it then treats the frame as undecodable (decoder.c). */
+static int spent(const snd_decoder *d)
 {
-	uint32_t best = n, best_d = tol + 1u, j = from;
+	return d->work >= d->work_cap;
+}
 
+/* Index of the edge nearest to `target` within `tol`, searching from index
+ * `from` forward (dir > 0) or backward (dir < 0), passing over edges marked in
+ * `skip` (if given); n if none. A galloping search finds the edges within the
+ * tolerance, so a link costs at most about 2 log2(n) whatever the gap. */
+static uint32_t nearest(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t from, uint32_t target, uint32_t tol,
+                        int dir, const uint8_t *skip)
+{
+	uint32_t best = n, best_d = tol + 1u, lo, hi, j, lim = target > tol ? target - tol : 0, w = 0;
+
+	if (spent(d)) return n;
+	/* the first edge at or after target - tol: a few steps out from `from`
+	 * (it is near for most links), then galloping and halving */
 	if (dir > 0) {
-		for (; j < n && t[j] <= target + tol; j++) {
-			uint32_t dd = t[j] > target ? t[j] - target : target - t[j];
-			if (dd < best_d && !(skip && skip[j])) {
-				best_d = dd;
-				best = j;
-			}
+		uint32_t step = 1;
+		lo = from;
+		hi = n;
+		while (lo < n && lo < from + 4u && t[lo] < lim) {   /* the near case first */
+			w++;
+			lo++;
+		}
+		if (lo == n || t[lo] >= lim) step = 0;   /* found (or none): no search */
+		while (step && lo + step < n && t[lo + step - 1u] < lim) {
+			w++;
+			step *= 2u;
+		}
+		if (!step) hi = lo;
+		else {
+			if (lo + step < n) hi = lo + step;
+			if (step > 1u) lo += step / 2u;
 		}
 	} else {
-		for (;;) {
-			uint32_t dd;
-			if (t[j] + tol < target) break;
-			dd = t[j] > target ? t[j] - target : target - t[j];
-			if (dd < best_d && !(skip && skip[j])) {
-				best_d = dd;
-				best = j;
-			}
-			if (j == 0) break;
-			j--;
+		uint32_t step = 1;
+		lo = 0;
+		hi = from + 1u;
+		while (step <= from && t[from - step + 1u] >= lim) {
+			w++;
+			step *= 2u;
+		}
+		if (step <= from) lo = from - step + 1u;
+		if (step > 1u) hi = from - step / 2u + 2u;
+		if (hi > from + 1u) hi = from + 1u;
+	}
+	while (lo < hi) {
+		uint32_t mid = (lo + hi) / 2u;
+		w++;
+		if (t[mid] < lim) lo = mid + 1u;
+		else hi = mid;
+	}
+	for (j = lo; j < (dir > 0 ? n : from + 1u) && t[j] <= target + tol; j++) {
+		uint32_t dd = t[j] > target ? t[j] - target : target - t[j];
+		w++;
+		if (dd < best_d && !(skip && skip[j])) {
+			best_d = dd;
+			best = j;
 		}
 	}
+	d->work += w;   /* a local count: t may alias d's own arrays */
 	return best;
 }
 
@@ -88,7 +125,7 @@ typedef struct {
 /* One link from edge `cur` in direction dir: the edge one step on, or (if
  * `may_skip`) two steps on, with twice the tolerance since the error of two
  * half-periods adds up. Returns the edge (n if none) and the steps in *k. */
-static uint32_t link(const uint32_t *t, uint32_t n, uint32_t cur, uint32_t est, int dir, int may_skip,
+static uint32_t link(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t cur, uint32_t est, int dir, int may_skip,
                      const uint8_t *skip, uint32_t *k)
 {
 	uint32_t tol = tol_of(est), j = n;
@@ -96,16 +133,16 @@ static uint32_t link(const uint32_t *t, uint32_t n, uint32_t cur, uint32_t est, 
 	*k = 1;
 	if (dir > 0) {
 		if (cur + 1u >= n) return n;
-		j = nearest(t, n, cur + 1u, t[cur] + est, tol, 1, skip);
+		j = nearest(d, t, n, cur + 1u, t[cur] + est, tol, 1, skip);
 		if (j == n && may_skip) {
-			j = nearest(t, n, cur + 1u, t[cur] + 2u * est, 2u * tol, 1, skip);
+			j = nearest(d, t, n, cur + 1u, t[cur] + 2u * est, 2u * tol, 1, skip);
 			*k = 2;
 		}
 	} else {
 		if (cur == 0) return n;
-		if (t[cur] >= est + tol) j = nearest(t, n, cur - 1u, t[cur] - est, tol, -1, skip);
+		if (t[cur] >= est + tol) j = nearest(d, t, n, cur - 1u, t[cur] - est, tol, -1, skip);
 		if (j == n && may_skip && t[cur] >= 2u * (est + tol)) {
-			j = nearest(t, n, cur - 1u, t[cur] - 2u * est, 2u * tol, -1, skip);
+			j = nearest(d, t, n, cur - 1u, t[cur] - 2u * est, 2u * tol, -1, skip);
 			*k = 2;
 		}
 	}
@@ -124,7 +161,7 @@ static void follow(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t seed,
 	c->steps = 0;
 	d->chain[c->nodes++] = (uint16_t)seed;
 	/* forward, re-estimating the step from the chain so far */
-	while ((j = link(t, n, cur, est, 1, !skipped, skip, &k)) != n) {
+	while ((j = link(d, t, n, cur, est, 1, !skipped, skip, &k)) != n) {
 		skipped = k == 2;
 		c->steps += k;
 		cur = j;
@@ -135,7 +172,7 @@ static void follow(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t seed,
 	/* backward, at the step the forward chain measured */
 	cur = seed;
 	skipped = 0;
-	while ((j = link(t, n, cur, est, -1, !skipped, skip, &k)) != n) {
+	while ((j = link(d, t, n, cur, est, -1, !skipped, skip, &k)) != n) {
 		skipped = k == 2;
 		c->steps += k;
 		cur = j;
@@ -164,7 +201,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 
 	for (v = 0; v < SND_TONAL; v++)
 		hp_q8[v] = 0;
-	for (v = 0; v < SND_TONAL && n >= 3u; v++) {
+	for (v = 0; v < SND_TONAL && n >= 3u && !spent(d); v++) {
 		uint32_t nc = 0, s, i, j, last_seed = n, span = t[n - 1u] - t[0];
 		chain_t c;
 		int found = 0;
@@ -184,12 +221,14 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 				}
 				cand[i] = gap;
 				from[i] = (uint16_t)seed;
+				d->work += nc - i + 1u;
 				nc++;
 			}
 		}
 		for (i = 0; i < nc && !found; i++) {
 			uint32_t ext, per, b;
 			int mult = 0;
+			if (spent(d)) break;
 			if (i && cand[i] == cand[i - 1u] && from[i] == from[i - 1u]) continue;
 			follow(d, t, n, from[i], cand[i], 0, &c);
 			if (c.nodes < MIN_NODES) continue;
@@ -213,7 +252,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 		for (i = 0; i < c.nodes; i++)
 			d->used[d->chain[i]] = 1;
 		explained += c.nodes;
-		for (i = 0; i < n; i++) {
+		for (i = 0; i < n && !spent(d); i++) {
 			if (d->used[i]) continue;
 			follow(d, t, n, i, hp_q8[v] >> 8, d->used, &c);
 			if (c.nodes < 3u) continue;
@@ -223,6 +262,7 @@ uint32_t snd_flips_decode(snd_decoder *d, uint32_t *t, uint32_t n, uint32_t *hp_
 		}
 		for (i = 0, j = 0; i < n; i++)
 			if (!d->used[i]) t[j++] = t[i];
+		d->work += 2u * n;   /* the passes over the pool */
 		n = j;
 	}
 	return explained;
@@ -234,8 +274,9 @@ uint32_t snd_flips_cover(snd_decoder *d, const uint32_t *t, uint32_t n, uint32_t
 	chain_t c;
 
 	*extent = 0;
-	if (hp < HMIN || !m) return 0;
-	for (i = 0; i < m; i++) {
+	if (hp < HMIN || !m || spent(d)) return 0;
+	d->work += m;
+	for (i = 0; i < m && !spent(d); i++) {
 		uint32_t a, b;
 		if (d->used[i]) continue;
 		follow(d, t, n, i, hp, d->used, &c);

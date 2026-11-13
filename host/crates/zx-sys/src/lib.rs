@@ -294,6 +294,8 @@ pub const SND_DELAY_FRAMES: u32 = sys::SND_DELAY_FRAMES;
 pub const SND_TONAL: usize = sys::SND_TONAL as usize;
 /// Most samples a mixer frame may have.
 pub const SND_MAX_FRAME_SAMPLES: u32 = sys::SND_MAX_FRAME_SAMPLES;
+/// The decoder's work cap per frame (`snd_decoder.work` units).
+pub const SND_WORK_MAX: u32 = sys::SND_WORK_MAX;
 /// The mixer's hysteresis: FM after this many confident decisions in a row...
 pub const SND_ENTER_FRAMES: u32 = sys::SND_ENTER_FRAMES;
 /// ...and the beeper after this many unconfident ones.
@@ -376,6 +378,13 @@ impl SndDecoder {
             )
         };
         out
+    }
+}
+
+impl SndDecoder {
+    /// The work units (`snd_decoder.work`) the last [`SndDecoder::frame`] call spent.
+    pub fn work(&self) -> u32 {
+        self.raw.work
     }
 }
 

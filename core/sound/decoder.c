@@ -10,6 +10,15 @@
  * their frame; windows over several frames put them on one time axis. A frame
  * with more than SND_EDGES_MAX edges is noise and is not decoded.
  *
+ * Work cap: the decoder runs on every frame in every sound mode, so its work
+ * is counted (flips.c: search steps, edges looked at, pool passes) and capped
+ * at SND_WORK_MAX units a frame, 2/3 of it for the new frame's analysis and
+ * the rest for the decision. Real and generated music needs at most about
+ * 27,000 (typically 4,000-9,000); dense or adversarial edges stop at the cap.
+ * Out of work is the safe direction: a frame whose analysis runs out is
+ * undecodable, like a busy one, and a decision that runs out is not
+ * confident and ends the music context.
+ *
  * Style: flips.c (speaker flips) is the only style so far; a frame is FLIPS
  * when it reports voices or is a confident part of the music, NONE otherwise.
  *
@@ -49,8 +58,9 @@
  *
  * Confidence (confidence over coverage: unsure means beeper):
  *   - music context: a pitch change in F or F+1, or in the 100 frames (2 s)
- *     before F with no frame too busy to decode since (other sound ends the
- *     music; such a frame also drops the reference note). A tone that never changes pitch for 2 s is a test tone or an
+ *     before F with no undecodable frame decided since (other sound ends the
+ *     music until the next pitch change; such a frame also drops the
+ *     reference note). A tone that never changes pitch for 2 s is a test tone or an
  *     effect, not music; so the first note of a tune plays on the beeper
  *     until the second begins (a lone tone cannot be told from a test tone
  *     within 60 ms of look-ahead).
@@ -75,6 +85,7 @@
 #define MUSIC_FRAMES 100u   /* a pitch change within this many frames: music */
 #define REST_FRAMES 50u     /* a rest keeps FM this long after the last confident voices */
 #define CHANGE_GAP 10u      /* most frames between two clean frames for a pitch change (200 ms) */
+#define WORK_ANALYSIS (SND_WORK_MAX * 2u / 3u)   /* of the frame's work, the most its own analysis may use */
 #define TIMING_MAX 3
 #define TIMING_SWITCH 2
 #define VOICE_LEVEL 160u
@@ -105,8 +116,9 @@ void snd_decoder_init(snd_decoder *d)
 	d->frame_notes = 0;
 	d->have_clean = 0;
 	d->have_change = 0;
-	d->have_busy = 0;
-	d->busy_frame = 0;
+	d->broken = 0;
+	d->work = 0;
+	d->work_cap = 0xffffffffu;
 	d->clean_frame = 0;
 	d->change_frame = 0;
 	for (k = 0; k < SND_TONAL; k++) {
@@ -189,11 +201,10 @@ static void take_frame(snd_decoder *d, uint32_t t, const zx_edge *e, uint32_t n,
 		/* too busy for speaker flips: some other sound, which ends the music
 		 * this decoder was following */
 		d->have_clean = 0;
-		d->busy_frame = t;
-		d->have_busy = 1;
 		return;
 	}
 
+	d->work_cap = WORK_ANALYSIS;
 	m = join(d, t, 1, 0);
 	explained = snd_flips_decode(d, d->pool, m, s->hp_q8);
 	s->expl = (uint16_t)explained;
@@ -203,6 +214,17 @@ static void take_frame(snd_decoder *d, uint32_t t, const zx_edge *e, uint32_t n,
 	if (t > 0 && !d->slot[ring(t - 1u)].busy) {
 		m = join(d, t - 1u, 2, 0);
 		snd_flips_decode(d, d->pool, m, s->pair_q8);
+	}
+	if (d->work >= d->work_cap) {
+		/* out of work: undecodable, like a frame with too many edges */
+		s->busy = 1;
+		s->clean = 0;
+		s->expl = 0;
+		for (i = 0; i < SND_TONAL; i++) {
+			s->hp_q8[i] = 0;
+			s->pair_q8[i] = 0;
+		}
+		d->have_clean = 0;
 	}
 }
 
@@ -282,12 +304,14 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 	const snd_slot *s = &d->slot[ring(f)], *s1 = &d->slot[ring(f + 1u)];
 	cand_t c[5u * SND_TONAL];
 	uint32_t rep[SND_TONAL], nc = 0, nrep = 0, i, k, m, nf, fit = 0, sounding;
-	int context, confident = 0;
+	int context, confident = 0, over = 0;
 	uint8_t drum = 0;
+
+	d->work_cap = SND_WORK_MAX;
 
 	context = s->change || s1->change ||
 	          (d->have_change && f - d->change_frame <= MUSIC_FRAMES &&
-	           !(d->have_busy && d->busy_frame >= d->change_frame && d->busy_frame <= f));
+	           !d->broken);
 	for (k = 0; k < SND_TONAL; k++)
 		rep[k] = 0;
 
@@ -330,7 +354,13 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 			c[best].eligible = 0;
 		}
 		fit = fit * 100u / nf;
-		if (nrep && fit >= FIT_TONAL) {
+		if (d->work >= d->work_cap) {
+			/* out of work: not decoded, so not music */
+			over = 1;
+			nrep = 0;
+			for (k = 0; k < SND_TONAL; k++)
+				rep[k] = 0;
+		} else if (nrep && fit >= FIT_TONAL) {
 			confident = context;
 		} else if (fit >= FIT_TONAL || nf < 8u) {
 			/* no voice sounds for half of F, and F is explained or nearly silent:
@@ -393,9 +423,11 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 	d->prev_conf = (uint8_t)confident;
 	if (confident && nrep) d->since_tonal = 0;
 	else if (d->since_tonal < MUSIC_FRAMES) d->since_tonal++;
+	if (s->busy || over) d->broken = 1;   /* other sound: the music context stays off until the next change */
 	if (s->change) {
 		d->have_change = 1;
 		d->change_frame = f;
+		d->broken = 0;
 	}
 }
 
@@ -403,6 +435,7 @@ void snd_decoder_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t sta
 {
 	uint32_t t = d->frames, k;
 
+	d->work = 0;
 	take_frame(d, t, e, n, start_level);
 	track_changes(d, t);
 	if (t >= SND_DELAY_FRAMES) {

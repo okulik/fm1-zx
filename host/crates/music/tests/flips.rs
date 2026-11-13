@@ -162,3 +162,47 @@ fn steady_tone_not_music() {
     assert!(heard >= dec.len() * 9 / 10, "the decoder hears the tone ({heard} frames)");
     assert_eq!(confident, 0, "a steady tone is not music");
 }
+
+#[test]
+fn effect_after_music_stays_beeper() {
+    // one-note-per-frame music, then for 1 s an effect whose frames alternate between too many
+    // edges to decode and a clean tone at a new pitch each time (which would pass for notes in
+    // that music)
+    let mut s = frame_loop(&frame_tune(8));
+    let n = s.frames.len();
+    let mut level = s.frames.iter().flatten().last().map_or(s.start_level, |e| e.level);
+    let mut seed = 0x9e37_79b9u32;
+    for k in 0..50u32 {
+        let mut t: Vec<u32> = if k % 2 == 0 {
+            (0..300)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    seed % 69_800
+                })
+                .collect()
+        } else {
+            let hp = 1_500 + 230 * (k % 7);
+            (1..69_800 / hp).map(|i| i * hp).collect()
+        };
+        t.sort();
+        t.dedup();
+        s.frames.push(
+            t.into_iter()
+                .map(|x| {
+                    level ^= 2;
+                    zx_sys::zx_edge { tstate: x, level }
+                })
+                .collect(),
+        );
+    }
+    let dec = decode_stream(&s);
+    let music = dec[..n].iter().filter(|f| f.confident != 0).count();
+    let tones = (n..n + 50).filter(|&i| !voices_hz(&dec[i]).is_empty()).count();
+    let effect = dec[n..n + 50].iter().filter(|f| f.confident != 0).count();
+    println!("music: {music} of {n} frames confident; effect: {tones} frames with a tone decoded, {effect} confident");
+    assert!(music > n / 2, "the music before it plays in FM");
+    assert!(tones >= 20, "the effect's tones decode ({tones})");
+    assert_eq!(effect, 0, "an effect is not music");
+}
