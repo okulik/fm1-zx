@@ -75,6 +75,15 @@ The tape is the release's, so it is taken under its MIT licence; the repository'
 it too (SPDX `MIT OR (GPL-3.0-only AND CC-BY-SA-2.0)`). Attribution: Castaway by Juan J. Martínez,
 <https://www.usebox.net/jjm/castaway/>.
 
+**Escape from Colony 8** by Juan J. Martínez (2014), `third_party/games/colony8/`. The release archive's
+`README.txt` (`README.release.txt`) carries the MIT licence ("Escape from Colony 8, version 1.0 /
+Copyright (C) 2014 by Juan J. Martinez"); the game's web page has the site-wide footer "CC BY NC SA
+4.0, unless stated otherwise", which the release states otherwise, as for Castaway. No source
+repository is published. The tape is the release's, unmodified (SPDX `MIT`); it was built with
+z88dk (Small C+), so it holds z88dk start-up and runtime routines, which the Clarified Artistic
+License does not extend to as compiled library output. No credits name any other author.
+Attribution: Escape from Colony 8 by Juan J. Martínez, <https://www.usebox.net/jjm/colony8/>.
+
 **ZX Sopwith** by Neil Rackett (2026), `third_party/games/sopwith/`: a port of David L. Clark's Sopwith
 (GPL 2 or later, as the original-source repository confirms), released under GPL-3.0-or-later. The
 file is the release's `sopwith.sna`, unmodified. It holds sprite art and a ground profile from the

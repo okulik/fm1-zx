@@ -67,6 +67,18 @@ SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
 SPDX-License-Identifier = "GPL-3.0-only"
 
 [[annotations]]
+path = "third_party/games/colony8/colony8.tap"
+precedence = "override"
+SPDX-FileCopyrightText = "2014 Juan J. Martinez"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "third_party/games/colony8/README.release.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "2014 Juan J. Martinez"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
 path = "third_party/games/sopwith/sopwith.sna"
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Neil Rackett"

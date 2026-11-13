@@ -60,6 +60,30 @@ demo = "note.F4@2500+200, note.A3@4500+150, note.A3@5000+150, note.A3@5500+150, 
 "note.D#4" = "key.E"                    # start an expert game
 "button.LFO" = "key.M"                  # sound on and off
 
+# Escape from Colony 8: press 1 for keyboard control (OCT-). O/P left/right, Q/A up/down, SPACE fire
+# (hold to charge a missile, release to launch it), H pause; CAPS SHIFT + 0 (SEQ + ARP) leaves
+# the game. Option 1 reads keys, so the default Kempston notes (F#3/G#3 up, G3 down) are remapped.
+# demo: any key past the title, 1 (keyboard), then every 4 s a walk right, down, left and up with a
+# shot on the way, until 36 s (the report window ends at 36 s): the player keeps moving in the first room.
+[[game]]
+id = "colony8"
+name = "Escape from Colony 8"
+file = "../third_party/games/colony8/colony8.tap"
+demo = "button.OCT-@5000, button.OCT-@7000, note.A3@9000+1000, note.G3@10000+800, note.C5@10200+120, note.F3@10800+1000, note.F#3@11800+800, note.A3@13000+1000, note.G3@14000+800, note.C5@14200+120, note.F3@14800+1000, note.F#3@15800+800, note.A3@17000+1000, note.G3@18000+800, note.C5@18200+120, note.F3@18800+1000, note.F#3@19800+800, note.A3@21000+1000, note.G3@22000+800, note.C5@22200+120, note.F3@22800+1000, note.F#3@23800+800, note.A3@25000+1000, note.G3@26000+800, note.C5@26200+120, note.F3@26800+1000, note.F#3@27800+800, note.A3@29000+1000, note.G3@30000+800, note.C5@30200+120, note.F3@30800+1000, note.F#3@31800+800, note.A3@33000+1000, note.G3@34000+800, note.C5@34200+120, note.F3@34800+1000, note.F#3@35800+800"
+
+[game.keys]
+"note.F3" = "key.O"                     # left
+"note.A3" = "key.P"                     # right
+"note.F#3" = "key.Q"                    # up
+"note.G#3" = "key.Q"
+"note.G3" = "key.A"                     # down
+"note.C5" = "key.SPACE"                 # fire (hold to charge a missile)
+"note.D5" = "key.SPACE"
+"note.E5" = "key.SPACE"
+"note.F5" = "key.SPACE"
+"note.G5" = "key.SPACE"
+"note.B3" = "key.H"                     # pause
+
 # Multi-load test: a tape that loads a screen image from its third block while it runs
 # (`fmzx-pack testprogs`). No keys.
 [[game]]
