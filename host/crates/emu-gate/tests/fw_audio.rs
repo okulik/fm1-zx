@@ -7,7 +7,7 @@
 //! Pack: `games/games.toml`; game 1 is `border.sna` (stripes and a 976 Hz tone).
 
 use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
-use fmzx_pack::testprogs::BORDER_TONE_HZ;
+use fmzx_pack::testprogs::{BORDER_TONE_HZ, TUNE_HZ, TUNE_NOTE_FRAMES};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -17,6 +17,13 @@ const BORDER: u32 = 1;
 const MASTER_ADC: u8 = 4;
 /// I2S frames per second: 750000 / 17.
 const RATE: f64 = 750_000.0 / 17.0;
+
+/// Index of the game `id` in `games/games.toml`.
+fn game_index(id: &str) -> u32 {
+    let text = std::fs::read_to_string(repo().join("games/games.toml")).expect("read the manifest");
+    let m = fmzx_pack::manifest::parse_manifest(&text).expect("parse the manifest");
+    m.game.iter().position(|g| g.id == id).unwrap_or_else(|| panic!("no game {id}")) as u32
+}
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -32,19 +39,23 @@ fn pack() -> &'static [u8] {
     PACK.get_or_init(|| fmzx_pack::pack::build_pack(&repo().join("games/games.toml")).expect("build the game pack"))
 }
 
-/// Boots with MASTER at full, starts `border` and returns once its view is up.
-fn start_border() -> Machine {
+/// Boots with MASTER at full, starts the game at `index` and returns once its view is up.
+fn start_game(index: u32) -> Machine {
     let mut m = Machine::boot(&firmware().with_pack(pack()), BootOpt { rgb565: false, divider: 4 });
     m.set_adc(MASTER_ADC, 1023);
     m.run_ms(1500);
     assert_eq!(m.resets(), 0);
-    m.turn(SELECT, BORDER as i32);
+    m.turn(SELECT, index as i32);
     m.run_ms(200);
     m.press(PLAY, 30);
     m.run_ms(20);
     let s = m.stats();
-    assert_eq!((s.view, s.game), (zx_sys::view::GAME as u32, BORDER));
+    assert_eq!((s.view, s.game), (zx_sys::view::GAME as u32, index));
     m
+}
+
+fn start_border() -> Machine {
+    start_game(BORDER)
 }
 
 /// The host's render of `border.sna`: `frames` frames of the host core through `Beeper`.
@@ -148,4 +159,30 @@ fn tone_resumes_after_pause() {
     assert!((hz - BORDER_TONE_HZ).abs() <= BORDER_TONE_HZ * 0.02, "tone {hz:.1} Hz after resuming");
     let s = m.stats();
     assert_eq!((s.underruns, s.overflows), (0, 0), "{s:?}");
+}
+
+#[test]
+fn tune_pitches_in_firmware() {
+    let mut m = start_game(game_index("tune"));
+    // two passes of eight notes, plus the time the first note takes to start
+    m.run_ms(2 * 8 * 25 * 20 + 600);
+    let a = m.audio_left();
+    let start = first_loud(&a);
+    let frame = RATE * 69_888.0 / 3_500_000.0; // samples per Spectrum frame
+    let note = TUNE_NOTE_FRAMES as f64 * frame;
+    assert!(a.len() as f64 >= start as f64 + 16.0 * note, "only {} samples after the first loud one", a.len() - start);
+    for k in 0..16 {
+        let i = k % 8;
+        // each note's window, 3 frames off each end
+        let from = start + (k as f64 * note + 3.0 * frame) as usize;
+        let to = start + ((k + 1) as f64 * note - 3.0 * frame) as usize;
+        let hz = crossings(&a[from..to]) as f64 / 2.0 * RATE / (to - from) as f64;
+        println!("note {i} (pass {}): {hz:.2} Hz (host {} Hz)", k / 8, TUNE_HZ[i]);
+        assert!((hz - TUNE_HZ[i]).abs() <= TUNE_HZ[i] * 0.02, "note {i} of pass {}: {hz:.2} Hz, host {} Hz", k / 8, TUNE_HZ[i]);
+    }
+    // no 20 ms is silent anywhere in the two passes
+    let span = &a[start..start + (16.0 * note) as usize];
+    for (w, win) in span.chunks_exact(RATE as usize / 50).enumerate() {
+        assert!(win.iter().any(|x| x.unsigned_abs() > 64), "20 ms window {w} is silent");
+    }
 }

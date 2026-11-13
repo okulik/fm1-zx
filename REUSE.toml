@@ -11,6 +11,7 @@ path = [
   "games/test/scroll.sna",
   "games/test/border.sna",
   "games/test/tape.tap",
+  "games/test/tune.sna",
   "docs/superpowers/**",
   "web/*.json",
 ]

@@ -3,7 +3,10 @@
 
 use fmzx_pack::manifest::parse_manifest;
 use fmzx_pack::pack::build_pack;
-use fmzx_pack::testprogs::{self, tape_tap, BORDER_EDGES_PER_FRAME, BORDER_TONE_HZ, TAPE_DONE_BORDER, TAPE_WAIT_FRAMES};
+use fmzx_pack::testprogs::{
+    self, tape_tap, tune_sna, BORDER_EDGES_PER_FRAME, BORDER_TONE_HZ, TAPE_DONE_BORDER, TAPE_WAIT_FRAMES, TUNE_HZ, TUNE_NOTES_HZ,
+    TUNE_NOTE_FRAMES, TUNE_START_FRAME,
+};
 use std::path::{Path, PathBuf};
 use zx_sys::{Beeper, Machine};
 
@@ -203,4 +206,57 @@ fn tape_loads_its_data_block_after_starting() {
         m.run_frame();
     }
     assert_eq!(m.border_line(100), TAPE_DONE_BORDER, "stays done");
+}
+
+/// Renders `frames` frames of `tune.sna`: the samples of each frame, and the edges as absolute
+/// T-states (69,888 per frame) with the frame they fall in.
+fn render_tune(frames: u32) -> (Vec<Vec<i16>>, Vec<(u64, u32)>) {
+    let mut m = machine(&tune_sna());
+    let mut b = Beeper::new(RATE.0, RATE.1);
+    let (mut audio, mut edges) = (Vec::new(), Vec::new());
+    for f in 1..=frames {
+        m.run_frame();
+        if f == 1 {
+            b.set_level(m.edges_start_level());
+        }
+        audio.push(b.render(m.edges()));
+        edges.extend(m.edges().iter().map(|e| ((f as u64 - 1) * 69_888 + e.tstate as u64, f)));
+    }
+    (audio, edges)
+}
+
+#[test]
+fn tune_pitches() {
+    let pass = TUNE_NOTES_HZ.len() as u32 * TUNE_NOTE_FRAMES;
+    let (audio, _) = render_tune(10 + 2 * pass + TUNE_START_FRAME);
+    // frame f (1-based) is audio[f - 1]; note k of the run starts at TUNE_START_FRAME + 25k
+    for k in 0..2 * TUNE_NOTES_HZ.len() as u32 {
+        let i = k as usize % TUNE_NOTES_HZ.len();
+        let first = TUNE_START_FRAME + k * TUNE_NOTE_FRAMES + 2;
+        let last = TUNE_START_FRAME + (k + 1) * TUNE_NOTE_FRAMES - 2; // exclusive
+        if first < 10 + TUNE_START_FRAME {
+            continue; // settling: the first note of the first pass
+        }
+        let win: Vec<i16> = (first..last).flat_map(|f| audio[f as usize - 1].iter().copied()).collect();
+        let crossings = win.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count() as f64;
+        let secs = win.len() as f64 * RATE.1 as f64 / RATE.0 as f64;
+        let hz = crossings / 2.0 / secs;
+        println!("note {i} (pass {}): {hz:.2} Hz, nominal {:.2}, recorded {:.2}", k / 8, TUNE_NOTES_HZ[i], TUNE_HZ[i]);
+        assert!((hz - TUNE_NOTES_HZ[i]).abs() <= TUNE_NOTES_HZ[i] * 0.01, "note {i}: {hz:.2} Hz, nominal {}", TUNE_NOTES_HZ[i]);
+        assert!((hz - TUNE_HZ[i]).abs() <= TUNE_HZ[i] * 0.002, "note {i}: {hz:.2} Hz, recorded {}", TUNE_HZ[i]);
+    }
+}
+
+#[test]
+fn tune_has_no_gaps() {
+    let (_, edges) = render_tune(410);
+    let longest = TUNE_NOTES_HZ.iter().map(|f| 3_500_000.0 / (2.0 * f)).fold(0.0, f64::max);
+    let from: Vec<&(u64, u32)> = edges.iter().filter(|e| e.1 >= 10).collect();
+    for w in from.windows(2) {
+        let gap = (w[1].0 - w[0].0) as f64;
+        assert!(gap <= 1.02 * longest, "edges {gap} T apart at frame {}, longest half-period {longest:.0}", w[1].1);
+    }
+    for f in 10..=410 {
+        assert!(edges.iter().any(|e| e.1 == f), "no edge in frame {f}");
+    }
 }

@@ -45,3 +45,10 @@ demo = "button.OCT-@12000, button.OCT-@14500, note.F3@16000+300, note.A3@16600+2
 id = "tape"
 name = "Tape multi-load test"
 file = "test/tape.tap"
+
+# Beeper music test: a C major scale, C5 to C6, 25 frames per note, repeated; eight bars on
+# the screen (`fmzx-pack testprogs`). No keys.
+[[game]]
+id = "tune"
+name = "Beeper tune test"
+file = "test/tune.sna"

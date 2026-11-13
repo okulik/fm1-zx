@@ -2,4 +2,5 @@ game_border_frame300 = a2417dc5
 game_castaway_frame1500 = 6f999e48
 game_scroll_frame300 = 5fa53b45
 game_tape_frame1500 = 4c308e25
+game_tune_frame300 = c0da09c5
 picker_3_games = 07241ec6

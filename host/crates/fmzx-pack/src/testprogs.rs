@@ -3,12 +3,13 @@
 
 //! Our test programs, hand-assembled: `scroll.sna` changes every screen line every frame
 //! (the LCD update path's worst case), `border.sna` draws border stripes and a beeper tone, and
-//! `tape.tap` loads a screen image from the tape in the middle of its run (the LD-BYTES trap).
+//! `tape.tap` loads a screen image from the tape in the middle of its run (the LD-BYTES trap),
+//! and `tune.sna` plays eight notes on the beeper.
 //! `fmzx-pack testprogs <dir>` writes them; `games/test/` holds the committed copies.
 //!
-//! # Common layout of the two snapshots
+//! # Common layout of the snapshots
 //!
-//! Both run in uncontended RAM under IM 2 with their own vector table, so no ROM code or
+//! All three run in uncontended RAM under IM 2 with their own vector table, so no ROM code or
 //! system variable is involved and every frame takes the same time:
 //!
 //! | Address         | Contents                                                    |
@@ -145,6 +146,78 @@
 //! 801F FB           EI
 //! 8020 18 FE        JR $
 //! ```
+//!
+//! # `tune.sna`
+//!
+//! A scale, C5 to C6 (the notes of [`TUNE_NOTES_HZ`]), each [`TUNE_NOTE_FRAMES`] frames long
+//! (0.5 s), repeated forever, as a square wave on EAR with MIC 0. The paper shows eight
+//! stair-step bars, one per note, of the colours 1-7 and then 1 again, each four columns wide.
+//!
+//! Every note starts with `EI; HALT`, so its first beeper edge is at the same T-state after
+//! the frame interrupt every time (T 51-54); then `K` edges follow, `P` T-states apart, and
+//! after the note's last edge come the next note's setup and its `HALT`. `K` and `P` are
+//! chosen so that `K` edges of `P` T fill the 25 frames (1,747,200 T) to within the table's
+//! "gap" column: the time from a note's last edge to the next note's first edge. A half-period
+//! is `P` and a gap about `P`, so the seam is no more than a slightly long or short half-period
+//! (note 7's is 311 T long, the most).
+//!
+//! Why it does not drift: the interrupt that every `HALT` waits for happens at T 0 of a
+//! frame, whatever the program did before, so the note boundaries are exactly 25 frames apart
+//! and an error in one note (a rounded `P`, the I/O contention below) cannot add up into the
+//! next. The last edge of every note is 1,658-3,250 T before that interrupt, far more than
+//! the setup needs (about 100 T). The half-period itself is a fixed number of T-states: the
+//! loop has no frame-dependent part, and interrupts are off inside it (the handler's `RET`
+//! returns with interrupts off, as in `border.sna`).
+//!
+//! `OUT (FEh),A` is contended when its I/O cycle falls on a paper line's 128 pixel T-states
+//! (the ULA holds the CPU for 0-6 T). The note starts at the same T of the frame every time,
+//! so every pass has the same edges; the measured half-periods are `P` plus 0-2 T on average
+//! (`P` + contention), and [`TUNE_HZ`] records the frequencies the host core produces.
+//!
+//! One edge costs `87 + 13n + 16m` T: the `DJNZ` loop is `13n - 5` T, the `DEC C; JR NZ` loop
+//! `16m - 5` T, and two loops with coprime step sizes reach every `P` above 300 T. The table
+//! at `802Fh` has one 4-byte record per note, `K` (16 bits), `n`, `m`, and a record of zeros
+//! that restarts the tune. The `P` are within 0.5% of the nominal half-periods
+//! 3,500,000 / (2 f); the gaps are those measured on the host core:
+//!
+//! | Note | Nominal Hz | `n`  | `m` | `P` T | `K`   | gap T |
+//! |------|-----------:|-----:|----:|------:|------:|------:|
+//! | C5   |     523.25 |  244 |   5 | 3,339 |   523 | 3,303 |
+//! | D5   |     587.33 |  207 |  13 | 2,986 |   585 | 2,991 |
+//! | E5   |     659.26 |  192 |   5 | 2,663 |   656 | 2,539 |
+//! | F5   |     698.46 |  173 |  10 | 2,496 |   700 | 2,495 |
+//! | G5   |     783.99 |  157 |   7 | 2,240 |   780 | 2,239 |
+//! | A5   |     880.00 |  132 |  12 | 1,995 |   875 | 1,935 |
+//! | B5   |     987.77 |  123 |   5 | 1,766 |   989 | 1,711 |
+//! | C6   |    1046.50 |  113 |   7 | 1,668 | 1,047 | 1,979 |
+//!
+//! ```text
+//! 8000 DD 21 2F 80 start: LD IX,802Fh    the first record
+//! 8004 DD 6E 00    note:  LD L,(IX+0)    K, the number of edges
+//! 8007 DD 66 01           LD H,(IX+1)
+//! 800A 7C                 LD A,H
+//! 800B B5                 OR L
+//! 800C 28 F2              JR Z,start     the zero record: again from the first note
+//! 800E FB                 EI
+//! 800F 76                 HALT           the interrupt at T 0; returns to 8010, interrupts off
+//! 8010 7A          tog:   LD A,D         D = the output level, bit 4 only
+//! 8011 EE 10              XOR 10h
+//! 8013 57                 LD D,A
+//! 8014 D3 FE              OUT (FEh),A    the edge
+//! 8016 2B                 DEC HL
+//! 8017 7C                 LD A,H
+//! 8018 B5                 OR L
+//! 8019 28 0D              JR Z,next      that was the last edge of the note
+//! 801B DD 46 02           LD B,(IX+2)    n
+//! 801E DD 4E 03           LD C,(IX+3)    m
+//! 8021 10 FE       d1:    DJNZ d1        13n - 5 T
+//! 8023 0D          d2:    DEC C
+//! 8024 20 FD              JR NZ,d2       16m - 5 T
+//! 8026 18 E8              JR tog
+//! 8028 01 04 00    next:  LD BC,4
+//! 802B DD 09              ADD IX,BC      the next record
+//! 802D 18 D5              JR note
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -163,10 +236,20 @@ pub const TAPE_WAIT_FRAMES: u32 = 100;
 pub const TAPE_DONE_BORDER: u8 = 4;
 /// Border of `tape.tap` if the load failed.
 pub const TAPE_FAIL_BORDER: u8 = 2;
+/// The nominal pitches of `tune.sna`, C5 to C6.
+pub const TUNE_NOTES_HZ: [f64; 8] = [523.25, 587.33, 659.26, 698.46, 783.99, 880.00, 987.77, 1046.50];
+/// Frames each note of `tune.sna` lasts.
+pub const TUNE_NOTE_FRAMES: u32 = 25;
+/// The first frame (1-based, counted from loading the snapshot) with the first note's edges.
+pub const TUNE_START_FRAME: u32 = 2;
+/// The notes of `tune.sna` measured from the host beeper renderer: zero crossings over each
+/// note's 21 middle frames, in both passes of the test (they agree to 0.02 Hz).
+pub const TUNE_HZ: [f64; 8] = [524.67, 586.65, 657.01, 701.11, 781.02, 876.39, 989.70, 1049.28];
 /// Builds one program's file.
 pub type Generator = fn() -> Vec<u8>;
 /// The programs `fmzx-pack testprogs` writes: file name and generator.
-pub const PROGRAMS: [(&str, Generator); 3] = [("scroll.sna", scroll_sna), ("border.sna", border_sna), ("tape.tap", tape_tap)];
+pub const PROGRAMS: [(&str, Generator); 4] =
+    [("scroll.sna", scroll_sna), ("border.sna", border_sna), ("tape.tap", tape_tap), ("tune.sna", tune_sna)];
 
 const CODE: u16 = 0x8000;
 const STACK: u16 = 0xFD00;
@@ -246,6 +329,42 @@ const TAPE_CODE: [u8; 34] = [
     0x18, 0xFE,                   //        JR $
 ];
 
+/// Address of the note table of `tune.sna`.
+const TUNE_TABLE_AT: u16 = 0x802F;
+
+#[rustfmt::skip]
+const TUNE_CODE: [u8; 47] = [
+    0xDD, 0x21, 0x2F, 0x80, // start: LD IX,802Fh
+    0xDD, 0x6E, 0x00,       // note:  LD L,(IX+0)
+    0xDD, 0x66, 0x01,       //        LD H,(IX+1)
+    0x7C,                   //        LD A,H
+    0xB5,                   //        OR L
+    0x28, 0xF2,             //        JR Z,start
+    0xFB,                   //        EI
+    0x76,                   //        HALT
+    0x7A,                   // tog:   LD A,D
+    0xEE, 0x10,             //        XOR 10h
+    0x57,                   //        LD D,A
+    0xD3, 0xFE,             //        OUT (FEh),A
+    0x2B,                   //        DEC HL
+    0x7C,                   //        LD A,H
+    0xB5,                   //        OR L
+    0x28, 0x0D,             //        JR Z,next
+    0xDD, 0x46, 0x02,       //        LD B,(IX+2)
+    0xDD, 0x4E, 0x03,       //        LD C,(IX+3)
+    0x10, 0xFE,             // d1:    DJNZ d1
+    0x0D,                   // d2:    DEC C
+    0x20, 0xFD,             //        JR NZ,d2
+    0x18, 0xE8,             //        JR tog
+    0x01, 0x04, 0x00,       // next:  LD BC,4
+    0xDD, 0x09,             //        ADD IX,BC
+    0x18, 0xD5,             //        JR note
+];
+
+/// `tune.sna`'s notes: edges `K`, `DJNZ` count `n`, `DEC C` count `m` (see the module docs).
+const TUNE_TABLE: [(u16, u8, u8); 8] =
+    [(523, 244, 5), (585, 207, 13), (656, 192, 5), (700, 173, 10), (780, 157, 7), (875, 132, 12), (989, 123, 5), (1047, 113, 7)];
+
 /// 48K of RAM (from 4000h) with `code` at 8000h, the IM 2 handler and vector table, and a
 /// screen whose attributes are all `attr`.
 fn ram_with(code: &[u8], attr: u8) -> Vec<u8> {
@@ -304,6 +423,27 @@ pub fn border_sna() -> Vec<u8> {
     let mut ram = ram_with(&BORDER_CODE, 0x38);
     for (i, a) in ram[0x1800..0x1B00].iter_mut().enumerate() {
         *a = ((i % 32 / 4) as u8) << 3; // paper = colour, ink 0
+    }
+    sna(ram, 0)
+}
+
+/// The scale: eight notes of 25 frames on the beeper, and eight stair-step bars on the screen.
+pub fn tune_sna() -> Vec<u8> {
+    let mut code = TUNE_CODE.to_vec();
+    for (k, n, m) in TUNE_TABLE {
+        code.extend_from_slice(&k.to_le_bytes());
+        code.extend_from_slice(&[n, m]);
+    }
+    code.extend_from_slice(&[0; 4]); // K = 0 restarts the tune
+    debug_assert_eq!(CODE as usize + TUNE_CODE.len(), TUNE_TABLE_AT as usize);
+    let mut ram = ram_with(&code, 0x38);
+    for row in 0..24 {
+        for note in 0..8 {
+            // bar `note` is `note + 1` character rows high, rising from the bottom
+            let lit = row >= 23 - note;
+            let colour = (note % 7 + 1) as u8;
+            ram[0x1800 + row * 32 + note * 4..0x1800 + row * 32 + note * 4 + 4].fill(if lit { colour << 3 } else { 0x38 });
+        }
     }
     sna(ram, 0)
 }

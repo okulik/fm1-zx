@@ -106,9 +106,9 @@ fn cpu_per_frame_and_audio_isr() {
             r.cpu.len(),
             r.frames
         );
-        // (border.sna and tape.tap are static once the border has been drawn / the image has
+        // (border.sna, tape.tap and tune.sna are static once the border has been drawn / the image has
         // loaded: they compose no bands)
-        assert!(id == "border" || id == "tape" || r.lcd.bands > 0, "{id}: no LCD bands composed");
+        assert!(matches!(id.as_str(), "border" | "tape" | "tune") || r.lcd.bands > 0, "{id}: no LCD bands composed");
         assert!(!r.isr.is_empty(), "{id}: the audio ISR never ran");
         if max > CPU_PER_FRAME {
             bad.push(format!("{id}: {max} > {CPU_PER_FRAME}"));
