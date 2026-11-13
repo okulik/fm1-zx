@@ -4,7 +4,7 @@
 //! The firmware boots to the game picker in fm1-emu. Needs the device build: set
 //! `FMZX_FM1_BUILD` (the tests fail with the build commands otherwise).
 //!
-//! The pack is the whole of `games/games.toml` (three games: the picker shows them all), built
+//! The pack is the whole of `games/games.toml` (the picker shows them all), built
 //! once per run with `fmzx-pack`.
 
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine, KEY_OCT_DOWN};

@@ -38,3 +38,10 @@ demo = "button.OCT-@12000, button.OCT-@14500, note.F3@16000+300, note.A3@16600+2
 "note.F5" = "key.SPACE"
 "note.G5" = "key.SPACE"
 "note.B3" = "key.H"                     # pause
+
+# Multi-load test: a tape that loads a screen image from its third block while it runs
+# (`fmzx-pack testprogs`). No keys.
+[[game]]
+id = "tape"
+name = "Tape multi-load test"
+file = "test/tape.tap"

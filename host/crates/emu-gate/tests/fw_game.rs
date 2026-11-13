@@ -4,9 +4,10 @@
 //! Running a game in fm1-emu: frame pacing, the LCD's picture of the Spectrum screen, and a
 //! game that fails to load. Needs the device build (`FMZX_FM1_BUILD`).
 //!
-//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway).
+//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway); the test programs `tape` and `tune`
+//! are found by id.
 
-use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
+use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine};
 use fm1_core::Bus as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -17,6 +18,13 @@ const OCT_UP: u8 = 1;
 const SELECT: u8 = 0;
 const SCROLL: u32 = 0;
 const BORDER: u32 = 1;
+
+/// Index of the game `id` in `games/games.toml`.
+fn game_index(id: &str) -> u32 {
+    let text = std::fs::read_to_string(repo().join("games/games.toml")).expect("read the manifest");
+    let m = fmzx_pack::manifest::parse_manifest(&text).expect("parse the manifest");
+    m.game.iter().position(|g| g.id == id).unwrap_or_else(|| panic!("no game {id}")) as u32
+}
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -261,4 +269,75 @@ fn resumes_after_pause_and_menu() {
 
     let s = m.stats();
     assert_eq!((s.underruns, s.overflows), (0, 0), "{s:?}");
+}
+
+fn golden(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name)
+}
+
+/// The LCD colour (RGB565) of Spectrum border colour `colour`, as the host composes it.
+fn border_pixel(colour: u8) -> u16 {
+    let mut sna = fmzx_pack::testprogs::scroll_sna();
+    sna[26] = colour;
+    let mut host = zx_sys::Machine::new();
+    host.load_sna(&sna).expect("loads");
+    host.run_frame();
+    host_row(&host, 0, 0)[0]
+}
+
+/// The LCD's border rows (the top and bottom 8; the paper fills the width), all one colour,
+/// which is returned; `None` for a mixed border.
+fn lcd_border(m: &Machine) -> Option<u16> {
+    let lcd = m.lcd_rgb565();
+    let c = lcd[0];
+    (lcd[..8 * 240].iter().chain(&lcd[232 * 240..]).all(|&p| p == c)).then_some(c)
+}
+
+/// Runs until the LCD's border is `colour` or `max_ms` have passed; returns the ms waited.
+fn wait_for_border(m: &mut Machine, colour: u8, max_ms: u64) -> u64 {
+    let want = border_pixel(colour);
+    for ms in 0..max_ms {
+        if lcd_border(m) == Some(want) {
+            return ms;
+        }
+        m.run_ms(1);
+    }
+    panic!("the border did not become {colour} within {max_ms} ms (LCD {:04X?}, {:?})", lcd_border(m), m.stats());
+}
+
+/// Waits until the tape's data block has loaded (border 4, within 6 s) and checks the LCD.
+fn tape_loaded(m: &mut Machine) {
+    use fmzx_pack::testprogs::{TAPE_DONE_BORDER, TAPE_WAIT_FRAMES};
+    let waited = wait_for_border(m, TAPE_DONE_BORDER, 6000);
+    println!("tape: border {TAPE_DONE_BORDER} after {waited} more ms (the code waits {TAPE_WAIT_FRAMES} frames)");
+    m.run_ms(300);
+    assert_golden(m.lcd_rgb565(), &golden("tape_loaded.png"), &build_dir().join("tape_loaded.actual.png"));
+}
+
+#[test]
+fn tape_multiload_in_firmware() {
+    let mut m = start(&firmware().with_pack(pack()), BootOpt { rgb565: true, divider: 0 }, game_index("tape"));
+    assert_eq!(m.stats().view, zx_sys::view::GAME as u32);
+    assert_eq!(m.stats().game, game_index("tape"));
+    // the ROM takes about 2.3 s to run the autostart, then the code waits 2 s before it loads
+    m.run_ms(3000);
+    assert_eq!(lcd_border(&m), Some(border_pixel(1)), "border 1 three seconds after the start");
+    tape_loaded(&mut m);
+    assert_eq!(m.resets(), 0);
+}
+
+#[test]
+fn tape_reloads_after_reset() {
+    let mut m = start(&firmware().with_pack(pack()), BootOpt { rgb565: true, divider: 0 }, game_index("tape"));
+    tape_loaded(&mut m);
+    // HOME -> "Reset game" (the item below Resume)
+    press_to(&mut m, HOME, zx_sys::view::MENU as i32);
+    m.run_ms(100);
+    m.press(OCT_UP, 30);
+    m.run_ms(50);
+    press_to(&mut m, PLAY, zx_sys::view::GAME as i32);
+    m.run_ms(3000);
+    assert_eq!(lcd_border(&m), Some(border_pixel(1)), "border 1 again three seconds after the reset");
+    tape_loaded(&mut m);
+    assert_eq!(m.resets(), 0);
 }

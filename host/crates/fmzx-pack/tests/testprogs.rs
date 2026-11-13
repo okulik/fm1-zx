@@ -3,7 +3,7 @@
 
 use fmzx_pack::manifest::parse_manifest;
 use fmzx_pack::pack::build_pack;
-use fmzx_pack::testprogs::{self, BORDER_EDGES_PER_FRAME, BORDER_TONE_HZ};
+use fmzx_pack::testprogs::{self, tape_tap, BORDER_EDGES_PER_FRAME, BORDER_TONE_HZ, TAPE_DONE_BORDER, TAPE_WAIT_FRAMES};
 use std::path::{Path, PathBuf};
 use zx_sys::{Beeper, Machine};
 
@@ -25,7 +25,7 @@ fn testprogs_reproducible() {
     let dir = std::env::temp_dir().join(format!("fmzx-testprogs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let written = testprogs::write_all(&dir).unwrap();
-    assert_eq!(written.len(), 2);
+    assert_eq!(written.len(), testprogs::PROGRAMS.len());
     for (name, make) in testprogs::PROGRAMS {
         let fresh = make();
         assert_eq!(std::fs::read(dir.join(name)).unwrap(), fresh, "{name} as written");
@@ -154,4 +154,53 @@ fn pack_fits_budget() {
     let pack = build_pack(&repo().join("games/games.toml")).unwrap();
     println!("pack: {} bytes", pack.len());
     assert!(pack.len() <= PACK_BUDGET, "pack is {} bytes, budget {PACK_BUDGET}", pack.len());
+}
+
+/// The payload of the tape's last block: the screen image the code loads.
+fn tape_image(tap: &[u8]) -> Vec<u8> {
+    let mut at = 0;
+    let mut last = &tap[..0];
+    while at < tap.len() {
+        let len = u16::from_le_bytes([tap[at], tap[at + 1]]) as usize;
+        last = &tap[at + 2..at + 2 + len];
+        at += 2 + len;
+    }
+    assert_eq!(last[0], 0xFF, "flag of the data block");
+    last[1..last.len() - 1].to_vec()
+}
+
+fn screen_ram(m: &Machine) -> Vec<u8> {
+    (0x4000..0x5B00u16).map(|a| m.peek(a)).collect()
+}
+
+#[test]
+fn tape_loads_its_data_block_after_starting() {
+    let tape = tape_tap();
+    let image = tape_image(&tape);
+    assert_eq!(image.len(), 6912);
+    let mut m = Machine::new();
+    m.tape_insert(&tape).unwrap();
+    m.tape_autostart();
+    let mut frames = 0;
+    // the code starts when it sets the border to 1
+    while m.border_line(100) != 1 {
+        assert!(frames < 600, "the code did not start within 600 frames");
+        m.run_frame();
+        frames += 1;
+    }
+    let mut waited = 0;
+    while m.border_line(100) == 1 {
+        assert!(waited < 600, "the data block was not loaded within 600 frames");
+        assert_ne!(screen_ram(&m), image, "image shown after {waited} frames");
+        m.run_frame();
+        waited += 1;
+    }
+    assert!(waited >= TAPE_WAIT_FRAMES - 5, "the code waited only {waited} frames");
+    assert_eq!(m.border_line(100), TAPE_DONE_BORDER);
+    assert_eq!(screen_ram(&m), image);
+    assert_eq!(m.tape_pos() as usize, tape.len(), "the tape is at its end");
+    for _ in 0..10 {
+        m.run_frame();
+    }
+    assert_eq!(m.border_line(100), TAPE_DONE_BORDER, "stays done");
 }

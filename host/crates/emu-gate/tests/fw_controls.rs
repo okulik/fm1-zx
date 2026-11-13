@@ -4,8 +4,8 @@
 //! In-game controls in fm1-emu: the game's key map, the HOME menu, pause, the on-screen
 //! keyboard and the LCD speed item. Needs the device build (`FMZX_FM1_BUILD`).
 //!
-//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway); scroll has the default
-//! key map (F3 = Kempston left).
+//! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway; the test programs `tape`/`tune` are
+//! found by id); scroll has the default key map (F3 = Kempston left).
 //!
 //! The Spectrum's key rows and Kempston byte are read from the firmware's `fmzx_keys_now` and
 //! `fmzx_kempston_now`: copies of `fmzx_machine.keys` and `.kempston` made right after

@@ -195,6 +195,11 @@ impl Machine {
         self.tape = None;
     }
 
+    /// Offset in the tape of the next block to read (the tape's length at its end).
+    pub fn tape_pos(&self) -> u32 {
+        self.raw.tape_pos
+    }
+
     /// Resets the machine and types `LOAD ""` + ENTER over the next frames.
     pub fn tape_autostart(&mut self) {
         // SAFETY: `raw` was initialised by zx_init.

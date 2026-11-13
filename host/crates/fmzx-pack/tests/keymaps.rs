@@ -48,7 +48,7 @@ fn games_toml_keymaps() {
     let json = keymaps_json(&m).unwrap();
     let ids: Vec<usize> = ["scroll", "border", "castaway"].iter().map(|g| json.find(&format!("\"id\":\"{g}\"")).unwrap()).collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "game order");
-    assert_eq!(json.matches("\"id\":").count(), 3);
+    assert_eq!(json.matches("\"id\":").count(), m.game.len());
     assert!(entry(&json, "scroll", "note.F3").unwrap().ends_with("\"actions\":[\"kempston.left\"]}"));
     assert!(entry(&json, "castaway", "note.F3").unwrap().ends_with("\"actions\":[\"key.O\"]}"));
     assert!(entry(&json, "castaway", "note.G3").is_none());

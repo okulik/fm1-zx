@@ -10,6 +10,7 @@ path = [
   "host/crates/emu-gate/tests/golden/*.png",
   "games/test/scroll.sna",
   "games/test/border.sna",
+  "games/test/tape.tap",
   "docs/superpowers/**",
   "web/*.json",
 ]
