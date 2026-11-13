@@ -462,8 +462,26 @@ fn effects_after_slots_music() {
 #[test]
 fn jingle_after_slots_music() {
     // a jingle of three discrete notes after time-slot music is music: FM is allowed for it, but
-    // every note it plays must be right
+    // every note it plays must be right. After the music the time-slot decoder (its loop held for
+    // 25 frames) decides the jingle's frames and plays them on the beeper; the jingle alone
+    // shows the decoder reads each note's pitch right
     let ms = |x: f64| (x * 3_500.0) as u64;
+    let midi = music::score::midi_of;
+    // decoded voices (confident or not) in `range`: every one within half a semitone of a true
+    // pitch in the frame or a neighbour; returns, per jingle note, the frames that decode it
+    let check = |what: &str, s: &Stream, dec: &[SndFrame], range: std::ops::Range<usize>, notes: &[f64; 3]| -> [usize; 3] {
+        let mut per_note = [0usize; 3];
+        for i in range {
+            let truth: Vec<f64> = (i.saturating_sub(1)..=(i + 1).min(s.truth.len() - 1)).flat_map(|j| s.truth[j].clone().unwrap_or_default()).collect();
+            for v in voices_hz(&dec[i]) {
+                assert!(truth.iter().any(|&t| (midi(t) - midi(v)).abs() < 0.5), "{what}: frame {i} decodes {v:.1} Hz, true {truth:?}");
+                if let Some(k) = notes.iter().position(|&n| (midi(n) - midi(v)).abs() < 0.5) {
+                    per_note[k] += 1;
+                }
+            }
+        }
+        per_note
+    };
     for (notes, note_ms) in [([1_046.5, 1_318.5, 1_568.0], 80.0), ([523.25, 659.26, 783.99], 120.0), ([784.0, 988.0, 1_175.0], 60.0)] {
         let mut sp = Vec::new();
         for (k, &f) in notes.iter().enumerate() {
@@ -478,15 +496,30 @@ fn jingle_after_slots_music() {
                 Some(if k < 3 && mid < (k + 1) as f64 * note_ms - 5.0 { vec![notes[k]] } else { vec![] })
             })
             .collect();
+        // the jingle alone: the decoder reads each of its notes right in 2 frames or more
+        let alone = decode_stream(&effect);
+        let per_note = check("jingle alone", &effect, &alone, 0..frames, &notes);
+        println!("jingle {notes:?} of {note_ms} ms notes alone: frames decoding each note {per_note:?}");
+        assert!(per_note.iter().all(|&c| c >= 2), "jingle {notes:?} alone: frames decoding each note {per_note:?}");
         for gap in [0, 20] {
             let (s, n) = after_slots_music(gap, effect.clone());
             let dec = decode_stream(&s);
             let sc = music::score::score(&s.truth[n..], &music::played_hz(&dec[n..]));
             let (c, _) = confident(&dec, n..dec.len());
-            println!("jingle {notes:?} of {note_ms} ms notes after {gap} silent frames: {c} confident frames; {sc}");
+            // every frame of the jingle with sound reached the decoder, which took it as time slots
+            // (the loop is held), and any voice it reports is right
+            let sounding: Vec<usize> = (n..dec.len()).filter(|&i| !s.frames[i].is_empty()).collect();
+            let slots = sounding.iter().filter(|&&i| dec[i].style == zx_sys::SND_STYLE_SLOTS).count();
+            let per_note = check("jingle after music", &s, &dec, n..dec.len(), &notes);
+            println!(
+                "jingle {notes:?} of {note_ms} ms notes after {gap} silent frames: {} sounding frames, {slots} decided as time slots, \
+                 frames decoding each note {per_note:?}, {c} confident; {sc}",
+                sounding.len()
+            );
+            assert!(sounding.len() >= 3, "the jingle sounds");
+            assert_eq!(slots, sounding.len(), "jingle after {gap} silent frames: a frame not decided by the time-slot path");
             assert_eq!(sc.wrong_pitch, 0, "jingle after {gap} silent frames: a wrong pitch in FM");
             assert!(sc.wrong.is_empty(), "jingle after {gap} silent frames: {} wrong notes", sc.wrong.len());
         }
     }
 }
-
