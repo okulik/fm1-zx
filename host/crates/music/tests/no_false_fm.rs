@@ -393,3 +393,100 @@ fn slow_siren_bounded() {
         assert!(conf.last().is_none_or(|&l| l < 10 + 3 * two), "siren of {tone} ms tones: FM at frame {:?}", conf.last());
     }
 }
+
+/// Time-slot music (the slots tune, ending with its loop's last notes), then `gap` silent
+/// frames, then `effect`; returns the stream and the effect's first frame.
+fn after_slots_music(gap: usize, effect: Stream) -> (Stream, usize) {
+    let mut s = music::synthetic::slots_loop(&music::synthetic::slots_tune());
+    s.frames.extend((0..gap).map(|_| Vec::new()));
+    s.truth.extend((0..gap).map(|_| Some(Vec::new())));
+    s.drum.extend((0..gap).map(|_| false));
+    s.silent.extend((0..gap).map(|_| true));
+    let n = s.frames.len();
+    (s.then(effect), n)
+}
+
+#[test]
+fn effects_after_slots_music() {
+    // a sweep or a siren right after time-slot music (or 20 frames later) stays on the beeper,
+    // through the 25 frames the loop is held (the time-slot path) and after the loop is forgotten
+    // (speaker flips); the music's pitch changes do not carry over to it
+    let ms = |x: f64| (x * 3_500.0) as u64;
+    let mut effects: Vec<(String, Spans, usize)> = Vec::new();
+    for d in [50.0, 150.0, 300.0] {
+        for (f0, f1) in [(400.0f64, 1_600.0f64), (1_600.0, 400.0), (800.0, 1_000.0), (1_000.0, 800.0)] {
+            let len = ms(d) as f64;
+            effects.push((format!("sweep {f0}->{f1} Hz in {d} ms"), square(0, ms(d), &move |t: f64| f0 * (f1 / f0).powf(t / len)), 20));
+        }
+    }
+    // the same sweep again and again, 0.5 s apart: the later ones come after the loop is forgotten
+    for (f0, f1, d) in [(300.0f64, 1_200.0f64, 150.0), (1_500.0, 300.0, 80.0), (600.0, 900.0, 250.0), (800.0, 1_000.0, 300.0)] {
+        let len = ms(d) as f64;
+        let mut sp = Vec::new();
+        for k in 0..8 {
+            let a = ms(500.0 * k as f64);
+            sp.extend(square(a, a + ms(d), &move |t: f64| f0 * (f1 / f0).powf(t / len)));
+        }
+        effects.push((format!("sweep {f0}->{f1} Hz in {d} ms, 8 times"), sp, 210));
+    }
+    for tone in [20.0, 30.0, 40.0, 45.0, 60.0] {
+        for (lo, hi) in [(600.0, 800.0), (440.0, 587.0)] {
+            let mut sp = Vec::new();
+            let mut k = 0;
+            while (k as f64) * tone < 3_000.0 {
+                let f = if k % 2 == 0 { lo } else { hi };
+                sp.extend(square(ms(k as f64 * tone), ms((k + 1) as f64 * tone), &move |_| f));
+                k += 1;
+            }
+            effects.push((format!("siren {lo}/{hi} Hz, {tone} ms tones"), sp, 160));
+        }
+    }
+    let mut bad = Vec::new();
+    for (name, spans, frames) in effects {
+        for gap in [0, 20] {
+            let (s, n) = after_slots_music(gap, stream(spans.clone(), frames));
+            let dec = decode_stream(&s);
+            let music = dec[..n - gap].iter().filter(|f| f.confident != 0).count();
+            assert!(music > (n - gap) / 2, "the music before it plays in FM ({music} of {})", n - gap);
+            let voiced = (n..dec.len()).filter(|&i| !voices_hz(&dec[i]).is_empty()).count();
+            let (c, first) = confident(&dec, n..dec.len());
+            println!("{name} after {gap} silent frames: voices in {voiced} frames, confident {c}");
+            if c > 0 {
+                bad.push(format!("{name} after {gap} silent frames: FM in {c} frames: {first}"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "effects after time-slot music played in FM:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn jingle_after_slots_music() {
+    // a jingle of three discrete notes after time-slot music is music: FM is allowed for it, but
+    // every note it plays must be right
+    let ms = |x: f64| (x * 3_500.0) as u64;
+    for (notes, note_ms) in [([1_046.5, 1_318.5, 1_568.0], 80.0), ([523.25, 659.26, 783.99], 120.0), ([784.0, 988.0, 1_175.0], 60.0)] {
+        let mut sp = Vec::new();
+        for (k, &f) in notes.iter().enumerate() {
+            sp.extend(square(ms(k as f64 * note_ms), ms((k + 1) as f64 * note_ms - 5.0), &move |_| f));
+        }
+        let frames = (3.0 * note_ms / 20.0) as usize + 10;
+        let mut effect = stream(sp, frames);
+        effect.truth = (0..frames)
+            .map(|i| {
+                let mid = (i as f64 + 0.5) * 20.0;
+                let k = (mid / note_ms) as usize;
+                Some(if k < 3 && mid < (k + 1) as f64 * note_ms - 5.0 { vec![notes[k]] } else { vec![] })
+            })
+            .collect();
+        for gap in [0, 20] {
+            let (s, n) = after_slots_music(gap, effect.clone());
+            let dec = decode_stream(&s);
+            let sc = music::score::score(&s.truth[n..], &music::played_hz(&dec[n..]));
+            let (c, _) = confident(&dec, n..dec.len());
+            println!("jingle {notes:?} of {note_ms} ms notes after {gap} silent frames: {c} confident frames; {sc}");
+            assert_eq!(sc.wrong_pitch, 0, "jingle after {gap} silent frames: a wrong pitch in FM");
+            assert!(sc.wrong.is_empty(), "jingle after {gap} silent frames: {} wrong notes", sc.wrong.len());
+        }
+    }
+}
+

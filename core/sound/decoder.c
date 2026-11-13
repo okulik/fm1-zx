@@ -49,7 +49,10 @@
  * do not explain ends it. In a frame without the carrier whose rises all
  * come with every channel's (the whole speaker toggling: a plain square
  * wave), a voice must continue the last decision's (channels in unison, in
- * phase) and the voices' runs must explain 85% of F's rises. Confident:
+ * phase) and the voices' runs must explain 85% of F's rises; in any frame
+ * without the carrier, a voice the last decision did not have must still
+ * sound in F+1 (a pitch sweep's top, read through all channels in unison
+ * after the music, played as a note). Confident:
  * voices with 75% of F's box levels explained, in music context; a rest (no
  * voice) after a confident decision, for up to 50 frames; a drum in music
  * context next to voices. Each voice's level follows its slot's width.
@@ -667,6 +670,17 @@ static void decide_slots(snd_decoder *d, uint32_t f, snd_frame *out)
 	keep_of(d, keep);
 	explained_ok = plain_ok(d, f, keep, &plain);
 	nrep = slots_voices(d, f, plain ? keep : 0, rep, lvl);
+	if (nrep && !s->carrier && lacks(rep, d->out_q8)) {
+		/* no loop carrier, and a voice the last decision did not have: a
+		 * note starting where the loop is not heard must still sound in the
+		 * next frame (the top of a pitch sweep does not) */
+		uint32_t next[SND_TONAL];
+		int plain1;
+		for (k = 0; k < SND_TONAL; k++)
+			next[k] = 0;
+		plain_ok(d, f + 1u, keep, &plain1);
+		if (!slots_voices(d, f + 1u, plain1 ? keep : 0, next, 0) || lacks(rep, next)) explained_ok = 0;
+	}
 	/* a drum: unexplained full swings in F, at least two of them within a
 	 * quarter frame around it (a drum plays a few long pulses; the
 	 * sequencer's pause between notes leaves one swing) */
