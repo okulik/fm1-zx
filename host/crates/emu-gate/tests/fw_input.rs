@@ -54,7 +54,7 @@ fn encoder_scrolls_picker() {
     assert_eq!(play(&mut m), 2);
 }
 
-/// The picker reaches its last entry (the list scrolls past the first screenful) and PLAY starts
+/// The picker reaches its last entry (the last of the nine entries, which all fit on one screen) and PLAY starts
 /// it: `tune`, found by id in the manifest.
 #[test]
 fn picker_reaches_last_game() {

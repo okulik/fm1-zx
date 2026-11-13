@@ -3,7 +3,7 @@
 
 //! `fmzx-pack games <manifest.toml> -o <pack.bin>`
 //! `fmzx-pack keymaps <manifest.toml> -o <keymaps.json>`
-//! `fmzx-pack testprogs <dir>` (writes `scroll.sna`, `border.sna` and `tape.tap`)
+//! `fmzx-pack testprogs <dir>` (writes `scroll.sna`, `border.sna`, `tape.tap` and `tune.sna`)
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
 //!     [--product FM-1_948] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_948]`

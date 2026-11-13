@@ -35,8 +35,8 @@ author. `LICENSE` says:
 > sublicense, and distribute the Work and such Derivative Works in Source or Object form.
 
 Redistribution in Object form needs the licence text to go with it (section 4(a)): it is
-`LICENSE.release` here and `LICENSES/Apache-2.0.txt` in the repository, and the firmware's key map pages
-and `LICENSING.md` carry the attribution.
+`LICENSE.release` here and `LICENSES/Apache-2.0.txt` in the repository, and `LICENSING.md` carries
+the attribution.
 
 Beeper engine: the sound player in the game (`code/audio/soundPlayer.asm` in the repository, with
 `code/audio/sfxed-1.0.0-win/COPYING` copied here as `COPYING.beeper`) is Juan J. Martínez's beeper engine

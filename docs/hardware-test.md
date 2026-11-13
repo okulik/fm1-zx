@@ -48,8 +48,8 @@ screen. It is not part of this plan and is written first when the device arrives
 
 - [ ] Install `build/fm1/fmzx.fwsc` from the stock firmware through a community installer
       (`docs/install.md`) **[owner's yes]**. The FM-1 restarts into the game picker.
-- [ ] The picker shows the three built-in games in the right colours (RGB444), all on black: the
-      "FM-1 ZX" title in bright yellow, the names and the "1/3" counter in white, the selected
+- [ ] The picker shows the nine entries (the five built-in games and the four test programs) in the right colours (RGB444), all on black: the
+      "FM-1 ZX" title in bright yellow, the names and the "1/9" counter in white, the selected
       name in black on a bright-cyan bar; no scrambled pixels.
 
 ### LCD speed
@@ -72,7 +72,7 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] Escape from Colony 8's effects and title tune sound right, with no crackle, at every LCD speed.
 - [ ] ZX Dino's jump and crash sounds are clean and in time with the screen; nothing crackles while the dinosaur runs.
 - [ ] A World of One-Way's music plays without crackle, and its sound effects keep in time with the moves.
-- [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the eight bars on the screen fill in step with it.
+- [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the screen shows eight static bars, which do not change with the notes.
 
 ### Controls
 
@@ -82,11 +82,11 @@ screen. It is not part of this plan and is written first when the device arrives
       Key map and Back to games work.
 - [ ] On-screen keyboard: the cursor moves, PLAY types, SAVE and REC give CAPS and SYMBOL SHIFT.
 - [ ] Encoders: no skipped or doubled detents when turned slowly and quickly.
-- [ ] ZX Sopwith: N starts a game; F#3/G#3 and G3 pull the plane up and down, A3 and F3 raise and lower the throttle, C5 fires; the status bar and the plane move without tearing.
+- [ ] ZX Sopwith: F4 (N) starts a game; F#3/G#3 and G3 pull the plane up and down, A3 and F3 raise and lower the throttle, C5 fires; the status bar and the plane move without tearing.
 - [ ] Escape from Colony 8: OCT- chooses keyboard control at the title; F3/A3 walk left and right, F#3 and G3 go up and down, C5 shoots, and a held C5 charges a missile that leaves when released; the room scrolls without shifted rows.
 - [ ] ZX Dino: any button starts a run; F#3 or C5 jumps the cacti, G3 ducks under a bird; after a crash any key starts again.
 - [ ] A World of One-Way: OCT- starts from the menu, F3/A3/F#3/G3 slide the heroes left, right, up and down to the next wall, and the picture stays clean while they move.
-- [ ] Tape multi-load test ("Tape multi-load test"): after the load (about ten seconds) the border turns green and a screen image appears from the third block; Reset game in the HOME menu loads the tape again from its first block and reaches green again.
+- [ ] Tape multi-load test ("Tape multi-load test"): about 4 to 5 seconds after you start it (the ROM autostarts the tape, then the program waits two seconds) the border turns green and a screen image appears from the third block; Reset game in the HOME menu loads the tape again from its first block and reaches green again.
 
 ### Underruns
 
