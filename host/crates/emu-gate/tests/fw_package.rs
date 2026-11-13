@@ -103,10 +103,12 @@ fn preview_package_boots_without_boot_options() {
 
 #[test]
 fn packages_verify() {
+    let manifest = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/games.toml")).unwrap();
+    let games = fmzx_pack::manifest::parse_manifest(&manifest).unwrap().game.len() as u32;
     for name in ["fmzx.fwsc", "fmzx-preview.fwsc"] {
         let r = verify(&read_package(name), &Pins::builtin(), Some(PRODUCT));
         assert!(r.problems.is_empty(), "{name}: {:?}", r.problems);
-        assert_eq!(r.pack.map(|p| p.1), Some(3), "{name}: the three games of games/games.toml");
+        assert_eq!(r.pack.map(|p| p.1), Some(games), "{name}: the games of games/games.toml");
     }
 }
 
