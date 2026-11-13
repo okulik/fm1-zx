@@ -53,8 +53,8 @@ and the game pack (above), Felucca's update loader (GPL-3.0-only; its complete s
 `a53ecf428c29c780108fd70a31b71a32a6b5c313`) and the three SDK files (Apache-2.0). Whoever passes a
 package on should pass on with it, or point to, this repository at the same commit (the source
 of the GPL parts and the build of every byte), `LICENSES/` (in particular `GPL-3.0-or-later.txt`,
-`GPL-3.0-only.txt`, `LGPL-3.0-or-later.txt`, `MPL-2.0.txt`, `MIT.txt`, `CC-BY-SA-2.0.txt`,
-`CC-BY-SA-3.0.txt`), the SDK files' licence text (`docs/third-party/AC79-SDK-Apache-2.0.txt`;
+`GPL-3.0-only.txt`, `LGPL-3.0-or-later.txt`, `MPL-2.0.txt`, `MIT.txt`,
+`CC-BY-SA-2.0.txt`), the SDK files' licence text (`docs/third-party/AC79-SDK-Apache-2.0.txt`;
 `tools/make-packages` puts a copy, `AC79-SDK-Apache-2.0.txt`, next to the packages) and this file
 with the games' attributions. Nothing in the repository itself is under the Apache License.
 
