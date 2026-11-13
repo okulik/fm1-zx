@@ -66,6 +66,25 @@ precedence = "override"
 SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
 SPDX-License-Identifier = "GPL-3.0-only"
 
+[[annotations]]
+path = "third_party/games/sopwith/sopwith.sna"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Neil Rackett"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = "third_party/games/sopwith/README.upstream.md"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Neil Rackett"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The GPL's own text, as shipped in the ZX Sopwith repository.
+[[annotations]]
+path = "third_party/games/sopwith/LICENSE"
+precedence = "override"
+SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
+SPDX-License-Identifier = "GPL-3.0-only"
+
 # felucca-bsp (platform/fm1/VENDORED.md): its licence text and NOTICE, unmodified.
 [[annotations]]
 path = ["platform/fm1/bsp/LICENSE", "platform/fm1/bsp/NOTICE"]

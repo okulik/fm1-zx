@@ -60,7 +60,7 @@ with the games' attributions. Nothing in the repository itself is under the Apac
 
 ## The built-in games
 
-The game is an unmodified file with its licence texts and statements next to it.
+Each game is an unmodified file with its licence texts and statements next to it.
 
 **Castaway** by Juan J. Martínez (2016), `third_party/games/castaway/`. Three licence statements
 exist:
@@ -74,6 +74,13 @@ exist:
 The tape is the release's, so it is taken under its MIT licence; the repository's licence covers
 it too (SPDX `MIT OR (GPL-3.0-only AND CC-BY-SA-2.0)`). Attribution: Castaway by Juan J. Martínez,
 <https://www.usebox.net/jjm/castaway/>.
+
+**ZX Sopwith** by Neil Rackett (2026), `third_party/games/sopwith/`: a port of David L. Clark's Sopwith
+(GPL 2 or later, as the original-source repository confirms), released under GPL-3.0-or-later. The
+file is the release's `sopwith.sna`, unmodified. It holds sprite art and a ground profile from the
+original, the Spectrum ROM's font is not part of it, and it contains z88dk runtime code (Clarified
+Artistic License). Attribution: ZX Sopwith by Neil Rackett,
+<https://github.com/neilrackett/zxspectrum-sopwith>, after Sopwith by David L. Clark.
 
 ### Considered and left out
 
