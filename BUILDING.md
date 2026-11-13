@@ -195,7 +195,7 @@ emulator counts, one per instruction, interrupts excluded):
 | castaway | 1,322,195 | 445,715 |
 
 Audio interrupt, max 1,574 instructions per block. RAMTEXT 19,824 of 49,152 bytes. Image
-68,152 + pack 23,468 bytes, 92,812 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
+68,144 + pack 23,468 bytes, 92,812 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
 POOL 249,968 bytes, 118,672 below the user stack. The demo plays the whole 20 s window: Castaway
 (the player steps left and right on the ship's platform, out of the crawler's reach, so
 the energy does not run out).

@@ -631,8 +631,9 @@ void fmzx_main(void)
         if (view != last_view) { /* every view change repaints the whole panel, from now */
             unsigned r;
             last_view = view;
-            next = fm1_ticks(); /* the new view's first LCD frame without waiting for the old pace */
-            fmzx_stats.view = (uint32_t)view;
+            /* the new view's first LCD frame without waiting for the old pace: this pass's
+             * lcd_frame_end, whose stats_update publishes the view with that frame's stats */
+            next = fm1_ticks();
             memset(ui_rows, 0, sizeof ui_rows);
             for (r = 0; r < LCD_ROWS; r++)
                 if (menu_row_is_ui(&mn, r))

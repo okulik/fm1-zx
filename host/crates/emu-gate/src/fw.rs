@@ -263,6 +263,24 @@ impl Machine {
         }
     }
 
+    /// Runs for `us` emulated microseconds.
+    pub fn run_us(&mut self, us: u64) {
+        let end = self.soc.periph.cycles + self.soc.periph.cycle_of_ms(us) / 1000;
+        while self.soc.periph.cycles < end {
+            self.step();
+        }
+    }
+
+    /// Emulated CPU cycles since power-on (`cycles_per_ms` of them a millisecond).
+    pub fn cycles(&self) -> u64 {
+        self.soc.periph.cycles
+    }
+
+    /// Emulated CPU cycles a millisecond.
+    pub fn cycles_per_ms(&self) -> u64 {
+        self.soc.periph.cycle_of_ms(1)
+    }
+
     fn step(&mut self) {
         let soc = &mut self.soc;
         let cpu = &mut self.cpu;

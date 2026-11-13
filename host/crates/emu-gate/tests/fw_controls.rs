@@ -271,31 +271,74 @@ fn osk_rows_not_resent() {
     assert!(s.lcd.bytes - b0 >= 240 * 360, "no full repaint after the keyboard: {} bytes", s.lcd.bytes - b0);
 }
 
+/// Holds HOME in the game at phase `i` of [`VIEW_PHASES`]: `i` ms and `i % 4` quarter-ms after a
+/// Spectrum frame starts, so the phases cover the 20 ms LCD frame twice, the 40 ms the game's
+/// audio pacing leaves on the frame timer, and four points of each millisecond (the 1 ms steps the
+/// tests read fmzx_stats at against the main loop's passes).
+fn home_at_phase(m: &mut Machine, i: u64) {
+    assert!(m.run_until("game_frame", 100), "no game frame");
+    m.run_us(i * 1000 + i % 4 * 250);
+    m.hold(HOME, true);
+}
+
+const VIEW_PHASES: u64 = 41;
+
+/// Releases HOME in the menu and resumes the game, its pacing settled again.
+fn menu_back_to_game(m: &mut Machine) {
+    m.run_ms(30);
+    m.hold(HOME, false);
+    m.run_ms(50);
+    press_to(m, HOME, view::GAME);
+    m.run_ms(100);
+}
+
 #[test]
 fn view_change_starts_a_frame_at_once() {
     // leaving the game, the menu's first LCD frame (and its UI rows) does not wait for the up to
-    // 40 ms the game's audio pacing left on the frame timer: it comes in the same main-loop pass
+    // 40 ms the game's audio pacing left on the frame timer: it comes in the same main-loop pass,
+    // so fmzx_stats, read every 1 ms, never shows the menu before that frame (at any phase)
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
-    for i in 0..5 {
-        m.run_ms(7 * i + 1);
-        m.hold(HOME, true);
+    let mut late = Vec::new();
+    for i in 0..VIEW_PHASES {
+        home_at_phase(&mut m, i);
         let mut before = m.stats();
         let mut t = 0;
         while m.stats().view == view::GAME as u32 {
-            assert!(t < 100, "HOME did not open the menu");
+            assert!(t < 100, "HOME did not open the menu (phase {i})");
             before = m.stats();
             m.run_ms(1);
             t += 1;
         }
         let s = m.stats();
-        m.run_ms(30);
-        m.hold(HOME, false);
-        m.run_ms(50);
         assert_eq!(s.view, view::MENU as u32);
-        assert!(s.lcd.frames > before.lcd.frames, "no LCD frame within 1 ms of the menu (try {i})");
-        press_to(&mut m, HOME, view::GAME);
-        m.run_ms(100);
+        if s.lcd.frames == before.lcd.frames {
+            late.push(i);
+        }
+        menu_back_to_game(&mut m);
     }
+    assert!(late.is_empty(), "no LCD frame within 1 ms of the menu at phases {late:?} of {VIEW_PHASES}");
+}
+
+#[test]
+fn view_change_frame_latency() {
+    // the same, timed: from the HOME press's event to the menu's first LCD frame (the scheduler's
+    // new frame) at most 1 ms, at every phase
+    let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
+    let per_ms = m.cycles_per_ms();
+    let mut worst = 0;
+    for i in 0..VIEW_PHASES {
+        home_at_phase(&mut m, i);
+        assert!(m.run_until("handle_event", 100), "HOME was not handled (phase {i})");
+        let c0 = m.cycles();
+        assert!(m.run_until("lcd_sched_begin_frame", 100), "no LCD frame after HOME (phase {i})");
+        let us = (m.cycles() - c0) * 1000 / per_ms;
+        m.run_ms(1);
+        assert_eq!(m.stats().view, view::MENU as u32, "phase {i}");
+        assert!(us <= 1000, "the menu's first LCD frame {us} us after HOME (phase {i})");
+        worst = worst.max(us);
+        menu_back_to_game(&mut m);
+    }
+    println!("HOME to the menu's first LCD frame: at most {worst} us over {VIEW_PHASES} phases");
 }
 
 #[test]
