@@ -209,8 +209,8 @@ fn tape_loads_its_data_block_after_starting() {
 }
 
 /// Renders `frames` frames of `tune.sna`: the samples of each frame, and the edges as absolute
-/// T-states (69,888 per frame) with the frame they fall in.
-fn render_tune(frames: u32) -> (Vec<Vec<i16>>, Vec<(u64, u32)>) {
+/// T-states (69,888 per frame) with the frame they fall in and the level.
+fn render_tune(frames: u32) -> (Vec<Vec<i16>>, Vec<(u64, u32, u8)>) {
     let mut m = machine(&tune_sna());
     let mut b = Beeper::new(RATE.0, RATE.1);
     let (mut audio, mut edges) = (Vec::new(), Vec::new());
@@ -220,7 +220,7 @@ fn render_tune(frames: u32) -> (Vec<Vec<i16>>, Vec<(u64, u32)>) {
             b.set_level(m.edges_start_level());
         }
         audio.push(b.render(m.edges()));
-        edges.extend(m.edges().iter().map(|e| ((f as u64 - 1) * 69_888 + e.tstate as u64, f)));
+        edges.extend(m.edges().iter().map(|e| ((f as u64 - 1) * 69_888 + e.tstate as u64, f, e.level)));
     }
     (audio, edges)
 }
@@ -250,13 +250,27 @@ fn tune_pitches() {
 #[test]
 fn tune_has_no_gaps() {
     let (_, edges) = render_tune(410);
-    let longest = TUNE_NOTES_HZ.iter().map(|f| 3_500_000.0 / (2.0 * f)).fold(0.0, f64::max);
-    let from: Vec<&(u64, u32)> = edges.iter().filter(|e| e.1 >= 10).collect();
+    let half = |note: usize| 3_500_000.0 / (2.0 * TUNE_NOTES_HZ[note]);
+    // note n of the run starts at frame TUNE_START_FRAME + 25 n (T 69,888 per frame)
+    let note_of = |t: u64| ((t / 69_888 - (TUNE_START_FRAME as u64 - 1)) / TUNE_NOTE_FRAMES as u64) as usize;
+    let from: Vec<&(u64, u32, u8)> = edges.iter().filter(|e| e.1 >= 10).collect();
+    let (mut seams, mut worst_excess) = (0, f64::MIN);
     for w in from.windows(2) {
-        let gap = (w[1].0 - w[0].0) as f64;
-        assert!(gap <= 1.02 * longest, "edges {gap} T apart at frame {}, longest half-period {longest:.0}", w[1].1);
+        let (a, b) = (w[0], w[1]);
+        let (gap, i) = ((b.0 - a.0) as f64, note_of(a.0) % 8);
+        assert_ne!(a.2 & 2, b.2 & 2, "EAR does not toggle at frame {}", b.1);
+        assert_eq!((a.2 | b.2) & 1, 0, "MIC set at frame {}", b.1);
+        if note_of(a.0) == note_of(b.0) {
+            // inside a note: the note's half-period, within the 0.5% of the table and contention
+            assert!((gap - half(i)).abs() <= 0.01 * half(i), "note {i}: edges {gap} T apart at frame {}, half-period {:.0}", b.1, half(i));
+        } else {
+            // the seam: 0.9 to 1.2 half-periods of the note that ends, and at most 315 T more
+            seams += 1;
+            worst_excess = worst_excess.max(gap - half(i));
+            assert!(gap >= 0.9 * half(i) && gap <= 1.2 * half(i), "seam after note {i}: {gap} T, half-period {:.0}", half(i));
+            assert!(gap - half(i) <= 315.0, "seam after note {i}: {gap} T is {:.0} T over its half-period", gap - half(i));
+        }
     }
-    for f in 10..=410 {
-        assert!(edges.iter().any(|e| e.1 == f), "no edge in frame {f}");
-    }
+    assert!(seams >= 14, "{seams} seams");
+    println!("{seams} seams, the longest {worst_excess:.0} T over its half-period");
 }

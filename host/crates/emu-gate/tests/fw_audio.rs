@@ -180,9 +180,29 @@ fn tune_pitches_in_firmware() {
         println!("note {i} (pass {}): {hz:.2} Hz (host {} Hz)", k / 8, TUNE_HZ[i]);
         assert!((hz - TUNE_HZ[i]).abs() <= TUNE_HZ[i] * 0.02, "note {i} of pass {}: {hz:.2} Hz, host {} Hz", k / 8, TUNE_HZ[i]);
     }
-    // no 20 ms is silent anywhere in the two passes
+    // no silent stretch anywhere in the two passes, seams included: the longest run between
+    // zero crossings is the lowest note's half-period (0.96 ms) plus the longest seam's excess
+    // (0.1 ms) and a margin: measured 0.95 ms; 1.5 ms is far below a missed note
     let span = &a[start..start + (16.0 * note) as usize];
-    for (w, win) in span.chunks_exact(RATE as usize / 50).enumerate() {
-        assert!(win.iter().any(|x| x.unsigned_abs() > 64), "20 ms window {w} is silent");
+    let (mut run, mut longest) = (0usize, 0usize);
+    for w in span.windows(2) {
+        if (w[0] < 0) != (w[1] < 0) {
+            run = 0;
+        } else {
+            run += 1;
+            longest = longest.max(run);
+        }
     }
+    let ms = longest as f64 * 1000.0 / RATE;
+    println!("longest run between zero crossings: {ms:.2} ms");
+    assert!(ms <= 1.5, "{ms:.2} ms without a zero crossing");
+    // and the level never rests near zero for long: a decaying held level would show here
+    let (mut quiet, mut longest_quiet) = (0usize, 0usize);
+    for x in span {
+        quiet = if x.unsigned_abs() <= 64 { quiet + 1 } else { 0 };
+        longest_quiet = longest_quiet.max(quiet);
+    }
+    let ms = longest_quiet as f64 * 1000.0 / RATE;
+    println!("longest quiet run: {ms:.2} ms");
+    assert!(ms <= 0.5, "{ms:.2} ms with |x| <= 64");
 }

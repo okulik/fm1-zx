@@ -159,7 +159,7 @@
 //! chosen so that `K` edges of `P` T fill the 25 frames (1,747,200 T) to within the table's
 //! "gap" column: the time from a note's last edge to the next note's first edge. A half-period
 //! is `P` and a gap about `P`, so the seam is no more than a slightly long or short half-period
-//! (note 7's is 311 T long, the most).
+//! (note 7's is about 310 T long, the most; the test bounds it at 315 T).
 //!
 //! Why it does not drift: the interrupt that every `HALT` waits for happens at T 0 of a
 //! frame, whatever the program did before, so the note boundaries are exactly 25 frames apart
@@ -226,9 +226,9 @@ pub const BORDER_EDGES_PER_FRAME: usize = 39;
 /// Tone of `border.sna` measured from the host beeper renderer: 1,949 zero crossings in the
 /// 50 frames (0.9984 s) after frame 10 (the design value is 976.5625 Hz).
 pub const BORDER_TONE_HZ: f64 = 976.06;
-/// Address of the `HALT` in both snapshots.
+/// Address of the `HALT` in `scroll.sna` and `border.sna` (`tune.sna`'s is at 800Fh).
 pub const HALT: u16 = 0x8001;
-/// Where the interrupt handler returns to in both snapshots.
+/// Where the interrupt handler returns to in `scroll.sna` and `border.sna` (`tune.sna`: 8010h).
 pub const RESUME: u16 = 0x8002;
 /// Frames `tape.tap`'s code waits (one `HALT` each) before it loads the data block.
 pub const TAPE_WAIT_FRAMES: u32 = 100;
