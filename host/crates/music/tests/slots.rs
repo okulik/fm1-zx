@@ -9,7 +9,9 @@
 
 use fmzx_pack::testprogs::TUNE_START_FRAME;
 use music::score::{midi_of, score, Note, Score};
-use music::synthetic::{frame_loop, frame_tune, slots_loop, slots_tune, xor_loop, xor_tune};
+use music::synthetic::{
+    frame_loop, frame_tune, hz_of_midi, slots_engine, slots_loop, slots_step, slots_tune, xor_loop, xor_tune, SlotsNote, Stream,
+};
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, decode_stream, played_hz, test_sna, voices_hz, RATE};
 use zx_sys::{Beeper, Machine, SndFrame, SND_STYLE_FLIPS, SND_STYLE_SLOTS};
@@ -218,6 +220,97 @@ fn plain_tone_after_slots_music() {
     assert!(music > n / 2, "the music before it plays in FM");
     assert_eq!(slots, 25, "the loop is held through the tone");
     assert!(played.is_empty(), "the tone played as notes in frames {played:?}");
+}
+
+/// `a` then `b`, with `gap` silent frames between.
+fn join(a: Stream, gap: usize, b: Stream) -> (Stream, usize) {
+    let mut a = a;
+    a.frames.extend((0..gap).map(|_| Vec::new()));
+    a.truth.extend((0..gap).map(|_| Some(Vec::new())));
+    a.drum.extend((0..gap).map(|_| false));
+    a.silent.extend((0..gap).map(|_| true));
+    let n = a.frames.len();
+    (a.then(b), n)
+}
+
+#[test]
+fn effect_after_slots_music_stays_beeper() {
+    // time-slot music, then within a second an effect with no pitch change of its own: another
+    // time-slot loop (110 T, a steady two-channel chord) or a plain square tone (speaker flips);
+    // the music's pitch changes must not carry over to it
+    let tdm_effect = slots_engine(
+        &[SlotsNote { step: [slots_step(600.0), slots_step(900.0), 0], thr: [0x80, 0x80, 0], frames: 50 }],
+        110,
+        [0, 30, 70],
+    );
+    let tone = {
+        let mut level = 0u8;
+        let frames: Vec<Vec<zx_sys::zx_edge>> = (0..50)
+            .map(|_| {
+                (1..69_888u32 / 2_917)
+                    .map(|i| {
+                        level ^= 2;
+                        zx_sys::zx_edge { tstate: i * 2_917, level }
+                    })
+                    .collect()
+            })
+            .collect();
+        let n = frames.len();
+        Stream { frames, start_level: 0, truth: vec![Some(vec![]); n], drum: vec![false; n], silent: vec![false; n] }
+    };
+    // and speaker-flip music, a short time-slot tune, then the plain tone: the time slots end the
+    // speaker-flip music's context too (one thin channel: under 256 edges a frame, so the
+    // time-slot frames are not too busy for speaker flips)
+    let thin: Vec<SlotsNote> = [60.0, 64.0, 67.0, 64.0]
+        .iter()
+        .map(|&m| SlotsNote { step: [0, slots_step(hz_of_midi(m)), 0], thr: [0, 0x40, 0], frames: 6 })
+        .collect();
+    let mixed = frame_loop(&frame_tune(8)).then(slots_loop(&thin));
+    for (name, before, effect) in [
+        ("time-slot effect", slots_loop(&slots_tune()), tdm_effect),
+        ("plain tone", slots_loop(&slots_tune()), tone.clone()),
+        ("plain tone after both styles", mixed, tone),
+    ] {
+        for gap in [0, 20] {
+            let (s, n) = join(before.clone(), gap, effect.clone());
+            let dec = decode_stream(&s);
+            let music = dec[..n - gap].iter().filter(|f| f.confident != 0).count();
+            let conf: Vec<usize> = (n..dec.len()).filter(|&i| dec[i].confident != 0).map(|i| i - n).collect();
+            println!("{name} after {gap} silent frames: music {music} of {} confident; effect confident in {conf:?}", n - gap);
+            assert!(music > (n - gap) / 2, "{name}: the music before it plays in FM");
+            assert!(conf.is_empty(), "{name} after {gap} silent frames: FM in effect frames {conf:?}");
+        }
+    }
+}
+
+#[test]
+fn synthetic_slots_adjacent_semitones() {
+    // pairs of notes a semitone apart from 1 kHz up to the decoder's 2.5 kHz top, on the
+    // time-slot engine (16-bit accumulators: a period of 9-22 loops, so single periods jitter by
+    // a whole loop): each note within half a semitone, none taken for the other or between them
+    let mut notes = vec![
+        SlotsNote { step: [0, slots_step(hz_of_midi(60.0)), 0], thr: [0, 0x80, 0], frames: 6 },
+        SlotsNote { step: [0, slots_step(hz_of_midi(64.0)), 0], thr: [0, 0x80, 0], frames: 6 },
+    ];
+    let lead = notes.len();
+    for m in [84.0, 86.0, 88.0, 90.0, 92.0, 94.0, 96.0, 97.5] {
+        for (k, mm) in [m, m + 1.0, m, m + 1.0].into_iter().enumerate() {
+            let c = k % 2 * 2; // the 0.22 and 0.46 slots in turn
+            let mut step = [0u16; 3];
+            let mut thr = [0u8; 3];
+            step[c] = slots_step(hz_of_midi(mm));
+            thr[c] = 0x80;
+            notes.push(SlotsNote { step, thr, frames: 5 });
+        }
+    }
+    let s = slots_loop(&notes);
+    let dec = decode_stream(&s);
+    // from the first pair on (the lead-in gives the music context)
+    let a = (lead * 6) as usize + 1;
+    let sc = score(&s.truth[a..], &played_hz(&dec[a..]));
+    println!("adjacent semitones: {sc}");
+    assert!(sc.wrong.is_empty(), "{} wrong notes", sc.wrong.len());
+    assert_eq!(sc.notes_found, sc.true_notes, "every note decoded");
 }
 
 #[test]

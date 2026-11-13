@@ -32,7 +32,8 @@
  * Time slots (decide_slots): the voices are the channels with a run of
  * agreeing periods through F's middle, or else through a quarter frame
  * either side (a note beginning or ending in F); full swings that no voice
- * explains, one in F and another within a quarter frame, are a drum. Music context as for speaker flips, from the
+ * explains, one in F and another within a quarter frame, with the swings over
+ * by F+2, are a drum. Music context as for speaker flips, from the
  * time-slot voices' pitch changes, tracked at F+2 (one frame of look-ahead
  * left for the next rise), between notes up to 25 frames apart (slow bass
  * notes are known late); sound without the loop carrier that the channels do
@@ -152,13 +153,6 @@ void snd_decoder_init(snd_decoder *d)
 	d->since_tonal = REST_FRAMES;
 	d->prev_conf = 0;
 	snd_slots_reset(&d->sl);
-	for (k = 0; k < SND_TONAL; k++)
-		d->sref_q8[k] = 0;
-	d->sref_frame = 0;
-	d->schange_frame = 0;
-	d->have_sref = 0;
-	d->have_schange = 0;
-	d->sbroken = 0;
 }
 
 /* Same voice: periods within 1/32 (about half a semitone). */
@@ -430,8 +424,9 @@ static uint32_t slots_voices(snd_decoder *d, uint32_t f, const uint32_t *keep_q8
 /* The time slots' music context, at the newest frame whose voices are known
  * (x = t - 1: one frame of look-ahead for the next rise): the reference note
  * and pitch changes, as for speaker flips, with notes up to SLOTS_GAP frames
- * apart (slow bass notes are known late). Unexplained sound without the loop
- * carrier drops the reference. */
+ * apart (slow bass notes are known late); a new note counts once its voices
+ * hold in two frames in a row. Unexplained sound without the loop carrier
+ * drops the reference. */
 static void track_slots(snd_decoder *d, uint32_t x)
 {
 	const snd_slot *s = &d->slot[ring(x)];
@@ -441,7 +436,7 @@ static void track_slots(snd_decoder *d, uint32_t x)
 	if (!s->tdm || s->fit < FIT_SLOTS) {
 		/* other sound (no loop carrier) drops the reference; the loop still
 		 * running but fitting badly is a channel not learned yet */
-		if (!s->tdm || !s->carrier) d->have_sref = 0;
+		if (!s->tdm || !s->carrier) d->sl.have_sref = 0;
 		return;
 	}
 	for (k = 0; k < SND_TONAL; k++)
@@ -450,20 +445,33 @@ static void track_slots(snd_decoder *d, uint32_t x)
 	if (!plain_ok(d, x, keep, &plain)) return;   /* a plain tone the voices do not explain */
 	n = slots_voices(d, x, plain ? keep : 0, v, 0);
 	if (!n) return;   /* a rest: the reference stays (for SLOTS_GAP frames) */
-	if (!d->have_sref || x - d->sref_frame > SLOTS_GAP) {
-		/* a new reference after silence or other sound: not a change */
-	} else if (lacks(v, d->sref_q8) && lacks(d->sref_q8, v)) {
-		d->schange_frame = x;
-		d->have_schange = 1;
-		d->sbroken = 0;
-	} else {
-		d->sref_frame = x;   /* the same note, or a voice more or less */
+	if (d->sl.have_sref && x - d->sl.sref_frame <= SLOTS_GAP && !(lacks(v, d->sl.sref_q8) && lacks(d->sl.sref_q8, v))) {
+		d->sl.sref_frame = x;   /* the same note, or a voice more or less */
 		return;
 	}
-	d->have_sref = 1;
-	d->sref_frame = x;
+	/* another note: it counts once the same voices hold in two frames in a
+	 * row (a voice misread in one frame, as in sound that is not music, is
+	 * no pitch change) */
+	if (d->sl.pend_n && d->sl.pend_frame + 1u == x && !lacks(v, d->sl.pend_q8) && !lacks(d->sl.pend_q8, v)) {
+		if (d->sl.pend_n < 255u) d->sl.pend_n++;
+	} else {
+		d->sl.pend_n = 1;
+		for (k = 0; k < SND_TONAL; k++)
+			d->sl.pend_q8[k] = v[k];
+	}
+	d->sl.pend_frame = x;
+	if (d->sl.pend_n < 2u) return;
+	if (!d->sl.have_sref || x - d->sl.sref_frame > SLOTS_GAP) {
+		/* a new reference after silence or other sound: not a change */
+	} else {
+		d->sl.schange_frame = x - 1u;
+		d->sl.have_schange = 1;
+		d->sl.sbroken = 0;
+	}
+	d->sl.have_sref = 1;
+	d->sl.sref_frame = x;
 	for (k = 0; k < SND_TONAL; k++)
-		d->sref_q8[k] = v[k];
+		d->sl.sref_q8[k] = v[k];
 }
 
 /* The decision about frame f when it was decoded as time slots. */
@@ -490,7 +498,14 @@ static void decide_slots(snd_decoder *d, uint32_t f, snd_frame *out)
 	if (drums == 1u &&
 	    snd_slots_drums(d, base - ZX_FRAME_TSTATES / 4u, base + ZX_FRAME_TSTATES + ZX_FRAME_TSTATES / 4u) < 2u)
 		drums = 0;
-	context = d->have_schange && !d->sbroken && (int32_t)(f - d->schange_frame) <= (int32_t)MUSIC_FRAMES;
+	if (drums) {
+		/* and over by F+2: the whole speaker still toggling there is a tone
+		 * starting, not a drum */
+		uint32_t rises, swings;
+		snd_slots_explained(d, base + 2u * ZX_FRAME_TSTATES, base + 3u * ZX_FRAME_TSTATES, keep, &rises, &swings);
+		if (swings >= 2u * d->sl.k && 2u * swings > rises) drums = 0;
+	}
+	context = d->sl.have_schange && !d->sl.sbroken && (int32_t)(f - d->sl.schange_frame) <= (int32_t)MUSIC_FRAMES;
 
 	if (d->work >= d->work_cap) {
 		/* out of work: not decoded, so not music */
@@ -512,9 +527,9 @@ static void decide_slots(snd_decoder *d, uint32_t f, snd_frame *out)
 		/* a rest, or no voice through F's middle: music goes on, holding no note */
 		confident = context && d->prev_conf && d->since_tonal < REST_FRAMES;
 	}
-	if (over || (!fit_ok && !drum && !s->carrier && (int32_t)(d->schange_frame - f) <= 0)) {
+	if (over || (!fit_ok && !drum && !s->carrier && (int32_t)(d->sl.schange_frame - f) <= 0)) {
 		/* other sound: the music context stays off until the next pitch change */
-		d->sbroken = 1;
+		d->sl.sbroken = 1;
 	}
 	emit(d, rep, lvl, nrep, drum, SND_STYLE_SLOTS, confident, out);
 }
@@ -529,6 +544,9 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 	uint8_t drum = 0;
 
 	if (s->tdm) {
+		/* time slots: other sound to the speaker-flip decoder, whose music
+		 * context ends here (as for a busy frame) */
+		d->broken = 1;
 		decide_slots(d, f, out);
 		return;
 	}

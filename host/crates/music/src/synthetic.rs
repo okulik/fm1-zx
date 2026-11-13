@@ -324,6 +324,11 @@ pub const SLOTS_LOOP: u64 = 153;
 /// The time-slot engine (see the module notes). Truth: each sounding channel's pitch, from its
 /// step and the note's mean loop length (contention included).
 pub fn slots_loop(notes: &[SlotsNote]) -> Stream {
+    slots_engine(notes, SLOTS_LOOP, SLOTS_AT)
+}
+
+/// [`slots_loop`] with another loop length and `OUT` offsets (T).
+pub fn slots_engine(notes: &[SlotsNote], loop_t: u64, at_t: [u64; 3]) -> Stream {
     const GAP: u64 = 2_200; // between notes: the sequencer reads the next row
     let mut b = Builder::new(0);
     let mut t: u64 = FRAME_T / 3;
@@ -337,7 +342,7 @@ pub fn slots_loop(notes: &[SlotsNote]) -> Stream {
             let base = t;
             for c in 0..3 {
                 phase[c] = phase[c].wrapping_add(note.step[c]);
-                let mut at = base + SLOTS_AT[c];
+                let mut at = base + at_t[c];
                 // the OUT's I/O contention delays it and everything after it
                 let delay = contention((at % FRAME_T) as u32) as u64;
                 at += delay;
@@ -348,7 +353,7 @@ pub fn slots_loop(notes: &[SlotsNote]) -> Stream {
                     b.edges.push((at, level));
                 }
             }
-            t += SLOTS_LOOP;
+            t += loop_t;
             iters += 1;
         }
         let mean = (t - start) as f64 / iters as f64;

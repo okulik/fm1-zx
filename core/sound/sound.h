@@ -56,7 +56,7 @@ typedef struct {          /* what the decoder concluded about one past frame */
 #define SND_EDGES_MAX 256u                 /* speaker edges kept per frame; a busier frame is noise */
 #define SND_WORK_MAX 48000u                 /* decoder work units per frame (flips.c, slots.c), see decoder.c */
 #define SND_SLOTS 3u                        /* most channels (time slots) of a time-slot loop */
-#define SND_RISES 128u                      /* rises kept per time-slot channel */
+#define SND_RISES 256u                      /* rises kept per time-slot channel: 3.5 frames up to 3.6 kHz */
 #define SND_LEVEL_BINS 128u                 /* box-level histogram: levels in steps of 2/256 */
 
 /* What the decoder worked out about one frame of the history, when it arrived. */
@@ -69,7 +69,7 @@ typedef struct {
 	uint8_t clean;                 /* the frame alone decodes into voices that explain >= 90% of its edges */
 	uint8_t change;                /* a pitch change starts here (decoder.c) */
 	/* time slots (slots.c) */
-	uint8_t carrier;               /* most rising edges repeat at one loop length (40-400 T) */
+	uint8_t carrier;               /* most rising edges repeat at the loop length in use (40-400 T) */
 	uint8_t tdm;                   /* decoded as time slots: a loop is known, its channels learned */
 	uint8_t fit;                   /* % of the frame's box levels a channel combination explains */
 } snd_slot;
@@ -108,6 +108,15 @@ typedef struct {
 	uint32_t nrise[SND_SLOTS];             /* rises recorded since the channel was (re)set */
 	/* frame counters for the decision */
 	uint32_t good, samples;                /* this frame's box levels: fitting, all */
+	/* the music context (decoder.c): pitch changes of the decoded voices; it
+	 * goes with the loop, so a loop forgotten or replaced clears it */
+	uint32_t sref_q8[SND_TONAL];           /* the reference: the voices of the last note (half-periods) */
+	uint32_t sref_frame, schange_frame;
+	uint32_t pend_q8[SND_TONAL];           /* another note's voices, until they hold for two frames */
+	uint32_t pend_frame;
+	uint8_t pend_n;                        /* frames in a row they held */
+	uint8_t have_sref, have_schange;
+	uint8_t sbroken;                       /* undecodable sound since the last pitch change */
 } snd_slots;
 
 typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and per-style state */
@@ -129,12 +138,8 @@ typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and 
 	uint32_t out_q8[SND_TONAL];            /* the last decision's voices, by tone slot */
 	uint32_t since_tonal;                  /* decisions since the last confident one with voices */
 	uint8_t prev_conf;                     /* the last decision was confident */
-	/* time slots (slots.c) and their music context: pitch changes of the decoded voices */
+	/* time slots (slots.c) */
 	snd_slots sl;
-	uint32_t sref_q8[SND_TONAL];           /* the reference: the voices of the last note (periods) */
-	uint32_t sref_frame, schange_frame;
-	uint8_t have_sref, have_schange;
-	uint8_t sbroken;                       /* undecodable sound since the last pitch change */
 	/* scratch for flips.c */
 	uint32_t pool[2u * SND_EDGES_MAX];
 	uint16_t chain[2u * SND_EDGES_MAX];

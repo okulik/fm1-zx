@@ -10,7 +10,8 @@
  * them, follow the one before by the same interval (within 4%) in 40-400 T;
  * the mean of those intervals is P. A carrier frame at a length within 3% of
  * the known P refines it; a different length must show in two carrier frames
- * in a row to replace it (everything learned is then dropped). Between
+ * in a row to replace it (everything learned is then dropped, the music
+ * context with it). Between
  * carriers (rests, channels in unison, drums) the loop is assumed to run on,
  * but it is forgotten after 250 frames (5 s) without a carrier, or 25 frames
  * in a row that have sound but no carrier (other sound: the longest stretch
@@ -40,21 +41,24 @@
  * with every channel's (within two loops) is a full swing: all channels at
  * once, which another routine driving the whole speaker (a drum) makes.
  *
- * A channel's voice at a time: the rises just before and after it, whose
- * interval agrees with one of the intervals beside it within 1/32 plus one
- * loop (the rise times are only known to a grid point, and an accumulator
- * engine's rises fall on whole loops; 1/32 is half a semitone, so a glide
- * breaks into its steps), within 1,400-116,666 T (2.5 kHz to 30 Hz). The
- * period is the mean of up to 5 agreeing intervals around it, so it is
- * measured, never snapped. A run of two intervals touching a full swing is
- * not enough (two intervals beside a drum's or a pause's swing agree by
- * chance): it takes three. A channel that stopped has no next rise, or one
- * after a rest that agrees with nothing: no voice, nothing held.
+ * A channel's voice at a time: the run of rises around it that lie on one
+ * period (each within 3/4 of a loop plus 1/48 of the period of the line
+ * through the run's ends: an accumulator engine's rises fall on whole loops
+ * and the rise times are only known to a grid point; I/O contention stretches
+ * the loop while the screen is drawn), with a mean period of 1,400-116,666 T
+ * (2.5 kHz to 30 Hz), up to 5 intervals. Comparing positions over the run,
+ * not single intervals, keeps two notes a semitone apart from merging even
+ * where a loop is more than a semitone of the period (above about 1 kHz).
+ * The period is the run's span over its intervals, so it is measured, never
+ * snapped. A run takes 3 intervals, not 2, beside a full swing (two
+ * intervals beside a drum's or a pause's swing agree by chance) and above
+ * about 350 Hz (see run_of). A channel that stopped has no next rise, or one
+ * after a rest that fits nothing: no voice, nothing held.
  *
  * Drums: a full swing that no run of a voice explains is another routine
  * driving the speaker (Colony 8's drums stop the music loop for a third of a
  * frame and play a few long pulses); the channels' runs resume after it, the
- * interval across it agreeing with nothing.
+ * interval across it fitting nothing.
  *
  * Work: one unit per edge of each pass, per grid point, per histogram bin
  * looked at and per table entry; every pass checks the cap. A frame whose
@@ -132,6 +136,12 @@ void snd_slots_reset(snd_slots *s)
 		s->lut[i] = 0;
 	reset_channels(s);
 	s->good = s->samples = 0;
+	for (i = 0; i < SND_TONAL; i++)
+		s->sref_q8[i] = s->pend_q8[i] = 0;
+	s->sref_frame = s->schange_frame = s->pend_frame = 0;
+	s->pend_n = 0;
+	s->have_sref = s->have_schange = 0;
+	s->sbroken = 0;
 }
 
 /* ---- the loop carrier --------------------------------------------------- */
@@ -291,39 +301,48 @@ static void learn(snd_decoder *d)
 		return;
 	}
 	{
-		/* new channels: carry over the rises of those whose weight stays */
-		uint32_t (*keep)[SND_RISES] = (uint32_t (*)[SND_RISES])(void *)(d->pool + SND_LEVEL_BINS);
-		uint32_t keep_n[SND_SLOTS];
-		uint8_t keep_cur = 0;
-		for (i = 0; i < nw; i++) {
-			keep_n[i] = 0;
+		/* new channels: carry over the rises of those whose weight stays,
+		 * moving each kept ring to its new channel by swaps, in place */
+		uint32_t src[SND_SLOTS], kept_n[SND_SLOTS], x;
+		uint8_t cur = 0;
+		for (i = 0; i < SND_SLOTS; i++) {
+			src[i] = SND_SLOTS;   /* none */
+			if (i >= nw) continue;
 			for (j = 0; j < s->k; j++)
 				if (udiff(w[i], s->w[j]) <= SAME_W) break;
-			if (j < s->k && i * SND_RISES + SND_RISES <= 2u * SND_EDGES_MAX - SND_LEVEL_BINS) {
-				uint32_t r;
-				for (r = 0; r < SND_RISES; r++)
-					keep[i][r] = s->rise[j][r];
-				for (r = 0; r < SND_RISES; r++)
-					d->used[i * SND_RISES + r] = s->swing[j][r];
-				keep_n[i] = s->nrise[j];
-				if (s->cur >> j & 1u) keep_cur |= (uint8_t)(1u << i);
-				d->work += SND_RISES;
+			if (j < s->k) src[i] = j;
+		}
+		for (i = 0; i < nw; i++) {
+			uint32_t from = src[i], r;
+			if (from == SND_SLOTS || from == i) continue;
+			for (r = 0; r < SND_RISES; r++) {
+				uint32_t t = s->rise[i][r];
+				uint8_t f = s->swing[i][r];
+				s->rise[i][r] = s->rise[from][r];
+				s->swing[i][r] = s->swing[from][r];
+				s->rise[from][r] = t;
+				s->swing[from][r] = f;
 			}
+			x = s->nrise[i];
+			s->nrise[i] = s->nrise[from];
+			s->nrise[from] = x;
+			if ((s->cur >> i ^ s->cur >> from) & 1u) s->cur ^= (uint8_t)((1u << i) | (1u << from));
+			/* whatever was at i is now at `from` */
+			for (j = i + 1u; j < nw; j++)
+				if (src[j] == i) src[j] = from;
+			d->work += SND_RISES;
+		}
+		for (i = 0; i < SND_SLOTS; i++) {
+			kept_n[i] = src[i] == SND_SLOTS ? 0 : s->nrise[i];
+			if (kept_n[i] && (s->cur >> i & 1u)) cur |= (uint8_t)(1u << i);
 		}
 		reset_channels(s);
 		for (i = 0; i < nw; i++) {
-			uint32_t r;
 			s->w[i] = (uint8_t)w[i];
-			if (!keep_n[i]) continue;
-			for (r = 0; r < SND_RISES; r++) {
-				s->rise[i][r] = keep[i][r];
-				s->swing[i][r] = d->used[i * SND_RISES + r];
-			}
-			s->nrise[i] = keep_n[i];
+			s->nrise[i] = kept_n[i];
+			s->cand[i] = (uint8_t)(cur >> i & 1u);
 		}
-		s->cur = keep_cur;
-		for (i = 0; i < nw; i++)
-			s->cand[i] = (uint8_t)(keep_cur >> i & 1u);
+		s->cur = cur;
 		s->k = (uint8_t)nw;
 		if (nw) build_lut(d);
 	}
@@ -439,7 +458,6 @@ void snd_slots_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t start
 
 	m = carrier(d, e, n, start_level);
 	if (m) {
-		fs->carrier = 1;
 		if (!s->loop_q8) {
 			snd_slots_reset(s);
 			s->loop_q8 = m;
@@ -452,7 +470,10 @@ void snd_slots_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t start
 		} else {
 			s->other_q8 = m;
 		}
-		if (s->loop_q8 == m || udiff(m, s->loop_q8) <= s->loop_q8 / 32u) s->loop_frame = t;
+		if (s->loop_q8 == m || udiff(m, s->loop_q8) <= s->loop_q8 / 32u) {
+			s->loop_frame = t;
+			fs->carrier = 1;   /* the loop in use: a carrier at another length is other sound */
+		}
 	}
 	if (m) s->bare = 0;
 	else if (sounding) s->bare++;
@@ -525,12 +546,6 @@ static uint32_t kept(const snd_slots *s, uint32_t c)
 	return s->nrise[c] < SND_RISES ? s->nrise[c] : SND_RISES;
 }
 
-/* Intervals agree: within 1/32 plus one loop. */
-static int agree(const snd_slots *s, uint32_t a, uint32_t b)
-{
-	return udiff(a, b) <= a / 32u + (s->loop_q8 >> 8);
-}
-
 /* The last rise of channel c at or before `at` (count if none). */
 static uint32_t find(snd_decoder *d, uint32_t c, uint32_t at)
 {
@@ -551,43 +566,76 @@ static int swing_at(const snd_slots *s, uint32_t c, uint32_t i)
 	return s->swing[c][(s->nrise[c] - kept(s, c) + i) % SND_RISES];
 }
 
-/* The run of intervals agreeing with interval a (from rise a to rise a + 1)
- * around it, at most RUN_MAX: returns its length (0 if it is no run), puts
- * their sum in *sum and in *bare whether every rise of it is a full swing.
- * A run has 2 intervals, or 3 when one of them touches a full swing (two
- * intervals beside a swing agree by chance: the rises a drum or the
- * sequencer's pause between notes makes when it leaves the speaker on). */
+/* Rises lo..hi lie on one period: each within D of the line through the
+ * first and the last, D being 3/4 of a loop (an accumulator engine's rises
+ * fall on whole loops, half a loop either side of the true time, and a grid
+ * point is a quarter loop) plus 1/48 of the period (I/O contention makes the
+ * loop up to 2.6% longer while the screen is drawn), and each interval
+ * within 2D of the mean (one stretched by the sequencer's pause between
+ * notes moves the line less than D in a short run); the mean period within
+ * the voice range. Two notes a semitone apart differ by 5.6% of the period:
+ * a run of k periods of one and m of the other bends away from its line by
+ * about k * m / (k + m) of that, more than D once it holds enough of both
+ * (2 of each at 1 kHz, 3 of each at 2 kHz on a 156 T loop); a run that stays
+ * on its line holds mostly one note (see run_of for the shortest runs). */
+static int on_line(snd_decoder *d, uint32_t c, uint32_t lo, uint32_t hi)
+{
+	const snd_slots *s = &d->sl;
+	uint32_t r0 = rise_at(s, c, lo), span = rise_at(s, c, hi) - r0, n = hi - lo, p_q8, dev_q8, j, prev = r0;
+
+	if (span < n * PER_MIN || span > n * PER_MAX) return 0;
+	p_q8 = (span << 8) / n;
+	dev_q8 = (s->loop_q8 * 3u) / 4u + p_q8 / 48u;
+	for (j = lo + 1u; j <= hi; j++) {
+		uint32_t r = rise_at(s, c, j), at_q8 = (r - r0) << 8, want_q8 = (j - lo) * p_q8;
+		if (udiff(at_q8, want_q8) > dev_q8 || udiff((r - prev) << 8, p_q8) > 2u * dev_q8) return 0;
+		prev = r;
+	}
+	d->work += n;
+	return 1;
+}
+
+/* The run of rises on one period around interval a (from rise a to rise
+ * a + 1), grown a rise at a time backward and forward while they stay on the
+ * line (on_line), up to RUN_MAX intervals: returns its length (0 if it is no
+ * run), puts its span in *sum and in *bare whether every rise of it is a full
+ * swing. A run needs 2 intervals, or 3:
+ *   - when a rise of it is a full swing (two intervals beside a swing agree by
+ *     chance: the rises a drum or the sequencer's pause between notes makes
+ *     when it leaves the speaker on);
+ *   - when the period is under 64 loops (above about 350 Hz), where a run of
+ *     one interval of each of two notes a semitone apart can stay within D of
+ *     its line: with 3 intervals such a run is two of one note and one of the
+ *     other, its mean within a third of a semitone of the first. */
 static uint32_t run_of(snd_decoder *d, uint32_t c, uint32_t a, uint32_t *sum, int *bare)
 {
 	const snd_slots *s = &d->sl;
-	uint32_t n = kept(s, c), iv, cnt = 1, j;
-	int swingy, all;
+	uint32_t n = kept(s, c), lo = a, hi = a + 1u, j, cnt, need = 2u;
+	int back = 1, fwd = 1, swingy = 0, all = 1;
 
-	iv = rise_at(s, c, a + 1u) - rise_at(s, c, a);
-	*sum = iv;
+	*sum = 0;
 	*bare = 0;
-	if (iv < PER_MIN || iv > PER_MAX) return 0;
-	swingy = swing_at(s, c, a) || swing_at(s, c, a + 1u);
-	all = swing_at(s, c, a) && swing_at(s, c, a + 1u);
-	for (j = a; j >= 1u && cnt < RUN_MAX; j--) {
-		uint32_t x = rise_at(s, c, j) - rise_at(s, c, j - 1u);
-		if (!agree(s, iv, x)) break;
-		*sum += x;
-		cnt++;
-		swingy |= swing_at(s, c, j - 1u);
-		all &= swing_at(s, c, j - 1u);
+	if (!on_line(d, c, lo, hi)) return 0;
+	while (hi - lo < RUN_MAX && (back || fwd)) {
+		if (back) {
+			if (lo >= 1u && on_line(d, c, lo - 1u, hi)) lo--;
+			else back = 0;
+		}
+		if (fwd && hi - lo < RUN_MAX) {
+			if (hi + 1u < n && on_line(d, c, lo, hi + 1u)) hi++;
+			else fwd = 0;
+		}
 	}
-	for (j = a + 1u; j + 1u < n && cnt < RUN_MAX; j++) {
-		uint32_t x = rise_at(s, c, j + 1u) - rise_at(s, c, j);
-		if (!agree(s, iv, x)) break;
-		*sum += x;
-		cnt++;
-		swingy |= swing_at(s, c, j + 1u);
-		all &= swing_at(s, c, j + 1u);
+	for (j = lo; j <= hi; j++) {
+		int sw = swing_at(s, c, j);
+		swingy |= sw;
+		all &= sw;
 	}
-	d->work += cnt;
+	cnt = hi - lo;
+	*sum = rise_at(s, c, hi) - rise_at(s, c, lo);
 	*bare = all;
-	return cnt >= (swingy ? 3u : 2u) ? cnt : 0;
+	if (swingy || *sum < cnt * 64u * (s->loop_q8 >> 8)) need = 3u;
+	return cnt >= need ? cnt : 0;
 }
 
 /* The period (T x 256) of the run around interval a if it is a voice, else 0.
