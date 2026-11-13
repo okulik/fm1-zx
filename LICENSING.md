@@ -54,9 +54,9 @@ and the game pack (above), Felucca's update loader (GPL-3.0-only; its complete s
 package on should pass on with it, or point to, this repository at the same commit (the source
 of the GPL parts and the build of every byte), `LICENSES/` (in particular `GPL-3.0-or-later.txt`,
 `GPL-3.0-only.txt`, `LGPL-3.0-or-later.txt`, `MPL-2.0.txt`, `MIT.txt`,
-`CC-BY-SA-2.0.txt`), the SDK files' licence text (`docs/third-party/AC79-SDK-Apache-2.0.txt`;
+`CC-BY-SA-2.0.txt`, `Apache-2.0.txt`), the SDK files' licence text (`docs/third-party/AC79-SDK-Apache-2.0.txt`;
 `tools/make-packages` puts a copy, `AC79-SDK-Apache-2.0.txt`, next to the packages) and this file
-with the games' attributions. Nothing in the repository itself is under the Apache License.
+with the games' attributions. Only one game's file (A World of One-Way, `third_party/games/oneway/`) is under the Apache License; the rest of the repository is not.
 
 ## The built-in games
 
@@ -91,6 +91,15 @@ It is Z80 assembly with no library or compiler runtime; its twelve small sprites
 pixel art (typed as text tables in the first commit, GIF files since the last), redrawn at the Spectrum's
 scale and not taken from the Chrome game's sprite sheet, and it points to the ROM's character set rather
 than copying it. Attribution: ZX Dino by Aleksey Kurepin / Kukovnikov Bonifas, <https://github.com/foxweb/zxdino>.
+
+**A World of One-Way** by Serdjuk (2021), `third_party/games/oneway/`. The repository's `LICENSE` is the
+Apache License 2.0 (`LICENSE.release`; text in `LICENSES/Apache-2.0.txt`; the appendix's copyright line is not filled in,
+and all 62 commits are by the one author). The file is `Wow.tap`, version 0.41, unmodified (SPDX `Apache-2.0 AND MIT`).
+Its sound player is Juan J. Martínez's beeper engine (MIT, "Copyright (C) 2021 by Juan J. Martinez"; the notice is
+reproduced in `third_party/games/oneway/README.md` and copied as `COPYING.beeper`). The tape's font is the
+Spectrum ROM's, addressed in place (`font.SpecCHR` is only in the cartridge build); the title screen is drawn by the
+game's code, and the sprites and levels are the author's own. The ZX0 and aPLib tools in the repository's `utils/`
+are not in the tape. Attribution: A World of One-Way by Serdjuk, <https://github.com/Serdjuk/A-World-of-One-way>.
 
 **ZX Sopwith** by Neil Rackett (2026), `third_party/games/sopwith/`: a port of David L. Clark's Sopwith
 (GPL 2 or later, as the original-source repository confirms), released under GPL-3.0-or-later. The

@@ -131,3 +131,21 @@ path = ["third_party/games/dino/LICENSE.release", "third_party/games/dino/README
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Kukovnikov Bonifas"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "third_party/games/oneway/Wow.tap"
+precedence = "override"
+SPDX-FileCopyrightText = ["2021 Serdjuk", "2021 Juan J. Martinez"]
+SPDX-License-Identifier = "Apache-2.0 AND MIT"
+
+[[annotations]]
+path = ["third_party/games/oneway/LICENSE.release", "third_party/games/oneway/README.release.txt", "third_party/games/oneway/README.release.md"]
+precedence = "override"
+SPDX-FileCopyrightText = "2021 Serdjuk"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "third_party/games/oneway/COPYING.beeper"
+precedence = "override"
+SPDX-FileCopyrightText = "2021 Juan J. Martinez"
+SPDX-License-Identifier = "MIT"

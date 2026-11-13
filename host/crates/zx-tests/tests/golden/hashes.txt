@@ -2,6 +2,7 @@ game_border_frame300 = a2417dc5
 game_castaway_frame1500 = 6f999e48
 game_colony8_frame1500 = 174186c0
 game_dino_frame1500 = 29623ce1
+game_oneway_frame1500 = ef3b83e5
 game_scroll_frame300 = 5fa53b45
 game_sopwith_frame300 = 476b5d1d
 game_tape_frame1500 = 4c308e25

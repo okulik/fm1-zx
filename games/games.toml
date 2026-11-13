@@ -105,6 +105,26 @@ demo = "button.OCT-@7000, note.F#3@9000+200, note.F#3@10100+200, note.F#3@11200+
 "note.G5" = "key.SPACE"
 "note.G3" = "key.A"                     # duck
 
+# A World of One-Way: Q/A/O/P move (each move slides to a wall). CAPS SHIFT + ENTER restarts the
+# level or returns to the menu, and the shop takes 1 and 2. The game reads keys only, so the default Kempston notes are remapped: F3 = O (left), A3 = P (right),
+# F#3/G#3 = Q (up), G3 = A (down); OCT- and OCT+ are 1 and 2 (menu start, shop), SEQ + C4 is
+# CAPS SHIFT + ENTER.
+# demo: OCT- (1) at 8 s, 10 s and 12 s passes the title (any key) and starts the game from the menu
+# (a later press is only a Sinclair move), then every 1.2 s from 14 s a move left, up, right and down
+# until 36 s (the report window ends at 36 s), so the heroes keep sliding in the first level.
+[[game]]
+id = "oneway"
+name = "A World of One-Way"
+file = "../third_party/games/oneway/Wow.tap"
+demo = "button.OCT-@8000, button.OCT-@10000, button.OCT-@12000, note.F3@14000+150, note.F#3@15200+150, note.A3@16400+150, note.G3@17600+150, note.F3@18800+150, note.F#3@20000+150, note.A3@21200+150, note.G3@22400+150, note.F3@23600+150, note.F#3@24800+150, note.A3@26000+150, note.G3@27200+150, note.F3@28400+150, note.F#3@29600+150, note.A3@30800+150, note.G3@32000+150, note.F3@33200+150, note.F#3@34400+150"
+
+[game.keys]
+"note.F3" = "key.O"                     # left
+"note.A3" = "key.P"                     # right
+"note.F#3" = "key.Q"                    # up
+"note.G#3" = "key.Q"
+"note.G3" = "key.A"                     # down
+
 # Multi-load test: a tape that loads a screen image from its third block while it runs
 # (`fmzx-pack testprogs`). No keys.
 [[game]]
