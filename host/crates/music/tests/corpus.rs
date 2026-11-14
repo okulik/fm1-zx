@@ -4,7 +4,7 @@
 //! The corpus tool (`music::corpus`) on the pack's own files copied to a temp folder: TZX
 //! conversion, key scripts, report rows and the engine recognition.
 
-use fmzx_pack::testprogs::{tape_tap, turbo_tzx, TAPE_DONE_BORDER};
+use fmzx_pack::testprogs::{rom_copy_payload, rom_copy_tap, tape_tap, turbo_tzx, ROM_COPY_PAYLOAD_AT, TAPE_DONE_BORDER};
 use music::corpus::{load, parse_keys, report_csv, report_txt, run_folder, Options, Step};
 use music::repo;
 use music::truth::Engine;
@@ -336,4 +336,31 @@ fn corpus_loads_turbo() {
     assert_eq!(m.border(), TAPE_DONE_BORDER, "frame 0 of the run is the loaded machine");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn corpus_standard_tape_routes() {
+    // a standard tape the trap's trial rejects (its last block read by a loader of its own) runs
+    // from the snapshot after its signal load: frames already run, the payload in RAM, no tape
+    let dir = temp("routes");
+    std::fs::write(dir.join("copy.tap"), rom_copy_tap()).unwrap();
+    std::fs::write(dir.join("tape.tap"), tape_tap()).unwrap();
+    let m = load(&dir.join("copy.tap")).expect("loads through the signal");
+    assert!(m.frame_count() > 0, "time 0 is after the load and its settle time");
+    assert!(!m.has_tape_buffer(), "no tape for the trap");
+    assert_eq!(m.border(), TAPE_DONE_BORDER);
+    let payload = rom_copy_payload();
+    let got: Vec<u8> = (0..payload.len()).map(|i| m.peek(ROM_COPY_PAYLOAD_AT + i as u16)).collect();
+    assert!(got == payload, "the headerless block is in RAM");
+    // the plain standard tape takes the trap: time 0 is the autostart, the tape inserted, and
+    // LD-BYTES takes its blocks as the run goes on
+    let mut m = load(&dir.join("tape.tap")).expect("loads through the trap");
+    assert_eq!(m.frame_count(), 0, "time 0 is the autostart");
+    assert!(m.has_tape_buffer(), "the tape is in for the trap");
+    assert_eq!(m.tape_pos(), 0);
+    for _ in 0..200 {
+        m.run_frame();
+    }
+    assert!(m.tape_pos() > 0, "the trap took the first blocks");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -488,6 +488,14 @@
 //! Autostarting BASIC tapes of one line that fail load to snapshot's success test: `10 STOP`
 //! ends at the ROM's report "9 STOP statement"; `10 RANDOMIZE USR 0` resets the machine to the
 //! copyright screen; `10 POKE 32768,243: POKE 32769,118: RANDOMIZE USR 32768` runs `DI; HALT`.
+//!
+//! # `split_end_tap()` (not in the pack)
+//!
+//! `10 PAUSE 28: POKE 23610,8: PAUSE 10: RANDOMIZE USR 0`: an end whose settle-time samples no
+//! single "ended" rule of the success test takes on its own. Loaded through the trap, the settle
+//! time sees about 30 frames of `PAUSE` (running), then about 36 in the ROM with ERR_NR 8 (the
+//! second `PAUSE`, and the reset's RAM fill until it reaches the system variables), then about 35
+//! of the reset (the RAM check zeroes the system variables, then the copyright screen).
 
 use std::path::{Path, PathBuf};
 
@@ -1364,6 +1372,24 @@ pub fn reset_tap() -> Vec<u8> {
     let mut body = vec![0xF9, 0xC0]; // RANDOMIZE USR
     basic_number(&mut body, 0.0);
     basic_tap("reset", body)
+}
+
+/// An autostarting BASIC tape whose program is
+/// `10 PAUSE 28: POKE 23610,8: PAUSE 10: RANDOMIZE USR 0`: it runs, then sits in the ROM with a
+/// report code (ERR_NR 8), then resets, so the settle time's samples split between running, the
+/// error report and the reset (see the module docs). Not one of [`PROGRAMS`].
+pub fn split_end_tap() -> Vec<u8> {
+    let mut body = vec![0xF2]; // PAUSE
+    basic_number(&mut body, 28.0);
+    body.extend_from_slice(&[b':', 0xF4]); // POKE
+    basic_number(&mut body, 23610.0);
+    body.push(b',');
+    basic_number(&mut body, 8.0);
+    body.extend_from_slice(&[b':', 0xF2]);
+    basic_number(&mut body, 10.0);
+    body.extend_from_slice(&[b':', 0xF9, 0xC0]); // RANDOMIZE USR
+    basic_number(&mut body, 0.0);
+    basic_tap("split", body)
 }
 
 /// An autostarting BASIC tape whose program is

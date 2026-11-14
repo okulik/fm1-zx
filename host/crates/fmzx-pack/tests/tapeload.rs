@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use fmzx_pack::tapeload::{is_128k, load_signal, prepare, save_z80, trap_trial, Kind};
 use fmzx_pack::testprogs::{
-    halt_tap, hang_tzx, input_tap, ok_tap, pause_tap, reset_tap, rom_copy_payload, rom_copy_tap, stop_tap, tape_tap, tune_sna,
+    halt_tap, hang_tzx, input_tap, ok_tap, pause_tap, reset_tap, rom_copy_payload, rom_copy_tap, split_end_tap, stop_tap, tape_tap, tune_sna,
     turbo_tzx, tzx_header, wrap_tap_as_tzx, ROM_COPY_PAYLOAD_AT, TAPE_DONE_BORDER, TURBO_PAYLOAD, TURBO_PAYLOAD_AT,
 };
 use zx_sys::{zx_regs, Machine};
@@ -173,6 +173,10 @@ fn success_rules() {
     assert!(e.contains("BASIC editor"), "{e}");
     let e = load_signal(&ok_tap()).err().expect("so it does through the signal");
     assert!(e.contains("BASIC editor"), "{e}");
+    // an end that splits the samples between the error report and the reset (neither in half
+    // of them, ended in most): the backstop fails it and names the larger part
+    let e = trap_trial(&split_end_tap()).expect_err("an end split between report and reset fails");
+    assert!(e.contains("the program ended") && e.contains("mostly at the ROM's error report \"9 STOP statement\""), "{e}");
     // a BASIC program still running in the ROM has started: PAUSE 0, INPUT
     trap_trial(&pause_tap()).expect("PAUSE 0 runs");
     trap_trial(&input_tap()).expect("INPUT runs");

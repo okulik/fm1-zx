@@ -41,7 +41,11 @@
 //! - at the BASIC editor (the program ended with "0 OK"), when in at least half of the samples
 //!   PC is in the ROM's key wait (WAIT-KEY's loop through INPUT-AD, CALL-SUB and CALL-JUMP into
 //!   KEY-INPUT: 10A8h-10B4h, 15DEh-15FFh, 162Ch) and the system variable FLAGX (5C71h) has bit 5
-//!   clear (with it set, the editor is serving a BASIC `INPUT`: the program is still running).
+//!   clear (with it set, the editor is serving a BASIC `INPUT`: the program is still running);
+//! - as ended, when in at least half of the samples the machine is in any of the last three
+//!   states (each sample counted once), though none of them takes half on its own: an end that
+//!   passes through several, such as a reset at the end of the tape (the RAM check, the copyright
+//!   screen, the editor). The message names the state of the most samples.
 //!
 //! A program that runs in the ROM passes: a BASIC part playing `BEEP`, a menu printed through
 //! `RST 10h`, a `PAUSE 0`. (The design asked for code in RAM in half of the samples; that refuses
@@ -195,7 +199,7 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
     let peek16 = |m: &Machine, a: u16| u16::from_le_bytes([m.peek(a), m.peek(a + 1)]);
     m.port_fe_probe(true);
     m.take_port_fe_reads();
-    let (mut editor, mut polling, mut report, mut reset) = (0u32, 0u32, 0u32, 0u32);
+    let (mut editor, mut polling, mut report, mut reset, mut ended) = (0u32, 0u32, 0u32, 0u32, 0u32);
     let mut halted_di = false;
     let mut err_nr = 0xFF;
     for _ in 0..SETTLE_FRAMES {
@@ -203,23 +207,26 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
         let reads = m.take_port_fe_reads();
         let r = m.regs();
         halted_di |= m.halted() && r.iff1 == 0;
-        if ROM_KEY_WAIT.iter().any(|k| k.contains(&r.pc)) && m.peek(FLAGX) & 0x20 == 0 {
-            editor += 1;
-        }
         if reads >= POLL_READS && near_loader(r.pc) {
             polling += 1;
         }
+        let at_editor = ROM_KEY_WAIT.iter().any(|k| k.contains(&r.pc)) && m.peek(FLAGX) & 0x20 == 0;
+        let (mut at_reset, mut at_report) = (false, false);
         if r.pc < 0x4000 {
             // the copyright screen leaves ERR_NR 0 (or FFh); a report with no program (a failed
             // LOAD "") has another code
             let e = m.peek(ERR_NR);
-            if peek16(m, PROG) == peek16(m, VARS) && (e == 0 || e == 0xFF) {
-                reset += 1;
-            } else if e != 0xFF {
-                report += 1;
+            at_reset = peek16(m, PROG) == peek16(m, VARS) && (e == 0 || e == 0xFF);
+            at_report = !at_reset && e != 0xFF;
+            // the first code: a reset's RAM fill writes a byte of its own into ERR_NR
+            if at_report && report == 0 {
                 err_nr = e;
             }
         }
+        editor += u32::from(at_editor);
+        reset += u32::from(at_reset);
+        report += u32::from(at_report);
+        ended += u32::from(at_editor || at_reset || at_report);
     }
     m.port_fe_probe(false);
     if halted_di {
@@ -235,6 +242,18 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
         Err("back at the copyright screen (the machine reset)".into())
     } else if editor >= half {
         Err("the program ended: the machine waits at the BASIC editor".into())
+    } else if ended >= half {
+        let most = if report >= reset && report >= editor {
+            format!("at the ROM's error report {}", report_name(err_nr))
+        } else if reset >= editor {
+            "back at the copyright screen (the machine reset)".to_string()
+        } else {
+            "waiting at the BASIC editor".to_string()
+        };
+        Err(format!(
+            "the program ended: in {ended} of {SETTLE_FRAMES} frames it was at the BASIC editor, the ROM's error report \
+             or the copyright screen, mostly {most}"
+        ))
     } else {
         Ok(())
     }
