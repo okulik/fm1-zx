@@ -14,7 +14,7 @@ use music::synthetic::{
 };
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, decode_stream, played_hz, test_sna, voices_hz, RATE};
-use zx_sys::{Beeper, Machine, SndFrame, SND_STYLE_FLIPS, SND_STYLE_SLOTS};
+use zx_sys::{Beeper, Machine, SndDecoder, SndFrame, SND_DELAY_FRAMES, SND_STYLE_FLIPS, SND_STYLE_SLOTS};
 
 /// A game run from boot: every frame's edges, the decoder's decisions and the RAM truth.
 struct Run {
@@ -222,6 +222,27 @@ fn plain_tone_after_slots_music() {
     assert!(played.is_empty(), "the tone played as notes in frames {played:?}");
 }
 
+#[test]
+fn close_new_weights_keep_one_channel() {
+    // re-learning the weights: two new weights 15-16/256 apart can both lie within the 8/256 a
+    // weight may move of one old weight; only the nearer keeps that channel's rises, and no
+    // channel is handed another's (taking the first match for both gave the 75 channel the 150
+    // channel's rises, or the 82 channel's to the 90 one)
+    let ch = |c: u32| c * 1_000_000 + 9; // channel c's newest rise of 10
+    for (old, new, want) in [
+        (&[82u8, 150][..], &[75u32, 90][..], vec![(10, ch(0)), (0, 0)]),
+        (&[82, 150], &[75, 90, 150], vec![(10, ch(0)), (0, 0), (10, ch(1))]),
+        (&[82, 150], &[74, 89, 150], vec![(0, 0), (10, ch(0)), (10, ch(1))]),
+        (&[40, 82], &[40, 75, 90], vec![(10, ch(0)), (10, ch(1)), (0, 0)]),
+        (&[82], &[75, 90], vec![(10, ch(0)), (0, 0)]),
+        (&[40, 82, 150], &[82, 150], vec![(10, ch(1)), (10, ch(2))]),
+    ] {
+        let got = SndDecoder::slots_rechannel(old, 10, new);
+        println!("weights {old:?} -> {new:?}: (rises, newest) {got:?}");
+        assert_eq!(got, want, "weights {old:?} -> {new:?}");
+    }
+}
+
 /// `a` then `b`, with `gap` silent frames between.
 fn join(a: Stream, gap: usize, b: Stream) -> (Stream, usize) {
     let mut a = a;
@@ -338,4 +359,78 @@ fn flips_still_pass() {
     }
     let tune = &streams[3].1;
     assert!(tune[TUNE_START_FRAME as usize + 40].confident != 0, "tune.sna still plays in FM");
+}
+
+/// The first `upto` frames (edges, start level) with every edge `shift` T later.
+fn shifted(frames: &[(Vec<zx_sys::zx_edge>, u8)], shift: u64, upto: usize) -> Vec<(Vec<zx_sys::zx_edge>, u8)> {
+    let mut out: Vec<(Vec<zx_sys::zx_edge>, u8)> = Vec::new();
+    let mut level = frames[0].1;
+    let n = upto + 2;
+    let mut buckets: Vec<Vec<zx_sys::zx_edge>> = vec![Vec::new(); n];
+    for (f, (edges, _)) in frames.iter().enumerate().take(upto) {
+        for e in edges {
+            let t = f as u64 * 69_888 + e.tstate as u64 + shift;
+            buckets[(t / 69_888) as usize].push(zx_sys::zx_edge { tstate: (t % 69_888) as u32, level: e.level });
+        }
+    }
+    for b in buckets {
+        let start = level;
+        level = b.last().map_or(level, |e| e.level);
+        out.push((b, start));
+    }
+    out
+}
+
+/// The decisions about `frames` with the decoder's frame counter starting at `start`.
+fn decode_from(frames: &[(Vec<zx_sys::zx_edge>, u8)], start: u32) -> Vec<SndFrame> {
+    let mut d = SndDecoder::starting_at(start);
+    let mut out: Vec<SndFrame> = frames.iter().map(|(e, l)| d.frame(e, *l)).collect();
+    let level = frames.last().map_or(0, |(e, l)| e.last().map_or(*l, |x| x.level));
+    for _ in 0..SND_DELAY_FRAMES {
+        out.push(d.frame(&[], level));
+    }
+    out.drain(..SND_DELAY_FRAMES as usize);
+    out
+}
+
+#[test]
+fn time_wrap_at_colony8_drums() {
+    // the time-slot decoder's absolute times (frame x 69,888 + T) wrap at 2^32, once every 20.5
+    // minutes of play. Colony 8's drums drive the whole speaker (full swings, every channel
+    // rising together): with the wrap 20-200 T after a drum's first edge (the stream shifted to
+    // put it there), every decision is the same as without the wrap (comparing rise times across
+    // the wrap by their unsigned difference lost 7 of 48 drums)
+    let mut m = music::colony8();
+    let mut beeper = Beeper::new(RATE.0, RATE.1);
+    let mut cd = Colony8Drums::new();
+    let mut frames = Vec::new();
+    let mut starts = Vec::new();
+    for f in 0..900 {
+        let fr = capture(&mut m, &mut beeper, 1).pop().unwrap();
+        if cd.frame(&m) && f > 150 {
+            starts.push(f);
+        }
+        frames.push((fr.edges, fr.start_level));
+    }
+    let mut checked = 0;
+    let mut diffs = Vec::new();
+    for &f in starts.iter().take(12) {
+        // the drum's first speaker edge: the first edge of frame f
+        let Some(e0) = frames[f].0.first() else { continue };
+        let t0 = f as u64 * 69_888 + e0.tstate as u64;
+        for before in [20u64, 60, 120, 200] {
+            let target = (1u64 << 32) - before; // the edge `before` T ahead of the wrap
+            let s = (target - t0) / 69_888;
+            let shift = target - t0 - s * 69_888;
+            let sh = shifted(&frames, shift, (f + 30).min(frames.len()));
+            let a = decode_from(&sh, 0);
+            let b = decode_from(&sh, s as u32);
+            if let Some(i) = (0..a.len()).find(|&i| a[i] != b[i]) {
+                diffs.push(format!("drum at {f}, edge {before} T before the wrap: decision {i} {:?} vs {:?}", b[i], a[i]));
+            }
+            checked += 1;
+        }
+    }
+    println!("{} drums, {checked} wraps checked, {} decisions changed", starts.len().min(12), diffs.len());
+    assert!(diffs.is_empty(), "{}", diffs.join("\n"));
 }

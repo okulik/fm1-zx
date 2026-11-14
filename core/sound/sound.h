@@ -211,6 +211,11 @@ uint8_t snd_slots_level(const snd_slots *s, uint32_t c);
 uint32_t snd_slots_explained(snd_decoder *d, uint32_t from, uint32_t to, const uint32_t *keep_q8, uint32_t *rises,
                              uint32_t *swings);
 uint32_t snd_slots_drums(snd_decoder *d, uint32_t from, uint32_t to);
+/* Replaces the time-slot channels with nw channels of weights w (1/256, ascending): each old
+ * channel's rises go to the new channel whose weight is nearest its own within the tolerance,
+ * one new channel at most; the others start empty. (Used by the weight learning; exposed for
+ * its tests.) */
+void snd_slots_rechannel(snd_decoder *d, const uint32_t *w, uint32_t nw);
 
 /* ---- FM synth (fm.c) ---------------------------------------------------
  *

@@ -384,6 +384,42 @@ impl SndDecoder {
 }
 
 impl SndDecoder {
+    /// A decoder whose frame counter starts at `frame`, for tests: its absolute times (frame x
+    /// 69,888 + T-state) wrap at 2^32, 256 T into frame 61,455, as on a machine running 20 min.
+    pub fn starting_at(frame: u32) -> Self {
+        let mut d = Self::new();
+        d.raw.frames = frame;
+        d
+    }
+
+    /// For tests of the time-slot decoder's channel carry-over (`snd_slots_rechannel`): a decoder
+    /// with channels of weights `old` (1/256), channel c holding `rises` rises at times
+    /// c x 1,000,000 + i, re-learns the weights `new`; returns each new channel's rise count and
+    /// newest rise time (0 for none).
+    pub fn slots_rechannel(old: &[u8], rises: u32, new: &[u32]) -> Vec<(u32, u32)> {
+        assert!(old.len() <= sys::SND_SLOTS as usize && new.len() <= sys::SND_SLOTS as usize);
+        let mut d = Self::new();
+        let sl = &mut d.raw.sl;
+        sl.k = old.len() as u8;
+        for (c, &w) in old.iter().enumerate() {
+            sl.w[c] = w;
+            for i in 0..rises {
+                sl.rise[c][(i % sys::SND_RISES) as usize] = c as u32 * 1_000_000 + i;
+            }
+            sl.nrise[c] = rises;
+        }
+        // SAFETY: `raw` is an initialised snd_decoder; `new` holds new.len() weights (at most
+        // SND_SLOTS).
+        unsafe { sys::snd_slots_rechannel(&mut *d.raw, new.as_ptr(), new.len() as u32) };
+        let sl = &d.raw.sl;
+        (0..new.len())
+            .map(|c| {
+                let n = sl.nrise[c];
+                (n, if n > 0 { sl.rise[c][((n - 1) % sys::SND_RISES) as usize] } else { 0 })
+            })
+            .collect()
+    }
+
     /// The work units (`snd_decoder.work`) the last [`SndDecoder::frame`] call spent.
     pub fn work(&self) -> u32 {
         self.raw.work

@@ -97,6 +97,14 @@ static uint32_t udiff(uint32_t a, uint32_t b)
 	return a > b ? a - b : b - a;
 }
 
+/* The distance between two absolute times (which wrap at 2^32 T, every 20.5
+ * minutes): the signed difference's magnitude. */
+static uint32_t tdist(uint32_t a, uint32_t b)
+{
+	int32_t x = (int32_t)(a - b);
+	return x < 0 ? 0u - (uint32_t)x : (uint32_t)x;
+}
+
 static void reset_channels(snd_slots *s)
 {
 	uint32_t c;
@@ -243,6 +251,63 @@ static void build_lut(snd_decoder *d)
 	d->work += 257u * combos;
 }
 
+void snd_slots_rechannel(snd_decoder *d, const uint32_t *w, uint32_t nw)
+{
+	/* new channels: carry over the rises of those whose weight stays, each
+	 * old channel to one new channel at most (two new weights 15-16/256 apart
+	 * can both be within SAME_W of one old weight: the nearer keeps it),
+	 * moving each kept ring to its new channel by swaps, in place (with no
+	 * old channel taken twice, a swap never touches a ring already placed) */
+	snd_slots *s = &d->sl;
+	uint32_t src[SND_SLOTS], kept_n[SND_SLOTS], x, i, j;
+	uint8_t cur = 0;
+
+	for (i = 0; i < SND_SLOTS; i++)
+		src[i] = SND_SLOTS;   /* none */
+	for (j = 0; j < s->k; j++) {
+		uint32_t best = SND_SLOTS, best_d = SAME_W + 1u;
+		for (i = 0; i < nw; i++)
+			if (src[i] == SND_SLOTS && udiff(w[i], s->w[j]) < best_d) {
+				best = i;
+				best_d = udiff(w[i], s->w[j]);
+			}
+		if (best < SND_SLOTS) src[best] = j;
+	}
+	for (i = 0; i < nw; i++) {
+		uint32_t from = src[i], r;
+		if (from == SND_SLOTS || from == i) continue;
+		for (r = 0; r < SND_RISES; r++) {
+			uint32_t t = s->rise[i][r];
+			uint8_t f = s->swing[i][r];
+			s->rise[i][r] = s->rise[from][r];
+			s->swing[i][r] = s->swing[from][r];
+			s->rise[from][r] = t;
+			s->swing[from][r] = f;
+		}
+		x = s->nrise[i];
+		s->nrise[i] = s->nrise[from];
+		s->nrise[from] = x;
+		if ((s->cur >> i ^ s->cur >> from) & 1u) s->cur ^= (uint8_t)((1u << i) | (1u << from));
+		/* whatever was at i is now at `from` */
+		for (j = i + 1u; j < nw; j++)
+			if (src[j] == i) src[j] = from;
+		d->work += SND_RISES;
+	}
+	for (i = 0; i < SND_SLOTS; i++) {
+		kept_n[i] = src[i] == SND_SLOTS ? 0 : s->nrise[i];
+		if (kept_n[i] && (s->cur >> i & 1u)) cur |= (uint8_t)(1u << i);
+	}
+	reset_channels(s);
+	for (i = 0; i < nw; i++) {
+		s->w[i] = (uint8_t)w[i];
+		s->nrise[i] = kept_n[i];
+		s->cand[i] = (uint8_t)(cur >> i & 1u);
+	}
+	s->cur = cur;
+	s->k = (uint8_t)nw;
+	if (nw) build_lut(d);
+}
+
 /* Learns the weights from the plateau histogram; keeps the rises of the
  * channels whose weight stays. */
 static void learn(snd_decoder *d)
@@ -300,52 +365,7 @@ static void learn(snd_decoder *d)
 		if (nw) build_lut(d);
 		return;
 	}
-	{
-		/* new channels: carry over the rises of those whose weight stays,
-		 * moving each kept ring to its new channel by swaps, in place */
-		uint32_t src[SND_SLOTS], kept_n[SND_SLOTS], x;
-		uint8_t cur = 0;
-		for (i = 0; i < SND_SLOTS; i++) {
-			src[i] = SND_SLOTS;   /* none */
-			if (i >= nw) continue;
-			for (j = 0; j < s->k; j++)
-				if (udiff(w[i], s->w[j]) <= SAME_W) break;
-			if (j < s->k) src[i] = j;
-		}
-		for (i = 0; i < nw; i++) {
-			uint32_t from = src[i], r;
-			if (from == SND_SLOTS || from == i) continue;
-			for (r = 0; r < SND_RISES; r++) {
-				uint32_t t = s->rise[i][r];
-				uint8_t f = s->swing[i][r];
-				s->rise[i][r] = s->rise[from][r];
-				s->swing[i][r] = s->swing[from][r];
-				s->rise[from][r] = t;
-				s->swing[from][r] = f;
-			}
-			x = s->nrise[i];
-			s->nrise[i] = s->nrise[from];
-			s->nrise[from] = x;
-			if ((s->cur >> i ^ s->cur >> from) & 1u) s->cur ^= (uint8_t)((1u << i) | (1u << from));
-			/* whatever was at i is now at `from` */
-			for (j = i + 1u; j < nw; j++)
-				if (src[j] == i) src[j] = from;
-			d->work += SND_RISES;
-		}
-		for (i = 0; i < SND_SLOTS; i++) {
-			kept_n[i] = src[i] == SND_SLOTS ? 0 : s->nrise[i];
-			if (kept_n[i] && (s->cur >> i & 1u)) cur |= (uint8_t)(1u << i);
-		}
-		reset_channels(s);
-		for (i = 0; i < nw; i++) {
-			s->w[i] = (uint8_t)w[i];
-			s->nrise[i] = kept_n[i];
-			s->cand[i] = (uint8_t)(cur >> i & 1u);
-		}
-		s->cur = cur;
-		s->k = (uint8_t)nw;
-		if (nw) build_lut(d);
-	}
+	snd_slots_rechannel(d, w, nw);
 }
 
 /* ---- the sampler ------------------------------------------------------- */
@@ -369,7 +389,7 @@ static void record_rise(snd_slots *s, uint32_t c, uint32_t at, uint32_t hop)
 			break;
 		}
 		j = (s->nrise[o] - 1u) % SND_RISES;
-		if (udiff(s->rise[o][j], at) > 4u * hop) all = 0;
+		if (tdist(s->rise[o][j], at) > 4u * hop) all = 0;
 	}
 	if (!all) return;
 	for (o = 0; o < s->k; o++)
