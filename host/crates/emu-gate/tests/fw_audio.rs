@@ -2,17 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The beeper as the FM-1's audio out plays it, captured by fm1-emu (left channel), in the
-//! default Sound choice (Beeper) and in FM: sound. Needs the device build (`FMZX_FM1_BUILD`).
+//! default Sound choice (Beeper), in FM: sound and in FM: engines. Needs the device build
+//! (`FMZX_FM1_BUILD`).
 //!
 //! Pack: `games/games.toml`; game 1 is `border.sna` (stripes and a 976 Hz tone).
 
-use emu_gate::budgets::{choose_sound, sound_mode, SOUND_BEEPER, SOUND_FM};
+use emu_gate::budgets::{choose_sound, press_to, sound_mode, SOUND_BEEPER, SOUND_FM, SOUND_FM_B, SOUND_ITEM, VIEW_GAME, VIEW_MENU};
 use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
 use fmzx_pack::testprogs::{BORDER_TONE_HZ, TUNE_HZ, TUNE_NOTE_FRAMES};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 const PLAY: u8 = 12;
+const HOME: u8 = 8;
+const OCT_UP: u8 = 1;
 const SELECT: u8 = 0;
 const BORDER: u32 = 1;
 const MASTER_ADC: u8 = 4;
@@ -300,8 +303,46 @@ fn strongest_pitch(y: &[f64], notes: &[f64], rate: f64) -> (f64, Option<f64>, f6
 
 #[test]
 fn sound_menu_switches_to_fm() {
+    castaway_title_in(SOUND_FM);
+}
+
+#[test]
+fn fm_engines_castaway_title() {
+    castaway_title_in(SOUND_FM_B);
+}
+
+#[test]
+fn sound_menu_cycles_three() {
+    // from HOME, PLAY on the Sound item: Beeper -> FM: sound -> FM: engines -> Beeper, the menu
+    // staying up and the game's frames stopped
+    let mut m = start_border();
+    press_to(&mut m, HOME, VIEW_MENU);
+    let frames = m.stats().frames;
+    for _ in 0..SOUND_ITEM {
+        m.press(OCT_UP, 30);
+        m.run_ms(30);
+    }
+    assert_eq!(sound_mode(&m), SOUND_BEEPER, "Beeper by default");
+    for want in [SOUND_FM, SOUND_FM_B, SOUND_BEEPER] {
+        m.press(PLAY, 30);
+        m.run_ms(30);
+        assert_eq!(sound_mode(&m), want, "the Sound item's next choice");
+        assert_eq!(m.stats().view, VIEW_MENU, "the Sound item left the menu");
+    }
+    assert_eq!(m.stats().frames, frames, "frames ran in the menu");
+    press_to(&mut m, HOME, VIEW_GAME);
+    assert_eq!(sound_mode(&m), SOUND_BEEPER);
+}
+
+/// Castaway's title tune in the FM choice `sound` (FM: sound or FM: engines), chosen from the
+/// HOME menu while it plays, then Beeper again: the device plays the host mixer's output sample
+/// for sample, the strongest of the tune's notes (its RAM, the truth) shows at its pitch in the
+/// FM windows, the frames are decoded as music (FM: sound: the decoder is confident; FM: engines:
+/// the mixer plays B's FM), no underruns; and back in Beeper the live beeper again after the
+/// crossfade.
+fn castaway_title_in(sound: u32) {
     use music::truth::Engine;
-    use zx_sys::{SndMixer, SND_MODE_BEEPER, SND_MODE_FM_A};
+    use zx_sys::{SndMixer, SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B};
     const D: usize = zx_sys::SND_DELAY_FRAMES as usize;
     // Castaway's title tune plays from frame 155; its long notes (one or both channels) run to
     // about frame 310
@@ -313,7 +354,8 @@ fn sound_menu_switches_to_fm() {
         m.run_ms(5);
     }
     assert!(m.stats().frames >= 165, "Castaway stopped at frame {}", m.stats().frames);
-    let fm_from = choose_sound(&mut m, SOUND_FM) as usize;
+    let fm_from = choose_sound(&mut m, sound) as usize;
+    let fm_mode = if sound == SOUND_FM { SND_MODE_FM_A } else { SND_MODE_FM_B };
     m.run_ms(2600);
     let beeper_from = choose_sound(&mut m, SOUND_BEEPER) as usize;
     m.run_ms(1000);
@@ -334,9 +376,16 @@ fn sound_menu_switches_to_fm() {
     for i in 0..frames {
         let f = music::capture(&mut zx, &mut b, 1).pop().expect("a frame");
         truth.push(Engine::Castaway.read(&zx));
-        confident.push(dec.frame(&f.edges, f.start_level).confident != 0);
-        let mode = if (fm_from..beeper_from).contains(&i) { SND_MODE_FM_A } else { SND_MODE_BEEPER };
+        let a_confident = dec.frame(&f.edges, f.start_level).confident != 0;
+        let mode = if (fm_from..beeper_from).contains(&i) { fm_mode } else { SND_MODE_BEEPER };
         mixed.extend(mix.frame(mode, Some(&zx), &f.edges, f.start_level, &f.beeper));
+        // music in frame i: A's decoder confident in it; B's FM played for it (the mixer's
+        // decision for frame i comes SND_DELAY_FRAMES later)
+        if sound == SOUND_FM {
+            confident.push(a_confident);
+        } else if i >= D {
+            confident.push(mix.fm_on());
+        }
         beeper.extend_from_slice(&f.beeper);
         starts.push(beeper.len());
     }

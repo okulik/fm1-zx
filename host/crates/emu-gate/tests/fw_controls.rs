@@ -13,7 +13,7 @@
 //! `zx_machine` starts with the Z80 core's pointers (8 bytes on the host, 4 on the device), so
 //! the zx-sys layout of the fields after them differs from the device's.
 
-use emu_gate::budgets::{choose_sound, sound_mode, SOUND_FM};
+use emu_gate::budgets::{choose_sound, sound_mode, SOUND_FM, SOUND_FM_B};
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -435,8 +435,8 @@ fn leave_game(m: &mut Machine) {
 }
 
 /// The host's render of pack entry `index` (a snapshot) from its load, `frames` frames through
-/// the beeper and the mixer in FM: sound.
-fn host_fm(index: u32, frames: usize) -> Vec<i16> {
+/// the beeper and the mixer in the FM mode `mode` (`SND_MODE_FM_*`).
+fn host_fm(index: u32, mode: u8, frames: usize) -> Vec<i16> {
     let g = zx_sys::pack_game_at(pack(), index).expect("pack entry");
     let sna = g.extract(zx_sys::PACK_MAX_RAW as usize).expect("extract");
     let mut zx = zx_sys::Machine::new();
@@ -449,7 +449,7 @@ fn host_fm(index: u32, frames: usize) -> Vec<i16> {
         let level = zx.edges_start_level();
         b.set_level(level);
         let beeper = b.render(zx.edges());
-        out.extend(mix.frame(zx_sys::SND_MODE_FM_A, Some(&zx), zx.edges(), level, &beeper));
+        out.extend(mix.frame(mode, Some(&zx), zx.edges(), level, &beeper));
     }
     out
 }
@@ -457,13 +457,13 @@ fn host_fm(index: u32, frames: usize) -> Vec<i16> {
 /// Samples of a 20 ms frame, about (750000/17 Hz).
 const FRAME_SAMPLES: usize = 882;
 
-/// The audio from `mark` (a sample count taken before the game was (re)started in FM: sound) is
-/// silence until the new game's first sample, then exactly the host's FM render of `index` from
-/// its load: three frames of silence (the mixer's delay ring and decoder start empty) and then the
-/// game's own sound, 60 ms late. Nothing of the game before plays.
-fn assert_fresh_fm_start(m: &mut Machine, mark: usize, index: u32, what: &str) {
+/// The audio from `mark` (a sample count taken before the game was (re)started in the FM mode
+/// `mode`) is silence until the new game's first sample, then exactly the host's FM render of
+/// `index` from its load: three frames of silence (the mixer's delay ring and decoder start
+/// empty) and then the game's own sound, 60 ms late. Nothing of the game before plays.
+fn assert_fresh_fm_start(m: &mut Machine, mark: usize, index: u32, mode: u8, what: &str) {
     m.run_ms(1000);
-    let host = host_fm(index, 60);
+    let host = host_fm(index, mode, 60);
     let dev = &m.audio_left()[mark..];
     let loud = |a: &[i16]| a.iter().position(|x| x.unsigned_abs() > 64);
     let h = loud(&host).expect("the host render is silent");
@@ -484,34 +484,52 @@ fn sound_choice_survives_reset_and_new_game() {
     let mut m = start(BootOpt { rgb565: true, divider: 4 }, BORDER);
     master_full(&mut m);
     assert_eq!(sound_mode(&m), 0, "Beeper by default");
-    choose_sound(&mut m, SOUND_FM);
+    // FM: sound, then FM: engines, each chosen in border (with scroll the other game)
+    sound_choice_holds(&mut m, SOUND_FM, BORDER, SCROLL);
+    press_to(&mut m, HOME, view::GAME);
+    m.run_ms(300);
+    leave_game(&mut m);
+    m.turn(SELECT, BORDER as i32 - SCROLL as i32);
+    m.run_ms(200);
+    press_to(&mut m, PLAY, view::GAME);
+    assert_eq!((m.stats().game, sound_mode(&m)), (BORDER, SOUND_FM));
+    m.run_ms(300);
+    sound_choice_holds(&mut m, SOUND_FM_B, BORDER, SCROLL);
+}
+
+/// In game `game` (running), the Sound choice `sound` (an FM one) is made; it holds across Reset
+/// game (the game restarting afresh in it), the picker and another game, `other`, and the HOME
+/// menu shows it (ends there).
+fn sound_choice_holds(m: &mut Machine, sound: u32, game: u32, other: u32) {
+    let (name, mode, cycles) = if sound == SOUND_FM { ("FM: sound", zx_sys::SND_MODE_FM_A, 1) } else { ("FM: engines", zx_sys::SND_MODE_FM_B, 2) };
+    choose_sound(m, sound);
     m.run_ms(300);
 
     // reset game: the choice holds, and the restarted game starts afresh in it (the mark once
     // the menu has silenced the game)
-    press_to(&mut m, HOME, view::MENU);
+    press_to(m, HOME, view::MENU);
     m.run_ms(100);
     let mark = m.audio_left().len();
     m.press(OCT_UP, 30); // "Reset game"
     m.run_ms(50);
-    press_to(&mut m, PLAY, view::GAME);
-    assert_eq!(sound_mode(&m), SOUND_FM, "after Reset game");
-    assert_fresh_fm_start(&mut m, mark, BORDER, "reset");
+    press_to(m, PLAY, view::GAME);
+    assert_eq!(sound_mode(m), sound, "after Reset game ({name})");
+    assert_fresh_fm_start(m, mark, game, mode, &format!("reset ({name})"));
 
     // back to the picker and another game
-    leave_game(&mut m);
-    assert_eq!(sound_mode(&m), SOUND_FM, "in the picker");
-    m.turn(SELECT, -1); // border -> scroll
+    leave_game(m);
+    assert_eq!(sound_mode(m), sound, "in the picker ({name})");
+    m.turn(SELECT, other as i32 - game as i32);
     m.run_ms(200);
-    press_to(&mut m, PLAY, view::GAME);
-    assert_eq!((m.stats().game, sound_mode(&m)), (SCROLL, SOUND_FM), "after starting another game");
+    press_to(m, PLAY, view::GAME);
+    assert_eq!((m.stats().game, sound_mode(m)), (other, sound), "after starting another game ({name})");
     m.run_ms(300);
 
     // the menu shows it
-    press_to(&mut m, HOME, view::MENU);
+    press_to(m, HOME, view::MENU);
     m.run_ms(300);
     assert_eq!(m.stats().pending, 0, "LCD rows still pending");
-    assert!(m.lcd_rgb565() == &host_menu(pack(), 1)[..], "the LCD differs from the host's HOME menu with FM: sound");
+    assert!(m.lcd_rgb565() == &host_menu(pack(), cycles)[..], "the LCD differs from the host's HOME menu with {name}");
 }
 
 #[test]
@@ -538,5 +556,5 @@ fn fm_new_game_starts_silent() {
     let mark = m.audio_left().len();
     press_to(&mut m, PLAY, view::GAME);
     assert_eq!((m.stats().game, sound_mode(&m)), (BORDER, SOUND_FM));
-    assert_fresh_fm_start(&mut m, mark, BORDER, "new game");
+    assert_fresh_fm_start(&mut m, mark, BORDER, zx_sys::SND_MODE_FM_A, "new game");
 }

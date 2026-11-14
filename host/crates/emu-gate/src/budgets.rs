@@ -133,6 +133,7 @@ pub const SOUND_ITEM: u32 = 5;
 /// `fmzx_sound_mode` values (`SND_MODE_*` in `core/sound/sound.h`).
 pub const SOUND_BEEPER: u32 = 0;
 pub const SOUND_FM: u32 = 1;
+pub const SOUND_FM_B: u32 = 2;
 
 /// Presses `key` and runs until `fmzx_stats.view` is `view` (at most 300 ms).
 pub fn press_to(m: &mut Machine, key: u8, view: u32) {

@@ -6,16 +6,20 @@
 //!
 //! CPU per frame is `game_frame` plus every `lcd_compose_band` call before the next frame, at
 //! the LCD divider that sends the most bands (1), in RGB444, over 10 s of play after the games
-//! are loaded and past their menus (`budgets::SETTLE_MS`), in both Sound choices: Beeper (the
-//! default; the sound decoder still runs every frame for its look-ahead) and FM: sound. Besides
-//! the pack's games, `noise.sna` (testprogs, in a pack of its own) gives the decoder its busiest
-//! sound: 250 speaker edges a frame at pseudo-random spacings. `Machine::cost_of` counts at the
-//! caller's interrupt depth, so the audio ISR (`fm1_alnk0_irq`, measured on its own) and the
-//! key-scan timer interrupt are not in it.
+//! are loaded and past their menus (`budgets::SETTLE_MS`), in all three Sound choices: Beeper
+//! (the default; the mixer still runs both methods every frame for their look-ahead), FM: sound
+//! and FM: engines. Besides the pack's games, three test programs (testprogs, in a pack of their
+//! own, never committed): `noise.sna` gives the decoder its busiest sound, 250 speaker edges a
+//! frame at pseudo-random spacings; `sites.sna` and `sites-var.sna` drive the speaker from four
+//! OUT addresses a frame that match no engine, method B's matching worst case: in `sites.sna`
+//! the code around them stays the same (B remembers that they match nothing), in
+//! `sites-var.sna` it changes every frame (B looks every one up, every frame).
+//! `Machine::cost_of` counts at the caller's interrupt depth, so the audio ISR (`fm1_alnk0_irq`,
+//! measured on its own) and the key-scan timer interrupt are not in it.
 
 use emu_gate::budgets::*;
 use emu_gate::fw::{build_dir, BootOpt, Firmware, APP_SLOT};
-use fmzx_pack::testprogs::noise_sna;
+use fmzx_pack::testprogs::{noise_sna, out_sites_sna};
 use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
@@ -45,14 +49,23 @@ fn games() -> Vec<(String, Vec<DemoStep>)> {
         .collect()
 }
 
-/// A pack of one game, `noise.sna`, written to the build directory (never committed).
-fn noise_pack() -> Vec<u8> {
-    let dir = build_dir().join("noise-pack");
-    std::fs::create_dir_all(&dir).expect("create the noise pack's folder");
-    std::fs::write(dir.join("noise.sna"), noise_sna()).expect("write noise.sna");
-    std::fs::write(dir.join("games.toml"), "[[game]]\nid = \"noise\"\nname = \"Speaker noise\"\nfile = \"noise.sna\"\n")
-        .expect("write the noise manifest");
-    fmzx_pack::pack::build_pack(&dir.join("games.toml")).expect("build the noise pack")
+/// The test programs' pack: `noise.sna`, `sites.sna` and `sites-var.sna`, written to the build
+/// directory (never committed, never in `games/games.toml`). Ids in pack order.
+fn fixture_pack() -> (Vec<u8>, [&'static str; 3]) {
+    let dir = build_dir().join("fixture-pack");
+    std::fs::create_dir_all(&dir).expect("create the fixture pack's folder");
+    let progs = [
+        ("noise", "Speaker noise", noise_sna()),
+        ("sites", "Four OUT sites", out_sites_sna(false)),
+        ("sites-var", "Four OUT sites, changing", out_sites_sna(true)),
+    ];
+    let mut toml = String::new();
+    for (id, name, sna) in &progs {
+        std::fs::write(dir.join(format!("{id}.sna")), sna).expect("write a test program");
+        toml += &format!("[[game]]\nid = \"{id}\"\nname = \"{name}\"\nfile = \"{id}.sna\"\n");
+    }
+    std::fs::write(dir.join("games.toml"), toml).expect("write the fixture manifest");
+    (fmzx_pack::pack::build_pack(&dir.join("games.toml")).expect("build the fixture pack"), progs.map(|p| p.0))
 }
 
 #[test]
@@ -62,6 +75,7 @@ fn view_game_value() {
     assert_eq!(zx_sys::view::MENU as u32, VIEW_MENU);
     assert_eq!(u32::from(zx_sys::SND_MODE_BEEPER), SOUND_BEEPER);
     assert_eq!(u32::from(zx_sys::SND_MODE_FM_A), SOUND_FM);
+    assert_eq!(u32::from(zx_sys::SND_MODE_FM_B), SOUND_FM_B);
 }
 
 #[test]
@@ -92,25 +106,27 @@ fn pool_fits_below_the_stack() {
     assert!(used >= 16 * 1024 + game_buf, "POOL is only {used} bytes: the ROM copy and the game buffer are missing");
 }
 
+/// The Sound choices measured, in menu order.
+const MODES: [u32; 3] = [SOUND_BEEPER, SOUND_FM, SOUND_FM_B];
+
 fn mode_name(sound: u32) -> &'static str {
-    if sound == SOUND_BEEPER {
-        "Beeper"
-    } else {
-        "FM: sound"
+    match sound {
+        SOUND_BEEPER => "Beeper",
+        SOUND_FM => "FM: sound",
+        _ => "FM: engines",
     }
 }
 
 #[test]
 fn cpu_per_frame_and_audio_isr() {
-    let (fw, pack) = (firmware(), pack());
-    let (fw_noise, fw) = (fw.with_pack(&noise_pack()), fw.with_pack(&pack));
+    let (fw, pack, (fixtures, fixture_ids)) = (firmware(), pack(), fixture_pack());
+    let (fw_fix, fw) = (fw.with_pack(&fixtures), fw.with_pack(&pack));
     let mut games: Vec<(String, Vec<DemoStep>, &Firmware, u32)> =
         games().into_iter().enumerate().map(|(i, (id, demo))| (id, demo, &fw, i as u32)).collect();
-    games.push(("noise".to_string(), Vec::new(), &fw_noise, 0));
-    let runs_of = [SOUND_BEEPER, SOUND_FM];
+    games.extend(fixture_ids.iter().enumerate().map(|(i, id)| (id.to_string(), Vec::new(), &fw_fix, i as u32)));
     let opt = BootOpt { rgb565: false, divider: 1 };
     let runs: Vec<(u32, Measure)> = std::thread::scope(|s| {
-        let hs: Vec<_> = runs_of
+        let hs: Vec<_> = MODES
             .iter()
             .flat_map(|&sound| games.iter().map(move |g| (sound, g)))
             .map(|(sound, (_, demo, fw, index))| {
@@ -121,8 +137,10 @@ fn cpu_per_frame_and_audio_isr() {
     });
     let mut isr_max = 0;
     let mut bad = Vec::new();
-    let mut worst = [(0u64, String::new()), (0, String::new())];
-    let mut snd_worst = [(0u64, String::new()), (0, String::new())];
+    let mut worst = vec![(0u64, String::new()); MODES.len()];
+    let mut snd_worst = vec![(0u64, String::new()); MODES.len()];
+    // per mode: the mixer's most in sites.sna and sites-var.sna
+    let mut sites = vec![(0u64, 0u64); MODES.len()];
     for ((id, ..), (sound, r)) in games.iter().cycle().zip(&runs) {
         let mode = mode_name(*sound);
         let (max, avg) = (*r.cpu.iter().max().unwrap_or(&0), r.cpu.iter().sum::<u64>() / r.cpu.len().max(1) as u64);
@@ -134,12 +152,17 @@ fn cpu_per_frame_and_audio_isr() {
             r.frames,
             r.isr.len()
         );
-        let k = usize::from(*sound != SOUND_BEEPER);
+        let k = MODES.iter().position(|m| m == sound).expect("a measured mode");
         if max > worst[k].0 {
             worst[k] = (max, id.clone());
         }
         if snd_max > snd_worst[k].0 {
             snd_worst[k] = (snd_max, id.clone());
+        }
+        match id.as_str() {
+            "sites" => sites[k].0 = snd_max,
+            "sites-var" => sites[k].1 = snd_max,
+            _ => {}
         }
         assert_eq!(r.resets, 0, "{id} ({mode}): the firmware reset");
         assert_eq!(r.sound, *sound, "{id} ({mode}): the Sound choice");
@@ -151,25 +174,35 @@ fn cpu_per_frame_and_audio_isr() {
             r.frames
         );
         assert!(r.snd.len() + 2 >= r.frames as usize, "{id} ({mode}): the mixer ran {} times for {} frames", r.snd.len(), r.frames);
-        // (border.sna, tape.tap, tune.sna and noise.sna are static once the border has been drawn / the image
-        // has loaded: they compose no bands)
-        assert!(matches!(id.as_str(), "border" | "tape" | "tune" | "noise") || r.lcd.bands > 0, "{id} ({mode}): no LCD bands composed");
+        // (border.sna, tape.tap, tune.sna and the test programs are static once the border has
+        // been drawn / the image has loaded: they compose no bands)
+        assert!(
+            matches!(id.as_str(), "border" | "tape" | "tune" | "noise" | "sites" | "sites-var") || r.lcd.bands > 0,
+            "{id} ({mode}): no LCD bands composed"
+        );
         assert!(!r.isr.is_empty(), "{id} ({mode}): the audio ISR never ran");
         if max > CPU_PER_FRAME {
             bad.push(format!("{id} ({mode}): {max} > {CPU_PER_FRAME}"));
         }
     }
-    for (k, sound) in runs_of.iter().enumerate() {
+    for (k, sound) in MODES.iter().enumerate() {
         println!(
-            "{}: worst frame {} ({}), the mixer at most {} ({})",
+            "{}: worst frame {} ({}), the mixer at most {} ({}); with four unknown OUT sites the mixer at most {} (code unchanged), {} (changing)",
             mode_name(*sound),
             worst[k].0,
             worst[k].1,
             snd_worst[k].0,
-            snd_worst[k].1
+            snd_worst[k].1,
+            sites[k].0,
+            sites[k].1
         );
     }
     println!("audio ISR at most {isr_max}");
     assert!(isr_max <= ISR_PER_BLOCK, "audio ISR {isr_max} instructions, over {ISR_PER_BLOCK}");
     assert!(bad.is_empty(), "CPU per frame over budget: {bad:?}");
+    // method B remembers addresses that match no engine: unchanged code around four unknown OUT
+    // sites costs the mixer less than half what looking them up every frame does
+    for (k, &(same, var)) in sites.iter().enumerate() {
+        assert!(same * 2 < var, "{}: four unknown OUT sites cost the mixer {same} with the code unchanged, {var} changing", mode_name(MODES[k]));
+    }
 }
