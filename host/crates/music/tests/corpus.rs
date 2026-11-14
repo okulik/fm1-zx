@@ -125,7 +125,7 @@ fn corpus_runs_on_pack() {
     assert_eq!(txt, report_txt(&rows, &opts));
     assert_eq!(csv, report_csv(&rows));
     assert_eq!(csv.lines().count(), 5);
-    assert!(csv.lines().all(|l| l.matches(',').count() == 13), "{csv}");
+    assert!(csv.lines().all(|l| l.matches(',').count() == 14), "{csv}");
     for f in ["castawy_beeper.wav", "castawy_fm.wav", "tune_fm.wav"] {
         let w = std::fs::read(opts.out.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
         assert_eq!(&w[..4], b"RIFF");
@@ -149,6 +149,109 @@ fn keys_file_applies() {
     let rows = run_folder(&dir, &Options { seconds: 3, wav: false, out: out.clone() }).unwrap();
     assert_eq!(rows.iter().find(|r| r.file == "tune.sna").unwrap().status, "ok");
     assert!(rows.iter().find(|r| r.file == "border.sna").unwrap().status.contains("key script"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn tzx_skips_the_non_data_blocks() {
+    let tap = castaway_tap();
+    let blocks = tap_blocks(&tap);
+    let skipped: [&[u8]; 16] = [
+        &[0x20, 1, 0],
+        &[0x21, 2, b'h', b'i'],
+        &[0x22],
+        &[0x23, 5, 0],
+        &[0x24, 3, 0],
+        &[0x25],
+        &[0x26, 2, 0, 1, 0, 2, 0],
+        &[0x27],
+        &[0x28, 3, 0, 1, 2, 3],
+        &[0x2a, 0, 0, 0, 0],
+        &[0x2b, 1, 0, 0, 0, 1],
+        &[0x30, 2, b'h', b'i'],
+        &[0x31, 4, 2, b'h', b'i'],
+        &[0x32, 4, 0, 1, 1, 2, 3],
+        &[0x33, 2, 0, 0, 1, 0, 1, 2],
+        &[0x34, 0, 0, 0, 0, 0, 0, 0, 0],
+    ];
+    let mut t = tzx_header();
+    for b in skipped {
+        t.extend_from_slice(b);
+    }
+    t.extend_from_slice(&[0x35, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i', b'j', b'k', b'l', b'm', b'n', b'o', b'p', 2, 0, 0, 0, 9, 9]);
+    t.extend_from_slice(&[0x5a, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    for b in &blocks {
+        t.push(0x10);
+        t.extend_from_slice(&[0, 0]);
+        t.extend_from_slice(&(b.len() as u16).to_le_bytes());
+        t.extend_from_slice(b);
+    }
+    assert_eq!(to_tap(&t).expect("converts"), tap);
+    // each skipped block cut short is a clean refusal
+    for b in skipped.iter().copied().chain([&[0x35u8, 1, 2, 3][..], &[0x5a, 0, 0][..]]) {
+        for cut in 1..b.len() {
+            let mut c = tzx_header();
+            c.extend_from_slice(&b[..cut]);
+                        assert!(to_tap(&c).is_err(), "block 0x{:02x} cut at {cut}", b[0]);
+        }
+    }
+}
+
+#[test]
+fn engines_recognised_by_content() {
+    use music::corpus::detect_engine;
+    let run = |mut m: zx_sys::Machine| {
+        for _ in 0..1500 {
+            m.run_frame();
+        }
+        detect_engine(&m)
+    };
+    assert_eq!(run(music::castaway()), Some(Engine::Castaway));
+    assert_eq!(run(music::colony8()), Some(Engine::Colony8));
+    assert_eq!(run(music::test_sna("tune.sna")), None);
+}
+
+#[test]
+fn engine_not_taken_from_the_name() {
+    // Castaway under another name is still Castaway and scored; tune.sna named like Cave Runner
+    // is not, and gets no truth
+    let dir = temp("names");
+    std::fs::copy(repo().join("third_party/games/castaway/castawy.tap"), dir.join("renamed_game.tap")).unwrap();
+    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("cave_runner_x.sna")).unwrap();
+    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("cave.tap.sna")).unwrap();
+    let out = temp("namesout");
+    let rows = run_folder(&dir, &Options { seconds: 20, wav: false, out: out.clone() }).unwrap();
+    let r = rows.iter().find(|r| r.file == "renamed_game.tap").unwrap();
+    assert_eq!(r.engine, Some(Engine::Castaway));
+    assert!(r.truth.is_some());
+    for f in ["cave_runner_x.sna", "cave.tap.sna"] {
+        let r = rows.iter().find(|r| r.file == f).unwrap();
+        assert!(r.engine.is_none() && r.truth.is_none(), "{f}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn wav_failure_keeps_the_numbers() {
+    // the output dir exists but `tune_fm.wav` is a directory: the write fails, the row stays
+    let dir = temp("wavfail");
+    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("tune.sna")).unwrap();
+    let out = temp("wavfailout");
+    std::fs::create_dir_all(out.join("tune_fm.wav")).unwrap();
+    let opts = Options { seconds: 5, wav: true, out: out.clone() };
+    let rows = run_folder(&dir, &opts).unwrap();
+    let r = &rows[0];
+    assert_eq!(r.status, "ok");
+    assert!(r.note.starts_with("wav not written"), "{}", r.note);
+    assert!(r.fm_pct > 50.0);
+    let txt = std::fs::read_to_string(out.join("report.txt")).unwrap();
+    let csv = std::fs::read_to_string(out.join("report.csv")).unwrap();
+    assert!(txt.contains("wav not written") && txt.contains("tune.sna") && !txt.contains("not loadable"), "{txt}");
+    let line = csv.lines().nth(1).unwrap();
+    assert!(line.starts_with("tune.sna,ok,") && line.contains("wav not written"), "{line}");
+    assert!(csv.lines().all(|l| l.matches(',').count() >= 14));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&out);
 }

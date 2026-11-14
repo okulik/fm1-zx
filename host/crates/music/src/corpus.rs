@@ -50,6 +50,8 @@ pub struct Row {
     pub engine: Option<Engine>,
     /// Against the engine's own notes, when its engine was recognised and played.
     pub truth: Option<Score>,
+    /// Anything that went wrong beside the measurements (a WAV that could not be written).
+    pub note: String,
 }
 
 impl Row {
@@ -113,44 +115,43 @@ pub fn load(path: &Path) -> Result<Machine, String> {
     Ok(m)
 }
 
-/// Whether the music engine of `engine` is in memory: its sound loop's fixed bytes (`None` =
-/// operand the engine changes while it plays).
-fn signature(e: Engine) -> Option<(u16, &'static [Option<u8>])> {
-    const fn s(b: u8) -> Option<u8> {
-        Some(b)
-    }
-    const CASTAWAY: [Option<u8>; 36] = [
-        s(0x05), s(0xc2), s(0xb1), s(0xc8), s(0x06), None, s(0x2c), s(0x7d), s(0xe6), None, s(0x6f), s(0x7e), s(0xe6), None, s(0x0d), s(0x20),
-        s(0x3b), s(0x0e), None, s(0x1c), s(0xd3), s(0xfe), s(0x00), s(0x7b), s(0xe6), s(0x03), s(0x5f), s(0x1a), s(0xe6), None, s(0xd3), s(0xfe),
-        s(0xdd), s(0x2d), s(0x20), s(0xdc),
-    ];
-    const COLONY8: [Option<u8>; 36] = [
-        s(0x09), s(0x7c), s(0xd9), s(0xfe), None, s(0x9f), s(0xa1), s(0xdd), s(0x19), s(0xd3), s(0xfe), s(0xdd), s(0x7c), s(0xfe), None, s(0x9f),
-        s(0xa1), s(0xd3), s(0xfe), s(0x39), s(0x7c), s(0xfe), None, s(0x9f), s(0xa1), s(0xd9), s(0x1d), s(0xd3), s(0xfe), s(0xc2), s(0xfc), s(0x94),
-        s(0x15), s(0xc2), s(0xfc), s(0x94),
-    ];
-    match e {
-        Engine::Castaway => Some((0xc868, &CASTAWAY)),
-        Engine::Colony8 => Some((0x94fc, &COLONY8)),
-        Engine::CaveRunner => None,
-    }
+/// A music engine's sound loop in memory: `len` bytes from `base`, the operand bytes the engine
+/// rewrites while it plays (`wild`, offsets) left out, hashed with [`digest`]. Digests, not the
+/// bytes: the games' code does not enter the repository.
+struct Sig {
+    engine: Engine,
+    base: u16,
+    len: usize,
+    wild: &'static [usize],
+    digest: u64,
 }
 
-/// The recognised music engine in the machine's memory now: Castaway and Colony 8 by their sound
-/// loops' code (wherever the game file came from), Cave Runner by its file name only (the
-/// owner's copy is never in the repository, so there is no byte signature to check).
-pub fn detect_engine(m: &Machine, file: &str) -> Option<Engine> {
-    for e in [Engine::Castaway, Engine::Colony8] {
-        let (base, sig) = signature(e).expect("has a signature");
-        if sig.iter().enumerate().all(|(i, b)| b.is_none_or(|b| m.peek(base.wrapping_add(i as u16)) == b)) {
-            return Some(e);
-        }
+const DIGEST_CASTAWAY: u64 = 0xd9ca_bc62_66a8_0034;
+const DIGEST_COLONY8: u64 = 0x46ee_814f_9cab_12d7;
+const DIGEST_MM_TITLE: u64 = 0xe6cf_0316_1ab2_4a00;
+const DIGEST_MM_GAME: u64 = 0x5b1e_e7bd_a322_b262;
+
+const SIGS: [Sig; 4] = [
+    Sig { engine: Engine::Castaway, base: 0xc868, len: 36, wild: &[5, 9, 13, 18, 29], digest: DIGEST_CASTAWAY },
+    Sig { engine: Engine::Colony8, base: 0x94fc, len: 36, wild: &[4, 14, 22], digest: DIGEST_COLONY8 },
+    // Cave Runner's title tune loop and its in-game burst loop (no operands change)
+    Sig { engine: Engine::CaveRunner, base: 0x92f8, len: 22, wild: &[], digest: DIGEST_MM_TITLE },
+    Sig { engine: Engine::CaveRunner, base: 0x8852, len: 40, wild: &[], digest: DIGEST_MM_GAME },
+];
+
+/// 64-bit FNV-1a of the bytes `len` from `base`, the `wild` offsets skipped.
+pub fn digest(m: &Machine, base: u16, len: usize, wild: &[usize]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for i in (0..len).filter(|i| !wild.contains(i)) {
+        h = (h ^ m.peek(base.wrapping_add(i as u16)) as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
-    let name = file.to_ascii_lowercase();
-    if name.contains("cave") || Engine::of_file(file) == Some(Engine::CaveRunner) {
-        return Some(Engine::CaveRunner);
-    }
-    None
+    h
+}
+
+/// The music engine whose sound loop is in the machine's memory now, recognised by the digest of
+/// its fixed loop bytes at the known addresses (not by file name).
+pub fn detect_engine(m: &Machine) -> Option<Engine> {
+    SIGS.iter().find(|g| digest(m, g.base, g.len, g.wild) == g.digest).map(|g| g.engine)
 }
 
 /// Runs one game for `opts.seconds`; with `opts.wav` writes its two WAV files under `opts.out`.
@@ -185,7 +186,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         m.set_kempston(kemp);
         run.extend(capture(&mut m, &mut beeper, 1));
         if engine.is_none() {
-            engine = detect_engine(&m, &file);
+            engine = detect_engine(&m);
         }
         truth.push(engine.and_then(|e| e.read(&m)));
     }
@@ -221,7 +222,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         let rate = sample_rate().round() as u32;
         for (suffix, s) in [("beeper", &bp), ("fm", &fm)] {
             if let Err(e) = wav::write(&opts.out.join(format!("{stem}_{suffix}.wav")), s, rate) {
-                row.status = format!("ok (wav not written: {e})");
+                row.note = format!("wav not written: {e}");
             }
         }
     }
@@ -296,6 +297,7 @@ pub fn report_txt(rows: &[Row], opts: &Options) -> String {
                 t.wrong.len()
             )
         });
+        let truth = if r.note.is_empty() { truth } else { format!("{truth} ({})", r.note) };
         let _ = writeln!(
             s,
             "{:<28} {:>7.1} {:>6.1}  {:>5.1}/{:>5.1}/{:>5.1}  {}",
@@ -322,7 +324,7 @@ fn csv_field(s: &str) -> String {
 /// The CSV report: one line per game.
 pub fn report_csv(rows: &[Row]) -> String {
     let mut s = String::from(
-        "file,status,sound_seconds,fm_percent,slots_percent,flips_percent,pulses_percent,engine,truth_frames,precision_percent,recall_percent,notes_true,notes_found,wrong_notes\n",
+        "file,status,sound_seconds,fm_percent,slots_percent,flips_percent,pulses_percent,engine,truth_frames,precision_percent,recall_percent,notes_true,notes_found,wrong_notes,note\n",
     );
     for r in rows {
         let _ = write!(s, "{},{}", csv_field(&r.file), csv_field(&r.status));
@@ -355,6 +357,7 @@ pub fn report_csv(rows: &[Row]) -> String {
         } else {
             s.push_str(",,,,,,,,,,,,");
         }
+        let _ = write!(s, ",{}", csv_field(&r.note));
         s.push('\n');
     }
     s

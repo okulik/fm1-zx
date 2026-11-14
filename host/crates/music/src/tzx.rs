@@ -28,10 +28,25 @@ pub fn to_tap(d: &[u8]) -> Result<Vec<u8>, String> {
                 out.extend_from_slice(at(i + 4, ln)?);
                 4 + ln
             }
-            0x20 => 2,
+            // 0x20 pause, 0x23 jump, 0x24 loop start: a word
+            0x20 | 0x23 | 0x24 => 2,
+            // 0x21 group start, 0x30 text description: a length byte and the text
             0x21 | 0x30 => 1 + at(i, 1)?[0] as usize,
-            0x22 => 0,
+            // 0x22 group end, 0x25 loop end, 0x27 return from sequence
+            0x22 | 0x25 | 0x27 => 0,
+            // 0x26 call sequence: a count word, then that many words
+            0x26 => 2 + 2 * u16::from_le_bytes(at(i, 2)?.try_into().unwrap()) as usize,
+            // 0x28 select block: a length word and its content
+            0x28 => 2 + u16::from_le_bytes(at(i, 2)?.try_into().unwrap()) as usize,
+            // 0x2A stop the tape if in 48K mode: a 4-byte length (0)
+            0x2a => 4,
+            // 0x2B set signal level: length 4 and the level
+            0x2b => 5,
             0x31 => 2 + at(i + 1, 1)?[0] as usize,
+            // 0x33 hardware type: a count, then 3 bytes each
+            0x33 => 1 + 3 * at(i, 1)?[0] as usize,
+            // 0x34 emulation info: 8 bytes
+            0x34 => 8,
             0x32 => 2 + u16::from_le_bytes(at(i, 2)?.try_into().unwrap()) as usize,
             0x35 => 0x14 + u32::from_le_bytes(at(i + 0x10, 4)?.try_into().unwrap()) as usize,
             0x5a => 9,
