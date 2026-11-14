@@ -76,9 +76,10 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] Switching Sound between the three choices several times while music plays: a brief fade and gap when turning FM on, no clicks or pops in either direction.
 - [ ] In FM: sound, the effects in ZX Dino and ZX Sopwith stay on the beeper (their usual sound, only delayed), with no crackle.
 - [ ] FM: engines: set Sound to "FM: engines" and start Castaway: its title tune plays as FM with two voices, in tune.
-ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the host and emulator tests cover it with a generated BASIC BEEP tape (`beep_tap`).
 - [ ] The Sound choice survives Reset game and starting another game from the picker (it is back to Beeper after power-off).
 - [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the screen shows eight static bars, which do not change with the notes.
+
+ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the host and emulator tests cover it with a generated BASIC BEEP tape (`beep_tap`).
 
 ### Controls
 

@@ -265,7 +265,7 @@ entry and looks them up again only when the code around them changes; a lookup c
 instructions. The reachable worst case is about 7 lookups of unknown, changing addresses in one
 frame, about 2.9M estimated, under the cap.)
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 47,956 of 49,152 bytes. Image
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 48,144 of 49,152 bytes. Image
 + pack 179,904 of 581,564 (0x8DFBC) bytes. POOL 272,076 bytes, 96,564 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.
