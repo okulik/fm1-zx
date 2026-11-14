@@ -368,8 +368,9 @@ fn engines_claim_only_known_engines() {
         }
     }
     assert_eq!(b.name(0), "");
-    assert_eq!((b.name(1), b.name(2), b.name(3), b.name(4)), ("Castaway".into(), "Colony 8".into(), "ROM BEEP".into(), String::new()));
-    assert_eq!(t.name(4), "Test burst");
+    let names: Vec<String> = (1..=7).map(|i| b.name(i)).collect();
+    assert_eq!(names, ["Castaway", "Colony 8", "ROM BEEP", "Cave Runner title", "Cave Runner in game", "Unison", ""]);
+    assert_eq!(t.name(7), "Test burst");
     let frames = castaway_frames(600);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
     mixer.set_test_engines();

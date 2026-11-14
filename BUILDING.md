@@ -138,9 +138,10 @@ beside the games.
 Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded (tapes autostart; `.tzx` must be
 standard-speed, any other block type reports "not loadable" and the game is skipped) and run for N
 seconds (default 40). The output goes to `build/music-corpus` (the repository's `build/`) unless
-`-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_<ext>_beeper.wav` and
-`<name>_<ext>_fm.wav` (the mixer's FM-mode output, 3 frames late) to listen to the difference
-(`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx` beside it keeps its own).
+`-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_<ext>_beeper.wav`,
+`<name>_<ext>_fm.wav` (the mixer's output in FM: sound, 3 frames late) and `<name>_<ext>_fm_b.wav`
+(in FM: engines) to listen to the difference (`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx`
+beside it keeps its own).
 
 Key scripts: a file `<name>.keys` beside the game holds steps `ACTION@ms[+hold]` separated by commas
 or line breaks (`#` starts a comment line), in the syntax of the `demo` strings of `games/games.toml`
@@ -156,15 +157,20 @@ press may need a longer hold.
 What the report says, one row per game:
 
 - `sound s`: seconds of the run with any speaker activity.
-- `FM %`: of those frames, the share the mixer plays as FM, as the firmware does: the decoder's
-  confident decisions after the mixer's hysteresis (FM from the second confident decision in a row,
-  the beeper from the first unconfident one); the rest plays the beeper.
+- `FM %`: of those frames, the share the mixer plays as FM in FM: sound (method A), as the firmware
+  does: the decoder's confident decisions after the mixer's hysteresis (FM from the second
+  confident decision in a row, the beeper from the first unconfident one); the rest plays the
+  beeper.
+- `B FM %`: the same in FM: engines (method B, the known music engines; FM from its first confident
+  decision).
 - `styles s/f/p %`: of those frames, the share decoded as time-slot music, speaker-flip music and
   short-pulse music; the remainder is sound with no music in it.
 - truth, for games whose music engine is recognised (by the code of its sound loop in memory:
-  Castaway, Colony 8, Cave Runner's title tune and in-game loop): the engine's own notes are read
-  from RAM and compared with what the decoder found: frame precision and recall, notes found of the
-  true notes, and decoded notes that match no true note (`wrong`). The CSV has the same columns.
+  Castaway, Colony 8, Cave Runner's title tune and in-game loop, Unison's melody): the engine's own
+  notes are read from RAM and compared with what the decoder found: frame precision and recall,
+  notes found of the true notes, and decoded notes that match no true note (`wrong`). After `B:`,
+  the engines method B recognised and the same numbers for its notes (per voice, the last pitch it
+  sounded in each frame it is confident about). The CSV has the same columns.
 
 ## Toolchain pin
 

@@ -126,14 +126,44 @@ fn corpus_runs_on_pack() {
     assert_eq!(txt, report_txt(&rows, &opts));
     assert_eq!(csv, report_csv(&rows));
     assert_eq!(csv.lines().count(), 5);
-    assert!(csv.lines().all(|l| l.matches(',').count() == 14), "{csv}");
-    for f in ["castawy_tap_beeper.wav", "castawy_tap_fm.wav", "castawy_tzx_beeper.wav", "castawy_tzx_fm.wav", "tune_sna_fm.wav"] {
+    assert!(csv.lines().all(|l| l.matches(',').count() == 20), "{csv}");
+    for f in ["castawy_tap_beeper.wav", "castawy_tap_fm.wav", "castawy_tap_fm_b.wav", "castawy_tzx_beeper.wav", "castawy_tzx_fm.wav", "tune_sna_fm.wav"] {
         let w = std::fs::read(opts.out.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
         assert_eq!(&w[..4], b"RIFF");
         assert!(w.len() > 44 + 30 * 44_000);
     }
     let after: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(before.len(), after.len(), "nothing written beside the games");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn corpus_reports_b() {
+    // method B beside A: Castaway's and Colony 8's music recognised by B, named, its FM share
+    // through the mixer's FM: engines path, scored against the truth with no wrong note
+    let dir = temp("b");
+    std::fs::copy(repo().join("third_party/games/castaway/castawy.tap"), dir.join("castawy.tap")).unwrap();
+    std::fs::copy(repo().join("third_party/games/colony8/colony8.tap"), dir.join("colony8.tap")).unwrap();
+    let out = temp("bout");
+    let opts = Options { seconds: 30, wav: true, out: out.clone() };
+    let rows = run_folder(&dir, &opts).expect("runs");
+    let txt = report_txt(&rows, &opts);
+    println!("{txt}");
+    for (file, name, engine) in [("castawy.tap", "Castaway", Engine::Castaway), ("colony8.tap", "Colony 8", Engine::Colony8)] {
+        let r = rows.iter().find(|r| r.file == file).unwrap();
+        assert_eq!(r.engine, Some(engine), "{file}");
+        assert_eq!(r.b_engines, [name], "{file}");
+        assert!(r.b_fm_pct > 50.0, "{file}: B's FM {:.1}%", r.b_fm_pct);
+        let t = r.b_truth.as_ref().unwrap_or_else(|| panic!("{file}: B scored"));
+        assert!(t.wrong.is_empty(), "{file}: B's wrong notes {t}");
+        assert!(t.precision() >= 0.95, "{file}: B's precision {t}");
+        assert!(std::fs::read(out.join(format!("{}_fm_b.wav", file.replace('.', "_")))).is_ok_and(|w| &w[..4] == b"RIFF"), "{file}");
+    }
+    assert!(txt.contains("B: Castaway") && txt.contains("B: Colony 8"), "{txt}");
+    let csv = std::fs::read_to_string(out.join("report.csv")).unwrap();
+    assert!(csv.lines().next().unwrap().contains(",b_fm_percent,b_engines,"), "{csv}");
+    assert!(csv.lines().any(|l| l.starts_with("castawy.tap,ok,") && l.contains(",Castaway,")), "{csv}");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&out);
 }
@@ -235,6 +265,34 @@ fn engine_not_taken_from_the_name() {
 }
 
 #[test]
+fn unison_truth_digest() {
+    // Unison's melody loop joins the truth by its digest, not by the file name: tune.sna named
+    // like Unison is not Unison; a test-built image with the PC in the loop and the operands set
+    // reads N and N - 1 (no byte of Unison here), and is not recognised either
+    use music::corpus::detect_engine;
+    use music::truth::{LOOP_UNISON, Engine::Unison};
+    let dir = temp("unison");
+    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("unison.sna")).unwrap();
+    let out = temp("unisonout");
+    let rows = run_folder(&dir, &Options { seconds: 5, wav: false, out: out.clone() }).unwrap();
+    assert!(rows[0].engine.is_none() && rows[0].truth.is_none() && rows[0].b_engines.is_empty(), "{:?}", rows[0]);
+    let mut m = music::test_sna("tune.sna");
+    assert_eq!(Unison.read(&m), None, "the PC is not in the loop");
+    for (a, v) in [(0x81cdu16, 184u16), (0x81df, 183)] {
+        m.poke(a, v as u8);
+        m.poke(a + 1, (v >> 8) as u8);
+    }
+    let mut r = m.regs();
+    r.pc = 0x81c6;
+    m.set_regs(&r);
+    let hz = |n: f64| 3_500_000.0 / (2.0 * n * LOOP_UNISON);
+    assert_eq!(Unison.read_channels(&m), Some(vec![(0, hz(184.0)), (1, hz(183.0))]));
+    assert_eq!(detect_engine(&m), None);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
 fn wav_failure_keeps_the_numbers() {
     // the output dir exists but `tune_sna_fm.wav` is a directory: the write fails, the row stays
     let dir = temp("wavfail");
@@ -252,7 +310,7 @@ fn wav_failure_keeps_the_numbers() {
     assert!(txt.contains("wav not written") && txt.contains("tune.sna") && !txt.contains("not loadable"), "{txt}");
     let line = csv.lines().nth(1).unwrap();
     assert!(line.starts_with("tune.sna,ok,") && line.contains("wav not written"), "{line}");
-    assert!(csv.lines().all(|l| l.matches(',').count() >= 14));
+    assert!(csv.lines().all(|l| l.matches(',').count() >= 20));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&out);
 }

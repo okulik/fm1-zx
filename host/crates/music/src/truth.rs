@@ -18,6 +18,10 @@
 //!   tune (loop 92F8h-930Dh, 56.6 T per pass, IY pointing at [duration, N1, N2],
 //!   f = 3.5 MHz / (2 x N x 56.6)) and the in-game tune (burst loop 8852h, 40 T per pass, note
 //!   index 845Bh into the table at 858Ch, flag 845Ch bit 1 = off, f = 3.5 MHz / (2 x E x 40)).
+//! - Unison (for the local corpus tool only, as Cave Runner): the melody loop 81C6h-81E9h, 48.5 T
+//!   per pass on average, two 16-bit counters reloaded from the operands at 81CDh (N) and 81DFh
+//!   (N - 1), each flipping the speaker: f = 3.5 MHz / (2 x N x 48.5), read while the PC is in
+//!   81B4h-81E9h (the drums run from the interrupt routine and are not read).
 
 use zx_sys::Machine;
 
@@ -29,6 +33,7 @@ pub const LOOP_CASTAWAY: f64 = 156.6;
 pub const LOOP_COLONY8: f64 = 155.9;
 pub const LOOP_MM_TITLE: f64 = 56.6;
 pub const LOOP_MM_GAME: f64 = 40.0;
+pub const LOOP_UNISON: f64 = 48.5;
 
 /// The engines with a note reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +41,7 @@ pub enum Engine {
     Castaway,
     Colony8,
     CaveRunner,
+    Unison,
 }
 
 impl Engine {
@@ -62,6 +68,7 @@ impl Engine {
             Engine::Castaway => castaway(m),
             Engine::Colony8 => colony8(m),
             Engine::CaveRunner => cave_runner(m),
+            Engine::Unison => unison(m),
         }
     }
 }
@@ -187,4 +194,14 @@ pub fn cave_runner(m: &Machine) -> Option<Vec<(usize, f64)>> {
         }
     }
     None
+}
+
+/// Unison's melody: one note doubled in detuned unison (channel 0 N, channel 1 N - 1).
+pub fn unison(m: &Machine) -> Option<Vec<(usize, f64)>> {
+    if !(0x81b4..=0x81e9).contains(&m.regs().pc) {
+        return None;
+    }
+    let word = |a: u16| m.peek(a) as u16 | (m.peek(a + 1) as u16) << 8;
+    let v = [word(0x81cd), word(0x81df)].into_iter().enumerate().filter(|&(_, n)| n != 0);
+    Some(v.map(|(ch, n)| (ch, CPU_HZ / (2.0 * n as f64 * LOOP_UNISON))).collect())
 }

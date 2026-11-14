@@ -24,11 +24,13 @@
  * last edge claimed as its silence (the voices ring out on their envelopes).
  *
  * An entry whose notes are calls of a routine (min_len: ROM BEEP) is checked its own way
- * (observe_calls).
+ * (observe_calls); one whose channels each flip the speaker (flips: Cave Runner, Unison) has its
+ * flips checked (flip).
  *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
- * games), and the 48K ROM's BEEPER; engines_test.c adds the test fixtures' engines for host
- * tests. */
+ * games), the 48K ROM's BEEPER, and Cave Runner's two tunes and Unison's music (the owner's local
+ * games: their digests, offsets and formulas only); engines_test.c adds the test fixtures'
+ * engines for host tests. */
 
 #include "engines_builtin.h"
 
@@ -321,6 +323,53 @@ static void silent(check_state *c, const snd_engine *en, uint32_t j, uint32_t le
 	}
 }
 
+/* Entries with flips (the speaker is the XOR of the channels' levels, each edge one channel's
+ * flip): every flip of a channel must come half its period after its last one, within half the
+ * tolerance (more than one in eight off contradicts the voices, as for rises). An edge from an
+ * OUT all channels share (SND_CHAN_ANY) is the flip of the channel it fits (after a whole number
+ * of half periods: flips that fall in one pass cancel), else of one not yet seen, else of the
+ * nearest. */
+
+/* How far t is from a whole number (*k, at least 1) of half periods after channel ch's last
+ * flip; NOWHERE for a silent channel. */
+static uint32_t due(const check_state *c, uint32_t ch, int32_t t, uint32_t *k)
+{
+	const uint32_t d = (uint32_t)(t - c->tr[ch].obs), h = c->period[ch] / 2u;
+
+	if (!h) return NOWHERE;
+	*k = (d + h / 2u) / h;
+	if (!*k) *k = 1;
+	return d > *k * h ? d - *k * h : *k * h - d;
+}
+
+static void flip(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
+{
+	uint32_t i, k, off, best = NOWHERE;
+
+	if (ch == SND_CHAN_ANY) {
+		for (i = ch = 0; i < en->channels; i++) {
+			off = due(c, i, t, &k);
+			if (c->tr[i].bit == 2) off = 1u << 30;
+			else if (off > k * (c->tol[i] / 2u)) off = (1u << 31) | (off >> 2);
+			else if (k > 1) off |= 1u << 29;
+			if (off < best) {
+				best = off;
+				ch = i;
+			}
+		}
+	}
+	if (!c->blind) {
+		if (!c->period[ch]) {
+			c->rises[ch]++;   /* a silent channel sounds */
+		} else if (c->tr[ch].bit != 2) {
+			c->pairs[ch]++;
+			if (due(c, ch, t, &k) > c->tol[ch] / 2u || k != 1) c->bad[ch]++;
+		}
+	}
+	c->tr[ch].bit = 1;   /* (seen: its level is not followed) */
+	c->tr[ch].obs = t;
+}
+
 #define SEGS 3u
 
 typedef struct {          /* the voices of a frame in time: segment s from at[s] with voices v[s] */
@@ -412,15 +461,19 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 			continue;
 		}
 		if (sg->v[seg] && first[seg] == NOWHERE) first[seg] = (uint32_t)t;
-		if (have) {
-			silent(&c, en, pj, pl, pt, chan, t);
-			if (en->pass) {   /* the level before: the predecessor's */
-				uint32_t p = (chan + en->channels - 1u) % en->channels;
-				int32_t d = (int32_t)gap(en, p, chan);
-				known(&c, p, pl, t - d, t - d);
+		if (en->flips) {
+			flip(&c, en, chan, t);
+		} else {
+			if (have) {
+				silent(&c, en, pj, pl, pt, chan, t);
+				if (en->pass) {   /* the level before: the predecessor's */
+					uint32_t p = (chan + en->channels - 1u) % en->channels;
+					int32_t d = (int32_t)gap(en, p, chan);
+					known(&c, p, pl, t - d, t - d);
+				}
 			}
+			known(&c, chan, level, t, t);
 		}
-		known(&c, chan, level, t, t);
 		have = 1;
 		pt = t;
 		pj = chan;

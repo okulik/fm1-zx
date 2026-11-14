@@ -303,8 +303,11 @@ enum snd_site_role {
 typedef struct {
 	uint16_t off;     /* the OUT's offset from the anchor */
 	uint8_t role;     /* enum snd_site_role */
-	uint8_t chan;     /* tonal: the channel (and the voice it plays on) */
+	uint8_t chan;     /* tonal: the channel (and the voice it plays on); SND_CHAN_ANY: any channel's
+	                   * (entries with flips: one OUT for all channels) */
 } snd_engine_site;
+
+#define SND_CHAN_ANY 0xFFu
 
 #define SND_B_SINCE_ALL 0xFFFFFFFFu   /* snd_b_read.since / row: not known (all the frame) */
 
@@ -340,6 +343,9 @@ typedef struct snd_engine {   /* one table entry */
 	 * `site` (index in sites). */
 	void (*read)(const zx_machine *m, uint16_t anchor, uint32_t site, const zx_regs *r, snd_b_read *out);
 	uint8_t drum;             /* the drum's strength, for entries with drum sites */
+	/* 0, or: each edge flips one channel's level, the speaker sounds their XOR (engines.c, flip;
+	 * pass 0) */
+	uint8_t flips;
 	/* 0, or: each note is one call of the routine (one tonal site, a square of equal halves at
 	 * exactly the period read; engines.c, observe_calls), and a note shorter than this (T) is
 	 * not B's (ROM BEEP) */
