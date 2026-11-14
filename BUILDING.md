@@ -244,22 +244,22 @@ emulator counts, one per instruction, interrupts excluded):
 | tape | 4, 2, 1 | static | 0 | 0 |
 | tune | 4, 2, 1 | static | 0 | 0 |
 
-| game | Beeper max | FM: sound max | FM: engines max |
-| --- | --- | --- | --- |
-| scroll | 1,468,644 | 1,580,703 | 1,580,702 |
-| border | 1,379,638 | 1,491,697 | 1,491,696 |
-| castaway | 1,500,205 | 1,385,924 | 1,612,180 |
-| sopwith | 1,506,426 | 1,618,402 | 1,569,225 |
-| colony8 | 1,494,481 | 1,606,540 | 1,606,539 |
-| dino | 1,550,381 | 1,662,357 | 1,662,008 |
-| oneway | 693,368 | 805,427 | 805,343 |
-| tape | 807,007 | 919,066 | 919,065 |
-| tune | 1,160,409 | 1,307,033 | 1,272,469 |
-| noise | 1,739,926 | 1,851,873 | 1,851,872 |
-| sites (4 unknown OUT sites, code unchanged) | 201,717 | 313,776 | 313,775 |
-| sites-var (4 unknown OUT sites, code changing every frame) | 807,561 | 919,620 | 919,619 |
+| game | Beeper max | Beeper avg | FM: sound max | FM: sound avg | FM: engines max | FM: engines avg |
+| --- | --- | --- | --- | --- | --- | --- |
+| scroll | 1,468,644 | 1,450,662 | 1,580,703 | 1,562,693 | 1,580,702 | 1,562,692 |
+| border | 1,379,638 | 1,373,706 | 1,491,697 | 1,485,737 | 1,491,696 | 1,485,736 |
+| castaway | 1,500,205 | 467,916 | 1,385,924 | 574,665 | 1,612,180 | 579,195 |
+| sopwith | 1,506,426 | 1,232,003 | 1,618,402 | 1,344,034 | 1,569,225 | 1,355,967 |
+| colony8 | 1,494,481 | 394,932 | 1,606,540 | 506,963 | 1,606,539 | 506,953 |
+| dino | 1,550,381 | 889,473 | 1,662,357 | 1,001,504 | 1,662,008 | 1,001,169 |
+| oneway | 693,368 | 616,771 | 805,427 | 728,802 | 805,343 | 728,809 |
+| tape | 807,007 | 801,154 | 919,066 | 913,185 | 919,065 | 913,184 |
+| tune | 1,160,409 | 950,097 | 1,307,033 | 1,096,727 | 1,272,469 | 1,062,130 |
+| noise | 1,739,926 | 1,316,328 | 1,851,873 | 1,428,359 | 1,851,872 | 1,428,358 |
+| sites (4 unknown OUT sites, code unchanged) | 201,717 | 195,893 | 313,776 | 307,924 | 313,775 | 307,923 |
+| sites-var (4 unknown OUT sites, code changing every frame) | 807,561 | 801,763 | 919,620 | 913,795 | 919,619 | 913,794 |
 
-(CPU per frame, max, in the three sound modes, from `fw_budget`; the cap is 3,600,000. The noise
+(CPU per frame, max and average, in the three sound modes, from `fw_budget`; the cap is 3,600,000. The noise
 program is the worst frame in every mode. Method B remembers the OUT addresses that matched no
 entry and looks them up again only when the code around them changes; a lookup costs about 152,000
 instructions. The reachable worst case is about 7 lookups of unknown, changing addresses in one
