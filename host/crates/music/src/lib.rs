@@ -6,9 +6,12 @@
 use std::path::{Path, PathBuf};
 use zx_sys::{zx_edge, Beeper, Machine, SndDecoder, SndFrame, SND_DELAY_FRAMES};
 
+pub mod corpus;
 pub mod score;
 pub mod synthetic;
 pub mod truth;
+pub mod tzx;
+pub mod wav;
 
 /// The FM-1's audio rate, 750000 / 17 Hz (24 MHz / 544).
 pub const RATE: (u32, u32) = (750_000, 17);

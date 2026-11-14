@@ -125,6 +125,42 @@ Speed: the smoke test prints emulated seconds per wall second (about 1.7 in node
 and the tone test, 2026-11-12). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
 a browser, and games cost more than the picker: the page is a preview, not a promise of real time.
 
+## Music corpus
+
+`music-corpus` measures the FM music decoder (`core/sound`, the same C code as the firmware) over a
+local folder of games. It is for games that must not enter the repository (Cave Runner, Unison, any
+file of yours): it reads the folder you give it and writes only under the output directory, never
+beside the games.
+
+    cd host
+    cargo run --release -p music --bin music-corpus -- <folder> [--seconds N] [--wav] [-o <dir>]
+
+Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded (tapes autostart; `.tzx` must be
+standard-speed, any other block type reports "not loadable" and the game is skipped) and run for N
+seconds (default 40). The output goes to `build/music-corpus` (the repository's `build/`) unless
+`-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_beeper.wav` and
+`<name>_fm.wav` (the mixer's FM-mode output, 3 frames late) to listen to the difference.
+
+Key scripts: a file `<name>.keys` beside the game holds steps `ACTION@ms[+hold]` separated by commas
+or line breaks (`#` starts a comment line), in the syntax of the `demo` strings of `games/games.toml`
+but with Spectrum inputs: `key.ENTER@8000`, `key.SPACE@9000+200`, `kempston.fire@12000`. Hold is
+100 ms if omitted; times count from the start of the run.
+
+    # cave.keys
+    key.ENTER@8000, key.SPACE@9000+200
+
+What the report says, one row per game:
+
+- `sound s`: seconds of the run with any speaker activity.
+- `FM %`: of those frames, the share the decoder is confident enough about to play as FM (the rest
+  plays the beeper).
+- `styles s/f/p %`: of those frames, the share decoded as time-slot music, speaker-flip music and
+  short-pulse music; the remainder is sound with no music in it.
+- truth, for games whose music engine is recognised (Castaway and Colony 8 by the code of their
+  sound loops, Cave Runner by its file name): the engine's own notes are read from RAM and compared
+  with what the decoder found: frame precision and recall, notes found of the true notes, and
+  decoded notes that match no true note (`wrong`). The CSV has the same columns.
+
 ## Toolchain pin
 
 The JieLi toolchain comes from `https://pkgman.jieliapp.com/s/linux-toolchain`
