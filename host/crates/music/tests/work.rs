@@ -238,3 +238,28 @@ fn decoder_work_is_bounded() {
         assert!(max <= SND_WORK_MAX + 2 * 512 + 64, "{name}: {max} units in a frame");
     }
 }
+
+/// `noise.sna` (fmzx-pack's testprogs; `fw_budget` measures the firmware's frame on it as the
+/// decoder's worst case) must stay that worst case: its 250 edges a frame at pseudo-random
+/// spacings drive the decoder to at least 90% of its work cap, and are never music.
+#[test]
+fn noise_sna_nears_the_work_cap() {
+    let mut m = zx_sys::Machine::new();
+    m.load_sna(&fmzx_pack::testprogs::noise_sna()).expect("loads");
+    let mut d = SndDecoder::new();
+    let (mut peak, mut sum) = (0u32, 0u64);
+    let frames = 300;
+    for f in 0..frames {
+        m.run_frame();
+        let fr = d.frame(m.edges(), m.edges_start_level());
+        assert_eq!(fr.confident, 0, "frame {f}: noise decoded as music");
+        peak = peak.max(d.work());
+        sum += u64::from(d.work());
+    }
+    println!(
+        "noise.sna: decoder work peak {peak} ({:.0}% of {SND_WORK_MAX}), average {}",
+        f64::from(peak) * 100.0 / f64::from(SND_WORK_MAX),
+        sum / frames
+    );
+    assert!(peak * 10 >= SND_WORK_MAX * 9, "noise.sna peaks at {peak} work units, under 90% of {SND_WORK_MAX}");
+}
