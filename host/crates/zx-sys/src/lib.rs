@@ -3,6 +3,7 @@
 
 //! Raw bindings to the C machine core, and the safe [`Machine`] wrapper.
 
+use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
@@ -43,6 +44,8 @@ pub struct Machine {
     /// The inserted tape signal: the player's state and a copy of the file; the C core keeps
     /// pointers to both.
     sig: Option<(Box<sys::zx_tapesig>, Box<[u8]>)>,
+    /// The port FEh read counter of [`Machine::port_fe_probe`]; the C core keeps a pointer to it.
+    probe: Option<Box<UnsafeCell<u32>>>,
     _not_sync: PhantomData<*const ()>,
 }
 
@@ -55,7 +58,7 @@ impl Machine {
         // SAFETY: the ROM is 'static, so it outlives the machine; `raw` is
         // boxed, so the CPU's context pointer to it stays valid.
         unsafe { sys::zx_init(&mut *raw, ROM_48.as_ptr()) };
-        Machine { raw, tape: None, _rom: None, sig: None, _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: None, sig: None, probe: None, _not_sync: PhantomData }
     }
 
     /// A powered-on machine with another 16K ROM (host tests: an altered copy of the 48K ROM).
@@ -67,7 +70,7 @@ impl Machine {
         // SAFETY: the ROM is a heap buffer the machine keeps (it does not move) for as long as
         // the C side may read it; `raw` is boxed, as in `new`.
         unsafe { sys::zx_init(&mut *raw, rom.as_ptr()) };
-        Machine { raw, tape: None, _rom: Some(rom), sig: None, _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: Some(rom), sig: None, probe: None, _not_sync: PhantomData }
     }
 
     /// Runs one frame; an inserted tape signal is then advanced to the frame end.
@@ -263,35 +266,94 @@ impl Machine {
         match unsafe { sys::zx_tapesig_insert(&mut *self.raw, &mut *st, buf.as_ptr(), buf.len() as u32, &mut bad) } {
             0 => {
                 self.sig = Some((st, buf));
+                self.probe = None; // the signal took the place of the probe
                 Ok(())
             }
             e => Err(tape_signal_error(data, e, bad)),
         }
     }
 
-    /// Removes the tape signal (port FEh bit 6 is the last `OUT`'s EAR bit again).
+    /// Removes the tape signal, and the port FEh probe if that is on (port FEh bit 6 is the
+    /// last `OUT`'s EAR bit again).
     pub fn tape_signal_eject(&mut self) {
         // SAFETY: `raw` was initialised by zx_init; the C side forgets the pointers first.
         unsafe { sys::zx_tapesig_eject(&mut *self.raw) }
         self.sig = None;
+        self.probe = None;
     }
 
     /// True once the signal is past its last pulse and pause (false with none inserted).
     pub fn tape_signal_done(&self) -> bool {
-        // SAFETY: `raw` was initialised by zx_init; a NULL signal reads as not done.
+        // the C side reads m->tape_sig, which is the probe's counter while that is on
+        if self.sig.is_none() {
+            return false;
+        }
+        // SAFETY: `raw` was initialised by zx_init and its tape_sig is the signal's state.
         unsafe { sys::zx_tapesig_done(&*self.raw) != 0 }
     }
 
     /// True while the signal is held by a stop (a TZX pause 0).
     pub fn tape_signal_stopped(&self) -> bool {
+        if self.sig.is_none() {
+            return false;
+        }
         // SAFETY: as in `tape_signal_done`.
         unsafe { sys::zx_tapesig_stopped(&*self.raw) != 0 }
     }
 
     /// Starts the tape again after a stop.
     pub fn tape_signal_play(&mut self) {
-        // SAFETY: `raw` was initialised by zx_init; a NULL signal is ignored.
+        if self.sig.is_none() {
+            return;
+        }
+        // SAFETY: as in `tape_signal_done`.
         unsafe { sys::zx_tapesig_play(&mut *self.raw) }
+    }
+
+    /// True while the signal is in the middle of a pulse (it gives edges), false in a pause, a
+    /// stop, at its end or with none inserted.
+    pub fn tape_signal_in_pulse(&self) -> bool {
+        self.sig.as_ref().is_some_and(|(s, _)| s.in_pulse != 0 && s.done == 0 && s.stopped == 0)
+    }
+
+    /// Turns the port FEh read counter on or off. While on, every read of an even port (the
+    /// keyboard and EAR) is counted ([`Machine::take_port_fe_reads`]) and bit 6 reads as with no
+    /// tape (the last `OUT`'s EAR bit). It uses the tape signal's place, so it stays off while a
+    /// signal is inserted (`false`), and inserting or ejecting a signal turns it off.
+    pub fn port_fe_probe(&mut self, on: bool) -> bool {
+        if self.sig.is_some() {
+            return false;
+        }
+        if on {
+            if self.probe.is_none() {
+                let counter = Box::new(UnsafeCell::new(0u32));
+                self.raw.tape_sig = counter.get().cast();
+                self.raw.tape_ear = Some(port_fe_counted);
+                self.probe = Some(counter);
+            }
+        } else if self.probe.take().is_some() {
+            self.raw.tape_ear = None;
+            self.raw.tape_sig = std::ptr::null_mut();
+        }
+        true
+    }
+
+    /// The port FEh reads counted since the last call (0 with the probe off).
+    pub fn take_port_fe_reads(&mut self) -> u32 {
+        // SAFETY: the counter is only written by `port_fe_counted` while the core runs, which
+        // it does not do during this call.
+        self.probe.as_ref().map_or(0, |c| unsafe { std::mem::replace(&mut *c.get(), 0) })
+    }
+
+    /// True while the CPU is halted (in a `HALT`, waiting for an interrupt).
+    pub fn halted(&self) -> bool {
+        self.raw.cpu.halt_line != 0
+    }
+
+    /// The R register as `LD A,R` reads it: the refresh counter's 7 bits and the bit 7 last
+    /// written. ([`Machine::regs`] gives the core's raw counter, whose bit 7 is not R's.)
+    pub fn r_register(&self) -> u8 {
+        (self.raw.cpu.r & 0x7F) | (self.raw.cpu.r7 & 0x80)
     }
 
     /// The border colour (0-7) in effect now.
@@ -327,6 +389,18 @@ impl Machine {
     pub fn test_step(&mut self) -> u32 {
         // SAFETY: `raw` was initialised by zx_init.
         unsafe { sys::zx_test_step(&mut *self.raw) }
+    }
+}
+
+/// The port FEh probe's EAR input: counts the read, and gives the level a read with no tape
+/// gives.
+unsafe extern "C" fn port_fe_counted(m: *mut sys::zx_machine, _frame_t: u32) -> u8 {
+    // SAFETY: the core calls this only while `port_fe_probe` has installed it, with the machine
+    // whose tape_sig points at the probe's live counter.
+    unsafe {
+        let n = (*m).tape_sig.cast::<u32>();
+        *n = (*n).wrapping_add(1);
+        (*m).ear_in
     }
 }
 

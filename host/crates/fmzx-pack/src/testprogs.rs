@@ -359,6 +359,135 @@
 //! [`tzx_header`] and one function per TZX block the tape signal player plays (0x10-0x14,
 //! 0x20, 0x24/0x25), for the signal tests; [`wrap_tap_as_tzx`] turns a `.tap` into standard
 //! blocks with the `.tap`'s 1000 ms pause.
+//!
+//! # `turbo_tzx()` and `hang_tzx()` (not in the pack)
+//!
+//! A tape with a loader of its own, for load to snapshot (`tapeload`). Blocks:
+//!
+//! 1. Standard blocks: the BASIC header (`turbo`, autostart line 10) and program
+//!    `LOAD ""CODE: RANDOMIZE USR 32768`, then the CODE header (`loader`, 8000h) and the loader
+//!    below; each with a 1000 ms pause.
+//! 2. A turbo block (0x11, [`TURBO_TIMING`]: pilot 1500 T x 2000, syncs 400/450 T, bits 520/1040
+//!    T, pause 0) with the first [`TURBO_SPLIT`] bytes of [`TURBO_PAYLOAD`].
+//! 3. A 0x20 pause 0: the tape stops (load to snapshot presses play again after 1 s).
+//! 4. The same signal as three blocks: a pure tone (0x12, the pilot), a pulse sequence (0x13,
+//!    the syncs) and pure data (0x14, pause 0) with the rest of the payload. Nothing follows.
+//!
+//! The loader loads both parts to [`TURBO_PAYLOAD_AT`] and jumps there. The payload sets the
+//! border to [`TAPE_DONE_BORDER`] and then, once a frame (`EI; HALT` under the ROM's IM 1),
+//! increments the screen byte at 4000h. `hang_tzx()` is the same tape with its last block cut
+//! to half its bytes: the loader waits for the rest for ever.
+//!
+//! The loader times edges (level changes on port FEh bit 6) the way the ROM's does, by counting
+//! turns of a sampling loop of 43 T (more on a screen line, by the I/O contention), with
+//! interrupts off. A pulse of 256 turns (about 3 ms) is too long: the search starts again. The
+//! search wants [`TURBO_PILOT_PULSES_SEEN`] pilot pulses in a row (each 20-49 turns: 1500 T is
+//! about 32), then a short one (sync 1, under 20 turns), then any (sync 2); then each bit is two
+//! edges counted together: under [`TURBO_BIT_SPLIT`] turns a 0 (1040 T, about 20 turns), else a
+//! 1 (2080 T, about 40 turns), most significant bit first. (The load still works with the
+//! threshold anywhere from 24 to 36.)
+//!
+//! ```text
+//! start: DI
+//!        LD IX,TURBO_PAYLOAD_AT
+//!        LD DE,TURBO_SPLIT
+//!        CALL block
+//!        LD IX,TURBO_PAYLOAD_AT+TURBO_SPLIT
+//!        LD DE,TURBO_PAYLOAD.len()-TURBO_SPLIT
+//!        CALL block
+//!        JP TURBO_PAYLOAD_AT
+//! block:
+//! hunt:  LD H,256-TURBO_PILOT_PULSES_SEEN     pilot pulses still wanted (counts up to 0)
+//! pilot: CALL edge0
+//!        JR NC,hunt          too long: again
+//!        LD A,B
+//!        CP 20
+//!        JR C,hunt           too short for the pilot
+//!        CP 50
+//!        JR NC,hunt          too long for the pilot
+//!        INC H
+//!        JR NZ,pilot
+//! sync:  CALL edge0
+//!        JR NC,hunt
+//!        LD A,B
+//!        CP 20
+//!        JR NC,sync          still the pilot
+//!        CALL edge0          sync 2
+//!        JR NC,hunt
+//! byte:  LD L,1              a marker bit: 8 shifts carry it out
+//! bit:   CALL edge0
+//!        JR NC,hunt
+//!        CALL edge           the second edge, counted on
+//!        JR NC,hunt
+//!        LD A,B
+//!        CP TURBO_BIT_SPLIT  carry: a 0
+//!        CCF
+//!        RL L
+//!        JR NC,bit
+//!        LD (IX+0),L
+//!        INC IX
+//!        DEC DE
+//!        LD A,D
+//!        OR E
+//!        JR NZ,byte
+//!        RET
+//! edge0: LD B,0
+//! edge:  INC B               4    B turns; 0 again (256): carry clear, too long
+//!        RET Z               5
+//!        IN A,(FEh)          11
+//!        XOR C               4    C bit 6 = the level before
+//!        AND 40h             7
+//!        JR Z,edge           12   43 T a turn
+//!        LD A,C
+//!        XOR 40h
+//!        LD C,A              the new level
+//!        SCF
+//!        RET
+//! ```
+//!
+//! # `rom_copy_tap()` (not in the pack)
+//!
+//! A standard-speed tape that the ROM trap cannot load: the BASIC loader and the code as in
+//! `tape.tap`, then a headerless data block (flag FFh) of [`rom_copy_payload`] that the code
+//! loads to [`ROM_COPY_PAYLOAD_AT`] through its own copy of LD-BYTES in RAM, so 0556h is never
+//! reached. The code copies the ROM's 0556h-0604h to A056h and moves its eight absolute
+//! `CALL`/`JP` targets (05E3h, 05E7h, 05CAh) up by 9B00h, adding 9Bh to their high bytes (the
+//! table: the low bytes of their addresses in A0xxh). Border [`TAPE_DONE_BORDER`] once loaded.
+//!
+//! ```text
+//!        LD HL,0556h
+//!        LD DE,A056h
+//!        LD BC,00AFh
+//!        LDIR
+//!        LD H,A0h
+//!        LD DE,table
+//!        LD B,8
+//! rel:   LD A,(DE)
+//!        LD L,A
+//!        LD A,(HL)
+//!        ADD A,9Bh
+//!        LD (HL),A
+//!        INC DE
+//!        DJNZ rel
+//!        LD IX,ROM_COPY_PAYLOAD_AT
+//!        LD DE,len
+//!        LD A,FFh
+//!        SCF
+//!        CALL A056h          the copy of LD-BYTES
+//!        LD A,TAPE_DONE_BORDER
+//!        JR C,done
+//!        LD A,TAPE_FAIL_BORDER
+//! done:  OUT (FEh),A
+//!        EI
+//! spin:  JR spin
+//! table: 6E 7D 84 93 9D CC D7 E5
+//! ```
+//!
+//! # `stop_tap()`, `reset_tap()` and `halt_tap()` (not in the pack)
+//!
+//! Autostarting BASIC tapes of one line that fail load to snapshot's success test: `10 STOP`
+//! ends at the ROM's report "9 STOP statement"; `10 RANDOMIZE USR 0` resets the machine to the
+//! copyright screen; `10 POKE 32768,243: POKE 32769,118: RANDOMIZE USR 32768` runs `DI; HALT`.
 
 use std::path::{Path, PathBuf};
 
@@ -754,10 +883,8 @@ fn tap_header(kind: u8, name: &str, len: u16, p1: u16, p2: u16) -> Vec<u8> {
     tap_block(0, &d)
 }
 
-/// The multi-load tape: the autostart BASIC loader, the code, and the screen image the code
-/// loads while it runs.
-pub fn tape_tap() -> Vec<u8> {
-    // LOAD ""CODE: RANDOMIZE USR 32768, line 10
+/// The BASIC program `10 LOAD ""CODE: RANDOMIZE USR 32768`.
+fn usr_prog() -> Vec<u8> {
     let mut line = vec![0xEF, 0x22, 0x22, 0xAF, 0x3A, 0xF9, 0xC0];
     line.extend_from_slice(b"32768");
     line.extend_from_slice(&[0x0E, 0x00, 0x00, 0x00, 0x80, 0x00]);
@@ -765,6 +892,13 @@ pub fn tape_tap() -> Vec<u8> {
     prog.extend_from_slice(&((line.len() + 1) as u16).to_le_bytes());
     prog.extend_from_slice(&line);
     prog.push(0x0D);
+    prog
+}
+
+/// The multi-load tape: the autostart BASIC loader, the code, and the screen image the code
+/// loads while it runs.
+pub fn tape_tap() -> Vec<u8> {
+    let prog = usr_prog();
     let mut image = vec![0u8; 0x1B00];
     for y in 0..192 {
         image[bitmap_offset(y, 0)..bitmap_offset(y, 0) + 32].fill(y as u8);
@@ -941,6 +1075,292 @@ pub fn wrap_tap_as_tzx(tap: &[u8]) -> Vec<u8> {
         i += 2 + n;
     }
     d
+}
+
+/// A small Z80 code builder for the generated loaders: bytes, labels, and references to
+/// labels from relative (`JR`, `DJNZ`) and absolute (`JP`, `CALL`, `LD rr,nn`) operands, which
+/// `finish` fills in.
+struct Asm {
+    org: u16,
+    code: Vec<u8>,
+    labels: Vec<(&'static str, u16)>,
+    /// Operand offset, label, relative.
+    refs: Vec<(usize, &'static str, bool)>,
+}
+
+impl Asm {
+    fn new(org: u16) -> Self {
+        Asm { org, code: Vec::new(), labels: Vec::new(), refs: Vec::new() }
+    }
+
+    fn op(&mut self, bytes: &[u8]) -> &mut Self {
+        self.code.extend_from_slice(bytes);
+        self
+    }
+
+    fn label(&mut self, name: &'static str) -> &mut Self {
+        assert!(self.labels.iter().all(|l| l.0 != name), "label {name} twice");
+        self.labels.push((name, self.org + self.code.len() as u16));
+        self
+    }
+
+    /// `JR`/`JR cc`/`DJNZ` (`opcode`) to `name`.
+    fn rel(&mut self, opcode: u8, name: &'static str) -> &mut Self {
+        self.code.push(opcode);
+        self.refs.push((self.code.len(), name, true));
+        self.code.push(0);
+        self
+    }
+
+    /// An instruction (`opcode`, prefix included) whose last two bytes are `name`'s address.
+    fn abs(&mut self, opcode: &[u8], name: &'static str) -> &mut Self {
+        self.code.extend_from_slice(opcode);
+        self.refs.push((self.code.len(), name, false));
+        self.code.extend_from_slice(&[0, 0]);
+        self
+    }
+
+    fn finish(&self) -> Vec<u8> {
+        let mut code = self.code.clone();
+        for &(at, name, rel) in &self.refs {
+            let target = self.labels.iter().find(|l| l.0 == name).unwrap_or_else(|| panic!("no label {name}")).1;
+            if rel {
+                let from = self.org as i32 + at as i32 + 1;
+                let d = target as i32 - from;
+                assert!((-128..128).contains(&d), "JR to {name} out of range");
+                code[at] = d as i8 as u8;
+            } else {
+                code[at..at + 2].copy_from_slice(&target.to_le_bytes());
+            }
+        }
+        code
+    }
+}
+
+/// Where `turbo_tzx()` loads [`TURBO_PAYLOAD`].
+pub const TURBO_PAYLOAD_AT: u16 = 0x9000;
+/// Bytes of [`TURBO_PAYLOAD`] in the turbo block; the rest is in the pure data block.
+pub const TURBO_SPLIT: usize = 128;
+/// The timings of `turbo_tzx()`'s blocks, in T-states (the 0x12-0x14 part uses the same).
+pub const TURBO_TIMING: TzxTurbo =
+    TzxTurbo { pilot: 1500, sync1: 400, sync2: 450, zero: 520, one: 1040, pilot_pulses: 2000, last_bits: 8, pause_ms: 0 };
+/// Pilot pulses in a row the turbo loader wants before it looks for the sync.
+pub const TURBO_PILOT_PULSES_SEEN: u8 = 200;
+/// The turbo loader's bit threshold, in turns of its sampling loop (both edges of a bit).
+pub const TURBO_BIT_SPLIT: u8 = 30;
+
+const TURBO_PAYLOAD_BYTES: [u8; 256] = {
+    #[rustfmt::skip]
+    let code = [
+        0x3E, TAPE_DONE_BORDER, //       LD A,TAPE_DONE_BORDER
+        0xD3, 0xFE,             //       OUT (FEh),A
+        0xFB,                   // loop: EI
+        0x76,                   //       HALT
+        0x21, 0x00, 0x40,       //       LD HL,4000h
+        0x34,                   //       INC (HL)
+        0x18, 0xF8,             //       JR loop
+    ];
+    let mut a = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        a[i] = if i < code.len() { code[i] } else { (i * 151 + 7) as u8 };
+        i += 1;
+    }
+    a
+};
+/// What `turbo_tzx()` loads to [`TURBO_PAYLOAD_AT`]: the code that runs once loaded (border
+/// [`TAPE_DONE_BORDER`], then a screen byte incremented every frame), then a pattern.
+pub const TURBO_PAYLOAD: &[u8] = &TURBO_PAYLOAD_BYTES;
+
+/// `turbo_tzx()`'s loader, at 8000h (see the module docs).
+fn turbo_loader() -> Vec<u8> {
+    let at = TURBO_PAYLOAD_AT.to_le_bytes();
+    let second = (TURBO_PAYLOAD_AT + TURBO_SPLIT as u16).to_le_bytes();
+    let first_len = (TURBO_SPLIT as u16).to_le_bytes();
+    let second_len = ((TURBO_PAYLOAD.len() - TURBO_SPLIT) as u16).to_le_bytes();
+    let mut a = Asm::new(CODE);
+    a.op(&[0xF3]) // DI
+        .op(&[0xDD, 0x21, at[0], at[1]]) // LD IX,payload
+        .op(&[0x11, first_len[0], first_len[1]]) // LD DE,first part
+        .abs(&[0xCD], "block")
+        .op(&[0xDD, 0x21, second[0], second[1]])
+        .op(&[0x11, second_len[0], second_len[1]])
+        .abs(&[0xCD], "block")
+        .op(&[0xC3, at[0], at[1]]); // JP payload
+    a.label("block")
+        .label("hunt")
+        .op(&[0x26, 0u8.wrapping_sub(TURBO_PILOT_PULSES_SEEN)]) // LD H,256-n
+        .label("pilot")
+        .abs(&[0xCD], "edge0")
+        .rel(0x30, "hunt") // JR NC
+        .op(&[0x78, 0xFE, 20]) // LD A,B; CP 20
+        .rel(0x38, "hunt") // JR C
+        .op(&[0xFE, 50]) // CP 50
+        .rel(0x30, "hunt")
+        .op(&[0x24]) // INC H
+        .rel(0x20, "pilot") // JR NZ
+        .label("sync")
+        .abs(&[0xCD], "edge0")
+        .rel(0x30, "hunt")
+        .op(&[0x78, 0xFE, 20])
+        .rel(0x30, "sync")
+        .abs(&[0xCD], "edge0") // sync 2
+        .rel(0x30, "hunt")
+        .label("byte")
+        .op(&[0x2E, 0x01]) // LD L,1
+        .label("bit")
+        .abs(&[0xCD], "edge0")
+        .rel(0x30, "hunt")
+        .abs(&[0xCD], "edge")
+        .rel(0x30, "hunt")
+        .op(&[0x78, 0xFE, TURBO_BIT_SPLIT, 0x3F, 0xCB, 0x15]) // LD A,B; CP split; CCF; RL L
+        .rel(0x30, "bit")
+        .op(&[0xDD, 0x75, 0x00, 0xDD, 0x23, 0x1B, 0x7A, 0xB3]) // LD (IX+0),L; INC IX; DEC DE; LD A,D; OR E
+        .rel(0x20, "byte")
+        .op(&[0xC9]); // RET
+    a.label("edge0")
+        .op(&[0x06, 0x00]) // LD B,0
+        .label("edge")
+        .op(&[0x04, 0xC8, 0xDB, 0xFE, 0xA9, 0xE6, 0x40]) // INC B; RET Z; IN A,(FEh); XOR C; AND 40h
+        .rel(0x28, "edge") // JR Z
+        .op(&[0x79, 0xEE, 0x40, 0x4F, 0x37, 0xC9]); // LD A,C; XOR 40h; LD C,A; SCF; RET
+    a.finish()
+}
+
+/// Standard-speed blocks as TZX blocks 0x10 with a 1000 ms pause (the `.tap` blocks given with
+/// their lengths).
+fn tzx_standard_blocks(blocks: &[Vec<u8>]) -> Vec<u8> {
+    blocks.iter().flat_map(|b| tzx_standard(1000, &b[2..])).collect()
+}
+
+/// The turbo tape (see the module docs); with `cut`, the last block has half its bytes.
+fn turbo_tape(cut: bool) -> Vec<u8> {
+    let prog = usr_prog();
+    let code = turbo_loader();
+    let mut d = tzx_header();
+    d.extend(tzx_standard_blocks(&[
+        tap_header(0, "turbo", prog.len() as u16, 10, prog.len() as u16),
+        tap_block(0xFF, &prog),
+        tap_header(3, "loader", code.len() as u16, CODE, 0),
+        tap_block(0xFF, &code),
+    ]));
+    let (first, rest) = TURBO_PAYLOAD.split_at(TURBO_SPLIT);
+    let t = TURBO_TIMING;
+    d.extend(tzx_turbo(&t, first));
+    d.extend(tzx_pause(0));
+    d.extend(tzx_tone(t.pilot, t.pilot_pulses));
+    d.extend(tzx_pulses(&[t.sync1, t.sync2]));
+    let rest = if cut { &rest[..rest.len() / 2] } else { rest };
+    d.extend(tzx_pure_data(t.zero, t.one, 8, 0, rest));
+    d
+}
+
+/// A tape with a turbo loader of its own (see the module docs). Not one of [`PROGRAMS`].
+pub fn turbo_tzx() -> Vec<u8> {
+    turbo_tape(false)
+}
+
+/// [`turbo_tzx`] with its last block cut short: the loader never finishes. Not one of
+/// [`PROGRAMS`].
+pub fn hang_tzx() -> Vec<u8> {
+    turbo_tape(true)
+}
+
+/// Where `rom_copy_tap()`'s code loads [`rom_copy_payload`].
+pub const ROM_COPY_PAYLOAD_AT: u16 = 0xC000;
+/// Where `rom_copy_tap()`'s code copies LD-BYTES (0556h-0604h): the targets move by 9B00h.
+const ROM_COPY_AT: u16 = 0xA056;
+/// The low bytes of the addresses, in the copy, of the high bytes of its absolute targets.
+const ROM_COPY_RELOCS: [u8; 8] = [0x6E, 0x7D, 0x84, 0x93, 0x9D, 0xCC, 0xD7, 0xE5];
+
+/// The headerless block of `rom_copy_tap()`: 768 bytes of a pattern.
+pub fn rom_copy_payload() -> Vec<u8> {
+    (0..768u32).map(|i| (i * 73 + 29) as u8).collect()
+}
+
+/// `rom_copy_tap()`'s code, at 8000h (see the module docs).
+fn rom_copy_code() -> Vec<u8> {
+    let at = ROM_COPY_AT.to_le_bytes();
+    let dest = ROM_COPY_PAYLOAD_AT.to_le_bytes();
+    let len = (rom_copy_payload().len() as u16).to_le_bytes();
+    let mut a = Asm::new(CODE);
+    a.op(&[0x21, 0x56, 0x05]) // LD HL,0556h
+        .op(&[0x11, at[0], at[1]]) // LD DE,copy
+        .op(&[0x01, 0xAF, 0x00, 0xED, 0xB0]) // LD BC,00AFh; LDIR
+        .op(&[0x26, (ROM_COPY_AT >> 8) as u8]) // LD H,A0h
+        .abs(&[0x11], "table") // LD DE,table
+        .op(&[0x06, ROM_COPY_RELOCS.len() as u8]) // LD B,8
+        .label("rel")
+        .op(&[0x1A, 0x6F, 0x7E]) // LD A,(DE); LD L,A; LD A,(HL)
+        .op(&[0xC6, ((ROM_COPY_AT - 0x0556) >> 8) as u8, 0x77, 0x13]) // ADD A,9Bh; LD (HL),A; INC DE
+        .rel(0x10, "rel") // DJNZ
+        .op(&[0xDD, 0x21, dest[0], dest[1]]) // LD IX,payload
+        .op(&[0x11, len[0], len[1], 0x3E, 0xFF, 0x37]) // LD DE,len; LD A,FFh; SCF
+        .op(&[0xCD, at[0], at[1]]) // CALL copy
+        .op(&[0x3E, TAPE_DONE_BORDER])
+        .rel(0x38, "done") // JR C
+        .op(&[0x3E, TAPE_FAIL_BORDER])
+        .label("done")
+        .op(&[0xD3, 0xFE, 0xFB]) // OUT (FEh),A; EI
+        .label("spin")
+        .rel(0x18, "spin")
+        .label("table")
+        .op(&ROM_COPY_RELOCS);
+    a.finish()
+}
+
+/// A standard-speed tape whose last block only a loader of its own reads (see the module docs).
+/// Not one of [`PROGRAMS`].
+pub fn rom_copy_tap() -> Vec<u8> {
+    let prog = usr_prog();
+    let code = rom_copy_code();
+    let mut tap = tap_header(0, "copy", prog.len() as u16, 10, prog.len() as u16);
+    tap.extend(tap_block(0xFF, &prog));
+    tap.extend(tap_header(3, "copy", code.len() as u16, CODE, 0));
+    tap.extend(tap_block(0xFF, &code));
+    tap.extend(tap_block(0xFF, &rom_copy_payload()));
+    tap
+}
+
+/// An autostarting BASIC tape (program `name`) of one line 10 with the statements `body`.
+fn basic_tap(name: &str, mut body: Vec<u8>) -> Vec<u8> {
+    body.push(0x0D);
+    let mut prog = 10u16.to_be_bytes().to_vec();
+    prog.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    prog.extend(body);
+    let mut tap = tap_header(0, name, prog.len() as u16, 10, prog.len() as u16);
+    tap.extend(tap_block(0xFF, &prog));
+    tap
+}
+
+/// An autostarting BASIC tape whose program is `10 STOP`. Not one of [`PROGRAMS`].
+pub fn stop_tap() -> Vec<u8> {
+    basic_tap("stop", vec![0xE2])
+}
+
+/// An autostarting BASIC tape whose program is `10 RANDOMIZE USR 0`: the machine resets to
+/// the copyright screen. Not one of [`PROGRAMS`].
+pub fn reset_tap() -> Vec<u8> {
+    let mut body = vec![0xF9, 0xC0]; // RANDOMIZE USR
+    basic_number(&mut body, 0.0);
+    basic_tap("reset", body)
+}
+
+/// An autostarting BASIC tape whose program is
+/// `10 POKE 32768,243: POKE 32769,118: RANDOMIZE USR 32768`: `DI; HALT` at 8000h, halted with
+/// interrupts off for ever. Not one of [`PROGRAMS`].
+pub fn halt_tap() -> Vec<u8> {
+    let mut body = Vec::new();
+    for (a, v) in [(32768.0, 243.0), (32769.0, 118.0)] {
+        body.push(0xF4); // POKE
+        basic_number(&mut body, a);
+        body.push(b',');
+        basic_number(&mut body, v);
+        body.push(b':');
+    }
+    body.extend_from_slice(&[0xF9, 0xC0]);
+    basic_number(&mut body, 32768.0);
+    basic_tap("halt", body)
 }
 
 /// Writes every program into `dir` (created if needed); returns the paths written.

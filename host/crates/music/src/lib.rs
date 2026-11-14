@@ -10,7 +10,7 @@ pub mod corpus;
 pub mod score;
 pub mod synthetic;
 pub mod truth;
-pub mod tzx;
+pub use fmzx_pack::tzx;
 pub mod wav;
 
 /// The FM-1's audio rate, 750000 / 17 Hz (24 MHz / 544).

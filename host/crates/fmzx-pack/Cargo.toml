@@ -23,6 +23,8 @@ zx-sys = { path = "../zx-sys" }
 # tests only (the tool itself keeps the workspace's rust-version).
 fm1-soc = { git = "https://github.com/joakimeriksson/fm1-emu", rev = "93cb7ee3f7008b27959ba73073b864e37efd7289" }
 zx-tests = { path = "../zx-tests" }
+# music re-exports our tzx module; its test checks that path
+music = { path = "../music" }
 
 [lints]
 workspace = true
