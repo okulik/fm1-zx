@@ -16,7 +16,7 @@ use crate::{capture, decode, played_hz, sample_rate, tzx, wav, Frame, RATE};
 use fmzx_pack::manifest::parse_action;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use zx_sys::{Beeper, Machine, SndMixer, SND_MODE_FM_A, SND_STYLE_FLIPS, SND_STYLE_PULSES, SND_STYLE_SLOTS};
+use zx_sys::{Beeper, Machine, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_A, SND_STYLE_FLIPS, SND_STYLE_PULSES, SND_STYLE_SLOTS};
 
 /// Frame time in ms as the key scripts count it (50 Hz).
 const FRAME_MS: u64 = 20;
@@ -43,7 +43,9 @@ pub struct Row {
     pub frames: usize,
     /// Frames with any speaker edge.
     pub sound_frames: usize,
-    /// Of those frames, the percentage decided as FM.
+    /// Of those frames, the percentage the mixer plays as FM: the decoder's confident decisions
+    /// through the mixer's hysteresis (FM from the second confident decision in a row), as the
+    /// firmware plays them.
     pub fm_pct: f64,
     /// Of those frames, the percentage in each decoder style: slots, flips, pulses.
     pub style_pct: [f64; 3],
@@ -154,7 +156,18 @@ pub fn detect_engine(m: &Machine) -> Option<Engine> {
     SIGS.iter().find(|g| digest(m, g.base, g.len, g.wild) == g.digest).map(|g| g.engine)
 }
 
-/// Runs one game for `opts.seconds`; with `opts.wav` writes its two WAV files under `opts.out`.
+/// The name a game's WAV files start with: its file name with the dot made an underscore
+/// (`foo.tap` -> `foo_tap`), so `foo.tap` and `foo.tzx` in one folder keep their own.
+pub fn wav_stem(path: &Path) -> String {
+    let stem = path.file_stem().map_or_else(|| "game".into(), |s| s.to_string_lossy().into_owned());
+    match path.extension() {
+        Some(e) => format!("{stem}_{}", e.to_string_lossy()),
+        None => stem,
+    }
+}
+
+/// Runs one game for `opts.seconds`; with `opts.wav` writes its two WAV files under `opts.out`
+/// (`<wav_stem>_beeper.wav`, `<wav_stem>_fm.wav`).
 pub fn run_game(path: &Path, opts: &Options) -> Row {
     let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut row = Row { file: file.clone(), ..Row::default() };
@@ -198,11 +211,32 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
             run[i].edges.iter().any(|e| std::mem::replace(&mut level, e.level & 2) != e.level & 2)
         })
         .collect();
+    // the mixer in FM mode, as the firmware runs it: which frames it plays as FM (its hysteresis
+    // over the decisions) and its output
+    let mut mixer = SndMixer::new(RATE.0, RATE.1);
+    let mut fm = Vec::new();
+    let mut plays_fm = Vec::with_capacity(run.len());
+    for (t, f) in run.iter().enumerate() {
+        let out = mixer.frame(SND_MODE_FM_A, &f.edges, f.start_level, &f.beeper);
+        if opts.wav {
+            fm.extend(out);
+        }
+        if t >= SND_DELAY_FRAMES as usize {
+            plays_fm.push(mixer.fm_on());
+        }
+    }
+    // the last frames' decisions come with frames after the run: silent ones
+    let level = run.last().map_or(0, |f| f.edges.last().map_or(f.start_level, |e| e.level));
+    let quiet = vec![0i16; run.last().map_or(0, |f| f.beeper.len())];
+    while plays_fm.len() < run.len() {
+        mixer.frame(SND_MODE_FM_A, &[], level, &quiet);
+        plays_fm.push(mixer.fm_on());
+    }
     let pct = |n: usize| 100.0 * n as f64 / sounding.len().max(1) as f64;
     row.status = "ok".into();
     row.frames = run.len();
     row.sound_frames = sounding.len();
-    row.fm_pct = pct(sounding.iter().filter(|&&i| dec[i].confident != 0).count());
+    row.fm_pct = pct(sounding.iter().filter(|&&i| plays_fm[i]).count());
     for (k, style) in [SND_STYLE_SLOTS, SND_STYLE_FLIPS, SND_STYLE_PULSES].into_iter().enumerate() {
         row.style_pct[k] = pct(sounding.iter().filter(|&&i| dec[i].style == style).count());
     }
@@ -211,14 +245,8 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         row.truth = Some(score(&truth, &played_hz(&dec)));
     }
     if opts.wav {
-        let stem = path.file_stem().map_or_else(|| "game".into(), |s| s.to_string_lossy().into_owned());
-        let mut mixer = SndMixer::new(RATE.0, RATE.1);
-        let mut fm = Vec::new();
-        let mut bp = Vec::new();
-        for f in &run {
-            fm.extend(mixer.frame(SND_MODE_FM_A, &f.edges, f.start_level, &f.beeper));
-            bp.extend_from_slice(&f.beeper);
-        }
+        let stem = wav_stem(path);
+        let bp: Vec<i16> = run.iter().flat_map(|f| f.beeper.iter().copied()).collect();
         let rate = sample_rate().round() as u32;
         for (suffix, s) in [("beeper", &bp), ("fm", &fm)] {
             if let Err(e) = wav::write(&opts.out.join(format!("{stem}_{suffix}.wav")), s, rate) {
@@ -274,9 +302,10 @@ fn engine_name(e: Option<Engine>) -> &'static str {
 /// The human-readable report.
 pub fn report_txt(rows: &[Row], opts: &Options) -> String {
     let mut s = format!(
-        "music-corpus: {} games, {} s each; FM = frames the decoder is confident about, of the frames with sound.\n\
-         styles: slots / flips / pulses, % of the frames with sound. Truth (engines read from RAM): frame precision and\n\
-         recall, notes found of true notes, detected notes matching no true note (wrong).\n\n",
+        "music-corpus: {} games, {} s each; FM = frames the mixer plays as FM (the decoder's confident decisions\n\
+         after the mixer's hysteresis), of the frames with sound. styles: slots / flips / pulses, % of the frames\n\
+         with sound. Truth (engines read from RAM): frame precision and recall of the confident decisions, notes\n\
+         found of true notes, detected notes matching no true note (wrong).\n\n",
         rows.len(),
         opts.seconds
     );

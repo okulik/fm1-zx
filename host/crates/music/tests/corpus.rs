@@ -93,7 +93,8 @@ fn corpus_runs_on_pack() {
         tz.extend_from_slice(&(b.len() as u16).to_le_bytes());
         tz.extend_from_slice(b);
     }
-    std::fs::write(dir.join("castaway_tzx.tzx"), &tz).unwrap();
+    // (named as the .tap: each keeps its own WAVs)
+    std::fs::write(dir.join("castawy.tzx"), &tz).unwrap();
     let mut turbo = tzx_header();
     turbo.extend_from_slice(&[0x12, 0, 0, 0, 0]);
     std::fs::write(dir.join("turbo.tzx"), &turbo).unwrap();
@@ -113,7 +114,7 @@ fn corpus_runs_on_pack() {
     println!("{}", report_txt(&rows, &opts));
     assert!(c.fm_pct > 50.0, "FM {:.1}%", c.fm_pct);
     assert!(t.precision() >= 0.9, "precision {:.3}", t.precision());
-    let z = by("castaway_tzx.tzx");
+    let z = by("castawy.tzx");
     assert_eq!(z.status, "ok");
     assert!((z.fm_pct - c.fm_pct).abs() < 1.0, "the .tzx plays as the .tap");
     assert!(by("tune.sna").status == "ok" && by("tune.sna").sound_frames > 0);
@@ -126,7 +127,7 @@ fn corpus_runs_on_pack() {
     assert_eq!(csv, report_csv(&rows));
     assert_eq!(csv.lines().count(), 5);
     assert!(csv.lines().all(|l| l.matches(',').count() == 14), "{csv}");
-    for f in ["castawy_beeper.wav", "castawy_fm.wav", "tune_fm.wav"] {
+    for f in ["castawy_tap_beeper.wav", "castawy_tap_fm.wav", "castawy_tzx_beeper.wav", "castawy_tzx_fm.wav", "tune_sna_fm.wav"] {
         let w = std::fs::read(opts.out.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
         assert_eq!(&w[..4], b"RIFF");
         assert!(w.len() > 44 + 30 * 44_000);
@@ -235,11 +236,11 @@ fn engine_not_taken_from_the_name() {
 
 #[test]
 fn wav_failure_keeps_the_numbers() {
-    // the output dir exists but `tune_fm.wav` is a directory: the write fails, the row stays
+    // the output dir exists but `tune_sna_fm.wav` is a directory: the write fails, the row stays
     let dir = temp("wavfail");
     std::fs::copy(repo().join("games/test/tune.sna"), dir.join("tune.sna")).unwrap();
     let out = temp("wavfailout");
-    std::fs::create_dir_all(out.join("tune_fm.wav")).unwrap();
+    std::fs::create_dir_all(out.join("tune_sna_fm.wav")).unwrap();
     let opts = Options { seconds: 5, wav: true, out: out.clone() };
     let rows = run_folder(&dir, &opts).unwrap();
     let r = &rows[0];

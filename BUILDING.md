@@ -138,8 +138,9 @@ beside the games.
 Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded (tapes autostart; `.tzx` must be
 standard-speed, any other block type reports "not loadable" and the game is skipped) and run for N
 seconds (default 40). The output goes to `build/music-corpus` (the repository's `build/`) unless
-`-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_beeper.wav` and
-`<name>_fm.wav` (the mixer's FM-mode output, 3 frames late) to listen to the difference.
+`-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_<ext>_beeper.wav` and
+`<name>_<ext>_fm.wav` (the mixer's FM-mode output, 3 frames late) to listen to the difference
+(`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx` beside it keeps its own).
 
 Key scripts: a file `<name>.keys` beside the game holds steps `ACTION@ms[+hold]` separated by commas
 or line breaks (`#` starts a comment line), in the syntax of the `demo` strings of `games/games.toml`
@@ -155,14 +156,15 @@ press may need a longer hold.
 What the report says, one row per game:
 
 - `sound s`: seconds of the run with any speaker activity.
-- `FM %`: of those frames, the share the decoder is confident enough about to play as FM (the rest
-  plays the beeper).
+- `FM %`: of those frames, the share the mixer plays as FM, as the firmware does: the decoder's
+  confident decisions after the mixer's hysteresis (FM from the second confident decision in a row,
+  the beeper from the first unconfident one); the rest plays the beeper.
 - `styles s/f/p %`: of those frames, the share decoded as time-slot music, speaker-flip music and
   short-pulse music; the remainder is sound with no music in it.
-- truth, for games whose music engine is recognised (Castaway and Colony 8 by the code of their
-  sound loops, Cave Runner by its file name): the engine's own notes are read from RAM and compared
-  with what the decoder found: frame precision and recall, notes found of the true notes, and
-  decoded notes that match no true note (`wrong`). The CSV has the same columns.
+- truth, for games whose music engine is recognised (by the code of its sound loop in memory:
+  Castaway, Colony 8, Cave Runner's title tune and in-game loop): the engine's own notes are read
+  from RAM and compared with what the decoder found: frame precision and recall, notes found of the
+  true notes, and decoded notes that match no true note (`wrong`). The CSV has the same columns.
 
 ## Toolchain pin
 
@@ -234,21 +236,23 @@ emulator counts, one per instruction, interrupts excluded):
 
 | game | Beeper max | Beeper avg | FM: sound max | FM: sound avg |
 | --- | --- | --- | --- | --- |
-| scroll | 1,465,703 | 1,447,623 | 1,574,233 | 1,556,223 |
-| border | 1,361,439 | 1,355,503 | 1,469,966 | 1,464,007 |
-| castaway | 1,337,485 | 470,179 | 1,376,829 | 569,070 |
-| sopwith | 1,502,114 | 1,209,485 | 1,610,561 | 1,332,740 |
-| colony8 | 1,367,653 | 397,448 | 1,449,235 | 498,704 |
-| dino | 1,541,056 | 883,313 | 1,649,503 | 992,850 |
-| oneway | 690,832 | 614,159 | 799,362 | 722,808 |
-| tape | 800,910 | 795,057 | 909,440 | 903,560 |
-| tune | 1,146,602 | 938,842 | 1,288,812 | 1,078,636 |
-| noise | 1,711,471 | 1,288,037 | 1,819,893 | 1,396,540 |
+| scroll | 1,465,734 | 1,447,654 | 1,574,233 | 1,556,223 |
+| border | 1,361,499 | 1,355,563 | 1,469,966 | 1,464,007 |
+| castaway | 1,337,519 | 470,113 | 1,376,829 | 569,070 |
+| sopwith | 1,502,145 | 1,209,517 | 1,610,561 | 1,332,740 |
+| colony8 | 1,367,687 | 397,480 | 1,449,235 | 498,704 |
+| dino | 1,541,087 | 883,345 | 1,649,503 | 992,850 |
+| oneway | 690,863 | 614,190 | 799,362 | 722,808 |
+| tape | 800,941 | 795,088 | 909,440 | 903,560 |
+| tune | 1,146,654 | 938,902 | 1,288,812 | 1,078,636 |
+| noise | 1,711,534 | 1,288,067 | 1,819,956 | 1,396,570 |
 
 (CPU per frame, in both sound modes; the noise program is the worst case, the mixer alone at most
-685,944 in Beeper and 794,366 in FM. The scroll to tune rows are from `fw_report`, noise from `fw_budget`.)
+686,007 in Beeper and 794,429 in FM. The scroll to tune rows are from `fw_report`, noise from `fw_budget`;
+the FM column of the scroll to tune rows is from the stage 1 run before the final decoder fixes,
+which moved the noise row by 63 instructions.)
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 38,600 of 49,152 bytes. Image
-+ pack 171,712 of 581,564 (0x8DFBC) bytes. POOL 270,804 bytes, 97,836 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 39,220 of 49,152 bytes. Image
++ pack 171,712 of 581,564 (0x8DFBC) bytes. POOL 270,812 bytes, 97,828 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.

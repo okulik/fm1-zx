@@ -491,6 +491,12 @@ impl SndMixer {
         };
         out
     }
+
+    /// Whether the mixer's hysteresis plays FM for the frame the last [`SndMixer::frame`] decided
+    /// (the one `SND_DELAY_FRAMES` before it), in an FM mode.
+    pub fn fm_on(&self) -> bool {
+        self.raw.fm_on != 0
+    }
 }
 
 /// Pixel formats of the LCD.
