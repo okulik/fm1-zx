@@ -40,5 +40,8 @@ file(GLOB ZX_SOUND_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sound/
 list(FILTER ZX_SOUND_SOURCES EXCLUDE REGEX "/engines_test\\.c$")
 add_library(zx_sound STATIC ${ZX_SOUND_SOURCES})
 target_compile_options(zx_sound PRIVATE -Wall -Wextra -Werror)
+# Method B (engines.c) runs a few reads and one pass over the frame's edges: built for size, as
+# all of core/sound sits in the firmware's 48 KiB of SRAM code.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/sound/engines.c" PROPERTIES COMPILE_OPTIONS "-Os")
 target_include_directories(zx_sound PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/sound")
 target_link_libraries(zx_sound PUBLIC zx_core)

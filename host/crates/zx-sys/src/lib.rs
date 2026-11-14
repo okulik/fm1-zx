@@ -585,6 +585,14 @@ impl SndEngines {
         // SAFETY: the table holds `n` entries, i - 1 < n; each name is a static C string.
         unsafe { std::ffi::CStr::from_ptr(sys::snd_engine_name(self.raw.table, i - 1)) }.to_string_lossy().into_owned()
     }
+
+    /// The signature digest of this table's entry `index` with its anchor at `anchor` in `m`'s
+    /// memory (`snd_engine_digest`): what the entry's `digest` must be to match there.
+    pub fn digest(&self, m: &Machine, index: usize, anchor: u16) -> u64 {
+        assert!(index < self.raw.n as usize, "entry {index}");
+        // SAFETY: the table holds `n` entries and index < n; `m.raw` is an initialised machine.
+        unsafe { sys::snd_engine_digest(&*m.raw, self.raw.table.add(index), anchor) }
+    }
 }
 
 impl Default for SndEngines {

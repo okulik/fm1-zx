@@ -337,24 +337,28 @@ fn delayed_beeper(frames: &[Frame]) -> Vec<i16> {
 }
 
 #[test]
-fn fm_b_stub_is_delayed_beeper() {
-    // with no engine in the table, FM: engines claims nothing: the delayed beeper throughout,
-    // on music method A would play in FM
-    let (frames, out) = mix_live(&mut castaway(), 600, |_| SND_MODE_FM_B);
+fn fm_b_unclaimed_is_delayed_beeper() {
+    // music from code no engine entry knows (tune.sna's loop), which method A plays in FM: FM:
+    // engines claims none of it, the delayed beeper throughout
+    let mut m = test_sna("tune.sna");
+    let dec = music::decode(capture(&mut test_sna("tune.sna"), &mut Beeper::new(RATE.0, RATE.1), 300).iter().map(|f| (f.edges.as_slice(), f.start_level)));
+    assert!(dec.iter().filter(|f| f.confident != 0).count() > 200, "method A plays the tune in FM");
+    let (frames, out) = mix_live(&mut m, 300, |_| SND_MODE_FM_B);
     let bd = delayed_beeper(&frames);
     let out = out.concat();
     let loud = bd.iter().filter(|&&x| x.abs() > 1000).count();
-    assert!(loud > 10_000, "the title music sounds ({loud} loud samples)");
+    assert!(loud > 10_000, "the tune sounds ({loud} loud samples)");
     if let Some(p) = (0..out.len()).find(|&p| out[p] != bd[p]) {
         panic!("sample {p} is {}, not the delayed beeper's {}", out[p], bd[p]);
     }
 }
 
 #[test]
-fn engines_stub_claims_nothing() {
-    // method B on its own, both tables: no frame claimed, no engine named; and a mixer with the
-    // test table plays FM: engines as the delayed beeper too
-    let mut m = castaway();
+fn engines_claim_only_known_engines() {
+    // method B on its own, both tables: no frame of code no entry knows claimed, no engine named
+    // for it; the tables name their entries; and a mixer given no machine (nothing is B's) plays
+    // FM: engines as the delayed beeper, even on Castaway's title music
+    let mut m = test_sna("tune.sna");
     let (mut b, mut t) = (SndEngines::new(), SndEngines::new_test());
     for _ in 0..300 {
         m.run_frame();
@@ -364,8 +368,9 @@ fn engines_stub_claims_nothing() {
         }
     }
     assert_eq!(b.name(0), "");
-    assert_eq!(b.name(1), "", "no engine 1 in an empty table");
-    let frames = castaway_frames(300);
+    assert_eq!((b.name(1), b.name(2), b.name(3)), ("Castaway".into(), "Colony 8".into(), String::new()));
+    assert_eq!(t.name(3), "Test burst");
+    let frames = castaway_frames(600);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
     mixer.set_test_engines();
     let out: Vec<i16> =
@@ -375,9 +380,8 @@ fn engines_stub_claims_nothing() {
 
 #[test]
 fn switch_between_fm_choices() {
-    // FM: sound, then FM: engines (the stub: the beeper), then FM: sound again, in Castaway's
-    // title music: the delayed stream carries on sample for sample, only FM and the delayed
-    // beeper crossfade
+    // FM: sound, then FM: engines, then FM: sound again, in Castaway's title music: the delayed
+    // stream carries on sample for sample, only FM and the delayed beeper crossfade
     let (b_from, a_from) = (300, 400);
     let mode = |i: usize| if (b_from..a_from).contains(&i) { SND_MODE_FM_B } else { SND_MODE_FM_A };
     let (frames, out) = mix_live(&mut castaway(), 600, mode);
@@ -386,16 +390,20 @@ fn switch_between_fm_choices() {
     let st = starts(&frames);
     let d = SND_DELAY_FRAMES as usize;
 
-    // the FM the mixer plays: method A's voices where A is confident in FM: sound, silence
-    // elsewhere, through one synth that never restarts
-    let (mut dec, mut fm) = (SndDecoder::new(), SndFm::new(RATE.0, RATE.1));
+    // the FM the mixer plays: the chosen method's voices where it is confident (A's in FM:
+    // sound, B's in FM: engines), silence elsewhere, through one synth that never restarts
+    let (mut dec, mut eng, mut fm) = (SndDecoder::new(), SndEngines::new(), SndFm::new(RATE.0, RATE.1));
+    let mut m = castaway();
     let mut fm_out = Vec::new();
     for (t, f) in frames.iter().enumerate() {
-        let fr = dec.frame(&f.edges, f.start_level);
+        m.run_frame();
+        let fa = dec.frame(&f.edges, f.start_level);
+        let fb = eng.frame(&m, &f.edges, f.start_level);
         if t < d {
             fm_out.extend(std::iter::repeat_n(0, f.beeper.len()));
         } else {
-            let src = if fr.confident != 0 && mode(t) == SND_MODE_FM_A { fr } else { SndFrame::default() };
+            let fr = if mode(t) == SND_MODE_FM_A { fa } else { fb };
+            let src = if fr.confident != 0 { fr } else { SndFrame::default() };
             fm_out.extend(fm.render(&src, f.beeper.len()));
         }
     }
@@ -406,11 +414,6 @@ fn switch_between_fm_choices() {
         let (lo, hi) = (fm_out[p].min(bd[p]) as i32 - 1, fm_out[p].max(bd[p]) as i32 + 1);
         assert!((lo..=hi).contains(&(out[p] as i32)), "sample {p}: {} is not between FM {} and beeper {}", out[p], fm_out[p], bd[p]);
     }
-    // FM: engines plays the delayed beeper itself once the crossfade from FM is over
-    let fade = ms(4.5);
-    if let Some(p) = (st[b_from] + fade..st[a_from]).find(|&p| out[p] != bd[p]) {
-        panic!("FM: engines, sample {p}: {} is not the delayed beeper's {}", out[p], bd[p]);
-    }
     // no 20 ms of silence where both the FM (rests in the music are silent FM) and the delayed
     // beeper sound
     let w = ms(20.0);
@@ -419,11 +422,12 @@ fn switch_between_fm_choices() {
             assert!(out[p..p + w].iter().any(|&x| x != 0), "silence at samples {p}..{}", p + w);
         }
     }
-    // FM in both FM: sound stretches, and the switches are crossfades, not cuts
+    // FM in both FM: sound stretches and in FM: engines (B claims the title music), and the
+    // switches are crossfades, not cuts
     let fm_in = |a: usize, b: usize| (st[a]..st[b]).filter(|&p| out[p] == fm_out[p] && fm_out[p] != bd[p]).count();
-    let (before, after) = (fm_in(d, b_from), fm_in(a_from, frames.len()));
-    println!("FM samples: {before} before FM: engines, {after} after");
-    assert!(before > 10_000 && after > 10_000, "FM: sound plays FM ({before}, {after})");
+    let (before, during, after) = (fm_in(d, b_from), fm_in(b_from + d, a_from), fm_in(a_from, frames.len()));
+    println!("FM samples: {before} before FM: engines, {during} in it, {after} after");
+    assert!(before > 10_000 && during > 10_000 && after > 10_000, "FM plays FM ({before}, {during}, {after})");
     let sw = switches(&out, &fm_out, &bd, st[d]);
     println!("switches: {sw:?}");
     for &(a, b, to) in &sw {

@@ -282,28 +282,140 @@ void snd_fm_render(snd_fm *f, const snd_frame *fr, int16_t *out, uint32_t n);
 
 /* ---- method B: known music engines (engines.c) -------------------------
  *
- * B recognises the music routines of a table of engines by the code around the OUT that drives
- * the speaker, reads their notes from memory and registers, and checks them against the edges.
- * (Plan 6 Task 2: the interfaces and a stub that claims nothing.) */
+ * B recognises the music routines of a table of engines by the code around the OUTs that drive
+ * the speaker (the frame's OUT sites, zx_out_sites), reads their notes from memory and
+ * registers, checks them against the frame's edges and reports them with note events placed in
+ * the frame. Anything it does not recognise is not B's (the beeper plays it).
+ *
+ * An entry's code is matched at an anchor address: its signature is `len` bytes from the
+ * anchor, the self-modified operand bytes (`wild`) left out and the absolute addresses inside
+ * it (`reloc`, 16-bit words) hashed as their offset from the anchor, so the engine is
+ * recognised wherever it sits; FNV-1a 64 of that is `digest`. Each OUT the engine drives the
+ * speaker from is a site at a fixed offset from the anchor. Every address a reader uses is
+ * relative to the anchor or read from an operand inside the matched code. */
+
+enum snd_site_role {
+	SND_SITE_TONAL,   /* the OUT of a tonal channel (chan) */
+	SND_SITE_DRUM,    /* the OUT of a drum routine */
+	SND_SITE_STOP     /* an OUT that silences every channel (the end of a note) */
+};
+
+typedef struct {
+	uint16_t off;     /* the OUT's offset from the anchor */
+	uint8_t role;     /* enum snd_site_role */
+	uint8_t chan;     /* tonal: the channel (and the voice it plays on) */
+} snd_engine_site;
+
+#define SND_B_SINCE_ALL 0xFFFFFFFFu   /* snd_b_read.since / row: not known (all the frame) */
+
+typedef struct {          /* what a reader found */
+	snd_voice v[SND_TONAL];   /* channel c's voice (period 0 = silent) */
+	uint32_t since;           /* T-states the values have held: up to the site's last edge, or
+	                           * (stale 1) up to the frame's end */
+	uint32_t row;             /* T-states since the note began (the engine paused before it), up to
+	                           * the site's last edge (>= since; SND_B_SINCE_ALL: not known) */
+	uint32_t step;            /* T-states between changes when they come in steps (a slide), else 0 */
+	snd_voice back[SND_TONAL];   /* step: the voices one step before v (period 0 for a channel
+	                              * whose voice is not known then) */
+	uint8_t stale;            /* 0: v are the voices of the site's last edge; 1: the engine moved on
+	                           * after that edge, v are its voices at the frame's end; 2: the
+	                           * memory is not to be read now (between notes) */
+} snd_b_read;
 
 typedef struct snd_engine {   /* one table entry */
 	const char *name;         /* e.g. "Castaway", "ROM BEEP" */
+	uint64_t digest;          /* FNV-1a 64 of the signature */
+	uint16_t len;             /* signature bytes from the anchor */
+	uint8_t n_wild, n_reloc, n_sites;
+	uint8_t channels;         /* tonal channels, at most SND_TONAL */
+	uint16_t pass;            /* T-states of one pass of the sound loop (the check), 0 = one channel */
+	const uint16_t *wild;     /* offsets of bytes left out */
+	const uint16_t *reloc;    /* offsets of absolute addresses (little-endian words) */
+	const snd_engine_site *sites;
+	const uint16_t *pos;      /* per channel: its OUT's T-state in a pass, from channel 0's */
+	/* Reads the voices at the end of the frame: m the machine (its memory and registers at the
+	 * frame's end), anchor the matched code, r the registers at the last edge of tonal site
+	 * `site` (index in sites). */
+	void (*read)(const zx_machine *m, uint16_t anchor, uint32_t site, const zx_regs *r, snd_b_read *out);
+	uint8_t drum;             /* the drum's strength, for entries with drum sites */
 } snd_engine;
 
 extern const snd_engine snd_engine_table[];   /* the built-in engines */
 extern const uint32_t snd_engine_count;
 /* The name of table[index] (index < the table's count). */
 const char *snd_engine_name(const snd_engine *table, uint32_t index);
+/* The signature digest of entry en with its anchor at `anchor` in m's memory. */
+uint64_t snd_engine_digest(const zx_machine *m, const snd_engine *en, uint16_t anchor);
 
 /* core/sound/engines_test.c, compiled by the host build only (never the firmware's): the built-in
  * entries plus test fixtures' engines. */
 extern const snd_engine snd_engine_test_table[];
 extern const uint32_t snd_engine_test_count;
 
+#define SND_B_MATCHES 8u      /* anchors remembered */
+#define SND_B_HOLD 6u         /* frames an engine holds after its last edge (120 ms) */
+
+typedef struct {          /* a remembered match */
+	uint16_t anchor;
+	uint8_t entry;        /* 1 + index in the table; 0 = free */
+	uint8_t ok;           /* the signature matched in frame `frame` */
+	uint32_t frame;       /* the frame it was last checked */
+	uint32_t used;        /* the frame it was last used */
+} snd_b_match;
+
+enum snd_b_kind { SND_B_NONE, SND_B_MINE, SND_B_FOREIGN };
+
+typedef struct {          /* a channel's level as the check followed it (engines.c) */
+	int32_t set;          /* when it took its level, T from the frame's start */
+	int32_t obs;          /* the last time it was known */
+	int32_t rise;         /* its last counted rise */
+	uint8_t bit;          /* 0, 1; 2 = not known */
+	uint8_t has_rise;
+} snd_b_track;
+
+typedef struct {          /* the check's state at the end of a frame, for the next */
+	snd_b_track tr[SND_TONAL];
+	int32_t t;            /* the last tonal edge (its inference waits for the next) */
+	uint8_t chan, level, has;
+} snd_b_carry;
+
+typedef struct {          /* what B saw in one frame, when it arrived */
+	uint8_t kind;         /* enum snd_b_kind: no edges, all an engine's, some from other code */
+	uint8_t entry;        /* 1 + index of the engine (MINE; FOREIGN: whose edges end the frame) */
+	uint8_t ok;           /* MINE: the voices passed the check against the edges */
+	uint8_t tonal;        /* tonal- or stop-site edges in the frame */
+	uint8_t drum;         /* drum-site edges in the frame */
+	uint8_t last_mine;    /* the frame's last edge is an engine's (a hold may follow) */
+	uint8_t read;         /* v holds the voices of the frame's tonal edges */
+	snd_voice v[SND_TONAL];   /* the voices at the frame's end */
+	uint32_t t_row;       /* the first tonal edge with the voices v (where they change to them, if
+	                       * they differ); NOWHERE: none */
+	uint8_t carry;        /* cy: the channels at the frame's end, with the voices v, for the next */
+	snd_b_carry cy;
+	uint8_t step;         /* sliding: the voices were bv from the edge at t_step (a step before v) */
+	snd_voice bv[SND_TONAL];
+	uint32_t t_step;
+	uint8_t next;         /* the engine moved on to the voices nv at t_next, after its last edge */
+	snd_voice nv[SND_TONAL];
+	uint32_t t_next;
+	uint32_t t_first, t_last;   /* the first and last tonal edge */
+	uint32_t d_first, d_last;   /* the first and last drum edge */
+} snd_b_rec;
+
 typedef struct snd_b {        /* method B's state */
 	const snd_engine *table;
 	uint32_t n;               /* entries in table */
 	uint32_t frames;          /* frames fed since init */
+	snd_b_match match[SND_B_MATCHES];
+	snd_b_rec rec[SND_HIST];  /* the frames fed last, at index frame % SND_HIST */
+	snd_voice lastv[SND_TONAL];   /* the voices last read (or moved on to), of engine last_entry */
+	uint8_t last_entry;
+	/* the decisions: the voices and the drum as the last decided frame left them */
+	snd_voice tone[SND_TONAL];
+	uint8_t drum;
+	uint8_t engine;           /* 1 + index of the engine holding, 0 = none */
+	uint32_t held;            /* frames decided since the engine's last edge */
+	uint32_t carry[SND_TONAL + 1u];   /* offs falling past the frame: T-state in the next, or ~0 */
 } snd_b;
 
 void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n);

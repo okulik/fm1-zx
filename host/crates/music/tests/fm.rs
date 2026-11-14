@@ -195,3 +195,32 @@ fn two_notes_in_one_frame() {
     assert!((first / 440.0 - 1.0).abs() < 0.01, "first half {first:.2} Hz");
     assert!((second / 660.0 - 1.0).abs() < 0.01, "second half {second:.2} Hz");
 }
+
+#[test]
+fn drum_event_mid_frame() {
+    let drum = |t: u32, level: u8| SndEvent { t, period_q8: 0, voice: 3, level };
+    let on = with_event(SndFrame { confident: 1, ..Default::default() }, drum(ZX_FRAME_TSTATES / 2, 200));
+    let held = SndFrame { confident: 1, drum: 200, ..Default::default() };
+    let off = with_event(held, drum(ZX_FRAME_TSTATES / 4, 0));
+    let rest = SndFrame { confident: 1, ..Default::default() };
+    let (s, st) = render_seq(&[on, held, off, rest, rest, rest, rest]);
+    let n = st[1];
+    // the noise starts at the event's sample (within an 8 kHz tick, the envelope's step)
+    let tick = (sample_rate() / 8000.0).ceil() as usize;
+    assert!(s[..n / 2 - 2].iter().all(|&x| x == 0), "silent before the drum event");
+    let first = s.iter().position(|&x| x != 0).unwrap();
+    println!("drum event at sample {}, first sound at {first}", n / 2);
+    assert!(first >= n / 2 - 2 && first <= n / 2 + 2 + tick, "first sound at {first}, the event at {}", n / 2);
+    assert!(s[n / 2 + tick..n].iter().filter(|&&x| x != 0).count() > (n / 2 - tick) * 9 / 10, "the noise sounds");
+    // a level-0 drum event releases it: the same sound up to the event, exact zeros within the
+    // release time (50 ms) and a tick after it, while a drum left on still sounds then
+    let p = st[2] + at(ZX_FRAME_TSTATES / 4, st[3] - st[2]);
+    let release = (0.050 * sample_rate()).ceil() as usize + tick;
+    let kept = render_seq(&[on, held, held, held, held, held, held]).0;
+    assert!(s[..p] == kept[..p], "unchanged before the off event");
+    assert!(s[p..p + 20].iter().any(|&x| x != 0), "released, not cut off");
+    if let Some(i) = s[p + release..].iter().position(|&x| x != 0) {
+        panic!("sample {} after the drum's release is {}", p + release + i, s[p + release + i]);
+    }
+    assert!(kept[p + release..p + release + 100].iter().any(|&x| x != 0), "without the event the drum still sounds");
+}

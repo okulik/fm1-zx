@@ -261,6 +261,55 @@
 //! ```
 //!
 //! 250 edges take at most 250 x 233 = 58,250 T, so every frame starts at its interrupt.
+//!
+//! # `burst_sna(base)` (not in the pack)
+//!
+//! Method B's test engine (the "Test burst" entry of `core/sound/engines_test.c`): a tiny
+//! music routine assembled at any address `base` that plays [`BURST_HZ`] as square-wave bursts
+//! of about [`BURST_MS`] with [`BURST_GAP_MS`] of silence after each (a burst starts every
+//! 78 ms, 4 frames less 2 ms: not in step with the frames), over and over, with interrupts off.
+//! The burst's half-period count `n` is written into the operand of its loop's `LD B,n` (a
+//! self-modified operand), and the melody is a table the code reads through the absolute
+//! operand of `LD HL,table`; both absolute operands are relocated with `base`. A half-period is
+//! `13n + 54` T (plus the I/O contention of the `OUT`), so f = 3,500,000 / (2 (13n + 54)).
+//! The table has 5 bytes per note: `n`, the burst's edges (16 bits, even, so it ends low) and
+//! the gap loop's count (16 bits, 26 T a turn), then a 0 that starts the melody again. The
+//! paper is white, the border black, SP `FD00h`, PC `base`.
+//!
+//! ```text
+//! +00 F3           start: DI
+//! +01 21 tt tt     again: LD HL,table      the absolute operand (base + 2Ch)
+//! +04 7E           next:  LD A,(HL)        n
+//! +05 B7                  OR A
+//! +06 28 F9               JR Z,again       n = 0: the melody again
+//! +08 32 oo oo            LD (tone+1),A    the absolute operand (base + 13h): self-modifies
+//! +0B 23                  INC HL
+//! +0C 5E                  LD E,(HL)
+//! +0D 23                  INC HL
+//! +0E 56                  LD D,(HL)        DE = the burst's edges
+//! +0F 23                  INC HL
+//! +10 0E 00               LD C,0           C = the output level, bit 4 only
+//! +12 06 nn        tone:  LD B,n           7    the self-modified operand
+//! +14 10 FE        wait:  DJNZ wait        13n - 5
+//! +16 79                  LD A,C           4
+//! +17 EE 10               XOR 10h          7
+//! +19 4F                  LD C,A           4
+//! +1A D3 FE               OUT (FEh),A      11   the edge (the engine's one OUT site)
+//! +1C 1B                  DEC DE           6
+//! +1D 7A                  LD A,D           4
+//! +1E B3                  OR E             4
+//! +1F 20 F1               JR NZ,tone       12   13n + 54 T an edge
+//! +21 4E                  LD C,(HL)
+//! +22 23                  INC HL
+//! +23 46                  LD B,(HL)        BC = the gap
+//! +24 23                  INC HL
+//! +25 0B           gap:   DEC BC           6
+//! +26 78                  LD A,B           4
+//! +27 B1                  OR C             4
+//! +28 20 FB               JR NZ,gap        12   26 T a turn
+//! +2A 18 D8               JR next
+//! +2C              table
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -290,6 +339,24 @@ pub const TUNE_START_FRAME: u32 = 2;
 pub const TUNE_HZ: [f64; 8] = [524.67, 586.65, 657.01, 701.11, 781.02, 876.39, 989.70, 1049.28];
 /// Beeper edges per frame of `noise.sna`.
 pub const NOISE_EDGES_PER_FRAME: usize = 250;
+/// Half-period counts `n` of `burst_sna`'s melody: C5 E5 G5 C6 G5 E5 D5 C5.
+pub const BURST_N: [u8; 8] = [253, 200, 168, 124, 168, 200, 224, 253];
+/// The pitches of `burst_sna`'s melody: 3,500,000 / (2 (13n + 54)) for each of [`BURST_N`].
+pub const BURST_HZ: [f64; 8] = {
+    let mut hz = [0.0; 8];
+    let mut i = 0;
+    while i < 8 {
+        hz[i] = 3_500_000.0 / (2.0 * (13.0 * BURST_N[i] as f64 + 54.0));
+        i += 1;
+    }
+    hz
+};
+/// A burst of `burst_sna` lasts about this long (the nearest even number of half-periods)...
+pub const BURST_MS: f64 = 9.0;
+/// ...and the silence after it this long: a burst starts every 78 ms.
+pub const BURST_GAP_MS: f64 = 69.0;
+/// Offset of `burst_sna`'s `OUT` from `base`.
+pub const BURST_OUT: u16 = 0x1A;
 /// Builds one program's file.
 pub type Generator = fn() -> Vec<u8>;
 /// The programs `fmzx-pack testprogs` writes: file name and generator.
@@ -451,10 +518,15 @@ fn bitmap_offset(y: usize, col: usize) -> usize {
 
 /// A 48K `.sna` that starts at 8000h with SP FD00h, I FEh, IM 2, interrupts off, every other
 /// register 0, and the given border.
-fn sna(mut ram: Vec<u8>, border: u8) -> Vec<u8> {
+fn sna(ram: Vec<u8>, border: u8) -> Vec<u8> {
+    sna_at(ram, border, CODE)
+}
+
+/// As [`sna`], starting at `pc`.
+fn sna_at(mut ram: Vec<u8>, border: u8, pc: u16) -> Vec<u8> {
     let sp = STACK - 2; // PC is popped from the stack
     let s = (sp - RAM) as usize;
-    ram[s..s + 2].copy_from_slice(&CODE.to_le_bytes());
+    ram[s..s + 2].copy_from_slice(&pc.to_le_bytes());
     let mut h = vec![0xFEu8]; // I
     h.extend_from_slice(&[0; 18]); // HL' DE' BC' AF' HL DE BC IY IX
     h.push(0); // IFF2 (bit 2) clear
@@ -519,6 +591,68 @@ pub fn tune_sna() -> Vec<u8> {
 /// spacings (see the module docs). Not one of [`PROGRAMS`]: the pack does not carry it.
 pub fn noise_sna() -> Vec<u8> {
     sna(ram_with(&NOISE_CODE, 0x38), 0)
+}
+
+#[rustfmt::skip]
+const BURST_CODE: [u8; 0x2C] = [
+    0xF3,             // start: DI
+    0x21, 0x00, 0x00, // again: LD HL,table (relocated)
+    0x7E,             // next:  LD A,(HL)
+    0xB7,             //        OR A
+    0x28, 0xF9,       //        JR Z,again
+    0x32, 0x00, 0x00, //        LD (tone+1),A (relocated)
+    0x23,             //        INC HL
+    0x5E,             //        LD E,(HL)
+    0x23,             //        INC HL
+    0x56,             //        LD D,(HL)
+    0x23,             //        INC HL
+    0x0E, 0x00,       //        LD C,0
+    0x06, 0x00,       // tone:  LD B,n (self-modified)
+    0x10, 0xFE,       // wait:  DJNZ wait
+    0x79,             //        LD A,C
+    0xEE, 0x10,       //        XOR 10h
+    0x4F,             //        LD C,A
+    0xD3, 0xFE,       //        OUT (FEh),A
+    0x1B,             //        DEC DE
+    0x7A,             //        LD A,D
+    0xB3,             //        OR E
+    0x20, 0xF1,       //        JR NZ,tone
+    0x4E,             //        LD C,(HL)
+    0x23,             //        INC HL
+    0x46,             //        LD B,(HL)
+    0x23,             //        INC HL
+    0x0B,             // gap:   DEC BC
+    0x78,             //        LD A,B
+    0xB1,             //        OR C
+    0x20, 0xFB,       //        JR NZ,gap
+    0x18, 0xD8,       //        JR next
+];
+
+/// Method B's test engine assembled at `base` (8000h-FB00h), playing [`BURST_HZ`] in bursts
+/// (see the module docs). Not one of [`PROGRAMS`].
+pub fn burst_sna(base: u16) -> Vec<u8> {
+    assert!((0x8000..=0xFB00).contains(&base), "burst_sna at {base:04X}");
+    let mut code = BURST_CODE.to_vec();
+    code[2..4].copy_from_slice(&(base + BURST_CODE.len() as u16).to_le_bytes());
+    code[9..11].copy_from_slice(&(base + 0x13).to_le_bytes());
+    debug_assert_eq!(code[BURST_OUT as usize], 0xD3);
+    // a burst: the nearest even number of half-periods to BURST_MS; then the gap loop's count
+    // that makes the note last 78 ms: 98 T of setup, the edges and 26 T a turn of the gap
+    let period = ((BURST_MS + BURST_GAP_MS) * 3_500.0) as u32;
+    for n in BURST_N {
+        let half = 13 * n as u32 + 54;
+        let edges = 2 * ((BURST_MS * 3_500.0 / half as f64 / 2.0).round() as u32).max(1);
+        let gap = (period - 98 - edges * half) / 26;
+        code.push(n);
+        code.extend_from_slice(&(edges as u16).to_le_bytes());
+        code.extend_from_slice(&(gap as u16).to_le_bytes());
+    }
+    code.push(0);
+    let mut ram = vec![0u8; 0xC000];
+    let at = |a: u16| (a - RAM) as usize;
+    ram[at(base)..at(base) + code.len()].copy_from_slice(&code);
+    ram[0x1800..0x1B00].fill(0x38);
+    sna_at(ram, 0, base)
 }
 
 /// A `.tap` block: length, flag, data, XOR checksum.
