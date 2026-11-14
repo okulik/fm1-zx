@@ -4,10 +4,12 @@
 //! No FM on sound that is not music (Review Focus 3): zero confident decisions on the test
 //! programs (the border tone for 60 s, the scroll test, the tape test), on the pack's games with
 //! effects and no music (ZX Dino, A World of One-Way, ZX Sopwith) driven by their `games.toml`
-//! demos for 36 s, on Castaway and Escape from Colony 8 in play after their demos start, and on
-//! generated effect-like signals: single pitch sweeps up and down of 50-300 ms, white-noise
-//! bursts, two-tone alternating sirens and a constant tone for 3 s, each as a square wave
-//! (speaker flips) and as short pulses (the pin-pulse style).
+//! demos for 36 s (with presses that make sound added, and a minimum of frames with sound), on
+//! Castaway and Escape from Colony 8 in play after their demos start, on generated effect-like
+//! signals: single pitch sweeps up and down of 50-300 ms, white-noise bursts, two-tone
+//! alternating sirens and a constant tone for 3 s, each as a square wave (speaker flips) and as
+//! short pulses (the pin-pulse style), and on sweeps and sirens right after time-slot and
+//! speaker-flip music. In all of them no confident frame plays FM silence over sound.
 
 use fmzx_pack::manifest::{encode_keymap, input_index, parse_manifest, BUTTON_COUNT};
 use music::synthetic::{Stream, FRAME_T};
@@ -32,6 +34,44 @@ fn sounding(frames: &[Frame], range: std::ops::Range<usize>) -> usize {
     range.filter(|&i| frames[i].edges.iter().any(|e| (e.level ^ frames[i].start_level) & 2 != 0)).count()
 }
 
+/// Each frame's speaker (EAR) edges.
+fn speaker_edges(frames: &[Frame]) -> Vec<usize> {
+    frames
+        .iter()
+        .map(|f| {
+            let mut ear = f.start_level & 2;
+            f.edges
+                .iter()
+                .filter(|e| {
+                    let changed = e.level & 2 != ear;
+                    ear = e.level & 2;
+                    changed
+                })
+                .count()
+        })
+        .collect()
+}
+
+/// Each frame's speaker edges in a generated stream (every edge of a [`stream`] changes EAR).
+fn stream_edges(s: &Stream) -> Vec<usize> {
+    s.frames.iter().map(Vec::len).collect()
+}
+
+/// No confident decision in `range` (sound that is not music) plays FM silence over sound: a
+/// confident frame with 8 speaker edges or more and no drum reports a voice (the mixer would
+/// otherwise play FM silence instead of the beeper's sound). Inside music such a frame can be a
+/// note ending or starting in it, so the ranges checked are the effects, the games in play after
+/// their music and the test programs.
+fn no_silent_fm(what: &str, edges: &[usize], dec: &[SndFrame], range: std::ops::Range<usize>) {
+    let bad = silent_fm(edges, dec, range);
+    assert!(bad.is_empty(), "{what}: confident silent frames over sound (frame, edges): {bad:?}");
+}
+
+/// The frames [`no_silent_fm`] rejects: (frame, speaker edges).
+fn silent_fm(edges: &[usize], dec: &[SndFrame], range: std::ops::Range<usize>) -> Vec<(usize, usize)> {
+    range.filter(|&i| dec[i].confident != 0 && dec[i].drum == 0 && voices_hz(&dec[i]).is_empty() && edges[i] >= 8).map(|i| (i, edges[i])).collect()
+}
+
 fn gate(what: &str, frames: &[Frame], dec: &[SndFrame], range: std::ops::Range<usize>) {
     let (n, first) = confident(dec, range.clone());
     let style = |s: u8| range.clone().filter(|&i| dec[i].style == s && !voices_hz(&dec[i]).is_empty()).count();
@@ -46,6 +86,7 @@ fn gate(what: &str, frames: &[Frame], dec: &[SndFrame], range: std::ops::Range<u
         style(zx_sys::SND_STYLE_PULSES),
     );
     assert_eq!(n, 0, "{what}: FM in {n} frames: {first}");
+    no_silent_fm(what, &speaker_edges(frames), dec, range);
 }
 
 #[test]
@@ -98,13 +139,7 @@ fn parse_demo(s: &str) -> Vec<Step> {
         .collect()
 }
 
-/// Game `id` of `games/games.toml` from its start for `frames` frames (20 ms each), with its
-/// `demo` keys pressed through its key map as the firmware does.
-fn demo(id: &str, frames: usize) -> Vec<Frame> {
-    demo_run(id, frames, 0).frames
-}
-
-/// A game run under its demo.
+/// A game run under its demo ([`demo_run`]).
 struct Run {
     frames: Vec<Frame>,
     /// The game's music engine (`truth.rs`) runs at the frame's end.
@@ -113,8 +148,10 @@ struct Run {
     lines: Vec<usize>,
 }
 
-/// [`demo`], with every key `delay_ms` later, the music engine and the screen activity.
-fn demo_run(id: &str, frames: usize, delay_ms: u64) -> Run {
+/// Game `id` of `games/games.toml` from its start for `frames` frames (20 ms each), with its
+/// `demo` keys pressed through its key map as the firmware does, every key `delay_ms` later and
+/// the steps `extra` (the `demo` syntax) added; with the music engine and the screen activity.
+fn demo_run(id: &str, frames: usize, delay_ms: u64, extra: &str) -> Run {
     let dir = repo().join("games");
     let manifest = parse_manifest(&std::fs::read_to_string(dir.join("games.toml")).expect("games.toml")).expect("parses");
     let game = manifest.game.iter().find(|g| g.id == id).unwrap_or_else(|| panic!("no game {id}"));
@@ -128,7 +165,8 @@ fn demo_run(id: &str, frames: usize, delay_ms: u64) -> Run {
     }
     let mut km = KeyMapper::new();
     km.set_map(&encode_keymap(&game.keys).expect("key map"));
-    let steps = parse_demo(game.demo.as_deref().expect("a demo"));
+    let mut steps = parse_demo(game.demo.as_deref().expect("a demo"));
+    steps.extend(parse_demo(extra));
     let engine = Engine::of_file(&game.file);
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let mut run = Run { frames: Vec::new(), engine: Vec::new(), lines: Vec::new() };
@@ -156,10 +194,19 @@ fn demo_run(id: &str, frames: usize, delay_ms: u64) -> Run {
 
 #[test]
 fn effects_games_demo() {
-    // effects, no music: the whole 36 s of each demo
-    for id in ["dino", "oneway", "sopwith"] {
-        let fr = demo(id, 1800);
+    // effects, no music: the first 36 s of each demo, with presses added where the demo makes
+    // little sound: ZX Sopwith a shot every 0.6 s from 7 s (its sounds are its shots, bombs and
+    // crashes, a frame or two each: 24 frames with sound under the demo alone, 33 with the shots),
+    // A World of One-Way its shop from the menu (it moves in silence: 5 frames, 9 with the shop
+    // clicks). Each must make at least `min` frames with sound for the gate to mean anything
+    let shots: Vec<String> = (0..48).map(|k| format!("note.C5@{}+100", 7_000 + 600 * k)).collect();
+    let shots = shots.join(", ");
+    for (id, extra, min) in [("dino", "", 70), ("oneway", "button.OCT+@9000, button.OCT+@9500, button.OCT+@11000", 8), ("sopwith", shots.as_str(), 30)] {
+        let fr = demo_run(id, 1800, 0, extra).frames;
         let dec = decide(&fr);
+        let n = sounding(&fr, 0..fr.len());
+        println!("{id}: {n} frames with sound, {} speaker edges", speaker_edges(&fr).iter().sum::<usize>());
+        assert!(n >= min, "{id}: {n} frames with sound, the gate needs {min}");
         gate(id, &fr, &dec, 0..dec.len());
     }
 }
@@ -172,10 +219,12 @@ fn effects_games_demo() {
 fn in_play(id: &str, delay_ms: u64) {
     const REST_FRAMES: usize = 50;
     let frames = 1800 + delay_ms as usize / 20;
-    let run = demo_run(id, frames, delay_ms);
+    let run = demo_run(id, frames, delay_ms, "");
     let (fr, engine) = (&run.frames, &run.engine);
     let dec = decide(fr);
     let stop = engine.iter().rposition(|&e| e).expect("the title music plays") + 1;
+    // (the frame the engine stops in still holds its last note's tail)
+    no_silent_fm(&format!("{id} in play"), &speaker_edges(fr), &dec, stop + 1..dec.len());
     let first = engine.iter().position(|&e| e).unwrap();
     let title = (first..stop).filter(|&i| dec[i].confident != 0).count();
     println!("{id}: title music from frame {first} to {stop}: confident in {title} frames");
@@ -354,6 +403,7 @@ fn effect_signals() {
         let dec = decode_stream(&s);
         let voiced = dec.iter().filter(|f| !voices_hz(f).is_empty()).count();
         let (n, first) = confident(&dec, 0..dec.len());
+        no_silent_fm(&name, &stream_edges(&s), &dec, 0..dec.len());
         println!("{name}: voices in {voiced} of {frames} frames, confident {n}");
         if n > 0 {
             bad.push(format!("{name}: FM in {n} frames: {first}"));
@@ -387,6 +437,7 @@ fn slow_siren_bounded() {
         let s = stream(siren(600.0, 800.0, tone, 5.0), 270);
         let dec = decode_stream(&s);
         let conf: Vec<usize> = (0..dec.len()).filter(|&i| dec[i].confident != 0).collect();
+        no_silent_fm("slow siren", &stream_edges(&s), &dec, 0..dec.len());
         let two = (2.0 * tone / 20.0) as usize;
         println!("siren of {tone} ms tones for 5 s: confident in {} frames ({:?}..{:?}), two tones are {two} frames", conf.len(), conf.first(), conf.last());
         assert!(conf.len() <= two, "siren of {tone} ms tones: FM in {} frames", conf.len());
@@ -394,10 +445,9 @@ fn slow_siren_bounded() {
     }
 }
 
-/// Time-slot music (the slots tune, ending with its loop's last notes), then `gap` silent
-/// frames, then `effect`; returns the stream and the effect's first frame.
-fn after_slots_music(gap: usize, effect: Stream) -> (Stream, usize) {
-    let mut s = music::synthetic::slots_loop(&music::synthetic::slots_tune());
+/// `music`, then `gap` silent frames, then `effect`; returns the stream and the effect's first
+/// frame.
+fn after_music(mut s: Stream, gap: usize, effect: Stream) -> (Stream, usize) {
     s.frames.extend((0..gap).map(|_| Vec::new()));
     s.truth.extend((0..gap).map(|_| Some(Vec::new())));
     s.drum.extend((0..gap).map(|_| false));
@@ -406,28 +456,42 @@ fn after_slots_music(gap: usize, effect: Stream) -> (Stream, usize) {
     (s.then(effect), n)
 }
 
-#[test]
-fn effects_after_slots_music() {
-    // a sweep or a siren right after time-slot music (or 20 frames later) stays on the beeper,
-    // through the 25 frames the loop is held (the time-slot path) and after the loop is forgotten
-    // (speaker flips); the music's pitch changes do not carry over to it
+/// Time-slot music (the slots tune, ending with its loop's last notes), then `gap` silent
+/// frames, then `effect`; returns the stream and the effect's first frame.
+fn after_slots_music(gap: usize, effect: Stream) -> (Stream, usize) {
+    after_music(music::synthetic::slots_loop(&music::synthetic::slots_tune()), gap, effect)
+}
+
+/// Speaker-flip music (the XOR tune: long notes, detuned unisons and chords), then `gap` silent
+/// frames, then `effect`.
+fn after_flips_music(gap: usize, effect: Stream) -> (Stream, usize) {
+    after_music(music::synthetic::xor_loop(&music::synthetic::xor_tune(0)), gap, effect)
+}
+
+/// An effect played after music: its name, high spans (from T 0), length in frames, and for a
+/// siren its tone length in frames (0 otherwise).
+type Effect = (String, Spans, usize, f64);
+
+/// The effects played after music: single sweeps of 50-300 ms (from T 0), the same sweep again
+/// and again 0.5 s apart, and two-tone sirens of 20-60 ms tones for 3 s, as square waves.
+fn music_effects() -> Vec<Effect> {
     let ms = |x: f64| (x * 3_500.0) as u64;
-    let mut effects: Vec<(String, Spans, usize)> = Vec::new();
+    let mut effects: Vec<Effect> = Vec::new();
     for d in [50.0, 150.0, 300.0] {
-        for (f0, f1) in [(400.0f64, 1_600.0f64), (1_600.0, 400.0), (800.0, 1_000.0), (1_000.0, 800.0)] {
+        for (f0, f1) in [(400.0f64, 1_600.0f64), (1_600.0, 400.0), (800.0, 1_000.0), (1_000.0, 800.0), (500.0, 600.0), (600.0, 500.0)] {
             let len = ms(d) as f64;
-            effects.push((format!("sweep {f0}->{f1} Hz in {d} ms"), square(0, ms(d), &move |t: f64| f0 * (f1 / f0).powf(t / len)), 20));
+            effects.push((format!("sweep {f0}->{f1} Hz in {d} ms"), square(0, ms(d), &move |t: f64| f0 * (f1 / f0).powf(t / len)), 20, 0.0));
         }
     }
     // the same sweep again and again, 0.5 s apart: the later ones come after the loop is forgotten
-    for (f0, f1, d) in [(300.0f64, 1_200.0f64, 150.0), (1_500.0, 300.0, 80.0), (600.0, 900.0, 250.0), (800.0, 1_000.0, 300.0)] {
+    for (f0, f1, d) in [(300.0f64, 1_200.0f64, 150.0), (1_500.0, 300.0, 80.0), (600.0, 900.0, 250.0), (800.0, 1_000.0, 300.0), (1_000.0, 800.0, 300.0), (500.0, 600.0, 300.0)] {
         let len = ms(d) as f64;
         let mut sp = Vec::new();
         for k in 0..8 {
             let a = ms(500.0 * k as f64);
             sp.extend(square(a, a + ms(d), &move |t: f64| f0 * (f1 / f0).powf(t / len)));
         }
-        effects.push((format!("sweep {f0}->{f1} Hz in {d} ms, 8 times"), sp, 210));
+        effects.push((format!("sweep {f0}->{f1} Hz in {d} ms, 8 times"), sp, 210, 0.0));
     }
     for tone in [20.0, 30.0, 40.0, 45.0, 60.0] {
         for (lo, hi) in [(600.0, 800.0), (440.0, 587.0)] {
@@ -438,25 +502,63 @@ fn effects_after_slots_music() {
                 sp.extend(square(ms(k as f64 * tone), ms((k + 1) as f64 * tone), &move |_| f));
                 k += 1;
             }
-            effects.push((format!("siren {lo}/{hi} Hz, {tone} ms tones"), sp, 160));
+            effects.push((format!("siren {lo}/{hi} Hz, {tone} ms tones"), sp, 160, tone / 20.0));
         }
     }
+    effects
+}
+
+/// Every effect of [`music_effects`] after the music `join` puts before it, `gap` frames later:
+/// the music plays in FM, the effect not at all, and no confident frame plays FM silence over
+/// sound. `first_tone`: a siren's first tone may play in FM in the frames decided before its
+/// first return (A B A) is in the look-ahead, none of them after the tone (see
+/// [`effects_after_flips_music`]).
+fn effects_after(what: &str, join: fn(usize, Stream) -> (Stream, usize), gaps: &[usize], first_tone: bool) {
     let mut bad = Vec::new();
-    for (name, spans, frames) in effects {
-        for gap in [0, 20] {
-            let (s, n) = after_slots_music(gap, stream(spans.clone(), frames));
+    let mut allowed = 0;
+    for (name, spans, frames, tone) in music_effects() {
+        for &gap in gaps {
+            let (s, n) = join(gap, stream(spans.clone(), frames));
             let dec = decode_stream(&s);
             let music = dec[..n - gap].iter().filter(|f| f.confident != 0).count();
             assert!(music > (n - gap) / 2, "the music before it plays in FM ({music} of {})", n - gap);
+            let silent = silent_fm(&stream_edges(&s), &dec, n..dec.len());
             let voiced = (n..dec.len()).filter(|&i| !voices_hz(&dec[i]).is_empty()).count();
             let (c, first) = confident(&dec, n..dec.len());
-            println!("{name} after {gap} silent frames: voices in {voiced} frames, confident {c}");
-            if c > 0 {
-                bad.push(format!("{name} after {gap} silent frames: FM in {c} frames: {first}"));
+            // a siren's first tone, decided before the tone after the next can be seen (2 tones and
+            // a frame from its start, less the 3 frames of look-ahead)
+            let judged = n + (2.0 * tone + 1.0 - 3.0).max(0.0).ceil() as usize;
+            let early = if first_tone && tone > 0.0 { (n..judged.min(n + tone.ceil() as usize)).filter(|&i| dec[i].confident != 0).count() } else { 0 };
+            println!("{name} after {gap} silent frames: voices in {voiced} frames, confident {c} ({early} in the first tone before its return is seen), {} silent over sound", silent.len());
+            allowed += early;
+            if c > early || !silent.is_empty() {
+                bad.push(format!("{name} after {gap} silent frames: FM in {c} frames ({} silent over sound): {first}", silent.len()));
             }
         }
     }
-    assert!(bad.is_empty(), "effects after time-slot music played in FM:\n{}", bad.join("\n"));
+    println!("{what}: {allowed} confident frames in sirens' first tones");
+    assert!(bad.is_empty(), "effects after {what} played in FM ({} cases):\n{}", bad.len(), bad.join("\n"));
+}
+
+#[test]
+fn effects_after_slots_music() {
+    // a sweep or a siren right after time-slot music (or 20 frames later) stays on the beeper,
+    // through the 25 frames the loop is held (the time-slot path) and after the loop is forgotten
+    // (speaker flips); the music's pitch changes do not carry over to it
+    effects_after("time-slot music", after_slots_music, &[0, 20], false);
+}
+
+#[test]
+fn effects_after_flips_music() {
+    // the same effects right after speaker-flip music, 5 or 20 frames later, inside the 2 s its
+    // pitch changes keep the music context: a sweep's steps (glides) are not notes and end the
+    // context, a frame with sound that no voice of the notes around it explains is no rest, and
+    // a quick alternation (A B A) is no music. A siren's first tone is the exception: within the
+    // music's context its first tone cannot be told from the tune's next note until its first
+    // return is in the 60 ms look-ahead, so the frames of a 40-60 ms tone decided before that
+    // (1, 2, 3 for 40, 45, 60 ms) play in FM; tones of 20-30 ms (the return seen in time) not at
+    // all, and nothing after the first tone
+    effects_after("speaker-flip music", after_flips_music, &[0, 5, 20], true);
 }
 
 #[test]

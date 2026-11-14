@@ -60,8 +60,12 @@ and 3 get their own design updates before their plans.
   seamless; the method's look-ahead is that same window (one ring of the last frames' edges and
   beeper samples, not two mechanisms). Beeper mode has no delay. Accepted consequence: music
   too sparse to confirm within 60 ms (Cave Runner's in-game tune: a 9 ms burst about every
-  78 ms) stays on the beeper under method A; method B (stage 2) can cover it. Stage 1 measured it: Cave Runner's in-game tune falls back to the
-  beeper only partly (the owner's local corpus run: 82.9% of its sounding frames in FM, 0 wrong notes).
+  78 ms) stays on the beeper under method A; method B (stage 2) can cover it. Stage 1 does so by
+  rule: a beep filling less than 60% of its frame is no note, so the in-game bursts make no pitch
+  change of their own and play on the beeper once the 2 s of music context a tune before them
+  leaves have run out (`core/sound/decoder.c`). The owner's local corpus run (from
+  the title tune into the game, 82.9% of its sounding frames in FM, 0 wrong notes) mixes title
+  and in-game frames, so it is no measure of the in-game tune.
 - **The bar is confidence, not coverage.** A wrong note in FM is worse than the gritty original;
   a method that is unsure must fall back.
 - **FM voices:** up to three tonal voices and one noise/drum voice, each a simple 2-operator FM

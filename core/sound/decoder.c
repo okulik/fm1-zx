@@ -72,18 +72,25 @@
  * less of its frame is no note (ZX Sopwith's 15 ms beeps 10 frames apart,
  * at two pitches, made a "tune"; every frame of the pack's music fills 60%
  * and more, but Cave Runner's in-game 9 ms bursts no longer count either).
- * A note whose voice drifts within the frame, or that is the reference's
- * voice moved by more than 1/128 (about 0.14 semitone) but less than 1/32,
- * is a glide: it drops the reference (pitch sweeps of 50-300 ms made a
- * pitch "change" every frame or two). Against the reference (the last note,
+ * A frame whose voice drifts within it (any frame with voices of its own),
+ * or a note that is the reference's voice moved by more than 1/128 (about
+ * 0.14 semitone) but less than 1/32, is a glide: it drops the reference
+ * (pitch sweeps of 50-300 ms made a pitch "change" every frame or two), and
+ * it and the frames of the same sweep before it not decided yet (back while
+ * each sounds and shares a voice with the next or drifts) are no notes: a
+ * change among them is withdrawn, and each, decided, ends the music context
+ * like other sound (after speaker-flip music a 300 ms sweep played as 10-15
+ * stepped notes). Against the reference (the last note,
  * within 10 frames: 200 ms) a note is:
  *   - the same note if it shares a voice with it within 1/32 (about half a
  *     semitone): the same note, a voice more or less, or the next note
  *     beginning beside it; the reference stays;
  *   - a return if it is the note before the reference (an alternation, as
- *     a siren's): no pitch change; the change that made the reference is
- *     withdrawn if its frame is not decided yet (so a siren of tones up to
- *     3 frames never becomes music), and 2 returns in a row (A B A B) mean
+ *     a siren's): no pitch change; if the change that made the reference is
+ *     not decided yet (A B A within the look-ahead) it is withdrawn and the
+ *     frames from A's beginning not decided yet are no notes (so a siren of
+ *     tones up to 3 frames never becomes music, nor plays in FM in the
+ *     context of music before it), and 2 returns in a row (A B A B) mean
  *     no music until the next pitch change (so a slower siren plays at most
  *     its first two tones in FM; within the 60 ms look-ahead its first
  *     change cannot be told from a tune's second note);
@@ -124,24 +131,28 @@
  *
  * Confidence (confidence over coverage: unsure means beeper):
  *   - music context: a pitch change in F, or in the 100 frames (2 s) before
- *     F with no undecodable frame decided since (other sound ends the music
- *     until the next pitch change; such a frame also drops the reference
- *     note), and no alternation since. A tone that never changes pitch for
+ *     F with no undecodable or glide frame decided since (other sound ends
+ *     the music until the next pitch change; such a frame also drops the
+ *     reference note), F no glide nor part of a quick alternation, and no
+ *     alternation since. A tone that never changes pitch for
  *     2 s is a test tone or an effect, not music; so the first note of a
  *     tune plays on the beeper until the second begins (a lone tone cannot
  *     be told from a test tone within 60 ms of look-ahead), and the mixer
  *     starts FM a frame into the second (the change in F+1 no longer counts
  *     for F: it played the last frame of a siren's first tone in FM).
  *   - voices reported and fit >= 85%: confident in music context.
- *   - fewer than 4 edges (a rest), fewer than 8 (speaker flips), or fit >=
- *     85% with no voice reported (a note ending or starting in F):
+ *   - fewer than 4 edges (a rest), fewer than 8 (speaker flips), or no
+ *     voice reported with 85% of F's edges explained by the voices of the
+ *     decision before and of F+1 alone (a note ending or starting in F):
  *     confident in music context if the decision before was, for up to 50
  *     frames after the last confident voices; no voices, so nothing is held
- *     across a rest.
+ *     across a rest. Edges explained only by other chains (a sweep's steps)
+ *     are sound the FM silence would mute: not confident.
  *   - fit < 50% with 8 or more edges: a drum (a buzz waveform, a sweep or
  *     noise between notes), reported with no tonal voice and confident only
  *     in music context with confident voices in the 4 frames before and a
- *     clean frame in the 3 after; otherwise not confident. Short pulses: a
+ *     note (clean, full, steady) in the 3 after before any glide; otherwise
+ *     not confident. Short pulses: a
  *     frame with too many edges to decode, the second in a row at most, is a
  *     drum on the same terms (the engine's noise burst between notes).
  *   - anything else (a frame partly explained): not confident.
@@ -206,6 +217,8 @@ void snd_decoder_init(snd_decoder *d)
 		d->slot[i].change = 0;
 		d->slot[i].full = 0;
 		d->slot[i].steady = 0;
+		d->slot[i].glide = 0;
+		d->slot[i].alt = 0;
 		d->slot[i].ear0 = 0;
 		d->slot[i].pulse = 0;
 		d->slot[i].width = 0;
@@ -228,6 +241,8 @@ void snd_decoder_init(snd_decoder *d)
 	for (k = 0; k < SND_TONAL; k++)
 		d->prev_q8[k] = 0;
 	d->ref_change_frame = 0;
+	d->ref_start = 0;
+	d->prev_start = 0;
 	d->have_prev = 0;
 	d->ref_change = 0;
 	d->returns = 0;
@@ -336,6 +351,8 @@ static void take_frame(snd_decoder *d, uint32_t t, const zx_edge *e, uint32_t n,
 	s->change = 0;
 	s->full = 0;
 	s->steady = 0;
+	s->glide = 0;
+	s->alt = 0;
 	for (i = 0; i < SND_TONAL; i++) {
 		s->hp_q8[i] = 0;
 		s->pair_q8[i] = 0;
@@ -397,6 +414,60 @@ static void take_frame(snd_decoder *d, uint32_t t, const zx_edge *e, uint32_t n,
 	}
 }
 
+/* Frame s sounds, decoded as speaker flips or short pulses, with voices of its own. */
+static int voiced(const snd_slot *s)
+{
+	return !s->busy && !s->tdm && s->n >= 4u && s->hp_q8[0];
+}
+
+/* Frame s is a note: clean, full, steady and no part of a sweep (what a drum leads to). */
+static int note(const snd_slot *s)
+{
+	return s->clean && s->full && s->steady && !s->glide;
+}
+
+/* A note in F+1..F+3 before any glide: what a drum between notes leads to. */
+static int note_ahead(const snd_decoder *d, uint32_t f)
+{
+	uint32_t k;
+	for (k = 1; k <= SND_DELAY_FRAMES; k++) {
+		const snd_slot *x = &d->slot[ring(f + k)];
+		if (x->glide) return 0;
+		if (note(x)) return 1;
+	}
+	return 0;
+}
+
+/* Some voice of a (frame alone, or with the frame before) is the same voice as one of b. */
+static int shares(const snd_slot *a, const uint32_t *b)
+{
+	uint32_t k;
+	for (k = 0; k < SND_TONAL; k++)
+		if ((a->hp_q8[k] && has_voice(b, a->hp_q8[k])) || (a->pair_q8[k] && has_voice(b, a->pair_q8[k]))) return 1;
+	return 0;
+}
+
+/* Frame t is a glide (a voice sweeping in pitch): it and the frames of the same sweep before it
+ * that are not decided yet (t - 3 .. t - 1, back while each sounds and shares a voice with the
+ * next or drifts itself) are no notes and end the music context when decided; a pitch change
+ * among them is withdrawn, so the sweep's first frame, a "new note" against the music's last,
+ * never counts. */
+static void glide(snd_decoder *d, uint32_t t)
+{
+	uint32_t f = t;
+
+	d->have_clean = 0;
+	d->slot[ring(t)].glide = 1;
+	d->slot[ring(t)].change = 0;
+	while (f > 0 && t - (f - 1u) <= SND_DELAY_FRAMES) {
+		snd_slot *x = &d->slot[ring(f - 1u)];
+		if (!voiced(x) || (x->steady && !shares(x, d->slot[ring(f)].hp_q8) && !shares(x, d->slot[ring(f)].pair_q8))) break;
+		x->glide = 1;
+		x->change = 0;
+		f--;
+	}
+}
+
 /* Pitch changes and the note-timing votes, with frame t just analysed. */
 static void track_changes(snd_decoder *d, uint32_t t)
 {
@@ -404,12 +475,12 @@ static void track_changes(snd_decoder *d, uint32_t t)
 	uint32_t k;
 	int vote = 0;
 
-	if (!s->clean || !s->full) return;   /* not a note: a beep shorter than most of a frame is no note */
-	if (!s->steady) {
+	if (voiced(s) && !s->steady) {
 		/* a voice sweeps in pitch within the frame: a glide, not a note */
-		d->have_clean = 0;
+		glide(d, t);
 		return;
 	}
+	if (!s->clean || !s->full) return;   /* not a note: a beep shorter than most of a frame is no note */
 	if (!d->have_clean || t - d->clean_frame > CHANGE_GAP || s->pulse != d->clean_pulse) {
 		/* a new reference after silence, other sound or the other style: not a change */
 		d->have_prev = 0;
@@ -421,14 +492,24 @@ static void track_changes(snd_decoder *d, uint32_t t)
 			 * change that left that note is withdrawn if its frame is not
 			 * decided yet (frames t - 3 .. t are not), and two returns in a
 			 * row are a siren: no music until the next pitch change */
-			if (d->ref_change && t - d->ref_change_frame <= SND_DELAY_FRAMES)
+			if (d->ref_change && t - d->ref_change_frame <= SND_DELAY_FRAMES) {
+				/* the note left came back within the look-ahead (A B A, B up to 3
+				 * frames): a quick alternation, a siren's first tones as much as an
+				 * ornament; the frames from A's beginning not decided yet are no
+				 * notes (after music its context would play them in FM) */
 				d->slot[ring(d->ref_change_frame)].change = 0;
+				for (f = t > SND_DELAY_FRAMES ? t - SND_DELAY_FRAMES : 0; f <= t; f++)
+					if ((int32_t)(f - d->prev_start) >= 0) d->slot[ring(f)].alt = 1;
+			}
 			if (d->returns < 255u) d->returns++;
 			if (d->returns >= RETURNS_ALT) d->alt = 1;
 			for (k = 0; k < SND_TONAL; k++) {
 				d->prev_q8[k] = d->clean_q8[k];
 				d->clean_q8[k] = s->hp_q8[k];
 			}
+			k = d->prev_start;
+			d->prev_start = d->ref_start;
+			d->ref_start = k;
 			d->ref_change = 0;
 			d->clean_frame = t;
 			return;
@@ -454,7 +535,7 @@ static void track_changes(snd_decoder *d, uint32_t t)
 		}
 	} else if (drifting(s->hp_q8, d->clean_q8)) {
 		/* the same voice, but its pitch moved off the reference's: a glide */
-		d->have_clean = 0;
+		glide(d, t);
 		return;
 	} else {
 		/* the same note (or a voice more or less, or a frame where the next note
@@ -462,6 +543,8 @@ static void track_changes(snd_decoder *d, uint32_t t)
 		d->clean_frame = t;
 		return;
 	}
+	if (s->change) d->prev_start = d->ref_start;
+	d->ref_start = t;
 	d->have_clean = 1;
 	d->clean_pulse = s->pulse;
 	d->clean_frame = t;
@@ -480,9 +563,10 @@ typedef struct {
 	uint32_t extent;    /* the time its chains span in F */
 	uint8_t eligible;   /* may be reported under the timing in use */
 	uint8_t seen;       /* windows that found it among those it may be reported from */
+	uint8_t bound;      /* a voice of the decision before or of F+1 alone: a note ending or starting in F */
 } cand_t;
 
-static void add_cand(cand_t *c, uint32_t *nc, uint32_t hp_q8, uint8_t eligible)
+static void add_cand(cand_t *c, uint32_t *nc, uint32_t hp_q8, uint8_t eligible, uint8_t bound)
 {
 	uint32_t i, hp = hp_q8 >> 8, tol = hp >> 8 > 28u ? hp >> 8 : 28u;
 
@@ -492,6 +576,7 @@ static void add_cand(cand_t *c, uint32_t *nc, uint32_t hp_q8, uint8_t eligible)
 		if ((o > hp ? o - hp : hp - o) <= tol) {
 			c[i].eligible |= eligible;
 			c[i].seen = (uint8_t)(c[i].seen + eligible);
+			c[i].bound |= bound;
 			return;
 		}
 	}
@@ -503,6 +588,7 @@ static void add_cand(cand_t *c, uint32_t *nc, uint32_t hp_q8, uint8_t eligible)
 	c[i].extent = 0;
 	c[i].eligible = eligible;
 	c[i].seen = eligible;
+	c[i].bound = bound;
 	(*nc)++;
 }
 
@@ -729,7 +815,7 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 {
 	const snd_slot *s = &d->slot[ring(f)], *s1 = &d->slot[ring(f + 1u)];
 	cand_t c[6u * SND_TONAL];
-	uint32_t rep[SND_TONAL], nc = 0, nrep = 0, i, k, m = 0, nf = 0, fit = 0, sounding;
+	uint32_t rep[SND_TONAL], nc = 0, nrep = 0, i, k, m = 0, nf = 0, fit = 0, bound = 0, sounding;
 	int context, confident = 0, over = 0;
 	uint8_t drum = 0, pulse = s->pulse;
 
@@ -748,7 +834,12 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 		d->broken = 1;
 		d->ctx_pulse = pulse;
 	}
-	context = !d->alt && (s->change || (d->have_change && f - d->change_frame <= MUSIC_FRAMES && !d->broken));
+	if (s->glide || (voiced(s) && !s->steady)) {
+		/* a pitch sweep: no music, and other sound, which ends the music context
+		 * until the next pitch change */
+		d->broken = 1;
+	}
+	context = !d->alt && !s->alt && !s->glide && (s->change || (d->have_change && f - d->change_frame <= MUSIC_FRAMES && !d->broken));
 	for (k = 0; k < SND_TONAL; k++)
 		rep[k] = 0;
 
@@ -756,13 +847,13 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 		/* candidates: F alone, F-1..F, F..F+1 (short pulses: all of them may be
 		 * reported, whatever the note timing) */
 		for (k = 0; k < SND_TONAL; k++) {
-			add_cand(c, &nc, s->hp_q8[k], d->frame_notes || pulse);
-			add_cand(c, &nc, s->pair_q8[k], !d->frame_notes || pulse);
-			add_cand(c, &nc, s1->pair_q8[k], !d->frame_notes || pulse);
-			if (pulse) add_cand(c, &nc, d->slot[ring(f + 2u)].pair_q8[k], 1);   /* F..F+2 */
+			add_cand(c, &nc, s->hp_q8[k], d->frame_notes || pulse, 0);
+			add_cand(c, &nc, s->pair_q8[k], !d->frame_notes || pulse, 0);
+			add_cand(c, &nc, s1->pair_q8[k], !d->frame_notes || pulse, 0);
+			if (pulse) add_cand(c, &nc, d->slot[ring(f + 2u)].pair_q8[k], 1, 0);   /* F..F+2 */
 			/* fit only: the voices of the frames before and after, for a note ending or starting in F */
-			add_cand(c, &nc, d->out_q8[k], 0);
-			add_cand(c, &nc, s1->hp_q8[k], 0);
+			add_cand(c, &nc, d->out_q8[k], 0, 1);
+			add_cand(c, &nc, s1->hp_q8[k], 0, 1);
 		}
 		if (pulse) {
 			/* short pulses: chains may run on through F+2 (a bass voice) */
@@ -789,6 +880,7 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 			/* short pulses: rising edges a whole period apart */
 			c[i].edges = snd_flips_cover(d, d->pool, m, nf, pulse ? 2u * c[i].hp_q8 : c[i].hp_q8, pulse, &c[i].extent);
 			fit += c[i].edges;
+			if (c[i].bound) bound += c[i].edges;
 		}
 		/* report: eligible voices covering half the sounding time, most covering first */
 		for (;;) {
@@ -815,23 +907,22 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 				rep[k] = 0;
 		} else if (nrep && fit >= FIT_TONAL) {
 			confident = context;
-		} else if (fit >= FIT_TONAL || (nf < 8u && !pulse)) {
-			/* no voice sounds for half of F, and F is explained or nearly silent:
-			 * the end of a note or the start of the next, around a rest (short
-			 * pulses: a few unexplained rises can be a bass voice, so explained) */
+		} else if (bound * 100u >= nf * FIT_TONAL || (nf < 8u && !pulse)) {
+			/* no voice sounds for half of F, and F is nearly silent or explained by
+			 * the voices of the decision before and of F+1: the end of a note or the
+			 * start of the next, around a rest (short pulses: a few unexplained rises
+			 * can be a bass voice, so explained). Edges other voices explain are
+			 * other sound (the steps of a sweep), whose FM silence would mute it */
 			nrep = 0;
 			for (k = 0; k < SND_TONAL; k++)
 				rep[k] = 0;
 			confident = context && d->prev_conf && d->since_tonal < REST_FRAMES;
 		} else if (fit < FIT_DRUM) {
 			/* mostly unexplained: a drum, whatever stray chains it holds */
-			int ahead = 0;
 			for (k = 0; k < SND_TONAL; k++)
 				rep[k] = 0;
 			nrep = 0;
-			for (k = 1; k <= SND_DELAY_FRAMES; k++)
-				if (d->slot[ring(f + k)].clean) ahead = 1;
-			if (context && ahead && d->since_tonal < SND_DELAY_FRAMES + 1u) {
+			if (context && note_ahead(d, f) && d->since_tonal < SND_DELAY_FRAMES + 1u) {
 				confident = 1;
 				drum = DRUM_LEVEL;
 			}
@@ -842,11 +933,8 @@ static void decide(snd_decoder *d, uint32_t f, snd_frame *out)
 	} else if (pulse && s->n == SND_EDGES_MAX && d->busy_run < BURST_FRAMES) {
 		/* short pulses: a burst with too many edges to decode, no longer than
 		 * BURST_FRAMES, between confident voices in the 4 frames before and a
-		 * clean frame in the 3 after: the engine's noise drum */
-		int ahead = 0;
-		for (k = 1; k <= SND_DELAY_FRAMES; k++)
-			if (d->slot[ring(f + k)].clean) ahead = 1;
-		if (context && ahead && d->since_tonal < SND_DELAY_FRAMES + 1u) {
+		 * note in the 3 after: the engine's noise drum */
+		if (context && note_ahead(d, f) && d->since_tonal < SND_DELAY_FRAMES + 1u) {
 			confident = 1;
 			drum = DRUM_LEVEL;
 		}

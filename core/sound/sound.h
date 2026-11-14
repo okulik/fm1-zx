@@ -70,6 +70,8 @@ typedef struct {
 	uint8_t change;                /* a pitch change starts here (decoder.c) */
 	uint8_t full;                  /* its edges (rises for short pulses) span most of the frame: a note, not a beep */
 	uint8_t steady;                /* none of its own voices drifts in pitch within it (flips.c) */
+	uint8_t glide;                 /* part of a pitch sweep (decoder.c): no note, and it ends the music context */
+	uint8_t alt;                   /* part of a quick alternation, A B A within the look-ahead (decoder.c): no note */
 	/* short pulses (pulses.c) */
 	uint8_t ear0;                  /* the speaker level at the frame's start: tells rising edges */
 	uint8_t pulse;                 /* analysed as short pulses (voices from rising edges, hp_q8 = period / 2) */
@@ -141,6 +143,7 @@ typedef struct snd_decoder {   /* edge history (SND_DELAY_FRAMES + current) and 
 	/* alternations: a return to the note before the reference is no pitch change */
 	uint32_t prev_q8[SND_TONAL];           /* the reference before the current one */
 	uint32_t ref_change_frame;             /* the pitch change that made the current reference */
+	uint32_t ref_start, prev_start;        /* the frames the current and the previous reference began */
 	uint8_t have_prev, ref_change;
 	uint8_t returns;                       /* returns in a row */
 	uint8_t alt;                           /* two returns in a row since the last pitch change: a siren, not music */
