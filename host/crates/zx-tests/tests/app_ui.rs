@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use zx_sys::{SND_MODE_BEEPER, SND_MODE_COUNT, SND_MODE_FM_A};
 use zx_tests::*;
 
 const ROM: &[u8] = include_bytes!("../../../../third_party/zx-rom/48.rom");
@@ -116,7 +117,7 @@ fn menu_items_and_divider_cycle() {
     let mut ui = Ui::new();
     let mut m = open_menu();
     ui.draw(&m, None);
-    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Back to games"] {
+    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: Beeper", "Back to games"] {
         assert!(find_row(&ui, item).is_some(), "{item}");
     }
     for _ in 0..4 {
@@ -134,6 +135,57 @@ fn menu_items_and_divider_cycle() {
     ui.draw(&m, None);
     assert!(find_row(&ui, "LCD speed: 1").is_some());
     assert_eq!(m.event(ev::OK), (cmd::DIVIDER, 0));
+}
+
+/// The HOME menu's Sound item: 5 items down.
+const SOUND_ITEM: usize = 5;
+
+/// Opens the HOME menu from the game and moves to the Sound item.
+fn to_sound(m: &mut Menu) {
+    m.set_view(view::GAME);
+    assert_eq!(m.event(ev::HOME).0, cmd::NONE);
+    for _ in 0..SOUND_ITEM {
+        m.event(ev::DOWN);
+    }
+}
+
+fn sound_shown(m: &Menu) -> String {
+    let mut ui = Ui::new();
+    ui.draw(m, None);
+    rows_text(&ui).into_iter().find(|t| t.contains("Sound: ")).expect("no Sound item").trim().to_string()
+}
+
+#[test]
+fn menu_sound_cycles_and_survives() {
+    assert_eq!(SND_MODE_COUNT, 2, "Beeper and FM: sound");
+    let mut m = Menu::new(2);
+    to_sound(&mut m);
+    assert_eq!(sound_shown(&m), "Sound: Beeper", "Beeper by default");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
+    assert_eq!(m.view(), view::MENU, "the item stays in the menu");
+    assert_eq!(sound_shown(&m), "Sound: FM: sound");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
+    assert_eq!(sound_shown(&m), "Sound: Beeper");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
+    // reset game: back in the game, the choice kept
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP);
+    assert_eq!(m.event(ev::OK).0, cmd::RESET);
+    assert_eq!(m.view(), view::GAME);
+    m.event(ev::HOME);
+    assert_eq!(sound_shown(&m), "Sound: FM: sound", "after a reset");
+    // back to the picker and another game started
+    m.event(ev::UP); // wraps to "Back to games"
+    assert_eq!(m.event(ev::OK).0, cmd::LEAVE);
+    assert_eq!(m.view(), view::PICKER);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::START, 1));
+    to_sound(&mut m);
+    assert_eq!(sound_shown(&m), "Sound: FM: sound", "after starting another game");
+    // and the next press cycles from the kept choice
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
 }
 
 #[test]

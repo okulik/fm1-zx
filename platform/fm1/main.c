@@ -24,6 +24,7 @@
 #include "pack.h"
 #include "pixels.h"
 #include "ramcalls.h"
+#include "sound.h"
 #include "ui.h"
 #include "zx.h"
 
@@ -50,6 +51,7 @@
 #define TIMER5_PRIO 4u
 #define AUDIO_LOW 1024u     /* run a Spectrum frame while fewer samples than this are queued */
 #define FRAME_SAMPLES 1024u /* room for one frame's samples: 750000/17 Hz * 69888 / 3.5 MHz < 882 */
+_Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole frame");
 #define GAIN_FRAMES 10u     /* MASTER -> gain every 10 frames */
 #define NO_COLOUR 0xFFu
 
@@ -93,11 +95,17 @@ static menu mn;
 static const uint8_t *pack_base;
 
 /* The running game: the machine, its extracted file (a .tap is read from it while it runs), the
- * beeper renderer and one frame's samples. */
+ * beeper renderer, the sound mixer (core/sound: Beeper copies the beeper, FM plays it 3 frames
+ * late as FM voices or the beeper) and one frame's samples, beeper and mixed. */
 zx_machine fmzx_machine POOL("machine");
 static uint8_t game_file[PACK_MAX_RAW] POOL("game");
 static int16_t frame_samples[FRAME_SAMPLES] POOL("samples");
+static int16_t mixed_samples[FRAME_SAMPLES] POOL("samples");
+static snd_mixer mixer POOL("mixer");
 static zx_beeper beeper;
+/* The Sound item's choice, SND_MODE_* (CMD_SOUND): kept across games until power off. Read by
+ * emu-gate. */
+uint32_t fmzx_sound_mode;
 static km_state kms;
 static struct {
     uint8_t loaded;      /* fmzx_machine holds a game */
@@ -230,23 +238,26 @@ void fmzx_cstart(void)
 /* ------------------------------------------------------------------ the game --- */
 
 /* One Spectrum frame, in RAMTEXT with the core: input applied, the frame run, its beeper edges
- * rendered and queued, and the LCD rows it changed noted in game.dirty (paper lines the core
- * reports, border rows whose colour differs from what the LCD last got). */
+ * rendered, mixed in the Sound choice and queued, and the LCD rows it changed noted in game.dirty
+ * (paper lines the core reports, border rows whose colour differs from what the LCD last got). */
 static void RAMTEXT game_step(void)
 {
     zx_machine *m = &fmzx_machine;
     const zx_edge *e;
-    uint32_t n, y, r;
+    uint32_t n, ne, y, r;
+    uint8_t level;
     zx_set_keys(m, game.rows);
     zx_set_kempston(m, game.kempston);
     for (r = 0; r < 8u; r++)
         fmzx_keys_now[r] = m->keys[r];
     fmzx_kempston_now = m->kempston;
     zx_run_frame(m);
-    zx_beeper_set_level(&beeper, zx_edges_start_level(m));
-    e = zx_edges(m, &n);
-    n = zx_beeper_render(&beeper, e, n, frame_samples);
-    audio_push(frame_samples, n);
+    level = zx_edges_start_level(m);
+    zx_beeper_set_level(&beeper, level);
+    e = zx_edges(m, &ne);
+    n = zx_beeper_render(&beeper, e, ne, frame_samples);
+    snd_mixer_frame(&mixer, (uint8_t)fmzx_sound_mode, e, ne, level, frame_samples, n, mixed_samples);
+    audio_push(mixed_samples, n);
     for (r = 0; r < LCD_ROWS / 8u; r++)
         game.dirty[r] = 0;
     for (y = 0; y < ZX_SCREEN_LINES; y++)
@@ -280,7 +291,7 @@ static void RAMTEXT game_release(void)
 /* The RAMTEXT code XIP calls (ramcalls.h). */
 struct ram_calls fmzx_ram = {
     zx_init, zx_load_sna, zx_load_z80, zx_tape_insert, zx_tape_autostart, zx_beeper_init,
-    pix_compose_zx, game_step, game_release, lcd_pump_ram,
+    snd_mixer_init, pix_compose_zx, game_step, game_release, lcd_pump_ram,
 };
 
 static uint16_t gain_q10(uint32_t master)
@@ -318,6 +329,8 @@ static int game_start(uint32_t index)
     if (e != ZX_OK)
         return e;
     fmzx_ram.beeper_init(&beeper, 750000u, 17u);
+    /* the decoder's history and the delay ring start empty: nothing of the last game plays */
+    fmzx_ram.mixer_init(&mixer, 750000u, 17u);
     for (i = 0; i < LCD_ROWS; i++)
         border_sent[i] = NO_COLOUR;
     game.crop_x = g.crop_x;
@@ -430,6 +443,9 @@ static void handle_event(int ev)
         break;
     case CMD_OSK_KEY:
         osk_press(arg);
+        break;
+    case CMD_SOUND: /* the mixer switches (with its crossfades) at the next frame */
+        fmzx_sound_mode = arg;
         break;
     default: /* CMD_RESUME: the run rule in fmzx_main does the rest */
         break;

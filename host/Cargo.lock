@@ -139,6 +139,7 @@ dependencies = [
  "fm1-core",
  "fm1-soc",
  "fmzx-pack",
+ "music",
  "object",
  "png",
  "zx-sys",

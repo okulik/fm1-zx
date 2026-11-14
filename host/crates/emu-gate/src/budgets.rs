@@ -121,9 +121,59 @@ pub fn parse_demo(s: &str) -> Result<Vec<DemoStep>, String> {
     Ok(v)
 }
 
-/// PLAY, HOME and the SELECT encoder as fm1-emu knows them.
+/// PLAY, HOME, OCT+ and the SELECT encoder as fm1-emu knows them.
 const PLAY: u8 = 12;
+const HOME: u8 = 8;
+const OCT_UP: u8 = 1;
 const ENC_SELECT: u8 = 0;
+const ENC_ALGORITHM: u8 = 1;
+
+/// The HOME menu's Sound item: items down from the first ("Resume").
+pub const SOUND_ITEM: u32 = 5;
+/// `fmzx_sound_mode` values (`SND_MODE_*` in `core/sound/sound.h`).
+pub const SOUND_BEEPER: u32 = 0;
+pub const SOUND_FM: u32 = 1;
+
+/// Presses `key` and runs until `fmzx_stats.view` is `view` (at most 300 ms).
+pub fn press_to(m: &mut Machine, key: u8, view: u32) {
+    m.press(key, 30);
+    for _ in 0..300 {
+        if m.stats().view == view {
+            return;
+        }
+        m.run_ms(1);
+    }
+    panic!("view {} after pressing {key}, expected {view}", m.stats().view);
+}
+
+/// The firmware's Sound choice now (`fmzx_sound_mode`).
+pub fn sound_mode(m: &Machine) -> u32 {
+    m.peek32(m.symbol("fmzx_sound_mode"))
+}
+
+/// From the running game: HOME, down to the Sound item, PLAY until the choice is `mode`, and
+/// HOME back to the game (which resumes in it). Spectrum frames stop while the menu is open:
+/// returns the frames run before it, the index of the first frame in the new choice.
+pub fn choose_sound(m: &mut Machine, mode: u32) -> u32 {
+    press_to(m, HOME, VIEW_MENU);
+    let frames = m.stats().frames;
+    for _ in 0..SOUND_ITEM {
+        m.press(OCT_UP, 30);
+        m.run_ms(30);
+    }
+    for _ in 0..4 {
+        if sound_mode(m) == mode {
+            break;
+        }
+        m.press(PLAY, 30);
+        m.run_ms(30);
+    }
+    assert_eq!(sound_mode(m), mode, "the Sound item did not reach the choice");
+    assert_eq!(m.stats().view, VIEW_MENU, "the Sound item left the menu");
+    assert_eq!(m.stats().frames, frames, "frames ran in the menu");
+    press_to(m, HOME, VIEW_GAME);
+    frames
+}
 
 /// Where a measurement starts, in ms after the game was started: the tapes are loaded by about
 /// 10 s (a tape's ROM loader runs at full speed with the audio paced frames) and the demos have
@@ -141,6 +191,10 @@ pub struct Measure {
     pub cpu: Vec<u64>,
     /// `fm1_alnk0_irq` per call (interrupt time excluded from `cpu`).
     pub isr: Vec<u64>,
+    /// `snd_mixer_frame` per call (within `cpu`): the sound decoder, the FM synth and the mix.
+    pub snd: Vec<u64>,
+    /// The Sound choice at the end (`fmzx_sound_mode`).
+    pub sound: u32,
     /// LCD rows sent in each 1-second sub-window of the window (a static screen sends none).
     pub rows_per_second: Vec<u32>,
     /// Chip resets during the run.
@@ -161,6 +215,27 @@ pub fn start_game(fw: &Firmware, opt: BootOpt, index: u32) -> Machine {
     }
     m.press(PLAY, 30);
     m.run_ms(20);
+    m
+}
+
+/// As [`start_game`], with the Sound choice `sound` made first, in game 0, which is then left
+/// for the picker: game `index` starts in that choice, its frames and the demo's clock exactly as
+/// from [`start_game`] (a visit to the menu after the start would shift the game's frames
+/// against the demo's keys, which some title screens only read at certain frames).
+pub fn start_game_in(fw: &Firmware, opt: BootOpt, index: u32, sound: u32) -> Machine {
+    let mut m = start_game(fw, opt, 0);
+    m.run_ms(300);
+    choose_sound(&mut m, sound);
+    m.run_ms(100);
+    press_to(&mut m, HOME, VIEW_MENU);
+    m.turn(ENC_ALGORITHM, -1); // wraps to "Back to games"
+    m.run_ms(100);
+    press_to(&mut m, PLAY, VIEW_PICKER);
+    m.turn(ENC_SELECT, index as i32 - m.stats().game as i32);
+    m.run_ms(200);
+    m.press(PLAY, 30);
+    m.run_ms(20);
+    assert_eq!((m.stats().view, m.stats().game, sound_mode(&m)), (VIEW_GAME, index, sound), "the game did not start");
     m
 }
 
@@ -208,13 +283,26 @@ pub fn active_share(m: &Measure) -> f64 {
 }
 
 /// Starts game `index` and measures `window_ms` of it from `settle_ms` on, with the demo's keys
-/// pressed throughout.
+/// pressed throughout, in the default Sound choice (Beeper).
 pub fn measure(fw: &Firmware, opt: BootOpt, index: u32, demo: &[DemoStep], settle_ms: u64, window_ms: u64) -> Measure {
-    let mut m = start_game(fw, opt, index);
+    measure_in(fw, opt, index, demo, settle_ms, window_ms, SOUND_BEEPER)
+}
+
+/// As [`measure`], in the Sound choice `sound` ([`start_game_in`]).
+pub fn measure_in(
+    fw: &Firmware,
+    opt: BootOpt,
+    index: u32,
+    demo: &[DemoStep],
+    settle_ms: u64,
+    window_ms: u64,
+    sound: u32,
+) -> Measure {
+    let mut m = if sound == SOUND_BEEPER { start_game(fw, opt, index) } else { start_game_in(fw, opt, index, sound) };
     let t0 = m.ms();
     let mut d = Demo::new(demo);
     d.run_to(&mut m, t0, settle_ms);
-    for sym in ["game_frame", "lcd_compose_band", "fm1_alnk0_irq"] {
+    for sym in ["game_frame", "lcd_compose_band", "fm1_alnk0_irq", "snd_mixer_frame"] {
         m.watch(sym);
     }
     m.clear_costs();
@@ -234,16 +322,18 @@ pub fn measure(fw: &Firmware, opt: BootOpt, index: u32, demo: &[DemoStep], settl
         frames: s1.frames - s0.frames,
         cpu: m.cost_with("game_frame", "lcd_compose_band"),
         isr: m.cost_of("fm1_alnk0_irq"),
+        snd: m.cost_of("snd_mixer_frame"),
+        sound: sound_mode(&m),
         rows_per_second,
         resets: m.resets() - resets0,
-        in_game: s1.view == zx_view_game(),
+        in_game: s1.view == VIEW_GAME,
     }
 }
 
-/// `menu_view` value while a game runs (`zx_sys::view::GAME`).
-const fn zx_view_game() -> u32 {
-    1
-}
+/// `menu_view` in the picker, while a game runs and in the HOME menu (`zx_sys::view::*`).
+pub const VIEW_PICKER: u32 = 0;
+pub const VIEW_GAME: u32 = 1;
+pub const VIEW_MENU: u32 = 2;
 
 #[cfg(test)]
 mod tests {

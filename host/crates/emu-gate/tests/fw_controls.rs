@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! In-game controls in fm1-emu: the game's key map, the HOME menu, pause, the on-screen
-//! keyboard and the LCD speed item. Needs the device build (`FMZX_FM1_BUILD`).
+//! keyboard, the LCD speed item and the Sound item. Needs the device build (`FMZX_FM1_BUILD`).
 //!
 //! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway; the test programs `tape`/`tune` are
 //! found by id); scroll has the default key map (F3 = Kempston left).
@@ -13,6 +13,7 @@
 //! `zx_machine` starts with the Z80 core's pointers (8 bytes on the host, 4 on the device), so
 //! the zx-sys layout of the fields after them differs from the device's.
 
+use emu_gate::budgets::{choose_sound, sound_mode, SOUND_FM};
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -164,8 +165,9 @@ fn pause_releases_keys() {
     assert_eq!(kempston(&m), KEMPSTON_LEFT, "F3 still held after the pause");
 }
 
-/// The host's composition of the HOME menu over the same pack.
-fn host_menu(pack: &[u8]) -> Vec<u16> {
+/// The host's composition of the HOME menu over the same pack, with the Sound item cycled
+/// `sound` times (0: Beeper) and the first item selected.
+fn host_menu(pack: &[u8], sound: u32) -> Vec<u16> {
     let count = zx_sys::pack_open(pack).expect("pack opens on the host");
     let mut ui = zx_sys::Ui::new();
     let mut menu = zx_sys::Menu::new(count);
@@ -173,6 +175,16 @@ fn host_menu(pack: &[u8]) -> Vec<u16> {
     assert_eq!(menu.event(zx_sys::ev::OK).0, zx_sys::cmd::START);
     menu.set_view(view::GAME);
     menu.event(zx_sys::ev::HOME);
+    if sound > 0 {
+        for _ in 0..5 {
+            menu.event(zx_sys::ev::DOWN);
+        }
+        for _ in 0..sound {
+            assert_eq!(menu.event(zx_sys::ev::OK).0, zx_sys::cmd::SOUND);
+        }
+        menu.set_view(view::GAME);
+        menu.event(zx_sys::ev::HOME);
+    }
     assert_eq!(menu.view(), view::MENU);
     ui.draw(&menu, Some(pack));
     (0..240)
@@ -190,7 +202,7 @@ fn menu_golden() {
     m.run_ms(300);
     assert_eq!(m.stats().pending, 0, "LCD rows still pending");
     assert_golden(m.lcd_rgb565(), &golden("menu.png"), &build_dir().join("menu.actual.png"));
-    assert!(m.lcd_rgb565() == &host_menu(pack())[..], "the LCD differs from the host's HOME menu");
+    assert!(m.lcd_rgb565() == &host_menu(pack(), 0)[..], "the LCD differs from the host's HOME menu");
 }
 
 #[test]
@@ -403,4 +415,128 @@ fn leave_and_restart() {
     assert_eq!(s.game, SCROLL);
     assert!(s.frames <= 5 && s.frames < before, "frames did not restart from 0: {s:?}");
     assert_frames_run(&mut m, "after the restart");
+}
+
+/// The MASTER pot (fm1-emu ADC channel).
+const MASTER_ADC: u8 = 4;
+
+/// MASTER at full (unity gain), in effect within 300 ms.
+fn master_full(m: &mut Machine) {
+    m.set_adc(MASTER_ADC, 1023);
+    m.run_ms(300);
+}
+
+/// From the game: HOME, "Back to games" (the last item), the picker.
+fn leave_game(m: &mut Machine) {
+    press_to(m, HOME, view::MENU);
+    m.turn(ALGORITHM, -1);
+    m.run_ms(100);
+    press_to(m, PLAY, view::PICKER);
+}
+
+/// The host's render of pack entry `index` (a snapshot) from its load, `frames` frames through
+/// the beeper and the mixer in FM: sound.
+fn host_fm(index: u32, frames: usize) -> Vec<i16> {
+    let g = zx_sys::pack_game_at(pack(), index).expect("pack entry");
+    let sna = g.extract(zx_sys::PACK_MAX_RAW as usize).expect("extract");
+    let mut zx = zx_sys::Machine::new();
+    zx.load_sna(&sna).expect("load");
+    let mut b = zx_sys::Beeper::new(750_000, 17);
+    let mut mix = zx_sys::SndMixer::new(750_000, 17);
+    let mut out = Vec::new();
+    for _ in 0..frames {
+        zx.run_frame();
+        let level = zx.edges_start_level();
+        b.set_level(level);
+        let beeper = b.render(zx.edges());
+        out.extend(mix.frame(zx_sys::SND_MODE_FM_A, zx.edges(), level, &beeper));
+    }
+    out
+}
+
+/// Samples of a 20 ms frame, about (750000/17 Hz).
+const FRAME_SAMPLES: usize = 882;
+
+/// The audio from `mark` (a sample count taken before the game was (re)started in FM: sound) is
+/// silence until the new game's first sample, then exactly the host's FM render of `index` from
+/// its load: three frames of silence (the mixer's delay ring and decoder start empty) and then the
+/// game's own sound, 60 ms late. Nothing of the game before plays.
+fn assert_fresh_fm_start(m: &mut Machine, mark: usize, index: u32, what: &str) {
+    m.run_ms(1000);
+    let host = host_fm(index, 60);
+    let dev = &m.audio_left()[mark..];
+    let loud = |a: &[i16]| a.iter().position(|x| x.unsigned_abs() > 64);
+    let h = loud(&host).expect("the host render is silent");
+    assert!(h >= 3 * FRAME_SAMPLES - 3, "{what}: the host render starts {h} samples in, not 3 frames");
+    let d = loud(dev).unwrap_or_else(|| panic!("{what}: no sound after the start"));
+    assert!(d >= h, "{what}: sound {d} samples after the start, before the host's first at {h}");
+    let off = d - h;
+    let before = dev[..off].iter().map(|x| x.unsigned_abs()).max().unwrap_or(0);
+    assert!(before <= 15, "{what}: a sample of {before} before the new game's first one");
+    let n = 40 * FRAME_SAMPLES;
+    assert!(dev.len() >= off + n, "{what}: only {} samples after the start", dev.len() - off);
+    let first_diff = dev[off..off + n].iter().zip(&host[..n]).position(|(a, b)| a != b);
+    assert_eq!(first_diff, None, "{what}: the device differs from the host's FM render of a fresh start");
+}
+
+#[test]
+fn sound_choice_survives_reset_and_new_game() {
+    let mut m = start(BootOpt { rgb565: true, divider: 4 }, BORDER);
+    master_full(&mut m);
+    assert_eq!(sound_mode(&m), 0, "Beeper by default");
+    choose_sound(&mut m, SOUND_FM);
+    m.run_ms(300);
+
+    // reset game: the choice holds, and the restarted game starts afresh in it (the mark once
+    // the menu has silenced the game)
+    press_to(&mut m, HOME, view::MENU);
+    m.run_ms(100);
+    let mark = m.audio_left().len();
+    m.press(OCT_UP, 30); // "Reset game"
+    m.run_ms(50);
+    press_to(&mut m, PLAY, view::GAME);
+    assert_eq!(sound_mode(&m), SOUND_FM, "after Reset game");
+    assert_fresh_fm_start(&mut m, mark, BORDER, "reset");
+
+    // back to the picker and another game
+    leave_game(&mut m);
+    assert_eq!(sound_mode(&m), SOUND_FM, "in the picker");
+    m.turn(SELECT, -1); // border -> scroll
+    m.run_ms(200);
+    press_to(&mut m, PLAY, view::GAME);
+    assert_eq!((m.stats().game, sound_mode(&m)), (SCROLL, SOUND_FM), "after starting another game");
+    m.run_ms(300);
+
+    // the menu shows it
+    press_to(&mut m, HOME, view::MENU);
+    m.run_ms(300);
+    assert_eq!(m.stats().pending, 0, "LCD rows still pending");
+    assert!(m.lcd_rgb565() == &host_menu(pack(), 1)[..], "the LCD differs from the host's HOME menu with FM: sound");
+}
+
+#[test]
+fn fm_new_game_starts_silent() {
+    // Castaway's title music in FM, then border.sna: none of the music (in the audio FIFO, the
+    // mixer's delay ring or the decoder's history) plays into the new game's first frames
+    let castaway = 2;
+    let mut m = start(BootOpt { rgb565: false, divider: 4 }, castaway);
+    master_full(&mut m);
+    choose_sound(&mut m, SOUND_FM);
+    for _ in 0..1000 {
+        if m.stats().frames >= 230 {
+            break;
+        }
+        m.run_ms(10);
+    }
+    assert!(m.stats().frames >= 230, "Castaway stopped at frame {}", m.stats().frames);
+    let a = m.audio_left();
+    let tail = &a[a.len() - 4 * FRAME_SAMPLES..];
+    assert!(tail.iter().any(|x| x.unsigned_abs() > 1000), "no music playing before leaving");
+    leave_game(&mut m);
+    m.turn(SELECT, BORDER as i32 - castaway as i32);
+    m.run_ms(200);
+    let mark = m.audio_left().len();
+    press_to(&mut m, PLAY, view::GAME);
+    assert_eq!((m.stats().game, sound_mode(&m)), (BORDER, SOUND_FM));
+    assert_fresh_fm_start(&mut m, mark, BORDER, "new game");
 }

@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The beeper as the FM-1's audio out plays it, captured by fm1-emu (left channel). Needs the
-//! device build (`FMZX_FM1_BUILD`).
+//! The beeper as the FM-1's audio out plays it, captured by fm1-emu (left channel), in the
+//! default Sound choice (Beeper) and in FM: sound. Needs the device build (`FMZX_FM1_BUILD`).
 //!
 //! Pack: `games/games.toml`; game 1 is `border.sna` (stripes and a 976 Hz tone).
 
+use emu_gate::budgets::{choose_sound, sound_mode, SOUND_BEEPER, SOUND_FM};
 use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
 use fmzx_pack::testprogs::{BORDER_TONE_HZ, TUNE_HZ, TUNE_NOTE_FRAMES};
 use std::path::{Path, PathBuf};
@@ -205,4 +206,184 @@ fn tune_pitches_in_firmware() {
     let ms = longest_quiet as f64 * 1000.0 / RATE;
     println!("longest quiet run: {ms:.2} ms");
     assert!(ms <= 0.5, "{ms:.2} ms with |x| <= 64");
+}
+
+#[test]
+fn beeper_default_unchanged() {
+    // the Sound choice starts as Beeper, which every test above measures: the beeper itself,
+    // with no delay (beeper_sample_exact) and nothing of FM
+    let m = start_border();
+    assert_eq!(sound_mode(&m), SOUND_BEEPER);
+}
+
+/// Where `needle` (at least a few hundred samples, not silence) first occurs in `hay`.
+fn find(hay: &[i16], needle: &[i16]) -> Option<usize> {
+    (0..=hay.len().checked_sub(needle.len())?).find(|&p| hay[p..p + needle.len()] == *needle)
+}
+
+/// Harmonics fitted per voice: a 2-operator FM voice at ratio 1:1 is a harmonic series of its
+/// note (index up to 2.5: the energy lies in the first few).
+const HARMONICS: usize = 6;
+
+/// Cosine and sine columns of the harmonics of `hz` below Nyquist, over `n` samples.
+fn harmonic_columns(hz: f64, n: usize, rate: f64) -> Vec<Vec<f64>> {
+    let mut cols = Vec::new();
+    for k in (1..=HARMONICS).filter(|&k| k as f64 * hz < rate * 0.45) {
+        let w = 2.0 * std::f64::consts::PI * k as f64 * hz / rate;
+        cols.push((0..n).map(|i| (w * i as f64).cos()).collect());
+        cols.push((0..n).map(|i| (w * i as f64).sin()).collect());
+    }
+    cols
+}
+
+/// Least squares of `y` on `cols`: (residual energy, coefficients).
+fn fit(y: &[f64], cols: &[Vec<f64>]) -> (f64, Vec<f64>) {
+    let m = cols.len();
+    let dot = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let mut g: Vec<Vec<f64>> = (0..m).map(|i| (0..m).map(|j| dot(&cols[i], &cols[j])).collect()).collect();
+    let mut c: Vec<f64> = cols.iter().map(|col| dot(col, y)).collect();
+    let rhs = c.clone();
+    for (i, row) in g.iter_mut().enumerate() {
+        row[i] *= 1.0 + 1e-12;
+    }
+    // Gaussian elimination with partial pivoting
+    for k in 0..m {
+        let p = (k..m).max_by(|&a, &b| g[a][k].abs().total_cmp(&g[b][k].abs())).expect("rows");
+        g.swap(k, p);
+        c.swap(k, p);
+        for r in k + 1..m {
+            let f = g[r][k] / g[k][k];
+            for j in k..m {
+                g[r][j] -= f * g[k][j];
+            }
+            c[r] -= f * c[k];
+        }
+    }
+    let mut x = vec![0.0; m];
+    for k in (0..m).rev() {
+        x[k] = (c[k] - (k + 1..m).map(|j| g[k][j] * x[j]).sum::<f64>()) / g[k][k];
+    }
+    (dot(y, y) - dot(&rhs, &x), x)
+}
+
+/// The pitch of each of `notes` (Hz) in `y` by a harmonic least-squares fit: each note's
+/// frequency in turn is searched over +-3% in 0.2% steps with the others' harmonics fitted at
+/// their own pitch (so a voice a semitone away is not mistaken for part of it). Returns, for the
+/// voice with the largest fitted amplitude, (its note, the frequency found, the share of the
+/// window's energy the fit explains); the frequency is `None` when the best fit is at either end
+/// of the search (no pitch near the note).
+fn strongest_pitch(y: &[f64], notes: &[f64], rate: f64) -> (f64, Option<f64>, f64) {
+    let energy = y.iter().map(|v| v * v).sum::<f64>().max(1.0);
+    let mut best = (0.0, None, 0.0, -1.0);
+    for (j, &hz) in notes.iter().enumerate() {
+        let fixed: Vec<Vec<f64>> =
+            notes.iter().enumerate().filter(|&(i, _)| i != j).flat_map(|(_, &f)| harmonic_columns(f, y.len(), rate)).collect();
+        let steps: Vec<f64> = (-15..=15).map(|s| hz * (1.0 + 0.002 * f64::from(s))).collect();
+        let fits: Vec<(f64, f64)> = steps
+            .iter()
+            .map(|&f| {
+                let free = harmonic_columns(f, y.len(), rate);
+                let nf = free.len();
+                let cols: Vec<Vec<f64>> = free.into_iter().chain(fixed.iter().cloned()).collect();
+                let (res, x) = fit(y, &cols);
+                (res, x[..nf].iter().map(|v| v * v).sum::<f64>().sqrt())
+            })
+            .collect();
+        let k = (0..fits.len()).min_by(|&a, &b| fits[a].0.total_cmp(&fits[b].0)).expect("steps");
+        let found = (k != 0 && k != fits.len() - 1).then_some(steps[k]);
+        if fits[k].1 > best.3 {
+            best = (hz, found, 1.0 - fits[k].0 / energy, fits[k].1);
+        }
+    }
+    (best.0, best.1, best.2)
+}
+
+#[test]
+fn sound_menu_switches_to_fm() {
+    use music::truth::Engine;
+    use zx_sys::{SndMixer, SND_MODE_BEEPER, SND_MODE_FM_A};
+    const D: usize = zx_sys::SND_DELAY_FRAMES as usize;
+    // Castaway's title tune plays from frame 155; its long notes (one or both channels) run to
+    // about frame 310
+    let mut m = start_game(game_index("castaway"));
+    for _ in 0..2000 {
+        if m.stats().frames >= 165 {
+            break;
+        }
+        m.run_ms(5);
+    }
+    assert!(m.stats().frames >= 165, "Castaway stopped at frame {}", m.stats().frames);
+    let fm_from = choose_sound(&mut m, SOUND_FM) as usize;
+    m.run_ms(2600);
+    let beeper_from = choose_sound(&mut m, SOUND_BEEPER) as usize;
+    m.run_ms(1000);
+    let dev = m.audio_left();
+    let s = m.stats();
+    assert_eq!((s.underruns, s.overflows), (0, 0), "{s:?}");
+    println!("FM from frame {fm_from}, Beeper again from frame {beeper_from}");
+    assert!(beeper_from >= fm_from + 120, "only {} frames in FM", beeper_from - fm_from);
+
+    // the host: the same frames through the beeper and the mixer, switched at the same frames,
+    // and the notes the tune plays (from the game's RAM)
+    let frames = beeper_from + 60;
+    let mut zx = music::castaway();
+    let mut b = zx_sys::Beeper::new(music::RATE.0, music::RATE.1);
+    let mut mix = SndMixer::new(music::RATE.0, music::RATE.1);
+    let mut dec = zx_sys::SndDecoder::new();
+    let (mut beeper, mut mixed, mut starts, mut truth, mut confident) = (vec![], vec![], vec![0usize], vec![], vec![]);
+    for i in 0..frames {
+        let f = music::capture(&mut zx, &mut b, 1).pop().expect("a frame");
+        truth.push(Engine::Castaway.read(&zx));
+        confident.push(dec.frame(&f.edges, f.start_level).confident != 0);
+        let mode = if (fm_from..beeper_from).contains(&i) { SND_MODE_FM_A } else { SND_MODE_BEEPER };
+        mixed.extend(mix.frame(mode, &f.edges, f.start_level, &f.beeper));
+        beeper.extend_from_slice(&f.beeper);
+        starts.push(beeper.len());
+    }
+
+    // the device plays the host's mix sample for sample from the switch frame on (silence,
+    // then the delayed path fading in) to well past the 2 s scored below
+    let at = |t: usize| starts[t];
+    let probe = at(fm_from + 8);
+    let p = find(&dev, &mixed[probe..probe + 2000]).expect("the host's FM mix is not in the device audio");
+    let (from, to) = (at(fm_from), at(fm_from + 120));
+    let dev_fm = &dev[p + from - probe..p + to - probe];
+    assert!(dev_fm == &mixed[from..to], "the device's FM audio differs from the host's mix");
+
+    // after 200 ms, 2 s of 20 ms windows: output frame t plays frame t - 3's music; the strongest
+    // of its notes (by a harmonic fit, strongest_pitch) shows at its pitch within 1%
+    let rate = music::sample_rate();
+    let (mut scored, mut right, mut fm_frames) = (0, 0, 0);
+    for t in fm_from + 10..fm_from + 110 {
+        let Some(truth) = truth[t - D].as_ref().filter(|v| !v.is_empty()) else { continue };
+        let mut notes: Vec<f64> = Vec::new();
+        for &hz in truth {
+            if !notes.iter().any(|&n| (n - hz).abs() <= n * 0.005) {
+                notes.push(hz); // a unison is one voice to the fit
+            }
+        }
+        fm_frames += usize::from(confident[t - D]);
+        let w: Vec<f64> = dev[p + at(t) - probe..p + at(t + 1) - probe].iter().map(|&x| f64::from(x)).collect();
+        let (hz, got, explained) = strongest_pitch(&w, &notes, rate);
+        scored += 1;
+        let ok = explained >= 0.5 && got.is_some_and(|f| (f - hz).abs() <= hz * 0.01);
+        right += usize::from(ok);
+        if !ok {
+            println!("frame {t}: notes {truth:.1?}, strongest {hz:.1} Hz found at {got:.1?} ({:.0}% explained)", explained * 100.0);
+        }
+    }
+    println!("{right} of {scored} windows within 1% of the strongest note; {fm_frames} of them decoded as music");
+    assert!(scored >= 90, "only {scored} windows with notes");
+    assert!(right * 10 >= scored * 9, "{right} of {scored} windows within 1%");
+    assert!(fm_frames * 10 >= scored * 9, "only {fm_frames} of {scored} windows decoded as music");
+
+    // back to Beeper: after the crossfade from the delayed path (4 ms) the live beeper again,
+    // delay-free, sample for sample
+    let probe = at(beeper_from + 3);
+    let p = find(&dev, &beeper[probe..probe + 2000]).expect("the live beeper is not in the device audio after the switch back");
+    let xfade = (rate / f64::from(zx_sys::SND_XFADE_DIV)).ceil() as usize + 1;
+    let (from, to) = (at(beeper_from), at(beeper_from + 45));
+    assert!(&dev[p + from - probe..p + to - probe] == &mixed[from..to], "the switch back differs from the host's mix");
+    assert!(&dev[p + from + xfade - probe..p + to - probe] == &beeper[from + xfade..to], "not the live beeper after the crossfade");
+    assert!(dev[p + from - probe..p + from + xfade - probe] != beeper[from..from + xfade], "no crossfade at the switch back");
 }

@@ -32,14 +32,16 @@ SECTIONS
 {
     .entry : { KEEP(*(.entry)) } > XIP
 
-    /* The Z80 core (the device copy, platform/fm1/CMakeLists.txt) and what calls it directly
-     * (pix_compose_zx, the game step), the audio interrupt (felucca-bsp's isr_alnk0 wrapper,
-     * fm1_alnk0_irq) with the FIFO, the LCD pump, and the mem* copies they call. */
+    /* The Z80 core and the sound library (the device copies, platform/fm1/CMakeLists.txt) and
+     * what calls them directly (pix_compose_zx, the game step), the audio interrupt
+     * (felucca-bsp's isr_alnk0 wrapper, fm1_alnk0_irq) with the FIFO, the LCD pump, and the mem*
+     * copies they call. */
     .ram_text : ALIGN(4)
     {
         _ram_text_start = .;
         *(.ram_text .ram_text.*)
         *libzx_core.a:*(.text .text.*)
+        *libzx_sound.a:*(.text .text.*)
         *(.text.pix_compose_zx)
         *(.text.isr_alnk0)
         *(.text.fmzx_rt_*)
@@ -52,7 +54,7 @@ SECTIONS
     {
         *(.text .text.*)
         KEEP(*(.rodata.fmzx_product))
-        *(EXCLUDE_FILE(*libzx_core.a:* *audio.c.obj) .rodata EXCLUDE_FILE(*libzx_core.a:* *audio.c.obj) .rodata.*)
+        *(EXCLUDE_FILE(*libzx_core.a:* *libzx_sound.a:* *audio.c.obj) .rodata EXCLUDE_FILE(*libzx_core.a:* *libzx_sound.a:* *audio.c.obj) .rodata.*)
         . = ALIGN(4);
         __init_array_start = .;
         KEEP(*(SORT(.init_array.*)))
@@ -61,12 +63,13 @@ SECTIONS
         . = ALIGN(4);
     } > XIP
 
-    /* The core's tables (contention, flags) are read from SRAM, and the audio interrupt reads
-     * no flash. */
+    /* The core's tables (contention, flags) and the sound library's (the sine) are read from
+     * SRAM, and the audio interrupt reads no flash. */
     .data : ALIGN(4)
     {
         _data_start = .;
         *libzx_core.a:*(.rodata .rodata.*)
+        *libzx_sound.a:*(.rodata .rodata.*)
         *audio.c.obj(.rodata .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
@@ -87,7 +90,7 @@ SECTIONS
     } > RAM
 
     /* Big buffers (section(".pool.*")): the ROM copy, the LCD bands, the machine, the game file,
-     * the audio FIFO and DMA halves. */
+     * the sound mixer, the frame's samples, the audio FIFO and DMA halves. */
     .pool (NOLOAD) : ALIGN(4)
     {
         _pool_start = .;

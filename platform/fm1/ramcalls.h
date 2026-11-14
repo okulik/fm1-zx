@@ -9,6 +9,7 @@
 #define FMZX_RAMCALLS_H
 
 #include <stdint.h>
+#include "sound.h"
 #include "zx.h"
 
 struct ram_calls {
@@ -18,6 +19,7 @@ struct ram_calls {
     int (*tape_insert)(zx_machine *, const uint8_t *, uint32_t);
     void (*tape_autostart)(zx_machine *);
     void (*beeper_init)(zx_beeper *, uint32_t, uint32_t);
+    void (*mixer_init)(snd_mixer *, uint32_t, uint32_t);
     void (*compose_zx)(const zx_machine *, unsigned, unsigned, uint8_t *);
     void (*game_step)(void);    /* main.c: one Spectrum frame */
     void (*game_release)(void); /* main.c: all Spectrum keys and Kempston up */

@@ -218,6 +218,49 @@
 //! 802B DD 09              ADD IX,BC      the next record
 //! 802D 18 D5              JR note
 //! ```
+//!
+//! # `noise.sna` (not in the pack)
+//!
+//! The decoder's worst case for the firmware's frame budget (`emu-gate`'s `fw_budget` builds it
+//! into a pack of its own; it is not committed): [`NOISE_EDGES_PER_FRAME`] beeper edges every
+//! frame at pseudo-random spacings of 121-233 T plus I/O contention (a 16-bit xorshift in HL
+//! picks 1-8 turns of a delay loop), dense enough to spend most of the decoder's work cap and
+//! few enough (at most 256 a frame) that the decoder analyses every frame. The paper is white,
+//! the border black.
+//!
+//! ```text
+//! 8000 21 E1 AC          LD HL,ACE1h       the seed (never 0)
+//! 8003 FB         frame: EI                4
+//! 8004 76                HALT              4n   IM 2 + RET return to 8005, interrupts off
+//! 8005 06 FA             LD B,250          7    edges this frame
+//! 8007 7C         edge:  LD A,H            4    xorshift: HL ^= HL << 7, >> 9, << 8
+//! 8008 1F                RRA               4
+//! 8009 7D                LD A,L            4
+//! 800A 1F                RRA               4
+//! 800B AC                XOR H             4
+//! 800C 67                LD H,A            4
+//! 800D 7D                LD A,L            4
+//! 800E 1F                RRA               4
+//! 800F 7C                LD A,H            4
+//! 8010 1F                RRA               4
+//! 8011 AD                XOR L             4
+//! 8012 6F                LD L,A            4
+//! 8013 AC                XOR H             4
+//! 8014 67                LD H,A            4
+//! 8015 E6 07             AND 07h           7
+//! 8017 3C                INC A             4
+//! 8018 4F                LD C,A            4    1-8 turns
+//! 8019 0D         wait:  DEC C             4
+//! 801A 20 FD             JR NZ,wait        12/7 16c - 5 T
+//! 801C 7A                LD A,D            4    D = the output level, bit 4 only
+//! 801D EE 10             XOR 10h           7
+//! 801F 57                LD D,A            4
+//! 8020 D3 FE             OUT (FEh),A       11   the edge
+//! 8022 10 E3             DJNZ edge         13/8 an edge every 105 + 16c T
+//! 8024 18 DD             JR frame          12
+//! ```
+//!
+//! 250 edges take at most 250 x 233 = 58,250 T, so every frame starts at its interrupt.
 
 use std::path::{Path, PathBuf};
 
@@ -245,6 +288,8 @@ pub const TUNE_START_FRAME: u32 = 2;
 /// The notes of `tune.sna` measured from the host beeper renderer: zero crossings over each
 /// note's 21 middle frames, in both passes of the test (they agree to 0.02 Hz).
 pub const TUNE_HZ: [f64; 8] = [524.67, 586.65, 657.01, 701.11, 781.02, 876.39, 989.70, 1049.28];
+/// Beeper edges per frame of `noise.sna`.
+pub const NOISE_EDGES_PER_FRAME: usize = 250;
 /// Builds one program's file.
 pub type Generator = fn() -> Vec<u8>;
 /// The programs `fmzx-pack testprogs` writes: file name and generator.
@@ -306,6 +351,28 @@ const BORDER_CODE: [u8; 35] = [
     0xB1,             //        OR C
     0x20, 0xEB,       //        JR NZ,line
     0x18, 0xDD,       //        JR frame
+];
+
+#[rustfmt::skip]
+const NOISE_CODE: [u8; 38] = [
+    0x21, 0xE1, 0xAC,                    //        LD HL,ACE1h
+    0xFB,                                // frame: EI
+    0x76,                                //        HALT
+    0x06, NOISE_EDGES_PER_FRAME as u8,   //        LD B,250
+    0x7C, 0x1F, 0x7D, 0x1F, 0xAC, 0x67,  // edge:  LD A,H; RRA; LD A,L; RRA; XOR H; LD H,A
+    0x7D, 0x1F, 0x7C, 0x1F, 0xAD, 0x6F,  //        LD A,L; RRA; LD A,H; RRA; XOR L; LD L,A
+    0xAC, 0x67,                          //        XOR H; LD H,A
+    0xE6, 0x07,                          //        AND 07h
+    0x3C,                                //        INC A
+    0x4F,                                //        LD C,A
+    0x0D,                                // wait:  DEC C
+    0x20, 0xFD,                          //        JR NZ,wait
+    0x7A,                                //        LD A,D
+    0xEE, 0x10,                          //        XOR 10h
+    0x57,                                //        LD D,A
+    0xD3, 0xFE,                          //        OUT (FEh),A
+    0x10, 0xE3,                          //        DJNZ edge
+    0x18, 0xDD,                          //        JR frame
 ];
 
 #[rustfmt::skip]
@@ -446,6 +513,12 @@ pub fn tune_sna() -> Vec<u8> {
         }
     }
     sna(ram, 0)
+}
+
+/// The decoder's busiest sound: [`NOISE_EDGES_PER_FRAME`] edges a frame at pseudo-random
+/// spacings (see the module docs). Not one of [`PROGRAMS`]: the pack does not carry it.
+pub fn noise_sna() -> Vec<u8> {
+    sna(ram_with(&NOISE_CODE, 0x38), 0)
 }
 
 /// A `.tap` block: length, flag, data, XOR checksum.

@@ -300,6 +300,8 @@ pub const SND_WORK_MAX: u32 = sys::SND_WORK_MAX;
 pub const SND_ENTER_FRAMES: u32 = sys::SND_ENTER_FRAMES;
 /// ...and the beeper after this many unconfident ones.
 pub const SND_LEAVE_FRAMES: u32 = sys::SND_LEAVE_FRAMES;
+/// Crossfades last 1/`SND_XFADE_DIV` s (4 ms).
+pub const SND_XFADE_DIV: u32 = sys::SND_XFADE_DIV;
 pub const SND_MODE_BEEPER: u8 = sys::snd_mode_SND_MODE_BEEPER as u8;
 pub const SND_MODE_FM_A: u8 = sys::snd_mode_SND_MODE_FM_A as u8;
 pub const SND_MODE_COUNT: u8 = sys::snd_mode_SND_MODE_COUNT as u8;
@@ -769,6 +771,7 @@ pub mod cmd {
     pub const LEAVE: i32 = sys::CMD_LEAVE as i32;
     pub const DIVIDER: i32 = sys::CMD_DIVIDER as i32;
     pub const OSK_KEY: i32 = sys::CMD_OSK_KEY as i32;
+    pub const SOUND: i32 = sys::CMD_SOUND as i32;
 }
 
 pub const UI_COLS: usize = sys::UI_COLS as usize;

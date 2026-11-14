@@ -8,7 +8,8 @@
   each other's branch reach, or only partly in it, which the linker does not report;
 * no address in XIP taken by RAMTEXT code (the audio interrupt reads no flash, and the core
   reads its tables from SRAM);
-* the core and app/pixels.c linked from their renamed device copies, not the originals.
+* the core, the sound library and app/pixels.c linked from their renamed device copies, not the
+  originals.
 
     check_reach.py fmzx_app.dis fmzx_app.map
 
@@ -63,6 +64,8 @@ def main(dis_path, map_path):
         for line in f:
             if re.search(r"[/\\]core[/\\]libzx_core\.a\(", line):
                 bad.append(f"the original core is linked (not the renamed copy): {line.strip()}")
+            if re.search(r"[/\\]core[/\\]libzx_sound\.a\(", line):
+                bad.append(f"the original sound library is linked (not the renamed copy): {line.strip()}")
             if re.search(r"libfmzx_app\.a\(pixels\.c\.obj\)", line):
                 bad.append(f"the original pixels.c is linked (not the renamed copy): {line.strip()}")
             m = re.match(r"^\.ram_text\s+0x[0-9a-f]+\s+0x([0-9a-f]+)", line)

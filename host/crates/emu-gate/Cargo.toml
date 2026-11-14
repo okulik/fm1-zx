@@ -17,6 +17,7 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 png = "0.18"
 
 [dev-dependencies]
+music = { path = "../music" }
 zx-sys = { path = "../zx-sys" }
 
 [lints]
