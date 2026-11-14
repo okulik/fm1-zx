@@ -75,6 +75,8 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] FM music: in the HOME menu set Sound to "FM: sound" and resume. Castaway's title and Escape from Colony 8's title music play as FM voices, in tune and in time, with no wrong notes; everything is about 60 ms later than on the beeper.
 - [ ] Switching Sound between Beeper and FM: sound several times while music plays: a brief fade and gap when turning FM on, no clicks or pops in either direction.
 - [ ] In FM: sound, the effects in ZX Dino and ZX Sopwith stay on the beeper (their usual sound, only delayed), with no crackle.
+- [ ] FM: engines: set Sound to "FM: engines" and start Castaway: its title tune plays as FM with two voices, in tune.
+- [ ] FM: engines in BASIC: at the Spectrum's BASIC prompt type `BEEP 0.25,0: BEEP 0.25,4: BEEP 0.25,7`: the three notes sound as FM. A `BEEP 0.008,0` blip and the key click stay on the beeper.
 - [ ] The Sound choice survives Reset game and starting another game from the picker (it is back to Beeper after power-off).
 - [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the screen shows eight static bars, which do not change with the notes.
 

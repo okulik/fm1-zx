@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # FM music from the beeper (Plans 5-7)
 
-**Status:** approved by the owner, 2026-11-13; stage 1 delivered (Plan 5), 2026-11-14; stage 2 designed in §9, 2026-11-14. A new milestone after Plan 4. It changes the main design
+**Status:** approved by the owner, 2026-11-13; stage 1 delivered (Plan 5), 2026-11-14; stage 2 delivered (Plan 6), 2026-11-14. A new milestone after Plan 4. It changes the main design
 (`2026-11-11-zx48k-fm1-design.md`): "the FM-1's synth side is used only to play the Spectrum's
 own sound (the beeper)" no longer holds once this lands; the main design's §6 records it.
 

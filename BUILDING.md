@@ -139,8 +139,8 @@ Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded (tapes autostart
 standard-speed, any other block type reports "not loadable" and the game is skipped) and run for N
 seconds (default 40). The output goes to `build/music-corpus` (the repository's `build/`) unless
 `-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_<ext>_beeper.wav`,
-`<name>_<ext>_fm.wav` (the mixer's output in FM: sound, 3 frames late) and `<name>_<ext>_fm_b.wav`
-(in FM: engines) to listen to the difference (`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx`
+`<name>_<ext>_fm.wav` (the mixer's output in FM: sound) and `<name>_<ext>_fm_b.wav` (in FM: engines), both 3 frames
+late to listen to the difference (`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx`
 beside it keeps its own).
 
 Key scripts: a file `<name>.keys` beside the game holds steps `ACTION@ms[+hold]` separated by commas
@@ -171,6 +171,10 @@ What the report says, one row per game:
   notes found of the true notes, and decoded notes that match no true note (`wrong`). After `B:`,
   the engines method B recognised and the same numbers for its notes (per voice, the last pitch it
   sounded in each frame it is confident about). The CSV has the same columns.
+
+The run is fast: a folder of games takes seconds (3 games of 40 s took under 1 s on an Apple Silicon
+Mac). The Cave Runner and Unison entries of method B were made from the owner's local copies of those
+games, which are not in the repository; they are tested only locally, with this tool.
 
 ## Toolchain pin
 
@@ -207,7 +211,7 @@ Both need the device build (see Firmware above) and run in fm1-emu:
     cd host
     FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget --test fw_report -- --nocapture
 
-`fw_budget` (about 2.8 minutes) runs every game, and a noise program that stresses the decoder, in both sound modes (Beeper and FM: sound), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+`fw_budget` (about 2.8 minutes) runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in three sound modes (Beeper, FM: sound and FM: engines), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
@@ -240,25 +244,28 @@ emulator counts, one per instruction, interrupts excluded):
 | tape | 4, 2, 1 | static | 0 | 0 |
 | tune | 4, 2, 1 | static | 0 | 0 |
 
-| game | Beeper max | Beeper avg | FM: sound max | FM: sound avg |
-| --- | --- | --- | --- | --- |
-| scroll | 1,465,734 | 1,447,654 | 1,574,233 | 1,556,223 |
-| border | 1,361,499 | 1,355,563 | 1,469,966 | 1,464,007 |
-| castaway | 1,337,519 | 470,113 | 1,376,829 | 569,070 |
-| sopwith | 1,502,145 | 1,209,517 | 1,610,561 | 1,332,740 |
-| colony8 | 1,367,687 | 397,480 | 1,449,235 | 498,704 |
-| dino | 1,541,087 | 883,345 | 1,649,503 | 992,850 |
-| oneway | 690,863 | 614,190 | 799,362 | 722,808 |
-| tape | 800,941 | 795,088 | 909,440 | 903,560 |
-| tune | 1,146,654 | 938,902 | 1,288,812 | 1,078,636 |
-| noise | 1,711,534 | 1,288,067 | 1,819,956 | 1,396,570 |
+| game | Beeper max | FM: sound max | FM: engines max |
+| --- | --- | --- | --- |
+| scroll | 1,468,644 | 1,580,703 | 1,580,702 |
+| border | 1,379,638 | 1,491,697 | 1,491,696 |
+| castaway | 1,500,205 | 1,385,924 | 1,612,180 |
+| sopwith | 1,506,426 | 1,618,402 | 1,569,225 |
+| colony8 | 1,494,481 | 1,606,540 | 1,606,539 |
+| dino | 1,550,381 | 1,662,357 | 1,662,008 |
+| oneway | 693,368 | 805,427 | 805,343 |
+| tape | 807,007 | 919,066 | 919,065 |
+| tune | 1,160,409 | 1,307,033 | 1,272,469 |
+| noise | 1,739,926 | 1,851,873 | 1,851,872 |
+| sites (4 unknown OUT sites, code unchanged) | 201,717 | 313,776 | 313,775 |
+| sites-var (4 unknown OUT sites, code changing every frame) | 807,561 | 919,620 | 919,619 |
 
-(CPU per frame, in both sound modes; the noise program is the worst case, the mixer alone at most
-686,007 in Beeper and 794,429 in FM. The scroll to tune rows are from `fw_report`, noise from `fw_budget`;
-the FM column of the scroll to tune rows is from the stage 1 run before the final decoder fixes,
-which moved the noise row by 63 instructions.)
+(CPU per frame, max, in the three sound modes, from `fw_budget`; the cap is 3,600,000. The noise
+program is the worst frame in every mode. Method B remembers the OUT addresses that matched no
+entry and looks them up again only when the code around them changes; a lookup costs about 152,000
+instructions. The reachable worst case is about 7 lookups of unknown, changing addresses in one
+frame, about 2.9M estimated, under the cap.)
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 39,220 of 49,152 bytes. Image
-+ pack 171,712 of 581,564 (0x8DFBC) bytes. POOL 270,812 bytes, 97,828 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 47,956 of 49,152 bytes. Image
++ pack 179,904 of 581,564 (0x8DFBC) bytes. POOL 272,076 bytes, 96,564 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.
