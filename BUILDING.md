@@ -147,7 +147,10 @@ but with Spectrum inputs: `key.ENTER@8000`, `key.SPACE@9000+200`, `kempston.fire
 100 ms if omitted; times count from the start of the run.
 
     # cave.keys
-    key.ENTER@8000, key.SPACE@9000+200
+    key.ENTER@8000+500, key.SPACE@9000+200
+
+Some games read the keyboard only now and then (Cave Runner only between title-tune notes), so a
+press may need a longer hold.
 
 What the report says, one row per game:
 
@@ -194,14 +197,13 @@ Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p
 Both need the device build (see Firmware above) and run in fm1-emu:
 
     cd host
-    FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget -- --nocapture
-    FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_report -- --nocapture
+    FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget --test fw_report -- --nocapture
 
-`fw_budget` (about 1.5 minutes) checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+`fw_budget` (about 2.8 minutes) runs every game, and a noise program that stresses the decoder, in both sound modes (Beeper and FM: sound), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
-`fw_report` (about 6 to 7 minutes (395 s measured), the 27 runs in parallel) boots every game in `games/games.toml`
+`fw_report` (about 5 to 6 minutes (318 s measured), the 27 runs in parallel) boots every game in `games/games.toml`
 at LCD dividers 4, 2 and 1 in RGB444, plays the manifest's `demo` (`demo = "<key>@<ms>[+<hold ms>],..."`,
 keys as in the key syntax plus `PLAY`/`HOME`, ms after the game started), measures 20 s from
 second 16 on and prints the table below. It also checks that each game with a demo is being
@@ -213,7 +215,7 @@ fps at divider 1. fps is `50 * row_sends / pending_frames_sum` (how often a chan
 the panel; 50 = every changed row goes out in the frame that changed it); a static screen
 (`border`) sends nothing and has no rate.
 
-Latest report (2026-11-13, 20 s windows; CPU at divider 1; the instruction counts are what the
+Latest report (2026-11-14, 20 s windows; CPU at divider 1; the instruction counts are what the
 emulator counts, one per instruction, interrupts excluded):
 
 | game | divider | fps | LCD bytes per frame | worst row age (frames) |
@@ -226,24 +228,27 @@ emulator counts, one per instruction, interrupts excluded):
 | sopwith | 4, 2, 1 | 50.0 | 2,090 | 1 |
 | colony8 | 4, 2, 1 | 50.0 | 1,222 | 1 |
 | dino | 4, 2, 1 | 50.0 | 16,122 | 1 |
-| oneway | 4, 2, 1 | 50.0 | 7,164 | 1 |
+| oneway | 4, 2, 1 | 50.0 | 7,165 | 1 |
 | tape | 4, 2, 1 | static | 0 | 0 |
 | tune | 4, 2, 1 | static | 0 | 0 |
 
-| game | CPU per frame, max | CPU per frame, avg |
-| --- | --- | --- |
-| scroll | 1,449,284 | 1,431,206 |
-| border | 1,273,386 | 1,267,447 |
-| castaway | 1,321,011 | 447,638 |
-| sopwith | 1,485,696 | 1,192,110 |
-| colony8 | 1,351,179 | 381,020 |
-| dino | 1,524,637 | 865,493 |
-| oneway | 674,414 | 597,720 |
-| tape | 784,491 | 778,640 |
-| tune | 875,913 | 851,379 |
+| game | Beeper max | Beeper avg | FM: sound max | FM: sound avg |
+| --- | --- | --- | --- | --- |
+| scroll | 1,465,703 | 1,447,623 | 1,574,233 | 1,556,223 |
+| border | 1,361,439 | 1,355,503 | 1,469,966 | 1,464,007 |
+| castaway | 1,337,485 | 470,179 | 1,376,829 | 569,070 |
+| sopwith | 1,502,114 | 1,209,485 | 1,610,561 | 1,332,740 |
+| colony8 | 1,367,653 | 397,448 | 1,449,235 | 498,704 |
+| dino | 1,541,056 | 883,313 | 1,649,503 | 992,850 |
+| oneway | 690,832 | 614,159 | 799,362 | 722,808 |
+| tape | 800,910 | 795,057 | 909,440 | 903,560 |
+| tune | 1,146,602 | 938,842 | 1,288,812 | 1,078,636 |
+| noise | 1,711,471 | 1,288,037 | 1,819,893 | 1,396,540 |
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 19,824 of 49,152 bytes. Image
-68,144 + pack 81,888 bytes, 151,232 of 581,564 (0x8DFBC) with the pack at its 4 KiB boundary.
-POOL 249,968 bytes, 118,672 below the user stack. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+(CPU per frame, in both sound modes; the noise program is the worst case, the mixer alone at most
+685,944 in Beeper and 794,366 in FM. The scroll to tune rows are from `fw_report`, noise from `fw_budget`.)
+
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 38,600 of 49,152 bytes. Image
++ pack 171,712 of 581,564 (0x8DFBC) bytes. POOL 270,804 bytes, 97,836 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.

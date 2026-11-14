@@ -111,6 +111,7 @@ the item, HOME resumes the game.
 | Keyboard | Opens the on-screen keyboard over the game |
 | Key map | The game's key map, a page at a time (turns and OCT-/OCT+ page, HOME back to the menu) |
 | LCD speed: *n* | The LCD's SPI clock, 60 MHz / (*n* + 1); each press steps 4, 2, 1, 0, then 4 again. Faster sends more of the screen each frame (150,000 / (*n* + 1) bytes). |
+| Sound: *choice* | How the game's sound is played. **Beeper** (the default) is the Spectrum's own sound, with no delay. **FM: sound** plays music through the FM-1's synth where the program is sure of the notes (the rest stays on the beeper), and delays all sound, music and effects alike, by 60 ms (3 frames). PLAY cycles the two. The choice stays through Reset game, Back to games and starting another game, but not through power-off. Turning FM on fades the sound out briefly and leaves a 60 ms gap before it returns; turning it off crossfades back in a few ms. |
 | Back to games | Stops the game and returns to the picker |
 
 **On-screen keyboard.** The Spectrum keyboard in the bottom five text rows, while the game keeps

@@ -16,10 +16,11 @@ on a unit before the [first device test](docs/hardware-test.md) has passed.
 What works, in fm1-emu:
 
 - a game picker, a HOME menu (resume, reset, on-screen Spectrum keyboard, the key map, LCD speed,
-  back to games) and pause;
+  sound, back to games) and pause;
 - built-in games: freely licensed Spectrum games (Castaway, ZX Sopwith, Escape from Colony 8, ZX Dino, A World of One-Way) and test programs,
   each with its own mapping of the FM-1's notes, buttons and encoders to Spectrum keys or a
   Kempston joystick ([controls](docs/controls.md));
+- FM music from the beeper: a Sound item in the HOME menu re-synthesises beeper music as FM voices where it can be sure of the notes (method A, a 60 ms delay); Beeper stays the default;
 - the Spectrum at its own speed (50 frames a second) with beeper sound, paced by the audio, and
   the screen sent to the LCD by changed rows: 50 display frames a second at LCD divider 1;
 - an update package (`.fwsc`) with Felucca's update loader, and a preview package to try in

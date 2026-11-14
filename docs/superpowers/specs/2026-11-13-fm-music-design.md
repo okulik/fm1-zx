@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # FM music from the beeper (Plans 5-7)
 
-**Status:** approved by the owner, 2026-11-13. A new milestone after Plan 4. It changes the main design
+**Status:** approved by the owner, 2026-11-13; stage 1 delivered (Plan 5), 2026-11-14. A new milestone after Plan 4. It changes the main design
 (`2026-11-11-zx48k-fm1-design.md`): "the FM-1's synth side is used only to play the Spectrum's
 own sound (the beeper)" no longer holds once this lands; the main design's §6 records it.
 
@@ -60,7 +60,8 @@ and 3 get their own design updates before their plans.
   seamless; the method's look-ahead is that same window (one ring of the last frames' edges and
   beeper samples, not two mechanisms). Beeper mode has no delay. Accepted consequence: music
   too sparse to confirm within 60 ms (Cave Runner's in-game tune: a 9 ms burst about every
-  78 ms) stays on the beeper under method A; method B (stage 2) can cover it.
+  78 ms) stays on the beeper under method A; method B (stage 2) can cover it. Stage 1 measured it: Cave Runner's in-game tune falls back to the
+  beeper only partly (the owner's local corpus run: 82.9% of its sounding frames in FM, 0 wrong notes).
 - **The bar is confidence, not coverage.** A wrong note in FM is worse than the gritty original;
   a method that is unsure must fall back.
 - **FM voices:** up to three tonal voices and one noise/drum voice, each a simple 2-operator FM
