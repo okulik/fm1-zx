@@ -320,6 +320,8 @@ typedef struct {          /* what a reader found */
 	uint8_t stale;            /* 0: v are the voices of the site's last edge; 1: the engine moved on
 	                           * after that edge, v are its voices at the frame's end; 2: the
 	                           * memory is not to be read now (between notes) */
+	uint32_t left;            /* entries with min_len: T-states from the site's last edge to the
+	                           * note's end (its last edge to come, plus half a period) */
 } snd_b_read;
 
 typedef struct snd_engine {   /* one table entry */
@@ -338,6 +340,10 @@ typedef struct snd_engine {   /* one table entry */
 	 * `site` (index in sites). */
 	void (*read)(const zx_machine *m, uint16_t anchor, uint32_t site, const zx_regs *r, snd_b_read *out);
 	uint8_t drum;             /* the drum's strength, for entries with drum sites */
+	/* 0, or: each note is one call of the routine (one tonal site, a square of equal halves at
+	 * exactly the period read; engines.c, observe_calls), and a note shorter than this (T) is
+	 * not B's (ROM BEEP) */
+	uint32_t min_len;
 } snd_engine;
 
 extern const snd_engine snd_engine_table[];   /* the built-in engines */
@@ -351,6 +357,9 @@ uint64_t snd_engine_digest(const zx_machine *m, const snd_engine *en, uint16_t a
  * entries plus test fixtures' engines. */
 extern const snd_engine snd_engine_test_table[];
 extern const uint32_t snd_engine_test_count;
+/* Also there: ROM BEEP's entry alone, its reader's period a semitone too long (a misread). */
+extern const snd_engine snd_engine_misread_table[];
+extern const uint32_t snd_engine_misread_count;
 
 #define SND_B_MATCHES 8u      /* anchors remembered */
 #define SND_B_HOLD 6u         /* frames an engine holds after its last edge (120 ms) */
@@ -382,7 +391,8 @@ typedef struct {          /* the check's state at the end of a frame, for the ne
 typedef struct {          /* what B saw in one frame, when it arrived */
 	uint8_t kind;         /* enum snd_b_kind: no edges, all an engine's, some from other code */
 	uint8_t entry;        /* 1 + index of the engine (MINE; FOREIGN: whose edges end the frame) */
-	uint8_t ok;           /* MINE: the voices passed the check against the edges */
+	uint8_t ok;           /* MINE: the voices passed the check against the edges (2: nothing in
+	                       * the frame to check them by; the next frame's check decides) */
 	uint8_t tonal;        /* tonal- or stop-site edges in the frame */
 	uint8_t drum;         /* drum-site edges in the frame */
 	uint8_t last_mine;    /* the frame's last edge is an engine's (a hold may follow) */
@@ -392,7 +402,8 @@ typedef struct {          /* what B saw in one frame, when it arrived */
 	                       * they differ); NOWHERE: none */
 	uint8_t carry;        /* cy: the channels at the frame's end, with the voices v, for the next */
 	snd_b_carry cy;
-	uint8_t step;         /* sliding: the voices were bv from the edge at t_step (a step before v) */
+	uint8_t step;         /* sliding: the voices were bv from the edge at t_step (a step before v;
+	                       * min_len entries: bv silent, where the note before ended) */
 	snd_voice bv[SND_TONAL];
 	uint32_t t_step;
 	uint8_t next;         /* the engine moved on to the voices nv at t_next, after its last edge */
@@ -400,6 +411,9 @@ typedef struct {          /* what B saw in one frame, when it arrived */
 	uint32_t t_next;
 	uint32_t t_first, t_last;   /* the first and last tonal edge */
 	uint32_t d_first, d_last;   /* the first and last drum edge */
+	/* entries with min_len: */
+	uint8_t whole;        /* the note at the frame's end lasts at least min_len */
+	uint8_t cont;         /* the frame's first edges carry on the note the frame before ended with */
 } snd_b_rec;
 
 typedef struct snd_b {        /* method B's state */

@@ -310,6 +310,21 @@
 //! +2A 18 D8               JR next
 //! +2C              table
 //! ```
+//!
+//! # `beep_tap()` (not in the pack)
+//!
+//! Method B's ROM BEEP fixture (the "ROM BEEP" entry of `core/sound/engines_builtin.h`): an
+//! autostarting BASIC tape (program `beep`, line 10) of `BEEP` statements that the ROM plays
+//! through its BEEPER routine (03B5h):
+//!
+//! ```text
+//! 10 BEEP d,p: ...      the melody, [`BEEP_NOTES`] (seconds, semitones above middle C)
+//! 20 BEEP .008,p: ...   five blips of 8 ms, [`BEEP_BLIPS`] (shorter than 20 ms: the beeper's)
+//! ```
+//!
+//! Each `BEEP` is a separate call of BEEPER, the interpreter's work between them a gap of
+//! silence (about 68,000 T). The program then stops with its report (0 OK) and waits in the
+//! editor.
 
 use std::path::{Path, PathBuf};
 
@@ -357,6 +372,14 @@ pub const BURST_MS: f64 = 9.0;
 pub const BURST_GAP_MS: f64 = 69.0;
 /// Offset of `burst_sna`'s `OUT` from `base`.
 pub const BURST_OUT: u16 = 0x1A;
+/// `beep_tap`'s melody: each `BEEP` statement's duration (seconds) and pitch (semitones above
+/// middle C, as `BEEP` takes it: 440 x 2^((p - 9) / 12) Hz). Every note lasts at least 20 ms.
+pub const BEEP_NOTES: [(f64, i8); 9] =
+    [(0.2, 0), (0.2, 4), (0.2, 7), (0.4, 12), (0.1, 9), (0.025, 14), (0.2, 7), (0.3, -5), (0.15, 24)];
+/// `beep_tap`'s blips after the melody: `BEEP .008,p` for each pitch p.
+pub const BEEP_BLIPS: [i8; 5] = [12, 19, 12, 19, 12];
+/// Duration of each of [`BEEP_BLIPS`] (seconds).
+pub const BEEP_BLIP_S: f64 = 0.008;
 /// Builds one program's file.
 pub type Generator = fn() -> Vec<u8>;
 /// The programs `fmzx-pack testprogs` writes: file name and generator.
@@ -700,6 +723,65 @@ pub fn tape_tap() -> Vec<u8> {
     tap.extend(tap_header(3, "tape", TAPE_CODE.len() as u16, CODE, 0));
     tap.extend(tap_block(0xFF, &TAPE_CODE));
     tap.extend(tap_block(0xFF, &image));
+    tap
+}
+
+/// A number as the ROM stores it after its text in a BASIC line: an integer up to 65535 in the
+/// small form, else the 5-byte floating-point form (exponent + 128, then the mantissa, its top
+/// bit the sign). Non-negative only (a BASIC minus is an operator).
+fn zx_number(x: f64) -> [u8; 5] {
+    assert!((0.0..1e30).contains(&x), "{x}");
+    if x.fract() == 0.0 && x <= 65535.0 {
+        let v = (x as u16).to_le_bytes();
+        return [0, 0, v[0], v[1], 0];
+    }
+    let mut exp = x.log2().floor() as i32 + 1; // x = m 2^exp, 0.5 <= m < 1
+    let mut m = (x / 2f64.powi(exp) * 4_294_967_296.0).round() as u64;
+    if m >= 1 << 32 {
+        m >>= 1;
+        exp += 1;
+    }
+    let m = (m as u32 & 0x7FFF_FFFF).to_be_bytes();
+    [(128 + exp) as u8, m[0], m[1], m[2], m[3]]
+}
+
+/// A number in a BASIC line: its text, then 0Eh and its stored form (a leading minus as text).
+fn basic_number(out: &mut Vec<u8>, x: f64) {
+    if x < 0.0 {
+        out.push(b'-');
+    }
+    out.extend_from_slice(format!("{}", x.abs()).as_bytes());
+    out.push(0x0E);
+    out.extend_from_slice(&zx_number(x.abs()));
+}
+
+/// A BASIC line: number, length, the statements `BEEP d,p` joined by `:`, ENTER.
+fn beep_line(number: u16, beeps: &[(f64, i8)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (k, &(d, p)) in beeps.iter().enumerate() {
+        if k > 0 {
+            body.push(b':');
+        }
+        body.push(0xD7); // BEEP
+        basic_number(&mut body, d);
+        body.push(b',');
+        basic_number(&mut body, f64::from(p));
+    }
+    body.push(0x0D);
+    let mut line = number.to_be_bytes().to_vec();
+    line.extend_from_slice(&(body.len() as u16).to_le_bytes());
+    line.extend(body);
+    line
+}
+
+/// The ROM BEEP fixture: an autostarting BASIC tape of `BEEP` statements, the melody
+/// [`BEEP_NOTES`] then the blips [`BEEP_BLIPS`] (see the module docs). Not one of [`PROGRAMS`].
+pub fn beep_tap() -> Vec<u8> {
+    let blips: Vec<(f64, i8)> = BEEP_BLIPS.iter().map(|&p| (BEEP_BLIP_S, p)).collect();
+    let mut prog = beep_line(10, &BEEP_NOTES);
+    prog.extend(beep_line(20, &blips));
+    let mut tap = tap_header(0, "beep", prog.len() as u16, 10, prog.len() as u16);
+    tap.extend(tap_block(0xFF, &prog));
     tap
 }
 

@@ -77,7 +77,7 @@ static const uint16_t cw_pos[] = { 0, 44 };
 
 #define SND_ENGINE_CASTAWAY {                                                                          \
 	"Castaway", 0x45eefa6915ef8919ull, 0x53, sizeof cw_wild / sizeof cw_wild[0], sizeof cw_reloc / sizeof cw_reloc[0], \
-	sizeof cw_sites / sizeof cw_sites[0], 2, 156, cw_wild, cw_reloc, cw_sites, cw_pos, read_castaway, 0, \
+	sizeof cw_sites / sizeof cw_sites[0], 2, 156, cw_wild, cw_reloc, cw_sites, cw_pos, read_castaway, 0, 0, \
 }
 
 /* Escape from Colony 8's music (anchor 9493h in the pack: the tone-burst drum, the ROM-noise drum,
@@ -162,9 +162,43 @@ static const uint16_t c8_pos[] = { 0, 34, 83 };
 
 #define SND_ENGINE_COLONY8 {                                                                           \
 	"Colony 8", 0xae5de8a81485ea1full, 0x93, sizeof c8_wild / sizeof c8_wild[0], sizeof c8_reloc / sizeof c8_reloc[0], \
-	sizeof c8_sites / sizeof c8_sites[0], 3, 155, c8_wild, c8_reloc, c8_sites, c8_pos, read_colony8, 200, \
+	sizeof c8_sites / sizeof c8_sites[0], 3, 155, c8_wild, c8_reloc, c8_sites, c8_pos, read_colony8, 200, 0, \
 }
 
-#define SND_ENGINES_BUILTIN SND_ENGINE_CASTAWAY, SND_ENGINE_COLONY8
+/* The 48K ROM's BEEPER (anchor 03B5h, 43h bytes to its RET; BASIC's BEEP and the key click call
+ * it, and many games): HL the half-period count, DE the cycles less one. Its setup shifts L right
+ * twice and enters a slide of three NOPs at IX = +1Ch + s, s = ~L & 3, so at its one OUT (+2Ch)
+ * H, L (shifted) and IX give the pitch. From one OUT to the next, either way round (the path
+ * after a high OUT is 16 T shorter, its first DEC C loop one turn longer): 60 T after a low OUT,
+ * 4 for each NOP from IX on (3 - s), 8 (INC B, INC C), 16 L + 11 the first DEC C loop, 21 the
+ * outer loop's pass, H x 1024 its passes of 3Fh turns, 18 (XOR, OUT): a half-period of
+ * 130 + 16 L + 1024 H - 4 s T, which is 118 + 4 HL for the HL BEEPER was called with. The cycles left
+ * are DE at the OUT (DEC DE follows the low OUT), so the note goes on (2 DE + 1) half-periods
+ * after a high OUT (bit 4 of A), 2 DE after a low one, and ends half a period after that. The
+ * absolute operands at +0Eh (the slide) and +28h (the loop) move with the code. */
+static void read_beep(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+{
+	const uint32_t slide = (uint16_t)(r->ix - a - 0x1C), de = r->de < 4096u ? r->de : 4096u;
+	uint32_t half;
+
+	(void)m;
+	(void)site;
+	if (slide > 3) return;   /* not BEEPER's state: no note */
+	half = 130u + 16u * (r->hl & 0xFFu) + 1024u * (r->hl >> 8) - 4u * slide;
+	out->v[0].period_q8 = half << 9;
+	out->v[0].level = 200;
+	out->left = (2u * de + 1u + ((r->af >> 12) & 1u)) * half;   /* (DE capped: long enough) */
+}
+
+static const uint16_t beep_reloc[] = { 0x0E, 0x28 };
+static const snd_engine_site beep_sites[] = { { 0x2C, SND_SITE_TONAL, 0 } };
+static const uint16_t beep_pos[] = { 0 };
+
+#define SND_ENGINE_ROM_BEEP_READ(rd) {                                                                 \
+	"ROM BEEP", 0x51a995b5e20f53abull, 0x43, 0, 2, 1, 1, 0, 0, beep_reloc, beep_sites, beep_pos, rd, 0, 70000u, \
+}
+#define SND_ENGINE_ROM_BEEP SND_ENGINE_ROM_BEEP_READ(read_beep)   /* min_len 70,000 T: 20 ms */
+
+#define SND_ENGINES_BUILTIN SND_ENGINE_CASTAWAY, SND_ENGINE_COLONY8, SND_ENGINE_ROM_BEEP
 
 #endif

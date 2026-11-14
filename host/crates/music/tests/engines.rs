@@ -5,10 +5,11 @@
 //! readers (`truth.rs`) on Castaway's title tune and Escape from Colony 8's music, B against
 //! method A where A is confident, the test engine of `burst_sna` moved in memory and held through
 //! its gaps, frames with other code's edges, edges that disagree with the voices read, an engine
-//! overwritten in place, and no B on the pack's effects, the border tone and noise.
+//! overwritten in place, no B on the pack's effects, the border tone and noise, and the ROM's
+//! BEEP on `beep_tap`'s melody, blips and key clicks.
 
 use fmzx_pack::manifest::{encode_keymap, input_index, parse_manifest, BUTTON_COUNT};
-use fmzx_pack::testprogs::{burst_sna, noise_sna, BURST_HZ, BURST_OUT};
+use fmzx_pack::testprogs::{beep_tap, burst_sna, noise_sna, BEEP_BLIPS, BEEP_NOTES, BURST_HZ, BURST_OUT};
 use music::score::midi_of;
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, hz_of_period_q8, repo, test_sna, Frame, RATE};
@@ -615,4 +616,174 @@ fn effects_not_b() {
         }
     }
     assert!(bad.is_empty(), "B claims non-music sound:\n{}", bad.join("\n"));
+}
+
+
+// ---- ROM BEEP ----------------------------------------------------------------------------
+
+/// The OUT of the ROM's BEEPER routine (03B5h-03F7h): the ROM BEEP entry's one site.
+const BEEPER_OUT: u16 = 0x03e1;
+const FRAME_T: i64 = 69_888;
+
+/// A BEEP heard: its edges from BEEPER's OUT, as T-states from the run's start.
+type Call = Vec<i64>;
+
+/// The frames a call's edges fall in.
+fn frames_of(c: &Call) -> std::ops::RangeInclusive<usize> {
+    (c[0] / FRAME_T) as usize..=(c[c.len() - 1] / FRAME_T) as usize
+}
+
+/// A call's period (T) measured from its edges: their mean spacing x 2.
+fn measured(c: &Call) -> f64 {
+    2.0 * (c[c.len() - 1] - c[0]) as f64 / (c.len() - 1) as f64
+}
+
+/// `BEEP`'s pitch p in Hz: 440 x 2^((p - 9) / 12) (p = 0 is middle C).
+fn beep_hz(p: i8) -> f64 {
+    440.0 * 2f64.powf((f64::from(p) - 9.0) / 12.0)
+}
+
+/// A run of `beep_tap()` and its calls of BEEPER (its edges split where they pause for more than
+/// 20,000 T): the melody's ([`BEEP_NOTES`]), the blips' ([`BEEP_BLIPS`]) and the key clicks (two
+/// edges each: the autostart's typing and any key pressed).
+struct Beeps {
+    r: Run,
+    melody: Vec<Call>,
+    blips: Vec<Call>,
+    clicks: Vec<Call>,
+}
+
+/// Runs `beep_tap()` on `m` for `frames` frames with method B `b`, holding key A for 5 frames
+/// from frame `press`.
+fn beep_run(mut m: Machine, frames: usize, b: SndEngines, press: Option<usize>) -> Beeps {
+    m.tape_insert(&beep_tap()).expect("inserts");
+    m.tape_autostart();
+    let r = run(m, frames, b, None, |i, m, edges| match press {
+        Some(p) if edges.is_none() && i == p => m.set_keys([0, 1, 0, 0, 0, 0, 0, 0]),
+        Some(p) if edges.is_none() && i == p + 5 => m.set_keys([0; 8]),
+        _ => {}
+    });
+    let mut calls: Vec<Call> = Vec::new();
+    let mut last = i64::MIN / 2;
+    for (i, f) in r.frames.iter().enumerate() {
+        for e in f.edges.iter().filter(|e| e.pc == BEEPER_OUT) {
+            let t = i as i64 * FRAME_T + i64::from(e.tstate);
+            if t - last > 20_000 {
+                calls.push(Vec::new());
+            }
+            calls.last_mut().unwrap().push(t);
+            last = t;
+        }
+    }
+    let (clicks, notes): (Vec<Call>, Vec<Call>) = calls.into_iter().partition(|c| c.len() == 2);
+    assert_eq!(notes.len(), BEEP_NOTES.len() + BEEP_BLIPS.len(), "the BEEPs heard (edges per call: {:?})", notes.iter().map(Vec::len).collect::<Vec<_>>());
+    let blips = notes[BEEP_NOTES.len()..].to_vec();
+    Beeps { melody: notes[..BEEP_NOTES.len()].to_vec(), blips, clicks, r }
+}
+
+/// B's events on voice 0 in confident decisions: (T from the run's start, period_q8; 0 = off).
+fn voice0_events(dec: &[SndFrame]) -> Vec<(i64, u32)> {
+    let mut out = Vec::new();
+    for (i, d) in dec.iter().enumerate().filter(|(_, d)| d.confident != 0) {
+        for e in d.events().iter().filter(|e| e.voice == 0) {
+            out.push((i as i64 * FRAME_T + i64::from(e.t), if e.level != 0 { e.period_q8 } else { 0 }));
+        }
+    }
+    out
+}
+
+#[test]
+fn beep_pitch_exact() {
+    // each melody note's period as B reads it (from H, L and IX at BEEPER's OUT) is the period
+    // its edges show, and the pitch BEEP was asked for within the ROM's own rounding
+    let bp = beep_run(Machine::new(), 300, SndEngines::new(), None);
+    let ev = voice0_events(&bp.r.dec);
+    for (k, (c, &(_, p))) in bp.melody.iter().zip(BEEP_NOTES.iter()).enumerate() {
+        let m = measured(c);
+        let read = ev.iter().find(|e| e.1 != 0 && (e.0 - c[0]).abs() <= 3_500).map(|e| f64::from(e.1) / 256.0);
+        println!("note {k} (BEEP p {p}, {:.2} Hz): measured period {m:.1} T, read {read:?}", beep_hz(p));
+        let read = read.unwrap_or_else(|| panic!("note {k}: no FM note at its first edge"));
+        assert!((read / m - 1.0).abs() <= 0.002, "note {k}: read period {read:.1} T, measured {m:.1} T");
+        let hz = 3_500_000.0 / read;
+        assert!((hz / beep_hz(p) - 1.0).abs() <= 0.005, "note {k}: {hz:.2} Hz, BEEP {p} is {:.2} Hz", beep_hz(p));
+    }
+}
+
+#[test]
+fn beep_notes_in_fm() {
+    // every melody note is ROM BEEP's in every frame it sounds in, starts within 1 ms of its
+    // first edge and ends within 2 ms of its last edge plus a half-period; between the notes
+    // (the interpreter's gaps) the voice is off: voice 0's events alternate on, off
+    let b = SndEngines::new();
+    let bp = beep_run(Machine::new(), 300, SndEngines::new(), None);
+    let ev = voice0_events(&bp.r.dec);
+    let mut prev_last = None;
+    for (k, c) in bp.melody.iter().enumerate() {
+        let (first, last, half) = (c[0], c[c.len() - 1], measured(c) / 2.0);
+        let names: Vec<String> = frames_of(c).map(|f| b.name(bp.r.dec[f].engine)).collect();
+        let off_frames: Vec<usize> = frames_of(c).filter(|&f| bp.r.dec[f].confident == 0).collect();
+        let on = ev.iter().position(|e| e.0 >= first - 3_500).filter(|&i| ev[i].1 != 0);
+        let (t_on, t_off) = (on.map(|i| ev[i].0), on.and_then(|i| ev.get(i + 1)).map(|e| (e.0, e.1)));
+        println!(
+            "note {k}: edges {first}..{last} (frames {:?}), FM on {:?} ({:+.2} ms), next event {t_off:?} ({:+.2} ms from the last edge + a half)",
+            frames_of(c),
+            t_on,
+            t_on.map_or(f64::NAN, |t| (t - first) as f64 / 3_500.0),
+            t_off.map_or(f64::NAN, |(t, _)| (t as f64 - last as f64 - half) / 3_500.0)
+        );
+        assert!(off_frames.is_empty(), "note {k}: frames {off_frames:?} not claimed");
+        assert!(names.iter().all(|n| n == "ROM BEEP"), "note {k}: engines {names:?}");
+        let on = on.unwrap_or_else(|| panic!("note {k}: no FM note starts at it"));
+        assert!((ev[on].0 - first).abs() <= 3_500, "note {k}: starts {} T from its first edge", ev[on].0 - first);
+        let (t_off, p_off) = t_off.unwrap_or_else(|| panic!("note {k}: never ends"));
+        assert_eq!(p_off, 0, "note {k}: the voice changes before it ends");
+        assert!((t_off as f64 - last as f64 - half).abs() <= 7_000.0, "note {k}: ends {} T after its last edge", t_off - last);
+        if let Some(pl) = prev_last {
+            assert!(on > 0 && ev[on - 1].1 == 0 && ev[on - 1].0 > pl, "note {k}: the voice is not off since the note before");
+        }
+        prev_last = Some(last);
+    }
+    // a note whose first frame holds only its first edge (nothing to check it by in that frame)
+    // starts there all the same: the next frame's check decides
+    let lone: Vec<usize> = (0..bp.melody.len()).filter(|&k| bp.melody[k].iter().filter(|&&t| t / FRAME_T == bp.melody[k][0] / FRAME_T).count() == 1).collect();
+    println!("notes with a single edge in their first frame: {lone:?}");
+    assert!(!lone.is_empty(), "the melody has a note that starts with a lone edge in a frame");
+}
+
+#[test]
+fn short_beeps_stay_beeper() {
+    // the five 8 ms blips, the autostart's key clicks, and the click of a key pressed for 5
+    // frames after the program's report ("0 OK"): never B's
+    let probe = beep_run(Machine::new(), 300, SndEngines::new(), None);
+    let press = *frames_of(probe.blips.last().unwrap()).end() + 50;
+    let bp = beep_run(Machine::new(), press + 60, SndEngines::new(), Some(press));
+    let keyed: Vec<&Call> = bp.clicks.iter().filter(|c| c[0] >= press as i64 * FRAME_T).collect();
+    println!("blips at frames {:?}; clicks at {:?}, of the key pressed at frame {press}: {}", bp.blips.iter().map(frames_of).collect::<Vec<_>>(), bp.clicks.iter().map(frames_of).collect::<Vec<_>>(), keyed.len());
+    assert_eq!(keyed.len(), 1, "the key pressed clicks once");
+    for (what, c) in bp.blips.iter().map(|c| ("blip", c)).chain(bp.clicks.iter().map(|c| ("click", c))) {
+        let claimed: Vec<usize> = frames_of(c).filter(|&f| bp.r.dec[f].confident != 0).collect();
+        assert!(claimed.is_empty(), "{what} at frames {:?} claimed in {claimed:?}", frames_of(c));
+    }
+}
+
+#[test]
+fn beep_nothing_from_other_rom() {
+    // a ROM whose BEEPER differs in one byte (its first NOP made LD B,B: the same 4 T, so the
+    // BEEPs sound the same) is not recognised: no frame is B's
+    let mut rom = std::fs::read(repo().join("third_party/zx-rom/48.rom")).expect("the 48K ROM");
+    assert_eq!(rom[0x03d1], 0x00, "BEEPER's NOP slide");
+    rom[0x03d1] = 0x40;
+    let bp = beep_run(Machine::with_rom(&rom), 300, SndEngines::new(), None);
+    let claimed: Vec<usize> = (0..bp.r.dec.len()).filter(|&i| bp.r.dec[i].confident != 0).collect();
+    println!("{} melody notes heard; B claims {claimed:?}", bp.melody.len());
+    assert!(claimed.is_empty(), "B claims frames with another ROM: {claimed:?}");
+}
+
+#[test]
+fn beep_misread_rejected() {
+    // the ROM BEEP entry with its reader's period a semitone too long: no melody frame is B's
+    let bp = beep_run(Machine::new(), 300, SndEngines::new_beep_misread(), None);
+    let claimed: Vec<usize> = bp.melody.iter().flat_map(frames_of).filter(|&f| bp.r.dec[f].confident != 0).collect();
+    println!("melody frames claimed with the period misread: {claimed:?}");
+    assert!(claimed.is_empty(), "frames claimed with the period misread: {claimed:?}");
 }

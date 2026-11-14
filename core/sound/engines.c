@@ -23,8 +23,12 @@
  * voices half a period after its last edge, and up to SND_B_HOLD silent frames after an engine's
  * last edge claimed as its silence (the voices ring out on their envelopes).
  *
+ * An entry whose notes are calls of a routine (min_len: ROM BEEP) is checked its own way
+ * (observe_calls).
+ *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
- * games); engines_test.c adds the test fixtures' engines for host tests. */
+ * games), and the 48K ROM's BEEPER; engines_test.c adds the test fixtures' engines for host
+ * tests. */
 
 #include "engines_builtin.h"
 
@@ -456,6 +460,54 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 	return 1;
 }
 
+/* ---- engines whose notes are calls (min_len: ROM BEEP) ------------------
+ *
+ * One tonal site; each note is one call of the routine, a square of equal halves at exactly the
+ * half-period read, so its edges are checked one by one, each within EPS of a half-period after
+ * the one before (no share of the period: a misread by a semitone fails). In order, the frame's
+ * edges must be the note the frame before ended with, carried on (the first a half-period after
+ * that frame's last edge), then the note read (back from the last edge): anything else in the
+ * frame (a call between them) is not B's. A new call is told by its edges: the routine's setup
+ * lies between two calls, so their edges break from the half-period (or the pitch changes; a
+ * call that follows one of the same pitch with no break is the same note to the ear). A note is
+ * B's only if its whole length, from its first edge to half a period after its last
+ * (rd->left of it to come after the frame), is at least min_len. A note whose first frame has a
+ * single edge (nothing to check it by) is B's if the next frame carries it on and passes (ok 2,
+ * decide). */
+
+/* Is d within EPS of h? */
+static int halfway(uint32_t d, uint32_t h)
+{
+	return d - h + EPS <= 2u * EPS;
+}
+
+static void observe_calls(const snd_b *b, const snd_engine *en, const zx_edge *e, uint32_t n, const snd_b_read *rd, snd_b_rec *r)
+{
+	const snd_b_rec *p = &b->rec[(b->frames + SND_HIST - 1u) % SND_HIST];
+	const uint32_t h = rd->v[0].period_q8 >> 9, hp = p->v[0].period_q8 >> 9;
+	uint32_t i = 0, j = n - 1u;
+
+	r->v[0] = rd->v[0];
+	r->read = 1;
+	r->cont = (uint8_t)(p->whole && p->entry == r->entry && halfway(e[0].tstate + FRAME_T - p->t_last, hp));
+	if (r->cont)
+		for (i = 1; i < n && halfway(e[i].tstate - e[i - 1u].tstate, hp); i++) {}
+	if (i == n) {   /* the note goes on (at the pitch read, or the edges are not the voice's) */
+		j = 0;
+		r->whole = 1;
+		r->ok = h == hp;
+	} else {
+		while (j > i && halfway(e[j].tstate - e[j - 1u].tstate, h)) j--;
+		if (i) {   /* the note before ends half a period after its last edge: a step to silence */
+			r->t_step = e[i - 1u].tstate + hp;
+			r->step = r->t_step < e[j].tstate;
+		}
+		r->whole = e[n - 1u].tstate - e[j].tstate + rd->left >= en->min_len;
+		r->ok = j != i || !r->whole ? 0 : j + 1u < n ? 1 : 2;
+	}
+	r->t_row = e[j].tstate;
+}
+
 /* ---- per frame, as it arrives ------------------------------------------ */
 
 static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, snd_b_rec *r)
@@ -479,9 +531,10 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 	r->step = 0;
 	r->t_row = r->t_first = r->d_first = r->t_step = NOWHERE;
 	r->t_last = r->d_last = 0;
+	r->whole = r->cont = 0;
 	for (k = 0; k < SND_TONAL; k++) {
-		r->v[k].period_q8 = 0;
-		r->v[k].level = 0;
+		r->v[k].period_q8 = r->bv[k].period_q8 = 0;
+		r->v[k].level = r->bv[k].level = 0;
 	}
 	if (!n) return;
 	r->kind = SND_B_FOREIGN;
@@ -554,7 +607,12 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 	rd.since = rd.row = SND_B_SINCE_ALL;
 	rd.step = 0;
 	rd.stale = 0;
+	rd.left = 0;
 	en->read(zm, cl.mine->anchor, cl.site_of[best], &cl.sites[best].regs, &rd);
+	if (en->min_len) {
+		observe_calls(b, en, e, n, &rd, r);
+		return;
+	}
 	{
 		const snd_b_rec *p = &b->rec[(b->frames + SND_HIST - 1u) % SND_HIST];
 		const int had = b->last_entry == r->entry;
@@ -709,9 +767,10 @@ static void decide(snd_b *b, snd_frame *out)
 	uint32_t k, i;
 	int conf;
 
-	if (r->kind == SND_B_MINE)
-		conf = r->ok;
-	else if (r->kind == SND_B_NONE)
+	if (r->kind == SND_B_MINE) {   /* (ok 2: if the next frame carries the note on and passes) */
+		const snd_b_rec *nx = &b->rec[(f + 1u) % SND_HIST];
+		conf = r->ok == 1 || (r->ok == 2 && nx->cont && nx->ok == 1);
+	} else if (r->kind == SND_B_NONE)
 		conf = b->engine && b->held < SND_B_HOLD;
 	else
 		conf = 0;
@@ -743,7 +802,7 @@ static void decide(snd_b *b, snd_frame *out)
 	for (k = 0; k < SND_TONAL; k++)
 		cur[k] = b->tone[k];
 	if (r->kind == SND_B_MINE) {
-		if (r->step) {   /* a slide's step before the voices read */
+		if (r->step) {   /* a slide's step before the voices read (or a call's end: bv silent) */
 			for (k = 0; k < SND_TONAL; k++) {
 				if (r->bv[k].period_q8 == cur[k].period_q8 && r->bv[k].level == cur[k].level) continue;
 				add(&l, r->t_step, (uint8_t)k, r->bv[k].period_q8, r->bv[k].level);

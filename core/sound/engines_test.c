@@ -29,6 +29,16 @@ static const uint16_t burst_pos[] = { 0 };
 
 const snd_engine snd_engine_test_table[] = {
 	SND_ENGINES_BUILTIN,
-	{ "Test burst", 0xd4b551f46da9de4cull, 0x2C, 1, 2, 1, 1, 0, burst_wild, burst_reloc, burst_sites, burst_pos, read_burst, 0 },
+	{ "Test burst", 0xd4b551f46da9de4cull, 0x2C, 1, 2, 1, 1, 0, burst_wild, burst_reloc, burst_sites, burst_pos, read_burst, 0, 0 },
 };
 const uint32_t snd_engine_test_count = sizeof snd_engine_test_table / sizeof snd_engine_test_table[0];
+
+/* ROM BEEP misread: the period a semitone too long (x 18/17, 5.9%), for the check to reject. */
+static void read_beep_misread(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+{
+	read_beep(m, a, site, r, out);
+	out->v[0].period_q8 += out->v[0].period_q8 / 17u;
+}
+
+const snd_engine snd_engine_misread_table[] = { SND_ENGINE_ROM_BEEP_READ(read_beep_misread) };
+const uint32_t snd_engine_misread_count = 1;

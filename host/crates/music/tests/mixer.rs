@@ -368,8 +368,8 @@ fn engines_claim_only_known_engines() {
         }
     }
     assert_eq!(b.name(0), "");
-    assert_eq!((b.name(1), b.name(2), b.name(3)), ("Castaway".into(), "Colony 8".into(), String::new()));
-    assert_eq!(t.name(3), "Test burst");
+    assert_eq!((b.name(1), b.name(2), b.name(3), b.name(4)), ("Castaway".into(), "Colony 8".into(), "ROM BEEP".into(), String::new()));
+    assert_eq!(t.name(4), "Test burst");
     let frames = castaway_frames(600);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
     mixer.set_test_engines();

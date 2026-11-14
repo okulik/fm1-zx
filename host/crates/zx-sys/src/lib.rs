@@ -38,6 +38,8 @@ pub struct Machine {
     raw: Box<sys::zx_machine>,
     /// The inserted .tap; the C core keeps a pointer into this heap buffer.
     tape: Option<Box<[u8]>>,
+    /// A ROM other than the built-in one ([`Machine::with_rom`]); the C core keeps a pointer to it.
+    _rom: Option<Box<[u8]>>,
     _not_sync: PhantomData<*const ()>,
 }
 
@@ -50,7 +52,19 @@ impl Machine {
         // SAFETY: the ROM is 'static, so it outlives the machine; `raw` is
         // boxed, so the CPU's context pointer to it stays valid.
         unsafe { sys::zx_init(&mut *raw, ROM_48.as_ptr()) };
-        Machine { raw, tape: None, _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: None, _not_sync: PhantomData }
+    }
+
+    /// A powered-on machine with another 16K ROM (host tests: an altered copy of the 48K ROM).
+    pub fn with_rom(rom: &[u8]) -> Self {
+        assert_eq!(rom.len(), ZX_ROM_SIZE as usize, "ROM size");
+        let rom: Box<[u8]> = rom.into();
+        // SAFETY: as in `new`.
+        let mut raw: Box<sys::zx_machine> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        // SAFETY: the ROM is a heap buffer the machine keeps (it does not move) for as long as
+        // the C side may read it; `raw` is boxed, as in `new`.
+        unsafe { sys::zx_init(&mut *raw, rom.as_ptr()) };
+        Machine { raw, tape: None, _rom: Some(rom), _not_sync: PhantomData }
     }
 
     pub fn run_frame(&mut self) {
@@ -519,13 +533,24 @@ impl SndFm {
 }
 
 /// An engine table of method B: (entries, count).
-fn engine_table(test: bool) -> (*const sys::snd_engine, u32) {
+/// Method B's engine tables.
+#[derive(Clone, Copy)]
+enum Table {
+    /// The built-in engines (the firmware's).
+    Builtin,
+    /// The built-in engines plus the test fixtures'.
+    Test,
+    /// The ROM BEEP entry with its period read a semitone off.
+    BeepMisread,
+}
+
+fn engine_table(which: Table) -> (*const sys::snd_engine, u32) {
     // SAFETY: the tables and counts are immutable C globals.
     unsafe {
-        if test {
-            (std::ptr::addr_of!(sys::snd_engine_test_table).cast(), sys::snd_engine_test_count)
-        } else {
-            (std::ptr::addr_of!(sys::snd_engine_table).cast(), sys::snd_engine_count)
+        match which {
+            Table::Builtin => (std::ptr::addr_of!(sys::snd_engine_table).cast(), sys::snd_engine_count),
+            Table::Test => (std::ptr::addr_of!(sys::snd_engine_test_table).cast(), sys::snd_engine_test_count),
+            Table::BeepMisread => (std::ptr::addr_of!(sys::snd_engine_misread_table).cast(), sys::snd_engine_misread_count),
         }
     }
 }
@@ -539,16 +564,22 @@ pub struct SndEngines {
 impl SndEngines {
     /// With the built-in engine table (the firmware's).
     pub fn new() -> Self {
-        Self::with_table(false)
+        Self::with_table(Table::Builtin)
     }
 
     /// With the test table: the built-in engines plus the test fixtures'.
     pub fn new_test() -> Self {
-        Self::with_table(true)
+        Self::with_table(Table::Test)
     }
 
-    fn with_table(test: bool) -> Self {
-        let (table, n) = engine_table(test);
+    /// With one entry, ROM BEEP's with its reader's period a semitone too long (host tests: a
+    /// misread the check must reject).
+    pub fn new_beep_misread() -> Self {
+        Self::with_table(Table::BeepMisread)
+    }
+
+    fn with_table(which: Table) -> Self {
+        let (table, n) = engine_table(which);
         let mut raw: Box<sys::snd_b> = boxed_zeroed();
         // SAFETY: `raw` is a valid, exclusively owned snd_b; the table is a 'static C array of n
         // entries.
@@ -618,7 +649,7 @@ impl SndMixer {
 
     /// Method B with the test engine table instead of the built-in one.
     pub fn set_test_engines(&mut self) {
-        let (table, n) = engine_table(true);
+        let (table, n) = engine_table(Table::Test);
         // SAFETY: `raw` was initialised by snd_mixer_init; the table is a 'static C array of n
         // entries.
         unsafe { sys::snd_mixer_set_engines(&mut *self.raw, table, n) };
