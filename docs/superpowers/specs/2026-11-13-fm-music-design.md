@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # FM music from the beeper (Plans 5-7)
 
-**Status:** approved by the owner, 2026-11-13; stage 1 delivered (Plan 5), 2026-11-14. A new milestone after Plan 4. It changes the main design
+**Status:** approved by the owner, 2026-11-13; stage 1 delivered (Plan 5), 2026-11-14; stage 2 designed in §9, 2026-11-14. A new milestone after Plan 4. It changes the main design
 (`2026-11-11-zx48k-fm1-design.md`): "the FM-1's synth side is used only to play the Spectrum's
 own sound (the beeper)" no longer holds once this lands; the main design's §6 records it.
 
@@ -191,3 +191,154 @@ choice; USB game upload.
 File and function names, the decoders' algorithms (starting from the spike, recorded in its
 `findings.txt` and to be summarised into the plan), the confidence measure and thresholds, the
 exact delay, voice patches, the corpus tool's command line and key-script format, test names.
+
+## 9. Stage 2 (Plan 6): method B, "FM: engines"
+
+### 9.1 Intent and the owner's choice
+
+Method B recognises a known music routine (an **engine**) in the running game and reads the notes
+it plays from its variables and registers, so it does not guess. It is the second FM choice in the
+Sound menu, for comparison with method A, and it is pure: anything it does not recognise plays on
+the beeper (§1). Its use beside A: it is exact and instant where it applies, and it covers music
+A leaves on the beeper by rule (the sparse Cave Runner in-game tune, §3).
+
+**The engine table (the owner's choice, 2026-11-14: "your pick" of the options offered):**
+- the four engines the spike mapped: Castaway's title tune, Escape from Colony 8's music, Cave
+  Miner's two routines (title, in game), and Unison's;
+- **the ROM's BEEP routine** (BEEPER, 03B5h-03F7h in the 48K ROM), which BASIC's `BEEP` and many
+  machine-code games call: one small entry that covers far more games than any single engine.
+
+Published shared engines (Beepola and other 1-bit tracker players) are **not** in stage 2; they
+can join the table later through the same entry format, each with its licence checked and a test
+tune.
+
+### 9.2 Behaviour
+
+- **Menu:** Sound cycles Beeper · FM: sound · FM: engines (`SND_MODE_FM_B`, before
+  `SND_MODE_COUNT`). Same holding rules as §7.
+- **Delay and switching:** shared: 60 ms in every FM choice, the same mixer and crossfades. B
+  does not need the look-ahead; the delay stays so that the three choices compare like for like and
+  switching between them is seamless (the designer's call; the owner may later ask for B without
+  the delay). The mixer's 2-frame entry rule is A's guard against guessing; in FM: engines a frame
+  B claims switches to FM at once (the exit rule and the crossfades are unchanged).
+- **Timing inside the frame:** B knows when in the frame a note starts and stops (the T-states of
+  the engine's `OUT`s), so its result carries note events with their position in the frame, and
+  the FM voices start and stop there, not at the frame edge. A 9 ms burst is a 9 ms note; two BEEPs
+  that meet inside one frame are two notes. Method A keeps its per-frame result (its events all sit
+  at the frame start), so stage 1's output does not change.
+- **A tune between bursts:** a recognised engine counts as still playing for up to 120 ms after its
+  last `OUT` (the spike's hold across silence), so the gaps of a burst tune (Cave Runner in game: a
+  9 ms burst about every 78 ms) are B's confident silence, in which the FM notes ring out on their
+  envelopes, instead of flipping to the beeper between bursts. Any frame in which other code drives
+  the speaker ends that.
+- **Per frame:** B says either "engine E is playing these voices" (FM) or "not mine" (beeper). A
+  frame is B's only when every speaker edge in it came from code of a recognised engine (9.3), or
+  it falls in an engine's hold (above) with no edges from other code, **and** the voices B read
+  agree with the frame's edges (9.4). An `OUT` that leaves the speaker bits unchanged (a border
+  write) is no speaker edge and does not count. A frame where an engine and other code both drive
+  the speaker (Cave Runner's jump sound over its tune) plays on the beeper, so no effect is lost. Rests inside a playing tune (the
+  engine's loop runs with a channel muted) are confident silence for that voice.
+- **Drums:** where an entry names its drum routines (Colony 8's 9496h tone burst and 94ADh ROM
+  noise, Unison's four drums in its interrupt routine at 8257h, 826Ah, 827Eh and 8292h, so its
+  drums-only intro and its drum frames between arpeggios are FM drums), frames driven from them are drum events on the noise voice;
+  an entry without drum routines leaves those frames to the beeper.
+- **Voices:** each engine channel keeps its own FM voice for as long as the tune plays (no voice
+  swapping); the patch follows the role as in §3. Loudness follows the engine's own duty or mask
+  where the entry knows it, a fixed level otherwise.
+- **ROM BEEP:** a BEEP whose whole length is at least 20 ms (worked out at its first `OUT` from
+  the registers: DE the cycles, H/L/IX the pitch) is a note in FM at the exact pitch, starting and
+  ending where it does in the frame; a shorter one (key clicks, which the ROM makes through BEEPER, and blips) stays
+  on the beeper. Accepted consequence: a game's effects built from long BEEPs play in FM, at
+  their exact pitches.
+- **Effects:** sound from code outside every entry (most games' effects) is never B's, so it plays
+  on the beeper; the committed "no FM on non-music sound" gate (§7) applies to B unchanged.
+
+### 9.3 Recognising an engine wherever it sits
+
+The fixed-address fingerprints of Plan 5 (`host/crates/music/src/corpus.rs`) recognise an engine
+only at the address one game put it. B anchors on the code that drives the speaker instead:
+
+- **The core records, per frame,** the distinct addresses of `OUT` instructions that wrote port
+  FEh (a small fixed number of them, with a count each) and the CPU registers at the last such
+  `OUT` from each address. It is observation only: no change to emulation or timing, and Beeper
+  mode's output stays byte-identical.
+- **An entry** is: a signature (bytes at fixed offsets from the `OUT`'s address, self-modified
+  operands left out, hashed with the existing FNV-1a 64 `digest`); the reader's addresses, each
+  either relative to the matched code or taken from an operand inside it (so a moved engine still
+  reads the right variables; Cave Runner's in-game note index at 845Bh is read through the
+  instruction that loads it); the registers it reads (Colony 8's steps in BC/DE/SP, Cave Runner's
+  IY, BEEP's H/L/IX); the pitch formula per channel (the spike's, §6 of its findings: for example
+  Castaway f = 3.5 MHz / ((wrap + 1) x N x loop)); and its drum routines, if any.
+- **Matching is per frame** on the recorded addresses only (no memory scan), so B's cost is a few
+  digests and reads a frame. A match is remembered per address while the bytes stay the same.
+- **The ROM BEEP entry** matches the ROM's own bytes the same way, so a machine with another ROM
+  simply does not match.
+- **Third-party engines:** only digests, offsets and formulas go in the repository, never a byte of
+  Cave Runner's or Unison's code (as for Plan 5's fingerprints). Their entries are tested only on
+  the owner's local corpus.
+
+### 9.4 The check against what is heard
+
+A routine that matches the signature but is a modified variant, or a reader formula that is wrong
+in a case nobody tested, must not put wrong notes in FM. Each frame B claims is checked against
+the frame's own beeper edges: the voices B read must be consistent with what the speaker did (for
+example, the edge count or the spacing of edges the read pitches imply). A frame that fails stays
+on the beeper. The exact check and its tolerance are the builder's; it uses the edges only as a
+check and never decodes from them (B stays pure).
+
+### 9.5 Tests (committed)
+
+The truth readers that score method A read the same memory B reads, so scoring B against them alone
+proves only that two implementations agree. The committed gates are therefore:
+
+- **Readers against the Rust truth readers** (`music::truth`), on Castaway's title and Colony 8:
+  the same notes on at least 99% of the frames the engine plays (an implementation check: C
+  firmware code against Rust test code).
+- **B against what is heard, independently:** on the frames where method A is confident, B and A
+  agree on every voice within the existing tolerance (at least 95% of those frames, no wrong
+  notes); and for ROM BEEP, B's pitch matches the period measured directly from the edges.
+- **ROM BEEP test program:** a generated BASIC tape of `BEEP` statements (a known melody, host test
+  fixture, not added to the pack): every note right in FM, each starting within 1 ms of its first
+  beeper edge and lasting within 2 ms of the beeper's length; a `BEEP` shorter than 20 ms stays on
+  the beeper.
+- **Burst tune and mixed frames:** a test-built stream of 9 ms bursts every 78 ms from one engine
+  plays in FM through the gaps; the same with another routine's edges in one frame puts that frame
+  on the beeper.
+- **Moved engine:** recognition does not depend on where the engine sits: a test that runs an
+  engine from another address (for example a test-built memory image with Castaway's engine
+  copied elsewhere) gets the same notes.
+- **Variant rejection:** a frame whose edges disagree with the readout (for example the same
+  engine with a reader operand altered in a test-built image) stays on the beeper.
+- **No FM on non-music sound** (§7's gate) with B chosen: the border tone, every pack game's
+  effects during its demo, noise.sna.
+- Firmware under fm1-emu: the Sound item cycles three choices and survives as in Plan 5; with FM:
+  engines chosen Castaway's title audio shows the read pitches; budgets with B active.
+
+### 9.6 Local corpus
+
+`music-corpus` reports B beside A for each game: FM share, engines recognised, and, where a truth
+reader exists, notes found and wrong notes. A Unison truth reader (the spike's: operands 81CDh /
+81DFh, read while the PC is in 81B4h-81E9h) joins `music::truth` for this. Cave Runner and Unison
+stay local files, as before.
+
+### 9.7 Settled here (the designer's calls; the owner may overrule)
+
+- The 60 ms delay is kept for B (9.2).
+- BEEPs under 20 ms stay on the beeper; long BEEP effects play in FM (9.2).
+- The BEEP test program is a host fixture, not a pack entry (the pack's order and count stay).
+- Stage 2 changes the core only by the observation in 9.3.
+- B enters FM without the 2-frame rule; an engine holds for 120 ms after its last `OUT`; mixed
+  frames play on the beeper; border-only writes do not count (9.2).
+- B's result carries note events positioned inside the frame; A's are all at the frame start, so
+  stage 1 is unchanged (9.2).
+- All four of Unison's drums are B's (9.2).
+- If a stage-1 rule (busy latch, music context, first-note rule) would hold B back, it does not
+  apply to B: those rules exist to make A's guesses safe, and B does not guess; 9.4 is B's safety
+  rule.
+
+### 9.8 Left to the builder
+
+The core's recording format and limits (it must tell each speaker edge's source address, for the
+mixed-frame rule), the event format in the frame result, the entry format in C, the consistency check's form and
+tolerance, how B's state lives beside the decoder, each entry's signature offsets, the tests'
+names and the BEEP fixture's melody.
