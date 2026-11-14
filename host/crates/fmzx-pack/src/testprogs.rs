@@ -311,6 +311,34 @@
 //! +2C              table
 //! ```
 //!
+//! # `out_sites_sna(changing)` (not in the pack)
+//!
+//! Method B's matching worst case for the firmware's frame budget (`emu-gate`'s `fw_budget`
+//! builds it into a pack of its own; it is not committed): every frame the speaker is driven from
+//! [`OUT_SITES`] OUTs at four addresses (as many as a frame lists), none of them a known engine,
+//! so B looks each one up. Each OUT changes the level (high, low, high, low), 4 edges a frame.
+//! With `changing`, each routine also increments a byte beside its OUT every frame: the code
+//! around each OUT is never the same two frames running, so no lookup is ever spared (with it
+//! unchanged, method B remembers that the four addresses match nothing). The paper is white, the
+//! border black.
+//!
+//! ```text
+//! 8000 FB         frame: EI
+//! 8001 76                HALT
+//! 8002 CD 00 90          CALL 9000h        the routines, at OUT_SITES less 6
+//! 8005 CD 00 A0          CALL A000h
+//! 8008 CD 00 B0          CALL B000h
+//! 800B CD 00 C0          CALL C000h
+//! 800E 18 F0             JR frame
+//!
+//! +0 21 vv vv            LD HL,+9          its byte
+//! +3 34 (or 00)          INC (HL)          (NOP when not `changing`)
+//! +4 3E 10 (or 00)       LD A,10h          high from the first and third, low from the others
+//! +6 D3 FE               OUT (FEh),A       the OUT site
+//! +8 C9                  RET
+//! +9 00                  the byte
+//! ```
+//!
 //! # `beep_tap()` (not in the pack)
 //!
 //! Method B's ROM BEEP fixture (the "ROM BEEP" entry of `core/sound/engines_builtin.h`): an
@@ -380,6 +408,8 @@ pub const BEEP_NOTES: [(f64, i8); 9] =
 pub const BEEP_BLIPS: [i8; 5] = [12, 19, 12, 19, 12];
 /// Duration of each of [`BEEP_BLIPS`] (seconds).
 pub const BEEP_BLIP_S: f64 = 0.008;
+/// The four OUT addresses of [`out_sites_sna`].
+pub const OUT_SITES: [u16; 4] = [0x9006, 0xA006, 0xB006, 0xC006];
 /// Builds one program's file.
 pub type Generator = fn() -> Vec<u8>;
 /// The programs `fmzx-pack testprogs` writes: file name and generator.
@@ -614,6 +644,26 @@ pub fn tune_sna() -> Vec<u8> {
 /// spacings (see the module docs). Not one of [`PROGRAMS`]: the pack does not carry it.
 pub fn noise_sna() -> Vec<u8> {
     sna(ram_with(&NOISE_CODE, 0x38), 0)
+}
+
+/// Method B's matching worst case: four unknown OUT sites a frame, the code around them
+/// changing every frame if `changing` (see the module docs). Not one of [`PROGRAMS`].
+pub fn out_sites_sna(changing: bool) -> Vec<u8> {
+    let mut main = vec![0xFB, 0x76]; // frame: EI; HALT
+    for site in OUT_SITES {
+        main.push(0xCD); // CALL
+        main.extend_from_slice(&(site - 6).to_le_bytes());
+    }
+    main.extend_from_slice(&[0x18, 0xF0]); // JR frame
+    let mut ram = ram_with(&main, 0x38);
+    for (k, site) in OUT_SITES.into_iter().enumerate() {
+        let at = (site - 6 - RAM) as usize;
+        let var = (site + 3).to_le_bytes();
+        let level = if k % 2 == 0 { 0x10 } else { 0x00 };
+        let routine = [0x21, var[0], var[1], if changing { 0x34 } else { 0x00 }, 0x3E, level, 0xD3, 0xFE, 0xC9, 0x00];
+        ram[at..at + routine.len()].copy_from_slice(&routine);
+    }
+    sna(ram, 0)
 }
 
 #[rustfmt::skip]

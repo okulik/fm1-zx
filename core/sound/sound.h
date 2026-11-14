@@ -368,6 +368,7 @@ extern const snd_engine snd_engine_misread_table[];
 extern const uint32_t snd_engine_misread_count;
 
 #define SND_B_MATCHES 8u      /* anchors remembered */
+#define SND_B_UNKNOWN 8u      /* OUT addresses remembered as matching no entry */
 #define SND_B_HOLD 6u         /* frames an engine holds after its last edge (120 ms) */
 
 typedef struct {          /* a remembered match */
@@ -377,6 +378,13 @@ typedef struct {          /* a remembered match */
 	uint32_t frame;       /* the frame it was last checked */
 	uint32_t used;        /* the frame it was last used */
 } snd_b_match;
+
+typedef struct {          /* an OUT address that matched no entry (engines.c, find) */
+	uint16_t pc;
+	uint8_t valid;
+	uint32_t sum;         /* the hash of the bytes the entries' signatures cover there, then */
+	uint32_t used;        /* the frame it was last looked up */
+} snd_b_unknown;
 
 enum snd_b_kind { SND_B_NONE, SND_B_MINE, SND_B_FOREIGN };
 
@@ -427,6 +435,9 @@ typedef struct snd_b {        /* method B's state */
 	uint32_t n;               /* entries in table */
 	uint32_t frames;          /* frames fed since init */
 	snd_b_match match[SND_B_MATCHES];
+	snd_b_unknown unknown[SND_B_UNKNOWN];
+	uint16_t back, ahead;     /* the bytes any signature with a site at an address covers: from
+	                           * back before it to ahead after (the table's) */
 	snd_b_rec rec[SND_HIST];  /* the frames fed last, at index frame % SND_HIST */
 	snd_voice lastv[SND_TONAL];   /* the voices last read (or moved on to), of engine last_entry */
 	uint8_t last_entry;

@@ -7,7 +7,8 @@
  * Per frame (snd_b_frame), as it arrives:
  *  1. Every OUT site of the frame is looked up: a remembered match (its signature re-checked once
  *     a frame it is used) or, failing that, every entry's signature with the anchor that puts one
- *     of its sites at that OUT. Every edge must come from a site of one matched engine, else the
+ *     of its sites at that OUT (not again for an address that matched nothing while the code
+ *     around it stays the same). Every edge must come from a site of one matched engine, else the
  *     frame is not B's (other code drives the speaker; an engine's hold ends).
  *  2. The engine's reader gives the voices at the frame's end (tonal sites), how long they have
  *     held (since the note began, or a slide's last step) and, if the engine moved on to its next
@@ -77,12 +78,30 @@ uint64_t snd_engine_digest(const zx_machine *m, const snd_engine *en, uint16_t a
 	return h;
 }
 
+/* The hash (FNV-1a 32) of the bytes the table's signatures cover with a site at pc: from b->back
+ * before it to b->ahead after; 0 when they all lie in the ROM (they cannot change). */
+static uint32_t window_sum(const snd_b *b, const zx_machine *zm, uint16_t pc)
+{
+	uint32_t h = 0x811c9dc5u, i, n = (uint32_t)b->back + b->ahead;
+	const uint16_t from = (uint16_t)(pc - b->back);
+
+	if (pc >= b->back && (uint32_t)pc + b->ahead <= ZX_ROM_SIZE) return 0;
+	for (i = 0; i < n; i++)
+		h = (h ^ zx_peek(zm, (uint16_t)(from + i))) * 0x01000193u;
+	return h;
+}
+
 /* The match whose engine has a site at pc, re-checked this frame (NULL if none); *site is that
- * site's index. Tries the table where no remembered match has a site there. */
+ * site's index. Tries the table where no remembered match has a site there, unless pc is a
+ * remembered unknown address (it matched nothing) whose window (window_sum) is unchanged: a
+ * signature depends on nothing else, so the table would fail again. A changed window (code
+ * loaded, moved or modified there) is tried at once; the window is hashed every frame pc is
+ * looked up (a change that kept its 32-bit hash would go unseen until the next change). */
 static snd_b_match *find(snd_b *b, const zx_machine *zm, uint16_t pc, uint32_t *site)
 {
 	snd_b_match *free_m = &b->match[0];
-	uint32_t i, k, s;
+	snd_b_unknown *u = 0;
+	uint32_t i, k, s, sum, had = 0;
 
 	for (i = 0; i < SND_B_MATCHES; i++) {
 		snd_b_match *mt = &b->match[i];
@@ -109,11 +128,26 @@ static snd_b_match *find(snd_b *b, const zx_machine *zm, uint16_t pc, uint32_t *
 			return mt;
 		}
 	}
+	sum = window_sum(b, zm, pc);
+	for (i = 0; i < SND_B_UNKNOWN; i++) {   /* pc's entry; else a free one, else the oldest */
+		snd_b_unknown *x = &b->unknown[i];
+		if (x->valid && x->pc == pc) {
+			if (x->sum == sum) {
+				x->used = b->frames;
+				return 0;
+			}
+			u = x;
+			had = 1;
+			break;
+		}
+		if (!u || (u->valid && (!x->valid || x->used < u->used))) u = x;
+	}
 	for (k = 0; k < b->n; k++) {
 		const snd_engine *en = &b->table[k];
 		for (s = 0; s < en->n_sites; s++) {
 			uint16_t anchor = (uint16_t)(pc - en->sites[s].off);
 			if (snd_engine_digest(zm, en, anchor) != en->digest) continue;
+			if (had) u->valid = 0;
 			free_m->anchor = anchor;
 			free_m->entry = (uint8_t)(k + 1u);
 			free_m->ok = 1;
@@ -123,6 +157,10 @@ static snd_b_match *find(snd_b *b, const zx_machine *zm, uint16_t pc, uint32_t *
 			return free_m;
 		}
 	}
+	u->pc = pc;
+	u->valid = 1;
+	u->sum = sum;
+	u->used = b->frames;
 	return 0;
 }
 
@@ -336,6 +374,7 @@ static uint32_t due(const check_state *c, uint32_t ch, int32_t t, uint32_t *k)
 {
 	const uint32_t d = (uint32_t)(t - c->tr[ch].obs), h = c->period[ch] / 2u;
 
+	*k = 1;
 	if (!h) return NOWHERE;
 	*k = (d + h / 2u) / h;
 	if (!*k) *k = 1;
@@ -927,6 +966,23 @@ void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n)
 		b->match[k].ok = 0;
 		b->match[k].frame = 0;
 		b->match[k].used = 0;
+	}
+	for (k = 0; k < SND_B_UNKNOWN; k++) {
+		b->unknown[k].pc = 0;
+		b->unknown[k].valid = 0;
+		b->unknown[k].sum = 0;
+		b->unknown[k].used = 0;
+	}
+	/* the window window_sum hashes: every byte a digest with a site at the address reads (a
+	 * relocated word's high byte may lie one past the signature) */
+	b->back = b->ahead = 0;
+	for (k = 0; k < n; k++) {
+		uint32_t s;
+		for (s = 0; s < table[k].n_sites; s++) {
+			const uint32_t off = table[k].sites[s].off, end = table[k].len + 1u;
+			if (off > b->back) b->back = (uint16_t)off;
+			if (end > off && end - off > b->ahead) b->ahead = (uint16_t)(end - off);
+		}
 	}
 	for (k = 0; k < SND_HIST; k++) {
 		b->rec[k].kind = SND_B_NONE;

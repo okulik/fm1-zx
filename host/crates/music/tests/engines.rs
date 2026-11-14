@@ -9,7 +9,7 @@
 //! BEEP on `beep_tap`'s melody, blips and key clicks.
 
 use fmzx_pack::manifest::{encode_keymap, input_index, parse_manifest, BUTTON_COUNT};
-use fmzx_pack::testprogs::{beep_tap, burst_sna, noise_sna, BEEP_BLIPS, BEEP_NOTES, BURST_HZ, BURST_OUT};
+use fmzx_pack::testprogs::{beep_tap, burst_sna, noise_sna, out_sites_sna, BEEP_BLIPS, BEEP_NOTES, BURST_HZ, BURST_OUT};
 use music::score::midi_of;
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, hz_of_period_q8, repo, test_sna, Frame, RATE};
@@ -506,6 +506,59 @@ fn overwritten_engine_forgotten() {
     assert!(after.is_empty(), "claimed after the overwrite: {after:?}");
 }
 
+#[test]
+fn engine_written_over_unknown_out() {
+    // the reverse of overwritten_engine_forgotten: a tone loop around the engine's OUT address
+    // (no engine: B remembers that the address matches nothing) until frame `at`, then the
+    // engine's code written there and run: claimed as soon as in a fresh start, the same notes
+    let at = 60;
+    let base = 0x8000u16;
+    let out = base + BURST_OUT;
+    let fresh = run(burst(base), 100, SndEngines::new_test(), None, no_edit);
+    let first = |dec: &[SndFrame], from: usize| (from..dec.len()).find(|&i| dec[i].confident != 0);
+    let f0 = first(&fresh.dec, 0).expect("the fresh start is claimed");
+    let code: Vec<u8> = {
+        let m = burst(base);
+        (base..base + 0x2c).map(|a| m.peek(a)).collect()
+    };
+    let r = run(burst(base), at + 100, SndEngines::new_test(), None, |i, m, edges| {
+        if edges.is_some() {
+            return;
+        }
+        if i == 0 {
+            for a in base..base + 0x2c {
+                m.poke(a, 0);
+            }
+            for (k, &c) in [0x06, 0x40, 0x10, 0xfe, 0xee, 0x10, 0xd3, 0xfe, 0x18, 0xf6].iter().enumerate() {
+                m.poke(out - 6 + k as u16, c); // LD B,40h; DJNZ $; XOR 10h; OUT (FEh),A; JR back
+            }
+            let mut regs = m.regs();
+            regs.pc = out - 6;
+            m.set_regs(&regs);
+        } else if i == at {
+            for (k, &c) in code.iter().enumerate() {
+                m.poke(base + k as u16, c);
+            }
+            let mut regs = m.regs();
+            regs.pc = base;
+            m.set_regs(&regs);
+        }
+    });
+    let pcs: Vec<u16> = r.frames[at - 5].edges.iter().map(|e| e.pc).take(3).collect();
+    let before = (0..at).filter(|&i| r.dec[i].confident != 0).count();
+    let f1 = first(&r.dec, at).expect("the engine written in is claimed");
+    println!("tone loop from {pcs:04X?}, claimed {before} frames; the engine claimed from frame {} after it was written (fresh: {f0})", f1 - at);
+    assert!(pcs.iter().all(|&p| p == out), "the tone loop drives the speaker from the engine's OUT address");
+    assert_eq!(before, 0, "the tone loop is claimed");
+    assert!(f1 - at <= f0 + 1, "claimed {} frames after the engine was written, a fresh start {f0}", f1 - at);
+    let notes = notes_started(&r.dec[at..]);
+    assert!(notes.len() >= 2 * BURST_HZ.len(), "{} notes", notes.len());
+    for (k, &f) in notes.iter().enumerate() {
+        let want = BURST_HZ[k % BURST_HZ.len()];
+        assert!((f / want - 1.0).abs() < 0.005, "note {k} at {f:.2} Hz, the melody's is {want:.2} Hz");
+    }
+}
+
 /// One step of a `demo` script: inputs (KmInput bits) held from `at` for `hold` ms.
 struct Step {
     button: u32,
@@ -616,6 +669,25 @@ fn effects_not_b() {
         }
     }
     assert!(bad.is_empty(), "B claims non-music sound:\n{}", bad.join("\n"));
+}
+
+#[test]
+fn out_sites_not_b() {
+    // four OUT addresses a frame that match no engine, the code around them unchanged (B
+    // remembers they match nothing) or changing every frame (B looks them up every frame): no
+    // frame is B's
+    let runs: Vec<Vec<SndFrame>> =
+        [false, true].iter().map(|&changing| run(load(&out_sites_sna(changing)), 300, SndEngines::new(), None, no_edit).dec).collect();
+    for (r, changing) in runs.iter().zip([false, true]) {
+        let claimed: Vec<usize> = (0..r.len()).filter(|&i| r[i].confident != 0).collect();
+        assert!(claimed.is_empty(), "changing {changing}: B claims {claimed:?}");
+    }
+}
+
+fn load(sna: &[u8]) -> Machine {
+    let mut m = Machine::new();
+    m.load_sna(sna).expect("loads");
+    m
 }
 
 

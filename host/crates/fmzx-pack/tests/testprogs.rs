@@ -4,7 +4,7 @@
 use fmzx_pack::manifest::parse_manifest;
 use fmzx_pack::pack::build_pack;
 use fmzx_pack::testprogs::{
-    self, tape_tap, tune_sna, BORDER_EDGES_PER_FRAME, BORDER_TONE_HZ, NOISE_EDGES_PER_FRAME, TAPE_DONE_BORDER, TAPE_WAIT_FRAMES, TUNE_HZ, TUNE_NOTES_HZ,
+    self, tape_tap, tune_sna, BORDER_EDGES_PER_FRAME, BORDER_TONE_HZ, NOISE_EDGES_PER_FRAME, OUT_SITES, TAPE_DONE_BORDER, TAPE_WAIT_FRAMES, TUNE_HZ, TUNE_NOTES_HZ,
     TUNE_NOTE_FRAMES, TUNE_START_FRAME,
 };
 use std::path::{Path, PathBuf};
@@ -135,6 +135,30 @@ fn noise_edges_every_frame() {
     let (lo, hi) = (*gaps.first().unwrap(), *gaps.last().unwrap());
     println!("noise: edges {lo}-{hi} T apart, {} spacings", gaps.len());
     assert!(lo >= 121 && hi <= 240 && gaps.len() >= 8, "spacings {lo}-{hi} ({} of them)", gaps.len());
+}
+
+#[test]
+fn out_sites_every_frame() {
+    for changing in [false, true] {
+        let mut m = machine(&testprogs::out_sites_sna(changing));
+        let mut bytes = Vec::new();
+        for f in 1..=20 {
+            m.run_frame();
+            if f >= 2 {
+                // the four OUTs, each one a speaker flip, in order, every frame
+                let pcs: Vec<u16> = m.out_sites().iter().map(|s| s.pc).collect();
+                assert_eq!(pcs, OUT_SITES, "frame {f} (changing {changing})");
+                let e = m.edges();
+                assert_eq!(e.iter().map(|e| e.pc).collect::<Vec<_>>(), OUT_SITES, "frame {f} (changing {changing})");
+                assert!(e.windows(2).all(|w| (w[0].level ^ w[1].level) & 2 != 0), "frame {f}: not all flips");
+            }
+            bytes.push(OUT_SITES.map(|a| m.peek(a + 3)));
+        }
+        // the byte beside each OUT counts the frames, or stays
+        let moved = bytes.windows(2).all(|w| w[0].iter().zip(&w[1]).all(|(a, b)| b.wrapping_sub(*a) == 1));
+        let still = bytes.iter().all(|b| *b == [0; 4]);
+        assert!(if changing { moved } else { still }, "changing {changing}: the bytes beside the OUTs {bytes:?}");
+    }
 }
 
 #[test]
