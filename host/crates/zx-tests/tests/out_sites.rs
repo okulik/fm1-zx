@@ -99,6 +99,71 @@ fn sites_capped() {
     assert_eq!(sites.len(), ZX_OUT_SITES as usize);
     assert_eq!(sites.iter().map(|s| s.pc).collect::<Vec<_>>(), outs[..4]);
     assert!(sites.iter().all(|s| s.count == 1 && s.regs.pc == s.pc));
+    // The registers are those at each OUT, not at the frame's end: A alternates 0x08 / 0x10.
+    for (i, s) in sites.iter().enumerate() {
+        assert_eq!((s.regs.af >> 8) as u8, if i % 2 == 0 { 0x08 } else { 0x10 }, "site {i}");
+    }
+    assert_eq!((m.regs().af >> 8) as u8, 0x10, "the frame ends with A = 0x10, so a frame-end snapshot would fail");
+}
+
+fn run_loop(code: &[u8]) -> Machine {
+    let mut m = Machine::new();
+    for (i, b) in code.iter().enumerate() {
+        m.poke(0x8000 + i as u16, *b);
+    }
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.sp = 0xFF00;
+    r.iff1 = 0;
+    r.iff2 = 0;
+    m.set_regs(&r);
+    m
+}
+
+#[test]
+fn pending_edge_carries_pc_and_regs() {
+    // Loops of 4+4 T of OUTs plus n NOPs: some phase puts the frame end inside an OUT.
+    let mut carried = 0;
+    for n in 0..24u8 {
+        let mut code = vec![0x3E, 0x08, 0xD3, 0xFE, 0x3E, 0x10, 0xD3, 0xFE];
+        code.extend(std::iter::repeat(0u8).take(n as usize));
+        code.extend([0x18, (-(10 + n as i32)) as u8]);
+        carried += check_pending(run_loop(&code));
+    }
+    assert!(carried > 0, "some frame ends inside an OUT");
+}
+
+fn check_pending(mut m: Machine) -> usize {
+    let mut carried = 0;
+    for f in 0..200 {
+        m.run_frame();
+        let overshoot = m.frame_tstate();
+        m.run_frame();
+        let first = m.edges()[0];
+        if first.tstate >= overshoot {
+            continue;
+        }
+        carried += 1;
+        let sites = m.out_sites();
+        assert_eq!(sites[0].pc, first.pc, "frame {f}: the carried edge's OUT is the first site");
+        assert!(sites[0].count >= 1 && sites[0].regs.pc == first.pc);
+        let want_a = if first.pc == 0x8002 { 0x08 } else { 0x10 };
+        assert_eq!((sites[0].regs.af >> 8) as u8, want_a, "frame {f}: registers at the OUT");
+        assert_eq!(sites.iter().map(|s| s.count as usize).sum::<usize>(), m.edges().len());
+    }
+    carried
+}
+
+#[test]
+fn snapshot_load_clears_sites() {
+    let mut m = test_sna("tune.sna");
+    for _ in 0..100 {
+        m.run_frame();
+    }
+    assert!(!m.out_sites().is_empty());
+    let data = std::fs::read(music::repo().join("games/test/border.sna")).unwrap();
+    m.load_sna(&data).unwrap();
+    assert!(m.edges().is_empty() && m.out_sites().is_empty());
 }
 
 fn fnv(frames: &[music::Frame]) -> u64 {

@@ -33,6 +33,7 @@ typedef struct {
 	uint8_t level;     /* (OUT 0xFE value >> 3) & 3: bit0 MIC, bit1 EAR */
 	uint16_t pc;       /* address of the OUT instruction's first byte (opcode or ED prefix) */
 } zx_edge;
+_Static_assert(sizeof(zx_edge) == 8, "zx_edge stays 8 bytes");
 
 #define ZX_OUT_SITES 4u
 typedef struct {
@@ -120,7 +121,8 @@ uint8_t zx_edges_start_level(const zx_machine *m);
 
 /* The OUTs that made this frame's speaker edges, one entry per distinct OUT
  * address, first seen first; at most ZX_OUT_SITES (later addresses are not
- * listed, their edges still carry their pc). Valid like zx_edges(). */
+ * listed, their edges still carry their pc; edges beyond ZX_MAX_EDGES count toward no
+ * site). Valid like zx_edges(). */
 const zx_out_site *zx_out_sites(const zx_machine *m, uint32_t *count);
 
 /* Border colour (0-7) on frame line 0-311 of the frame run last. */

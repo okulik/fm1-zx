@@ -33,34 +33,27 @@ static void border_apply(zx_machine *m, uint32_t t, uint8_t colour)
 	m->border_col = colour;
 }
 
-static void site_note(zx_machine *m, uint16_t pc, const zx_regs *regs)
+/* Records an edge and counts it for its OUT's site; returns the register slot of that
+ * site, or NULL when the edge is dropped (list full) or the site table has no room. */
+static zx_regs *edge_apply(zx_machine *m, uint32_t t, uint8_t level, uint16_t pc)
 {
 	unsigned i;
 
+	if (m->edge_count >= ZX_MAX_EDGES) return NULL;
+	m->edges[m->edge_count].tstate = t;
+	m->edges[m->edge_count].level = level;
+	m->edges[m->edge_count].pc = pc;
+	m->edge_count++;
 	for (i = 0; i < m->site_count; i++) {
 		if (m->sites[i].pc == pc) {
 			m->sites[i].count++;
-			m->sites[i].regs = *regs;
-			return;
+			return &m->sites[i].regs;
 		}
 	}
-	if (m->site_count < ZX_OUT_SITES) {
-		m->sites[m->site_count].pc = pc;
-		m->sites[m->site_count].count = 1u;
-		m->sites[m->site_count].regs = *regs;
-		m->site_count++;
-	}
-}
-
-static void edge_apply(zx_machine *m, uint32_t t, uint8_t level, uint16_t pc, const zx_regs *regs)
-{
-	if (m->edge_count < ZX_MAX_EDGES) {
-		m->edges[m->edge_count].tstate = t;
-		m->edges[m->edge_count].level = level;
-		m->edges[m->edge_count].pc = pc;
-		m->edge_count++;
-		site_note(m, pc, regs);
-	}
+	if (m->site_count >= ZX_OUT_SITES) return NULL;
+	m->sites[m->site_count].pc = pc;
+	m->sites[m->site_count].count = 1u;
+	return &m->sites[m->site_count++].regs;
 }
 
 void zx_ula_new_frame(zx_machine *m)
@@ -73,8 +66,11 @@ void zx_ula_new_frame(zx_machine *m)
 	m->border_filled = 0;   /* border_col is the colour in effect at the last frame's end */
 	for (i = 0; i < m->pend_border_count; i++)
 		border_apply(m, m->pend_borders[i].tstate, m->pend_borders[i].level);
-	for (i = 0; i < m->pend_edge_count; i++)
-		edge_apply(m, m->pend_edges[i].tstate, m->pend_edges[i].level, m->pend_edges[i].pc, &m->pend_regs[i]);
+	for (i = 0; i < m->pend_edge_count; i++) {
+		zx_regs *slot = edge_apply(m, m->pend_edges[i].tstate, m->pend_edges[i].level, m->pend_edges[i].pc);
+
+		if (slot) *slot = m->pend_regs[i];
+	}
 	for (i = 0; i < m->pend_edge_count; i++) m->base_level = m->pend_edges[i].level;
 	m->pend_border_count = 0;
 	m->pend_edge_count = 0;
@@ -98,19 +94,24 @@ void zx_port_out(zx_machine *m, uint16_t port, uint8_t value)
 	}
 
 	if (level != m->level) {
-		zx_regs regs;
-
 		m->level = level;
-		zx_get_regs(m, &regs);
-		regs.pc = m->insn_pc;
 		if (!late) {
+			zx_regs *slot;
+
 			m->base_level = level;
-			edge_apply(m, t, level, m->insn_pc, &regs);
+			slot = edge_apply(m, t, level, m->insn_pc);
+			if (slot) {
+				zx_get_regs(m, slot);
+				slot->pc = m->insn_pc;
+			}
 		} else if (m->pend_edge_count < 4u) {
-			m->pend_edges[m->pend_edge_count].tstate = t - ZX_FRAME_TSTATES;
-			m->pend_edges[m->pend_edge_count].level = level;
-			m->pend_edges[m->pend_edge_count].pc = m->insn_pc;
-			m->pend_regs[m->pend_edge_count++] = regs;
+			unsigned n = m->pend_edge_count++;
+
+			m->pend_edges[n].tstate = t - ZX_FRAME_TSTATES;
+			m->pend_edges[n].level = level;
+			m->pend_edges[n].pc = m->insn_pc;
+			zx_get_regs(m, &m->pend_regs[n]);
+			m->pend_regs[n].pc = m->insn_pc;
 		}
 	}
 }

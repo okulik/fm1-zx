@@ -90,6 +90,7 @@ static void commit(zx_machine *m, const snap *s)
 	memset(m->border_lines, s->border, sizeof m->border_lines);
 	m->edge_count = 0;
 	m->pend_edge_count = 0;
+	m->site_count = 0;
 	m->pend_border_count = 0;
 	m->level = 0;
 	m->base_level = 0;
