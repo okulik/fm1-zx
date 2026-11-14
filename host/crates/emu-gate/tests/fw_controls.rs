@@ -449,7 +449,7 @@ fn host_fm(index: u32, frames: usize) -> Vec<i16> {
         let level = zx.edges_start_level();
         b.set_level(level);
         let beeper = b.render(zx.edges());
-        out.extend(mix.frame(zx_sys::SND_MODE_FM_A, zx.edges(), level, &beeper));
+        out.extend(mix.frame(zx_sys::SND_MODE_FM_A, Some(&zx), zx.edges(), level, &beeper));
     }
     out
 }

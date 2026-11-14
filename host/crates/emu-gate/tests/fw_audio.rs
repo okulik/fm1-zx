@@ -336,7 +336,7 @@ fn sound_menu_switches_to_fm() {
         truth.push(Engine::Castaway.read(&zx));
         confident.push(dec.frame(&f.edges, f.start_level).confident != 0);
         let mode = if (fm_from..beeper_from).contains(&i) { SND_MODE_FM_A } else { SND_MODE_BEEPER };
-        mixed.extend(mix.frame(mode, &f.edges, f.start_level, &f.beeper));
+        mixed.extend(mix.frame(mode, Some(&zx), &f.edges, f.start_level, &f.beeper));
         beeper.extend_from_slice(&f.beeper);
         starts.push(beeper.len());
     }

@@ -88,7 +88,8 @@ fn main() {
         b.compile(name);
     };
 
-    // Our code is held to -Werror; the vendored libraries are built as they are.
+    // Our code is held to -Werror; the vendored libraries are built as they are. core/sound
+    // includes engines_test.c (the test fixtures' engines), which the firmware build leaves out.
     build(c_files(&core_zx), "zxcore", true);
     build(c_files(&core_sound), "zxsound", true);
     build(c_files(&app), "fmzxapp", true);
@@ -126,7 +127,7 @@ fn main() {
         .allowlist_type("(zx|pix|lcd|km|pack|snd)_.*")
         .allowlist_type("keymap")
         .allowlist_type("menu")
-        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND)_.*")
+        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND|snd)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {

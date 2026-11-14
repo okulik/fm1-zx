@@ -1,9 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 FM-1 ZX contributors */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* FM music from the beeper: a decoder that reads the beeper's edge stream,
- * a 2-operator FM synth, and the mixer that plays either the FM voices or
- * the beeper itself, 3 frames late, with crossfades.
+/* FM music from the beeper: a decoder that reads the beeper's edge stream
+ * (method A), the recogniser of known music engines (method B), a 2-operator
+ * FM synth, and the mixer that plays either the FM voices or the beeper
+ * itself, 3 frames late, with crossfades.
  *
  * Integer and fixed-point arithmetic only (no float, no libm, no 64-bit
  * division), so the host, the device and the wasm build give the same samples.
@@ -27,7 +28,8 @@
 /* Mixer hysteresis, in decoder frames: FM starts after this many confident
  * frames in a row and stops after this many unconfident ones. Leaving is
  * immediate (confidence over coverage); the decoder itself keeps short rests
- * inside music confident. */
+ * inside music confident. FM: engines (method B) starts after one claimed
+ * frame: its claims are read from the engine, not guessed. */
 #define SND_ENTER_FRAMES 2u
 #define SND_LEAVE_FRAMES 1u
 
@@ -35,19 +37,33 @@
  * rate / SND_XFADE_DIV samples: 4 ms. */
 #define SND_XFADE_DIV 250u
 
-enum snd_style { SND_STYLE_NONE, SND_STYLE_SLOTS, SND_STYLE_FLIPS, SND_STYLE_PULSES };
-enum snd_mode { SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_COUNT }; /* Plans 6-7 add FM_B, FM_C before COUNT */
+enum snd_style { SND_STYLE_NONE, SND_STYLE_SLOTS, SND_STYLE_FLIPS, SND_STYLE_PULSES, SND_STYLE_ENGINE };
+/* The Sound choices: the beeper itself; FM from the decoder (method A, "FM: sound"); FM from the
+ * known music engines (method B, "FM: engines"). Plan 7 adds FM_C before COUNT. */
+enum snd_mode { SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SND_MODE_COUNT };
 
 typedef struct {
 	uint32_t period_q8;   /* full period in T-states, Q8 fixed point; 0 = voice off */
 	uint8_t level;        /* 0-255 loudness */
 } snd_voice;
 
-typedef struct {          /* what the decoder concluded about one past frame */
-	snd_voice tone[SND_TONAL];
+#define SND_EVENTS 8u     /* most note events in a frame */
+
+typedef struct {          /* a voice change inside a frame */
+	uint32_t t;           /* frame T-state, 0 .. ZX_FRAME_TSTATES - 1, ascending within a frame */
+	uint32_t period_q8;   /* tonal: the voice's new period (0 = off); drum: ignored */
+	uint8_t voice;        /* 0 .. SND_TONAL-1 tonal, SND_TONAL = the drum voice */
+	uint8_t level;        /* tonal: loudness; drum: strength (0 = drum off) */
+} snd_event;
+
+typedef struct {          /* what a method concluded about one past frame */
+	snd_voice tone[SND_TONAL];   /* the state at the frame's start */
 	uint8_t drum;         /* 0 = none, else drum strength 1-255 */
 	uint8_t style;        /* enum snd_style */
 	uint8_t confident;    /* 1 = play FM for this frame */
+	uint8_t engine;       /* 0 = none, else 1 + index in the engine table (method B) */
+	uint8_t n_ev;         /* events applied in order after the frame's start; method A: 0 */
+	snd_event ev[SND_EVENTS];
 } snd_frame;
 
 /* ---- decoder (decoder.c, flips.c, slots.c, pulses.c) ------------------- */
@@ -258,15 +274,50 @@ typedef struct snd_fm {   /* voice phases, envelopes */
 } snd_fm;
 
 void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den);
-/* Renders n samples of the frame *fr (all of its voices, whatever fr->confident). */
+/* Renders n samples of the frame *fr (all of its voices, whatever fr->confident): the voices
+ * and the drum as at the frame's start, then each event from sample t * n / ZX_FRAME_TSTATES,
+ * as if the frame had changed that voice there (a new period starts a note, period 0 releases
+ * it; a drum event starts the drum, level 0 releases it). */
 void snd_fm_render(snd_fm *f, const snd_frame *fr, int16_t *out, uint32_t n);
+
+/* ---- method B: known music engines (engines.c) -------------------------
+ *
+ * B recognises the music routines of a table of engines by the code around the OUT that drives
+ * the speaker, reads their notes from memory and registers, and checks them against the edges.
+ * (Plan 6 Task 2: the interfaces and a stub that claims nothing.) */
+
+typedef struct snd_engine {   /* one table entry */
+	const char *name;         /* e.g. "Castaway", "ROM BEEP" */
+} snd_engine;
+
+extern const snd_engine snd_engine_table[];   /* the built-in engines */
+extern const uint32_t snd_engine_count;
+/* The name of table[index] (index < the table's count). */
+const char *snd_engine_name(const snd_engine *table, uint32_t index);
+
+/* core/sound/engines_test.c, compiled by the host build only (never the firmware's): the built-in
+ * entries plus test fixtures' engines. */
+extern const snd_engine snd_engine_test_table[];
+extern const uint32_t snd_engine_test_count;
+
+typedef struct snd_b {        /* method B's state */
+	const snd_engine *table;
+	uint32_t n;               /* entries in table */
+	uint32_t frames;          /* frames fed since init */
+} snd_b;
+
+void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n);
+/* Feeds frame t (zm right after zx_run_frame; zm may be NULL: nothing is B's); fills *out with
+ * the decision for frame t - SND_DELAY_FRAMES. */
+void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
 
 /* ---- mixer (mixer.c) --------------------------------------------------- */
 
 #define SND_RING_SAMPLES (SND_DELAY_FRAMES * SND_MAX_FRAME_SAMPLES)
 
-typedef struct snd_mixer {   /* delay rings, hysteresis, crossfade; owns a decoder and an fm */
+typedef struct snd_mixer {   /* delay rings, hysteresis, crossfade; owns both methods and an fm */
 	snd_decoder dec;
+	snd_b b;
 	snd_fm fm;
 	int16_t ring[SND_RING_SAMPLES];   /* beeper samples, SND_DELAY_FRAMES frames late */
 	uint32_t rd, wr, fill;            /* ring read and write index, samples held */
@@ -275,27 +326,39 @@ typedef struct snd_mixer {   /* delay rings, hysteresis, crossfade; owns a decod
 	int32_t step;                     /* gain change per sample of a crossfade */
 	uint8_t primed;                   /* frames pushed, up to SND_DELAY_FRAMES */
 	uint8_t mode;                     /* mode of the previous frame */
+	uint8_t fm_choice;                /* the FM mode in use or last used (FM_A after init) */
 	uint8_t started;                  /* a frame has run since init */
 	uint8_t fm_on;                    /* the hysteresis' decision: FM */
 	uint8_t run;                      /* frames in a row disagreeing with fm_on */
 } snd_mixer;
 
+/* Uses the built-in engine table for method B. */
 void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den);
-/* beeper: this frame's n beeper samples (from zx_beeper_render). Writes n samples to out:
- * SND_MODE_BEEPER -> a copy of beeper (no delay); FM modes -> 3-frame-delayed FM or beeper.
+/* Re-initialises method B with another engine table (tests). */
+void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n);
+/* zm: the machine right after zx_run_frame (NULL: nothing is method B's); beeper: this frame's n
+ * beeper samples (from zx_beeper_render). Writes n samples to out: SND_MODE_BEEPER -> a copy of
+ * beeper (no delay); FM modes -> 3-frame-delayed FM or beeper, FM_A playing method A's
+ * decisions, FM_B method B's.
  *
  * The delay is a sample FIFO holding the first SND_DELAY_FRAMES frames' samples
  * after init, so the delayed stream is continuous (no sample repeated or
  * dropped) even though frames have 880 or 881 samples; frame t's output starts
- * within one sample of frame t - 3's first sample. The FIFO and the decoder are
+ * within one sample of frame t - 3's first sample. The FIFO and both methods are
  * fed in every mode, so an FM mode has its look-ahead at a switch.
+ *
+ * One hysteresis: FM after SND_ENTER_FRAMES confident decisions in a row (FM_B: after one), the
+ * beeper after SND_LEAVE_FRAMES unconfident ones; in Beeper mode it follows the last FM mode's
+ * method (FM_A's after init).
  *
  * Mode switches: Beeper -> FM fades the live beeper out, plays silence, and
  * fades the delayed path in at the switch frame's first sample (60 ms later);
  * FM -> Beeper crossfades from the delayed path to the live beeper (the last 3
- * frames of delayed material are dropped). n above SND_MAX_FRAME_SAMPLES:
- * the beeper is copied and the mixer is left as it was. */
-void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_edge *e, uint32_t n_edges, uint8_t start_level,
-                     const int16_t *beeper, uint32_t n, int16_t *out);
+ * frames of delayed material are dropped); FM_A <-> FM_B keeps the delayed path
+ * and the synth running, only FM and the delayed beeper crossfade if the decision
+ * changes. n above SND_MAX_FRAME_SAMPLES: the beeper is copied and the mixer is
+ * left as it was. */
+void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_edge *e, uint32_t n_edges,
+                     uint8_t start_level, const int16_t *beeper, uint32_t n, int16_t *out);
 
 #endif

@@ -326,11 +326,15 @@ pub const SND_LEAVE_FRAMES: u32 = sys::SND_LEAVE_FRAMES;
 pub const SND_XFADE_DIV: u32 = sys::SND_XFADE_DIV;
 pub const SND_MODE_BEEPER: u8 = sys::snd_mode_SND_MODE_BEEPER as u8;
 pub const SND_MODE_FM_A: u8 = sys::snd_mode_SND_MODE_FM_A as u8;
+pub const SND_MODE_FM_B: u8 = sys::snd_mode_SND_MODE_FM_B as u8;
 pub const SND_MODE_COUNT: u8 = sys::snd_mode_SND_MODE_COUNT as u8;
 pub const SND_STYLE_NONE: u8 = sys::snd_style_SND_STYLE_NONE as u8;
 pub const SND_STYLE_SLOTS: u8 = sys::snd_style_SND_STYLE_SLOTS as u8;
 pub const SND_STYLE_FLIPS: u8 = sys::snd_style_SND_STYLE_FLIPS as u8;
 pub const SND_STYLE_PULSES: u8 = sys::snd_style_SND_STYLE_PULSES as u8;
+pub const SND_STYLE_ENGINE: u8 = sys::snd_style_SND_STYLE_ENGINE as u8;
+/// Most note events in a [`SndFrame`].
+pub const SND_EVENTS: usize = sys::SND_EVENTS as usize;
 
 /// One voice of a decoder decision (`snd_voice`).
 #[repr(C)]
@@ -342,10 +346,25 @@ pub struct SndVoice {
     pub level: u8,
 }
 
-/// What the decoder concluded about one past frame (`snd_frame`).
+/// A voice change inside a frame (`snd_event`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SndEvent {
+    /// Frame T-state, 0 .. ZX_FRAME_TSTATES - 1, ascending within a frame.
+    pub t: u32,
+    /// Tonal: the voice's new period (T-states x 256; 0 = off). Drum: ignored.
+    pub period_q8: u32,
+    /// 0 .. SND_TONAL - 1 a tonal voice, SND_TONAL the drum.
+    pub voice: u8,
+    /// Tonal: loudness. Drum: strength (0 = drum off).
+    pub level: u8,
+}
+
+/// What a method concluded about one past frame (`snd_frame`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SndFrame {
+    /// The voices at the frame's start.
     pub tone: [SndVoice; SND_TONAL],
     /// 0 = none, else drum strength 1-255.
     pub drum: u8,
@@ -353,6 +372,18 @@ pub struct SndFrame {
     pub style: u8,
     /// 1 = play FM for this frame.
     pub confident: u8,
+    /// 0 = none, else 1 + the engine's index in method B's table (see [`SndEngines::name`]).
+    pub engine: u8,
+    /// Events in `ev`, applied in order after the frame's start (method A: 0).
+    pub n_ev: u8,
+    pub ev: [SndEvent; SND_EVENTS],
+}
+
+impl SndFrame {
+    /// The frame's note events.
+    pub fn events(&self) -> &[SndEvent] {
+        &self.ev[..(self.n_ev as usize).min(SND_EVENTS)]
+    }
 }
 
 const _: () = {
@@ -363,6 +394,15 @@ const _: () = {
     assert!(std::mem::offset_of!(SndFrame, drum) == std::mem::offset_of!(sys::snd_frame, drum));
     assert!(std::mem::offset_of!(SndFrame, style) == std::mem::offset_of!(sys::snd_frame, style));
     assert!(std::mem::offset_of!(SndFrame, confident) == std::mem::offset_of!(sys::snd_frame, confident));
+    assert!(std::mem::offset_of!(SndFrame, engine) == std::mem::offset_of!(sys::snd_frame, engine));
+    assert!(std::mem::offset_of!(SndFrame, n_ev) == std::mem::offset_of!(sys::snd_frame, n_ev));
+    assert!(std::mem::offset_of!(SndFrame, ev) == std::mem::offset_of!(sys::snd_frame, ev));
+    assert!(std::mem::size_of::<SndEvent>() == std::mem::size_of::<sys::snd_event>());
+    assert!(std::mem::align_of::<SndEvent>() == std::mem::align_of::<sys::snd_event>());
+    assert!(std::mem::offset_of!(SndEvent, t) == std::mem::offset_of!(sys::snd_event, t));
+    assert!(std::mem::offset_of!(SndEvent, period_q8) == std::mem::offset_of!(sys::snd_event, period_q8));
+    assert!(std::mem::offset_of!(SndEvent, voice) == std::mem::offset_of!(sys::snd_event, voice));
+    assert!(std::mem::offset_of!(SndEvent, level) == std::mem::offset_of!(sys::snd_event, level));
 };
 
 /// Allocates a zeroed C struct on the heap.
@@ -478,8 +518,83 @@ impl SndFm {
     }
 }
 
+/// An engine table of method B: (entries, count).
+fn engine_table(test: bool) -> (*const sys::snd_engine, u32) {
+    // SAFETY: the tables and counts are immutable C globals.
+    unsafe {
+        if test {
+            (std::ptr::addr_of!(sys::snd_engine_test_table).cast(), sys::snd_engine_test_count)
+        } else {
+            (std::ptr::addr_of!(sys::snd_engine_table).cast(), sys::snd_engine_count)
+        }
+    }
+}
+
+/// Method B, the known music engines: feed it each frame's machine and edges, get its decision
+/// about the frame `SND_DELAY_FRAMES` earlier.
+pub struct SndEngines {
+    raw: Box<sys::snd_b>,
+}
+
+impl SndEngines {
+    /// With the built-in engine table (the firmware's).
+    pub fn new() -> Self {
+        Self::with_table(false)
+    }
+
+    /// With the test table: the built-in engines plus the test fixtures'.
+    pub fn new_test() -> Self {
+        Self::with_table(true)
+    }
+
+    fn with_table(test: bool) -> Self {
+        let (table, n) = engine_table(test);
+        let mut raw: Box<sys::snd_b> = boxed_zeroed();
+        // SAFETY: `raw` is a valid, exclusively owned snd_b; the table is a 'static C array of n
+        // entries.
+        unsafe { sys::snd_b_init(&mut *raw, table, n) };
+        SndEngines { raw }
+    }
+
+    /// Feeds frame t (`m` right after its `run_frame`, its edges and the level they start
+    /// from); returns the decision for frame t - SND_DELAY_FRAMES.
+    pub fn frame(&mut self, m: &Machine, edges: &[zx_edge], start_level: u8) -> SndFrame {
+        let mut out = SndFrame::default();
+        // SAFETY: `raw` was initialised by snd_b_init; `m.raw` is an initialised machine; the
+        // edge pointer and count describe `edges`; SndFrame has snd_frame's layout (checked
+        // above).
+        unsafe {
+            sys::snd_b_frame(
+                &mut *self.raw,
+                &*m.raw,
+                edges.as_ptr(),
+                edges.len() as u32,
+                start_level,
+                (&mut out as *mut SndFrame).cast(),
+            )
+        };
+        out
+    }
+
+    /// The name of a frame's `engine` (1 + index in this table); "" for 0 or an unknown one.
+    pub fn name(&self, engine: u8) -> String {
+        let i = u32::from(engine);
+        if i == 0 || i > self.raw.n {
+            return String::new();
+        }
+        // SAFETY: the table holds `n` entries, i - 1 < n; each name is a static C string.
+        unsafe { std::ffi::CStr::from_ptr(sys::snd_engine_name(self.raw.table, i - 1)) }.to_string_lossy().into_owned()
+    }
+}
+
+impl Default for SndEngines {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The mixer: Beeper mode copies the beeper samples; an FM mode plays all sound 3 frames late,
-/// FM where the decoder is confident, the beeper elsewhere. Owns a decoder and a synth.
+/// FM where its method is confident, the beeper elsewhere. Owns both methods and a synth.
 pub struct SndMixer {
     raw: Box<sys::snd_mixer>,
 }
@@ -493,16 +608,26 @@ impl SndMixer {
         SndMixer { raw }
     }
 
-    /// One frame: its edges, the level they start from, and its beeper samples (from
-    /// [`Beeper::render`]); returns as many output samples in `mode` (`SND_MODE_*`).
-    pub fn frame(&mut self, mode: u8, edges: &[zx_edge], start_level: u8, beeper: &[i16]) -> Vec<i16> {
+    /// Method B with the test engine table instead of the built-in one.
+    pub fn set_test_engines(&mut self) {
+        let (table, n) = engine_table(true);
+        // SAFETY: `raw` was initialised by snd_mixer_init; the table is a 'static C array of n
+        // entries.
+        unsafe { sys::snd_mixer_set_engines(&mut *self.raw, table, n) };
+    }
+
+    /// One frame: the machine right after its `run_frame` (None: nothing is method B's), its
+    /// edges, the level they start from, and its beeper samples (from [`Beeper::render`]);
+    /// returns as many output samples in `mode` (`SND_MODE_*`).
+    pub fn frame(&mut self, mode: u8, m: Option<&Machine>, edges: &[zx_edge], start_level: u8, beeper: &[i16]) -> Vec<i16> {
         let mut out = vec![0i16; beeper.len()];
-        // SAFETY: `raw` was initialised by snd_mixer_init; each pointer and count describes its
-        // slice, and `out` is as long as `beeper`.
+        // SAFETY: `raw` was initialised by snd_mixer_init; the machine, if given, is initialised;
+        // each pointer and count describes its slice, and `out` is as long as `beeper`.
         unsafe {
             sys::snd_mixer_frame(
                 &mut *self.raw,
                 mode,
+                m.map_or(std::ptr::null(), |m| &*m.raw as *const sys::zx_machine),
                 edges.as_ptr(),
                 edges.len() as u32,
                 start_level,

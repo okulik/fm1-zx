@@ -15,6 +15,10 @@
  * Drum: xorshift noise, one-pole low-passed, with a 40 ms decay while the
  * decoder reports it and a 50 ms linear release after.
  *
+ * A frame gives the voices at its start and may list note events (method B):
+ * each changes one voice, or the drum, from its own sample on, exactly as a
+ * change between two frames would.
+ *
  * Fixed point: phase 32-bit (2^32 = one cycle); sine table 256 entries of
  * Q15, linearly interpolated with 8 more phase bits; envelope Q16; index in
  * depth units (2^16 / 2 pi of phase per radian), so the phase offset is
@@ -221,28 +225,62 @@ static void tick(snd_fm *f)
 	f->drum_amp = (f->drum_env >> 8) * f->drum_lvl;
 }
 
-void snd_fm_render(snd_fm *f, const snd_frame *fr, int16_t *out, uint32_t n)
+/* The drum on (strength 1-255: it starts unless it was already on) or off (0: a release). */
+static void drum_set(snd_fm *f, uint8_t strength)
 {
-	const uint32_t tick_add = TICK_HZ * f->rate_den;
-	uint32_t i, k;
-
-	for (k = 0; k < SND_TONAL; k++)
-		voice_frame(f, &f->v[k], &fr->tone[k]);
-	if (fr->drum) {
+	if (strength) {
 		if (!f->drum_held) {
 			f->drum_env = ENV_ONE;
-			f->drum_lvl = fr->drum;
+			f->drum_lvl = strength;
 			f->drum_stage = ATTACK;
 		}
 	} else if (f->drum_stage == ATTACK) {
 		f->drum_stage = RELEASE;
 		f->drum_rel = f->drum_env / RELEASE_TICKS + 1;
 	}
-	f->drum_held = fr->drum != 0;
+	f->drum_held = strength != 0;
+}
+
+/* Applies a note event: the voice changes as it would between two frames. */
+static void apply_event(snd_fm *f, const snd_event *ev)
+{
+	snd_voice in;
+
+	if (ev->voice < SND_TONAL) {
+		in.period_q8 = ev->period_q8;
+		in.level = ev->level;
+		voice_frame(f, &f->v[ev->voice], &in);
+	} else if (ev->voice == SND_TONAL) {
+		drum_set(f, ev->level);
+	}
+}
+
+/* The sample of a frame of n samples that an event at T-state t starts on (t * n < 2^32 for
+ * n <= SND_MAX_FRAME_SAMPLES). */
+static uint32_t event_sample(uint32_t t, uint32_t n)
+{
+	if (t >= ZX_FRAME_TSTATES) t = ZX_FRAME_TSTATES - 1u;
+	return t * n / ZX_FRAME_TSTATES;
+}
+
+void snd_fm_render(snd_fm *f, const snd_frame *fr, int16_t *out, uint32_t n)
+{
+	const uint32_t tick_add = TICK_HZ * f->rate_den;
+	const uint32_t n_ev = fr->n_ev < SND_EVENTS ? fr->n_ev : SND_EVENTS;
+	uint32_t i, k, ev = 0, next;
+
+	for (k = 0; k < SND_TONAL; k++)
+		voice_frame(f, &f->v[k], &fr->tone[k]);
+	drum_set(f, fr->drum);
+	next = n_ev ? event_sample(fr->ev[0].t, n) : n;
 
 	for (i = 0; i < n; i++) {
 		int32_t acc = 0;
 
+		while (i >= next) {   /* the events that start on this sample */
+			apply_event(f, &fr->ev[ev++]);
+			next = ev < n_ev ? event_sample(fr->ev[ev].t, n) : n;
+		}
 		f->tick_acc += tick_add;
 		while (f->tick_acc >= f->rate_num) {
 			f->tick_acc -= f->rate_num;
@@ -272,4 +310,6 @@ void snd_fm_render(snd_fm *f, const snd_frame *fr, int16_t *out, uint32_t n)
 		if (acc < -32768) acc = -32768;
 		out[i] = (int16_t)acc;
 	}
+	while (ev < n_ev)   /* none past the frame's end, unless n is 0 */
+		apply_event(f, &fr->ev[ev++]);
 }

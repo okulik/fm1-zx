@@ -27,7 +27,7 @@
 enum { IT_RESUME, IT_RESET, IT_KEYBOARD, IT_KEYMAP, IT_SPEED, IT_SOUND, IT_LEAVE, IT_COUNT };
 
 /* The Sound item's choices, by SND_MODE_*. */
-static const char *const sound_names[] = { "Beeper", "FM: sound" };
+static const char *const sound_names[] = { "Beeper", "FM: sound", "FM: engines" };
 _Static_assert(sizeof sound_names / sizeof sound_names[0] == SND_MODE_COUNT, "a name per SND_MODE_*");
 
 static unsigned slen(const char *s)

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use zx_sys::{SND_MODE_BEEPER, SND_MODE_COUNT, SND_MODE_FM_A};
+use zx_sys::{SND_MODE_BEEPER, SND_MODE_COUNT, SND_MODE_FM_A, SND_MODE_FM_B};
 use zx_tests::*;
 
 const ROM: &[u8] = include_bytes!("../../../../third_party/zx-rom/48.rom");
@@ -157,13 +157,15 @@ fn sound_shown(m: &Menu) -> String {
 
 #[test]
 fn menu_sound_cycles_and_survives() {
-    assert_eq!(SND_MODE_COUNT, 2, "Beeper and FM: sound");
+    assert_eq!(SND_MODE_COUNT, 3, "Beeper, FM: sound and FM: engines");
     let mut m = Menu::new(2);
     to_sound(&mut m);
     assert_eq!(sound_shown(&m), "Sound: Beeper", "Beeper by default");
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
     assert_eq!(m.view(), view::MENU, "the item stays in the menu");
     assert_eq!(sound_shown(&m), "Sound: FM: sound");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_B as u32));
+    assert_eq!(sound_shown(&m), "Sound: FM: engines");
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
     assert_eq!(sound_shown(&m), "Sound: Beeper");
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
@@ -185,7 +187,7 @@ fn menu_sound_cycles_and_survives() {
     to_sound(&mut m);
     assert_eq!(sound_shown(&m), "Sound: FM: sound", "after starting another game");
     // and the next press cycles from the kept choice
-    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_B as u32));
 }
 
 #[test]

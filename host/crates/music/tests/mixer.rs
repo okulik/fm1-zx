@@ -7,8 +7,8 @@
 use music::synthetic::{frame_loop, xor_loop, xor_tune, Drum, FrameNote, Stream, FRAME_T};
 use music::{capture, castaway, render_stream, sample_rate, test_sna, Frame, RATE};
 use zx_sys::{
-    zx_edge, Beeper, SndDecoder, SndFm, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_ENTER_FRAMES, SND_MODE_BEEPER,
-    SND_MODE_FM_A,
+    zx_edge, Beeper, Machine, SndDecoder, SndFm, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_ENTER_FRAMES,
+    SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SndEngines,
 };
 
 fn border(frames: usize) -> Vec<Frame> {
@@ -23,7 +23,7 @@ fn castaway_frames(frames: usize) -> Vec<Frame> {
 /// The mixer's output for each frame, in the mode `mode_of(frame index)`.
 fn mix(frames: &[Frame], mode_of: impl Fn(usize) -> u8) -> Vec<Vec<i16>> {
     let mut m = SndMixer::new(RATE.0, RATE.1);
-    frames.iter().enumerate().map(|(i, f)| m.frame(mode_of(i), &f.edges, f.start_level, &f.beeper)).collect()
+    frames.iter().enumerate().map(|(i, f)| m.frame(mode_of(i), None, &f.edges, f.start_level, &f.beeper)).collect()
 }
 
 /// Sample index at which each frame starts, plus the total.
@@ -282,4 +282,151 @@ fn hysteresis_no_flutter() {
     let sw: Vec<_> = switches(&out, &fm, &bd, st[d]).into_iter().filter(|x| x.1 >= a && x.1 < b).collect();
     println!("switches while the decisions alternate: {sw:?}");
     assert!(sw.len() <= 1, "{} switches", sw.len());
+}
+
+fn fnv(s: &[i16]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for x in s {
+        for b in x.to_le_bytes() {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+    }
+    h
+}
+
+/// Runs `frames` frames of `m` through a mixer in the mode `mode_of(frame index)`, the machine
+/// given to the mixer as the firmware does; returns the frames and the mixer's output.
+fn mix_live(m: &mut Machine, frames: usize, mode_of: impl Fn(usize) -> u8) -> (Vec<Frame>, Vec<Vec<i16>>) {
+    let mut beeper = Beeper::new(RATE.0, RATE.1);
+    let mut mixer = SndMixer::new(RATE.0, RATE.1);
+    let (mut fr, mut out) = (Vec::new(), Vec::new());
+    for i in 0..frames {
+        m.run_frame();
+        let start_level = m.edges_start_level();
+        beeper.set_level(start_level);
+        let edges = m.edges().to_vec();
+        let samples = beeper.render(&edges);
+        out.push(mixer.frame(mode_of(i), Some(m), &edges, start_level, &samples));
+        fr.push(Frame { edges, start_level, beeper: samples });
+    }
+    (fr, out)
+}
+
+#[test]
+fn fm_a_unchanged() {
+    // FM: sound (method A) plays sample for sample as before method B and note events came;
+    // hashes computed at the commit before them (cb0f375)
+    for (name, m, want) in [
+        ("castaway", castaway(), 0x1cec02944ff0d953u64),
+        ("colony8", music::colony8(), 0xbdc6bf364589bb9c),
+    ] {
+        let frames = capture(&mut { m }, &mut Beeper::new(RATE.0, RATE.1), 600);
+        let dec = music::decode(frames.iter().map(|f| (f.edges.as_slice(), f.start_level)));
+        let conf = dec.iter().filter(|f| f.confident != 0).count();
+        assert!(conf > 300, "{name}: music decoded ({conf} confident frames)");
+        let out = mix(&frames, |_| SND_MODE_FM_A).concat();
+        assert_eq!(fnv(&out), want, "{name}");
+    }
+}
+
+/// The beeper stream 3 frames late, as an FM mode plays it when nothing is confident.
+fn delayed_beeper(frames: &[Frame]) -> Vec<i16> {
+    let b: Vec<i16> = frames.iter().flat_map(|f| f.beeper.iter().copied()).collect();
+    let delay = starts(frames)[SND_DELAY_FRAMES as usize];
+    (0..b.len()).map(|p| if p < delay { 0 } else { b[p - delay] }).collect()
+}
+
+#[test]
+fn fm_b_stub_is_delayed_beeper() {
+    // with no engine in the table, FM: engines claims nothing: the delayed beeper throughout,
+    // on music method A would play in FM
+    let (frames, out) = mix_live(&mut castaway(), 600, |_| SND_MODE_FM_B);
+    let bd = delayed_beeper(&frames);
+    let out = out.concat();
+    let loud = bd.iter().filter(|&&x| x.abs() > 1000).count();
+    assert!(loud > 10_000, "the title music sounds ({loud} loud samples)");
+    if let Some(p) = (0..out.len()).find(|&p| out[p] != bd[p]) {
+        panic!("sample {p} is {}, not the delayed beeper's {}", out[p], bd[p]);
+    }
+}
+
+#[test]
+fn engines_stub_claims_nothing() {
+    // method B on its own, both tables: no frame claimed, no engine named; and a mixer with the
+    // test table plays FM: engines as the delayed beeper too
+    let mut m = castaway();
+    let (mut b, mut t) = (SndEngines::new(), SndEngines::new_test());
+    for _ in 0..300 {
+        m.run_frame();
+        for e in [&mut b, &mut t] {
+            let fr = e.frame(&m, m.edges(), m.edges_start_level());
+            assert!(fr.confident == 0 && fr.engine == 0 && fr.events().is_empty(), "{fr:?}");
+        }
+    }
+    assert_eq!(b.name(0), "");
+    assert_eq!(b.name(1), "", "no engine 1 in an empty table");
+    let frames = castaway_frames(300);
+    let mut mixer = SndMixer::new(RATE.0, RATE.1);
+    mixer.set_test_engines();
+    let out: Vec<i16> =
+        frames.iter().flat_map(|f| mixer.frame(SND_MODE_FM_B, None, &f.edges, f.start_level, &f.beeper)).collect();
+    assert!(out == delayed_beeper(&frames), "the delayed beeper");
+}
+
+#[test]
+fn switch_between_fm_choices() {
+    // FM: sound, then FM: engines (the stub: the beeper), then FM: sound again, in Castaway's
+    // title music: the delayed stream carries on sample for sample, only FM and the delayed
+    // beeper crossfade
+    let (b_from, a_from) = (300, 400);
+    let mode = |i: usize| if (b_from..a_from).contains(&i) { SND_MODE_FM_B } else { SND_MODE_FM_A };
+    let (frames, out) = mix_live(&mut castaway(), 600, mode);
+    let out = out.concat();
+    let bd = delayed_beeper(&frames);
+    let st = starts(&frames);
+    let d = SND_DELAY_FRAMES as usize;
+
+    // the FM the mixer plays: method A's voices where A is confident in FM: sound, silence
+    // elsewhere, through one synth that never restarts
+    let (mut dec, mut fm) = (SndDecoder::new(), SndFm::new(RATE.0, RATE.1));
+    let mut fm_out = Vec::new();
+    for (t, f) in frames.iter().enumerate() {
+        let fr = dec.frame(&f.edges, f.start_level);
+        if t < d {
+            fm_out.extend(std::iter::repeat_n(0, f.beeper.len()));
+        } else {
+            let src = if fr.confident != 0 && mode(t) == SND_MODE_FM_A { fr } else { SndFrame::default() };
+            fm_out.extend(fm.render(&src, f.beeper.len()));
+        }
+    }
+
+    // every sample a mix of the FM and the delayed beeper of the same moment: no silence put in,
+    // nothing replayed
+    for p in st[d]..out.len() {
+        let (lo, hi) = (fm_out[p].min(bd[p]) as i32 - 1, fm_out[p].max(bd[p]) as i32 + 1);
+        assert!((lo..=hi).contains(&(out[p] as i32)), "sample {p}: {} is not between FM {} and beeper {}", out[p], fm_out[p], bd[p]);
+    }
+    // FM: engines plays the delayed beeper itself once the crossfade from FM is over
+    let fade = ms(4.5);
+    if let Some(p) = (st[b_from] + fade..st[a_from]).find(|&p| out[p] != bd[p]) {
+        panic!("FM: engines, sample {p}: {} is not the delayed beeper's {}", out[p], bd[p]);
+    }
+    // no 20 ms of silence where both the FM (rests in the music are silent FM) and the delayed
+    // beeper sound
+    let w = ms(20.0);
+    for p in (st[d]..out.len() - w).step_by(w / 4) {
+        if bd[p..p + w].iter().any(|&x| x != 0) && fm_out[p..p + w].iter().any(|&x| x != 0) {
+            assert!(out[p..p + w].iter().any(|&x| x != 0), "silence at samples {p}..{}", p + w);
+        }
+    }
+    // FM in both FM: sound stretches, and the switches are crossfades, not cuts
+    let fm_in = |a: usize, b: usize| (st[a]..st[b]).filter(|&p| out[p] == fm_out[p] && fm_out[p] != bd[p]).count();
+    let (before, after) = (fm_in(d, b_from), fm_in(a_from, frames.len()));
+    println!("FM samples: {before} before FM: engines, {after} after");
+    assert!(before > 10_000 && after > 10_000, "FM: sound plays FM ({before}, {after})");
+    let sw = switches(&out, &fm_out, &bd, st[d]);
+    println!("switches: {sw:?}");
+    for &(a, b, to) in &sw {
+        assert!(b - a - 1 >= ms(2.0), "switch to {to:?} at sample {b}: a fade of {} samples", b - a - 1);
+    }
 }

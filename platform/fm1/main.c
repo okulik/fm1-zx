@@ -256,7 +256,7 @@ static void RAMTEXT game_step(void)
     zx_beeper_set_level(&beeper, level);
     e = zx_edges(m, &ne);
     n = zx_beeper_render(&beeper, e, ne, frame_samples);
-    snd_mixer_frame(&mixer, (uint8_t)fmzx_sound_mode, e, ne, level, frame_samples, n, mixed_samples);
+    snd_mixer_frame(&mixer, (uint8_t)fmzx_sound_mode, m, e, ne, level, frame_samples, n, mixed_samples);
     audio_push(mixed_samples, n);
     for (r = 0; r < LCD_ROWS / 8u; r++)
         game.dirty[r] = 0;

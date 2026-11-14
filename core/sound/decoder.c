@@ -974,5 +974,7 @@ void snd_decoder_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t sta
 		out->style = SND_STYLE_NONE;
 		out->confident = 0;
 	}
+	out->engine = 0;   /* method A: no engine, the voices hold for the whole frame */
+	out->n_ev = 0;
 	d->frames++;
 }

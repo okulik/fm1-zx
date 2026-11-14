@@ -3,26 +3,29 @@
 
 /* The mixer: Beeper mode copies the beeper; an FM mode plays the sound 3 frames
  * (SND_DELAY_FRAMES) late, each moment either the FM voices or the delayed
- * beeper, as the decoder decides.
+ * beeper, as the mode's method decides: FM_A the decoder (method A), FM_B the
+ * known engines (method B). Both methods are fed every frame in every mode.
  *
  * The delay is a sample FIFO (the ring): every frame pushes its n beeper
  * samples, and once the first SND_DELAY_FRAMES frames are in, every frame pops
  * n first. Its fill then stays at those first frames' sample count, so the
  * delayed stream is the beeper stream shifted by a constant: nothing repeated
- * or dropped, though frames have 880 or 881 samples. The decoder's decision for
+ * or dropped, though frames have 880 or 881 samples. Each method's decision for
  * frame t - 3 arrives with frame t, when the ring plays frame t - 3's sound.
  *
  * Three Q15 gains ramp by `step` per sample (a 4 ms crossfade):
  *   live_g  the live beeper: 1 in Beeper mode, 0 in an FM mode;
  *   del_g   the delayed path: 1 in an FM mode once `mute` has run out;
  *   fm_g    within the delayed path, FM against the delayed beeper: follows
- *           the hysteresis' fm_on.
+ *           the hysteresis' fm_on (one hysteresis, fed by the mode's method).
  * Beeper -> FM: live_g fades out at once; `mute` holds del_g at 0 until the
  * ring reaches the switch frame's first sample, then del_g fades in, so the
  * two fades meet on the same sound (60 ms apart) and the 3 frames already
  * played are not played again. FM -> Beeper: live_g and del_g cross at once
- * (the FM synth keeps rendering while del_g fades). In steady Beeper mode the
- * output is a plain copy and the ring and decoder are still fed. */
+ * (the FM synth keeps rendering while del_g fades). FM_A <-> FM_B: nothing but
+ * the method changes; the ring, the gains and the synth carry on, so only fm_g
+ * moves if the new method decides otherwise. In steady Beeper mode the output
+ * is a plain copy and the ring and both methods are still fed. */
 
 #include "sound.h"
 
@@ -37,6 +40,7 @@ void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)
 	if (!rate_num) rate_num = 1;
 	if (!rate_den) rate_den = 1;
 	snd_decoder_init(&m->dec);
+	snd_b_init(&m->b, snd_engine_table, snd_engine_count);
 	snd_fm_init(&m->fm, rate_num, rate_den);
 	for (i = 0; i < SND_RING_SAMPLES; i++)
 		m->ring[i] = 0;
@@ -52,6 +56,7 @@ void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)
 	m->step = (int32_t)((ONE + xf - 1u) / xf);
 	m->primed = 0;
 	m->mode = SND_MODE_BEEPER;
+	m->fm_choice = SND_MODE_FM_A;
 	m->started = 0;
 	m->fm_on = 0;
 	m->run = 0;
@@ -69,25 +74,30 @@ static int32_t toward(int32_t g, int32_t target, int32_t step)
 	return g;
 }
 
-/* FM after SND_ENTER_FRAMES confident decisions in a row, beeper after
- * SND_LEAVE_FRAMES unconfident ones. */
-static void hysteresis(snd_mixer *m, uint8_t confident)
+void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n)
+{
+	snd_b_init(&m->b, table, n);
+}
+
+/* FM after `enter` confident decisions in a row, beeper after SND_LEAVE_FRAMES
+ * unconfident ones. */
+static void hysteresis(snd_mixer *m, uint8_t confident, uint32_t enter)
 {
 	if ((confident != 0) == (m->fm_on != 0)) {
 		m->run = 0;
 		return;
 	}
 	m->run++;
-	if (m->run >= (m->fm_on ? SND_LEAVE_FRAMES : SND_ENTER_FRAMES)) {
+	if (m->run >= (m->fm_on ? SND_LEAVE_FRAMES : enter)) {
 		m->fm_on = !m->fm_on;
 		m->run = 0;
 	}
 }
 
-void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_edge *e, uint32_t n_edges, uint8_t start_level,
-                     const int16_t *beeper, uint32_t n, int16_t *out)
+void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_edge *e, uint32_t n_edges,
+                     uint8_t start_level, const int16_t *beeper, uint32_t n, int16_t *out)
 {
-	snd_frame fr;
+	snd_frame fa, fb, *fr;
 	int fm_mode, primed;
 	uint32_t i;
 
@@ -100,8 +110,14 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_edge *e, uint32_t n_ed
 	fm_mode = mode != SND_MODE_BEEPER;
 	primed = m->primed >= SND_DELAY_FRAMES;
 
-	snd_decoder_frame(&m->dec, e, n_edges, start_level, &fr);
-	if (primed) hysteresis(m, fr.confident);   /* earlier decisions are about frames before init */
+	snd_decoder_frame(&m->dec, e, n_edges, start_level, &fa);
+	snd_b_frame(&m->b, zm, e, n_edges, start_level, &fb);
+	/* the FM mode's method decides (Beeper mode: the last FM mode's, so its fade-out and a
+	 * switch back carry on with it); B's claims are exact, so one is enough to enter FM */
+	if (fm_mode) m->fm_choice = mode;
+	fr = m->fm_choice == SND_MODE_FM_B ? &fb : &fa;
+	if (primed)   /* earlier decisions are about frames before init */
+		hysteresis(m, fr->confident, m->fm_choice == SND_MODE_FM_B ? 1u : SND_ENTER_FRAMES);
 
 	if (!m->started) {
 		/* the first frame after init: no fade from the silence before it */
@@ -129,19 +145,15 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_edge *e, uint32_t n_ed
 		}
 	} else {
 		if (primed && (fm_mode || m->del_g)) {
-			snd_frame silent;
-			const snd_frame *src = &fr;
-			if (!fr.confident) {   /* FM voices only what the decoder is sure of */
+			if (!fr->confident) {   /* FM voices only what the method is sure of */
 				for (i = 0; i < SND_TONAL; i++) {
-					silent.tone[i].period_q8 = 0;
-					silent.tone[i].level = 0;
+					fr->tone[i].period_q8 = 0;
+					fr->tone[i].level = 0;
 				}
-				silent.drum = 0;
-				silent.style = SND_STYLE_NONE;
-				silent.confident = 0;
-				src = &silent;
+				fr->drum = 0;
+				fr->n_ev = 0;
 			}
-			snd_fm_render(&m->fm, src, out, n);
+			snd_fm_render(&m->fm, fr, out, n);
 		} else {
 			for (i = 0; i < n; i++)
 				out[i] = 0;

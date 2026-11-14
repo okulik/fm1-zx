@@ -217,7 +217,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
     let mut fm = Vec::new();
     let mut plays_fm = Vec::with_capacity(run.len());
     for (t, f) in run.iter().enumerate() {
-        let out = mixer.frame(SND_MODE_FM_A, &f.edges, f.start_level, &f.beeper);
+        let out = mixer.frame(SND_MODE_FM_A, None, &f.edges, f.start_level, &f.beeper);
         if opts.wav {
             fm.extend(out);
         }
@@ -229,7 +229,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
     let level = run.last().map_or(0, |f| f.edges.last().map_or(f.start_level, |e| e.level));
     let quiet = vec![0i16; run.last().map_or(0, |f| f.beeper.len())];
     while plays_fm.len() < run.len() {
-        mixer.frame(SND_MODE_FM_A, &[], level, &quiet);
+        mixer.frame(SND_MODE_FM_A, None, &[], level, &quiet);
         plays_fm.push(mixer.fm_on());
     }
     let pct = |n: usize| 100.0 * n as f64 / sounding.len().max(1) as f64;
