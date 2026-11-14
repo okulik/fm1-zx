@@ -18,7 +18,18 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_ERR_FORMAT, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_ERR_FORMAT, ZX_OUT_SITES, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+
+/// An `OUT` that changed the speaker level during a frame (see `zx_out_sites`).
+#[derive(Clone, Copy, Debug)]
+pub struct OutSite {
+    /// Address of the `OUT` instruction's first byte.
+    pub pc: u16,
+    /// Speaker edges it made this frame.
+    pub count: u16,
+    /// The registers at its last such `OUT`; `regs.pc` is the `OUT`'s address.
+    pub regs: zx_regs,
+}
 
 static ROM_48: &[u8; ZX_ROM_SIZE as usize] = include_bytes!("../../../../third_party/zx-rom/48.rom");
 
@@ -102,6 +113,17 @@ impl Machine {
             let p = sys::zx_edges(&*self.raw, &mut n);
             std::slice::from_raw_parts(p, n as usize)
         }
+    }
+
+    /// The distinct `OUT`s that made the last frame's speaker edges (at most `ZX_OUT_SITES`).
+    pub fn out_sites(&self) -> Vec<OutSite> {
+        let mut n = 0u32;
+        // SAFETY: the returned array holds `n` sites and lives as long as `self`.
+        let sites = unsafe {
+            let p = sys::zx_out_sites(&*self.raw, &mut n);
+            std::slice::from_raw_parts(p, n as usize)
+        };
+        sites.iter().map(|s| OutSite { pc: s.pc, count: s.count, regs: s.regs }).collect()
     }
 
     /// Beeper level in effect at the start of the current edge list; feed it

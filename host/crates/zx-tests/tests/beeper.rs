@@ -16,7 +16,7 @@ fn per_frame(abs: &[(u32, u8)], frames: u32) -> Vec<Vec<zx_edge>> {
         .map(|f| {
             abs.iter()
                 .filter(|(t, _)| *t >= f * FRAME && *t < (f + 1) * FRAME)
-                .map(|&(t, level)| zx_edge { tstate: t - f * FRAME, level })
+                .map(|&(t, level)| zx_edge { tstate: t - f * FRAME, level, pc: 0 })
                 .collect()
         })
         .collect()
@@ -60,7 +60,7 @@ fn silence_is_zero() {
 #[test]
 fn dc_decays() {
     let mut b = Beeper::new(FM1.0, FM1.1);
-    let mut out = b.render(&[zx_edge { tstate: 0, level: 2 }]);
+    let mut out = b.render(&[zx_edge { tstate: 0, level: 2, pc: 0 }]);
     for _ in 0..49 {
         out.extend(b.render(&[]));
     }
@@ -84,14 +84,14 @@ fn box_filter_half_level() {
     // 35 kHz: each sample spans exactly 100 T-states.
     let mut b = Beeper::new(35_000, 1);
     b.test_dc_block(false);
-    let out = b.render(&[zx_edge { tstate: 250, level: 2 }]);
+    let out = b.render(&[zx_edge { tstate: 250, level: 2, pc: 0 }]);
     assert_eq!(out[1], 0);
     assert!((out[2] as i32 - 6000).abs() <= 1, "{}", out[2]);
     assert_eq!(out[3], 12000);
     // a quarter-way edge, and levels MIC / both
     let mut b = Beeper::new(35_000, 1);
     b.test_dc_block(false);
-    let out = b.render(&[zx_edge { tstate: 125, level: 1 }, zx_edge { tstate: 300, level: 3 }]);
+    let out = b.render(&[zx_edge { tstate: 125, level: 1, pc: 0 }, zx_edge { tstate: 300, level: 3, pc: 0 }]);
     assert!((out[1] as i32 - 750).abs() <= 1, "{}", out[1]);
     assert_eq!(out[2], 1000);
     assert_eq!(out[3], 13000);
@@ -101,7 +101,7 @@ fn box_filter_half_level() {
 fn level_carries_across_frames() {
     let mut b = Beeper::new(48_000, 1);
     b.test_dc_block(false);
-    b.render(&[zx_edge { tstate: 100, level: 2 }]);
+    b.render(&[zx_edge { tstate: 100, level: 2, pc: 0 }]);
     let out = b.render(&[]);
     assert!(out.iter().all(|&x| x == 12000));
 }

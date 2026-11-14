@@ -608,5 +608,6 @@ name = "zx-tests"
 version = "0.1.0"
 dependencies = [
  "lz4_flex",
+ "music",
  "zx-sys",
 ]

@@ -312,7 +312,7 @@ fn stream(mut spans: Spans, frames: usize) -> Stream {
     let mut out = vec![Vec::new(); frames];
     let mut push = |t: u64, level: u8| {
         if t < end {
-            out[(t / FRAME_T) as usize].push(zx_edge { tstate: (t % FRAME_T) as u32, level });
+            out[(t / FRAME_T) as usize].push(zx_edge { tstate: (t % FRAME_T) as u32, level, pc: 0 });
         }
     };
     let mut cur: Option<(u64, u64)> = None;

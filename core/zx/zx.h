@@ -31,7 +31,15 @@ typedef struct {
 typedef struct {
 	uint32_t tstate;   /* frame T-state of the OUT's I/O cycle */
 	uint8_t level;     /* (OUT 0xFE value >> 3) & 3: bit0 MIC, bit1 EAR */
+	uint16_t pc;       /* address of the OUT instruction's first byte (opcode or ED prefix) */
 } zx_edge;
+
+#define ZX_OUT_SITES 4u
+typedef struct {
+	uint16_t pc;       /* address of an OUT that changed the speaker level this frame */
+	uint16_t count;    /* speaker edges it made this frame */
+	zx_regs regs;      /* the registers at its last such OUT (pc field = the OUT's address) */
+} zx_out_site;
 
 typedef struct zx_machine {
 	Z80 cpu;
@@ -48,6 +56,7 @@ typedef struct zx_machine {
 	uint32_t insn_t0;                         /* frame T-state at which the current instruction began */
 	uint32_t wait;                            /* contention delay accumulated in the current instruction */
 	uint8_t insn_open;                        /* a prefix has been fetched; the instruction continues */
+	uint16_t insn_pc;                         /* address of the current instruction's first byte */
 	uint32_t io_t;                            /* frame T-state at which the current I/O cycle starts */
 
 	/* Tape state (tape.c). */
@@ -69,6 +78,9 @@ typedef struct zx_machine {
 	uint16_t edge_count;
 	uint8_t pend_edge_count, pend_border_count;   /* changes by the frame-overshooting instruction */
 	zx_edge pend_edges[4];
+	zx_regs pend_regs[4];                     /* registers at each pending edge's OUT */
+	uint8_t site_count;
+	zx_out_site sites[ZX_OUT_SITES];
 	zx_edge pend_borders[4];                  /* .level holds the colour */
 	zx_edge edges[ZX_MAX_EDGES];
 } zx_machine;
@@ -105,6 +117,11 @@ void zx_set_kempston(zx_machine *m, uint8_t bits);        /* bit0 right, 1 left,
  * call zx_beeper_set_level() with it before rendering the list. */
 const zx_edge *zx_edges(const zx_machine *m, uint32_t *count);
 uint8_t zx_edges_start_level(const zx_machine *m);
+
+/* The OUTs that made this frame's speaker edges, one entry per distinct OUT
+ * address, first seen first; at most ZX_OUT_SITES (later addresses are not
+ * listed, their edges still carry their pc). Valid like zx_edges(). */
+const zx_out_site *zx_out_sites(const zx_machine *m, uint32_t *count);
 
 /* Border colour (0-7) on frame line 0-311 of the frame run last. */
 uint8_t zx_border_line(const zx_machine *m, unsigned frame_line);

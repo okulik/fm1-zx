@@ -84,7 +84,7 @@ impl Builder {
         let mut frames = vec![Vec::new(); n];
         for &(t, level) in &self.edges {
             if t < end {
-                frames[(t / FRAME_T) as usize].push(zx_edge { tstate: (t % FRAME_T) as u32, level });
+                frames[(t / FRAME_T) as usize].push(zx_edge { tstate: (t % FRAME_T) as u32, level, pc: 0 });
             }
         }
         let span = |i: usize| (i as u64 * FRAME_T, (i as u64 + 1) * FRAME_T);

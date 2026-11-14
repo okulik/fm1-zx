@@ -204,7 +204,7 @@ fn edges_from(times: &[u32], start_level: u8) -> Vec<zx_edge> {
         .iter()
         .map(|&t| {
             level ^= 2;
-            zx_edge { tstate: t, level }
+            zx_edge { tstate: t, level, pc: 0 }
         })
         .collect()
 }

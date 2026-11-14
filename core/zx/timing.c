@@ -109,6 +109,7 @@ static uint8_t cpu_fetch_opcode(void *context, uint16_t address)
 		z80_insn_clock_start(&m->clock, 0);
 		m->insn_t0 = m->run_base + (uint32_t)m->cpu.cycles;
 		m->wait = 0;
+		m->insn_pc = address;
 	}
 	extra = z80_insn_clock_extra_m1(&m->clock, opcode);
 	/* The table sets clock.cycles to 4 only for CB/ED-prefixed opcodes; for DD/FD

@@ -207,7 +207,7 @@ fn plain_tone_after_slots_music() {
             (1..69_800 / hp)
                 .map(|i| {
                     level ^= 2;
-                    zx_sys::zx_edge { tstate: i * hp, level }
+                    zx_sys::zx_edge { tstate: i * hp, level, pc: 0 }
                 })
                 .collect(),
         );
@@ -271,7 +271,7 @@ fn effect_after_slots_music_stays_beeper() {
                 (1..69_888u32 / 2_917)
                     .map(|i| {
                         level ^= 2;
-                        zx_sys::zx_edge { tstate: i * 2_917, level }
+                        zx_sys::zx_edge { tstate: i * 2_917, level, pc: 0 }
                     })
                     .collect()
             })
@@ -370,7 +370,7 @@ fn shifted(frames: &[(Vec<zx_sys::zx_edge>, u8)], shift: u64, upto: usize) -> Ve
     for (f, (edges, _)) in frames.iter().enumerate().take(upto) {
         for e in edges {
             let t = f as u64 * 69_888 + e.tstate as u64 + shift;
-            buckets[(t / 69_888) as usize].push(zx_sys::zx_edge { tstate: (t % 69_888) as u32, level: e.level });
+            buckets[(t / 69_888) as usize].push(zx_sys::zx_edge { tstate: (t % 69_888) as u32, level: e.level, pc: 0 });
         }
     }
     for b in buckets {

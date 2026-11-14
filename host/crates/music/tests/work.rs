@@ -29,7 +29,7 @@ fn edges(mut t: Vec<u32>, level: &mut u8) -> Vec<zx_edge> {
     t.into_iter()
         .map(|x| {
             *level ^= 2;
-            zx_edge { tstate: x, level: *level }
+            zx_edge { tstate: x, level: *level, pc: 0 }
         })
         .collect()
 }

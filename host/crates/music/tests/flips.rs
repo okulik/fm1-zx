@@ -192,7 +192,7 @@ fn effect_after_music_stays_beeper() {
             t.into_iter()
                 .map(|x| {
                     level ^= 2;
-                    zx_sys::zx_edge { tstate: x, level }
+                    zx_sys::zx_edge { tstate: x, level, pc: 0 }
                 })
                 .collect(),
         );

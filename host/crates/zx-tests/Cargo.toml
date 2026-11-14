@@ -16,4 +16,5 @@ zx-sys = { path = "../zx-sys" }
 workspace = true
 
 [dev-dependencies]
+music = { path = "../music" }
 lz4_flex = "0.14.0"
