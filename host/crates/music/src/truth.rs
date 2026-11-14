@@ -15,12 +15,12 @@
 //!   duty thresholds at 9500h / 950Ah / 9512h (0 = silent). f = step x 3.5 MHz / (loop x 65536).
 //!   The drum routines at 9496h (a tone burst) and 94ADh (ROM noise) stop the loop.
 //! - Cave Runner (for the local corpus tool only; never loaded by committed tests): the title
-//!   tune (loop 92F8h-930Dh, 56.6 T per pass, IY pointing at [duration, N1, N2],
-//!   f = 3.5 MHz / (2 x N x 56.6)) and the in-game tune (burst loop 8852h, 40 T per pass, note
+//!   tune (loop 92F8h-930Dh, IY pointing at [duration, N1, N2]; a channel's half-period
+//!   [`half_mm_title`] depends on both counts) and the in-game tune (burst loop 8852h, 40 T per pass, note
 //!   index 845Bh into the table at 858Ch, flag 845Ch bit 1 = off, f = 3.5 MHz / (2 x E x 40)).
-//! - Unison (for the local corpus tool only, as Cave Runner): the melody loop 81C6h-81E9h, 48.5 T
-//!   per pass on average, two 16-bit counters reloaded from the operands at 81CDh (N) and 81DFh
-//!   (N - 1), each flipping the speaker: f = 3.5 MHz / (2 x N x 48.5), read while the PC is in
+//! - Unison (for the local corpus tool only, as Cave Runner): the melody loop 81C6h-81E9h, two
+//!   16-bit counters reloaded from the operands at 81CDh (N) and 81DFh (N - 1), each flipping the
+//!   speaker (a channel's half-period [`half_unison`] depends on both), read while the PC is in
 //!   81B4h-81E9h (the drums run from the interrupt routine and are not read).
 
 use zx_sys::Machine;
@@ -31,9 +31,24 @@ const CPU_HZ: f64 = 3_500_000.0;
 /// included).
 pub const LOOP_CASTAWAY: f64 = 156.6;
 pub const LOOP_COLONY8: f64 = 155.9;
-pub const LOOP_MM_TITLE: f64 = 56.6;
 pub const LOOP_MM_GAME: f64 = 40.0;
-pub const LOOP_UNISON: f64 = 48.5;
+
+/// Cave Runner's title tune: the half-period (T) of a channel counting `n` passes while the other
+/// counts `other` (0 is 256 for both). A pass is 56 T, 11 more every 256 passes (B wraps), 21 more
+/// for each counter reloaded in it and about 2 T of the OUT's contention after each reload; the
+/// other channel reloads n / other times in the half-period.
+pub fn half_mm_title(n: u32, other: u32) -> f64 {
+    let (n, o) = (f64::from(if n == 0 { 256 } else { n }), f64::from(if other == 0 { 256 } else { other }));
+    (56.0 + 11.0 / 256.0) * n + 23.0 * (1.0 + n / o)
+}
+
+/// Unison's melody: the half-period (T) of a channel counting `n` passes while the other counts
+/// `other` (0 is 65,536). A pass is 48 T, 46 more for each counter reloaded in it and about 1.5 T
+/// of the OUT's contention; the other channel reloads n / other times in the half-period.
+pub fn half_unison(n: u32, other: u32) -> f64 {
+    let o = if other == 0 { 65_536.0 } else { f64::from(other) };
+    48.0 * f64::from(n) + 47.5 * (1.0 + f64::from(n) / o)
+}
 
 /// The engines with a note reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,13 +193,8 @@ impl Colony8Drums {
 pub fn cave_runner(m: &Machine) -> Option<Vec<(usize, f64)>> {
     let r = m.regs();
     if (0x92dc..=0x932f).contains(&r.pc) {
-        let mut v = Vec::new();
-        for ch in 0..2u16 {
-            let n = m.peek(r.iy.wrapping_add(1 + ch)) as f64;
-            let n = if n == 0.0 { 256.0 } else { n };
-            v.push((ch as usize, CPU_HZ / (2.0 * n * LOOP_MM_TITLE)));
-        }
-        return Some(v);
+        let n = [1, 2].map(|k| u32::from(m.peek(r.iy.wrapping_add(k))));
+        return Some((0..2).map(|ch| (ch, CPU_HZ / (2.0 * half_mm_title(n[ch], n[1 - ch])))).collect());
     }
     if (0x8000..0x9000).contains(&r.pc) && m.peek(0x845c) & 2 == 0 {
         let idx = m.peek(0x845b);
@@ -201,7 +211,7 @@ pub fn unison(m: &Machine) -> Option<Vec<(usize, f64)>> {
     if !(0x81b4..=0x81e9).contains(&m.regs().pc) {
         return None;
     }
-    let word = |a: u16| m.peek(a) as u16 | (m.peek(a + 1) as u16) << 8;
-    let v = [word(0x81cd), word(0x81df)].into_iter().enumerate().filter(|&(_, n)| n != 0);
-    Some(v.map(|(ch, n)| (ch, CPU_HZ / (2.0 * n as f64 * LOOP_UNISON))).collect())
+    let word = |a: u16| u32::from(m.peek(a)) | u32::from(m.peek(a + 1)) << 8;
+    let n = [word(0x81cd), word(0x81df)];
+    Some((0..2).filter(|&ch| n[ch] != 0).map(|ch| (ch, CPU_HZ / (2.0 * half_unison(n[ch], n[1 - ch])))).collect())
 }

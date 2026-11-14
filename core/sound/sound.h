@@ -420,7 +420,8 @@ typedef struct {          /* what B saw in one frame, when it arrived */
 	                       * min_len entries: bv silent, where the note before ended) */
 	snd_voice bv[SND_TONAL];
 	uint32_t t_step;
-	uint8_t next;         /* the engine moved on to the voices nv at t_next, after its last edge */
+	uint8_t next;         /* the engine moved on to the voices nv at t_next, after its last edge
+	                       * (played if the next frame is MINE and passes: nothing checks them here) */
 	snd_voice nv[SND_TONAL];
 	uint32_t t_next;
 	uint32_t t_first, t_last;   /* the first and last tonal edge */

@@ -19,7 +19,8 @@
  *     fails is not B's. The edges are used only for this and for where events go: B never takes
  *     a pitch from them.
  * Then, SND_DELAY_FRAMES later, the decision (decide): the frame's voice changes as events at
- * the first edge with the new voices, the drum on at its first edge and off after its last, an
+ * the first edge with the new voices (the note it moved on to after its last edge only if the
+ * next frame is the engine's and passes), the drum on at its first edge and off after its last, an
  * engine that stops (no edge of its own for longer than twice its longest period) releasing its
  * voices half a period after its last edge, and up to SND_B_HOLD silent frames after an engine's
  * last edge claimed as its silence (the voices ring out on their envelopes).
@@ -608,7 +609,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 	classifier cl;
 	uint32_t i, k, best = NOWHERE, best_t = 0, from = 0, row = 0, chan, stop = 0;
 	uint32_t last_of[ZX_OUT_SITES];
-	int foreign = 0;
+	int foreign = 0, tonal_site = 0;
 	snd_b_read rd;
 
 	r->kind = SND_B_NONE;
@@ -670,6 +671,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 			r->t_last = e[i].tstate;
 			r->tonal = 1;
 			if (en->sites[s].role == SND_SITE_STOP) stop = e[i].tstate + 1u;
+			else tonal_site = 1;
 		}
 	}
 	if (foreign) return;
@@ -690,6 +692,8 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 				r->v[k] = b->lastv[k];
 			r->read = 1;
 		}
+		/* tonal edges all from sites past the listed ones (no registers, not read): unchecked */
+		if (tonal_site) r->ok = 0;
 		return;
 	}
 	for (k = 0; k < SND_TONAL; k++) {
@@ -852,17 +856,16 @@ static uint32_t next_edge(const snd_b *b, uint32_t f, int drum)
 static void decide(snd_b *b, snd_frame *out)
 {
 	const uint32_t f = b->frames - 1u - SND_DELAY_FRAMES;   /* b->frames counts the frame just fed */
-	const snd_b_rec *r = &b->rec[f % SND_HIST];
+	const snd_b_rec *r = &b->rec[f % SND_HIST], *nx = &b->rec[(f + 1u) % SND_HIST];
 	const snd_engine *en = r->entry ? &b->table[r->entry - 1u] : 0;
 	snd_voice cur[SND_TONAL];
 	ev_list l;
 	uint32_t k, i;
 	int conf;
 
-	if (r->kind == SND_B_MINE) {   /* (ok 2: if the next frame carries the note on and passes) */
-		const snd_b_rec *nx = &b->rec[(f + 1u) % SND_HIST];
+	if (r->kind == SND_B_MINE)   /* (ok 2: if the next frame carries the note on and passes) */
 		conf = r->ok == 1 || (r->ok == 2 && nx->cont && nx->ok == 1);
-	} else if (r->kind == SND_B_NONE)
+	else if (r->kind == SND_B_NONE)
 		conf = b->engine && b->held < SND_B_HOLD;
 	else
 		conf = 0;
@@ -908,7 +911,7 @@ static void decide(snd_b *b, snd_frame *out)
 				cur[k] = r->v[k];
 			}
 		}
-		if (r->next) {   /* it moved on after its last edge */
+		if (r->next && nx->kind == SND_B_MINE && nx->ok == 1) {   /* it moved on after its last edge (if the next frame passes) */
 			for (k = 0; k < SND_TONAL; k++) {
 				if (r->nv[k].period_q8 == cur[k].period_q8 && r->nv[k].level == cur[k].level) continue;
 				add(&l, r->t_next, (uint8_t)k, r->nv[k].period_q8, r->nv[k].level);
@@ -985,13 +988,21 @@ void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n)
 		}
 	}
 	for (k = 0; k < SND_HIST; k++) {
+		uint32_t v;
 		b->rec[k].kind = SND_B_NONE;
 		b->rec[k].entry = 0;
+		b->rec[k].ok = 0;
 		b->rec[k].read = 0;
 		b->rec[k].carry = 0;
 		b->rec[k].next = 0;
 		b->rec[k].step = 0;
+		b->rec[k].whole = b->rec[k].cont = 0;
 		b->rec[k].t_first = b->rec[k].d_first = NOWHERE;
+		b->rec[k].t_last = 0;
+		for (v = 0; v < SND_TONAL; v++) {
+			b->rec[k].v[v].period_q8 = 0;
+			b->rec[k].v[v].level = 0;
+		}
 	}
 	silence(b);
 	for (k = 0; k < SND_TONAL; k++) {

@@ -74,6 +74,7 @@ static const uint16_t cw_wild[] = { 0x03, 0x09, 0x0D, 0x11, 0x16, 0x1D, 0x21, 0x
 static const uint16_t cw_reloc[] = { 0x06, 0x2B, 0x34, 0x39, 0x42, 0x47, 0x4B, 0x4E, 0x51 };
 static const snd_engine_site cw_sites[] = { { 0x18, SND_SITE_TONAL, 0 }, { 0x22, SND_SITE_TONAL, 1 } };
 static const uint16_t cw_pos[] = { 0, 44 };
+_Static_assert(sizeof cw_pos / sizeof cw_pos[0] == 2, "a pos per channel");
 
 #define SND_ENGINE_CASTAWAY {                                                                          \
 	"Castaway", 0x45eefa6915ef8919ull, 0x53, sizeof cw_wild / sizeof cw_wild[0], sizeof cw_reloc / sizeof cw_reloc[0], \
@@ -159,6 +160,7 @@ static const snd_engine_site c8_sites[] = {
 	{ 0x13, SND_SITE_DRUM, 0 },  { 0x27, SND_SITE_DRUM, 0 },  { 0x2D, SND_SITE_DRUM, 0 },
 };
 static const uint16_t c8_pos[] = { 0, 34, 83 };
+_Static_assert(sizeof c8_pos / sizeof c8_pos[0] == 3, "a pos per channel");
 
 #define SND_ENGINE_COLONY8 {                                                                           \
 	"Colony 8", 0xae5de8a81485ea1full, 0x93, sizeof c8_wild / sizeof c8_wild[0], sizeof c8_reloc / sizeof c8_reloc[0], \
@@ -205,14 +207,16 @@ static uint32_t peek16(const zx_machine *m, uint32_t a)
 	return zx_peek(m, (uint16_t)a) | (uint32_t)zx_peek(m, (uint16_t)(a + 1u)) << 8;
 }
 
-/* Cave Runner's title tune (anchor 92DCh, the note's setup and its loop to 930Eh; 56 T a pass,
- * 21 more for each counter reloaded in it, plus contention: 56.6 T on average). IY points at the
- * note [length, N1, N2]; each pass OUTs A from +1Ch, D and E count down from N1 and N2 (0: 256)
- * and each that reaches 0 is reloaded and flips the speaker (XOR A, 18h): two channels flipping
- * the one OUT, f = 3.5 MHz / (2 x N x 56.6). B (from 0) and C (from the length) count the
- * note's passes; the CALLs at +0Eh and +17h move with the code. */
-#define MMT_PERIOD_Q8 28979u   /* 2 x 56.6 x 256 */
-
+/* Cave Runner's title tune (anchor 92DCh, the note's setup and its loop to 930Eh). IY points at
+ * the note [length, N1, N2]; each pass OUTs A from +1Ch, D and E count down from N1 and N2 (0:
+ * 256) and each that reaches 0 is reloaded and flips the speaker (XOR A, 18h): two channels
+ * flipping the one OUT. A pass is 56 T, 11 more every 256 passes (B wraps), and 21 more for each
+ * counter reloaded in it, plus about 2 T of the OUT's contention after each reload (56 T is a
+ * whole number of contention cycles, so the OUT keeps its place in them until a reload moves
+ * it). A channel's half-period is n passes, in which the other (n') reloads n / n' times on
+ * average: half = (56 + 11/256) n + 23 (1 + n / n') T, f = 3.5 MHz / (2 x half) (within 0.03% of
+ * the spacing of its flips). B (from 0) and C (from the length) count the note's passes; the
+ * CALLs at +0Eh and +17h move with the code. */
 static void read_mm_title(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	const uint32_t k = 256u * ((zx_peek(m, r->iy) - r->bc) & 0xFFu) + ((0u - (r->bc >> 8)) & 0xFFu);   /* passes */
@@ -223,7 +227,9 @@ static void read_mm_title(const zx_machine *m, uint16_t a, uint32_t site, const 
 	for (c = 0; c < 2; c++) {
 		n[c] = zx_peek(m, (uint16_t)(r->iy + 1u + c));
 		if (!n[c]) n[c] = 256u;
-		out->v[c].period_q8 = n[c] * MMT_PERIOD_Q8;
+	}
+	for (c = 0; c < 2; c++) {
+		out->v[c].period_q8 = 28694u * n[c] + 11776u + 11776u * n[c] / n[1u - c];   /* 2 x 256 x half */
 		out->v[c].level = 200;
 		q += 5376u * (k / n[c]);   /* 21 x 256 per reload */
 	}
@@ -262,21 +268,28 @@ static const snd_engine_site mmg_sites[] = { { 0x33, SND_SITE_TONAL, 0 } };
 	"Cave Runner in game", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, mmg_reloc, mmg_sites, beep_pos, read_mm_game, 0, 1, 0, \
 }
 
-/* Unison's music (anchor 81B4h, the melody to the last drum's end at 82A6h). The melody (+12h,
- * 48 T a pass, 46 more for each counter reloaded): BC counts down from N (the operand at +19h)
- * and DE from N - 1 (+2Bh), each reload ADDs 10h to A' and OUTs it (+1Eh, +30h), so each
- * flips the speaker: one note doubled a step apart, f = 3.5 MHz / (2 x N x 48.5). The interrupt
- * routine (+36h) sequences it and runs the four drums (+A3h, +B6h, +CAh, +DEh), each OUTing
- * from two sites, until the next interrupt. */
+/* Unison's music (anchor 81B4h, the melody to the last drum's end at 82A6h). The melody (+12h):
+ * BC counts down from N (the operand at +19h) and DE from N - 1 (+2Bh), each reload ADDs 10h to
+ * A' and OUTs it (+1Eh, +30h), so each flips the speaker: one note doubled a step apart. A pass
+ * is 48 T, and 46 more for each counter reloaded in it, plus about 1.5 T of the OUT's contention
+ * (48 T is a whole number of contention cycles, so the OUT keeps its place in them until a
+ * reload moves it). A channel's half-period is n passes, in which the other (n') reloads n / n'
+ * times on average: half = 48 n + 47.5 (1 + n / n') T, f = 3.5 MHz / (2 x half) (within 0.04% of
+ * the spacing of its flips). The interrupt routine (+36h) sequences it and runs the four drums
+ * (+A3h, +B6h, +CAh, +DEh), each OUTing from two sites, until the next interrupt. */
 static void read_unison(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
-	uint32_t c;
+	uint32_t c, n[2];
 
 	(void)site;
 	(void)r;
+	for (c = 0; c < 2; c++)
+		n[c] = peek16(m, a + 0x19u + 0x12u * c);
 	for (c = 0; c < 2; c++) {
-		out->v[c].period_q8 = peek16(m, a + 0x19u + 0x12u * c) * 24832u;   /* 2 x 48.5 x 256 */
-		out->v[c].level = out->v[c].period_q8 ? 200 : 0;
+		const uint32_t o = n[1u - c] ? n[1u - c] : 65536u;   /* (0: the counter runs 65,536 passes) */
+		if (!n[c]) continue;   /* silent */
+		out->v[c].period_q8 = 24576u * n[c] + 24320u + 24320u * n[c] / o;   /* 2 x 256 x half */
+		out->v[c].level = 200;
 	}
 }
 

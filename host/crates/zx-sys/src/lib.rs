@@ -624,7 +624,68 @@ impl SndEngines {
         // SAFETY: the table holds `n` entries and index < n; `m.raw` is an initialised machine.
         unsafe { sys::snd_engine_digest(&*m.raw, self.raw.table.add(index), anchor) }
     }
+
+    /// The shape of this table's entries (host tests: the table's own consistency).
+    pub fn entries(&self) -> Vec<SndEngineEntry> {
+        (0..self.raw.n as usize)
+            .map(|i| {
+                // SAFETY: the table holds `n` entries; each `sites` array holds `n_sites` entries
+                // and, for an entry with a pass, `pos` one per channel (engines_builtin.h checks
+                // the built-in ones at compile time).
+                unsafe {
+                    let en = &*self.raw.table.add(i);
+                    let sites = (0..en.n_sites as usize).map(|s| *en.sites.add(s)).map(|s| SndEngineSite { off: s.off, role: s.role, chan: s.chan }).collect();
+                    let pos = if en.pass != 0 { (0..en.channels as usize).map(|c| *en.pos.add(c)).collect() } else { Vec::new() };
+                    SndEngineEntry { name: self.name(i as u8 + 1), len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, sites, pos }
+                }
+            })
+            .collect()
+    }
+
+    /// The voices entry `index`'s reader gives with its anchor at `anchor` in `m`, `site` the tonal
+    /// site whose registers `regs` are (host tests: a reader's formula).
+    pub fn read(&self, m: &Machine, index: usize, anchor: u16, site: u32, regs: &zx_regs) -> [SndVoice; SND_TONAL] {
+        assert!(index < self.raw.n as usize, "entry {index}");
+        // SAFETY: as in `digest`; snd_b_read is plain data, zero a valid start.
+        unsafe {
+            let en = &*self.raw.table.add(index);
+            assert!((site as usize) < en.n_sites as usize, "site {site}");
+            let mut out: sys::snd_b_read = MaybeUninit::zeroed().assume_init();
+            (en.read.expect("a reader"))(&*m.raw, anchor, site, regs, &mut out);
+            out.v.map(|v| SndVoice { period_q8: v.period_q8, level: v.level })
+        }
+    }
 }
+
+/// One site of a [`SndEngineEntry`] (`snd_engine_site`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SndEngineSite {
+    pub off: u16,
+    /// [`SND_SITE_TONAL`], [`SND_SITE_DRUM`] or [`SND_SITE_STOP`].
+    pub role: u8,
+    /// The tonal channel, or [`SND_CHAN_ANY`].
+    pub chan: u8,
+}
+
+/// The shape of a method B table entry (`snd_engine`).
+#[derive(Clone, Debug)]
+pub struct SndEngineEntry {
+    pub name: String,
+    /// Signature bytes from the anchor.
+    pub len: u16,
+    pub channels: u8,
+    /// T-states of a pass (0: none).
+    pub pass: u16,
+    pub flips: bool,
+    pub sites: Vec<SndEngineSite>,
+    /// Per channel, its OUT's T-state in a pass (only for an entry with a pass).
+    pub pos: Vec<u16>,
+}
+
+pub const SND_SITE_TONAL: u8 = sys::snd_site_role_SND_SITE_TONAL as u8;
+pub const SND_SITE_DRUM: u8 = sys::snd_site_role_SND_SITE_DRUM as u8;
+pub const SND_SITE_STOP: u8 = sys::snd_site_role_SND_SITE_STOP as u8;
+pub const SND_CHAN_ANY: u8 = sys::SND_CHAN_ANY as u8;
 
 impl Default for SndEngines {
     fn default() -> Self {

@@ -13,7 +13,10 @@ use fmzx_pack::testprogs::{beep_tap, burst_sna, noise_sna, out_sites_sna, BEEP_B
 use music::score::midi_of;
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, hz_of_period_q8, repo, test_sna, Frame, RATE};
-use zx_sys::{zx_edge, Beeper, KeyMapper, KmInput, Machine, SndEngines, SndFrame, SndMixer, SndVoice, SND_DELAY_FRAMES, SND_MODE_FM_B};
+use zx_sys::{
+    zx_edge, Beeper, KeyMapper, KmInput, Machine, SndEngines, SndFrame, SndMixer, SndVoice, SND_CHAN_ANY, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_SITE_DRUM,
+    SND_SITE_STOP, SND_SITE_TONAL,
+};
 
 /// The voices at a decision's end: its start state with its events applied.
 fn end_voices(f: &SndFrame) -> [SndVoice; 3] {
@@ -688,6 +691,128 @@ fn load(sna: &[u8]) -> Machine {
     let mut m = Machine::new();
     m.load_sna(sna).expect("loads");
     m
+}
+
+#[test]
+fn unlisted_tonal_edges_beeper() {
+    // Colony 8 frames whose edges all come from its drums (the loop stopped, so the frame's
+    // listed OUT sites are the drums') with edges from a tonal OUT added after them: those come
+    // from no listed site, so no registers read them and nothing checks them: not claimed
+    const TONAL: u16 = 0x9505;
+    let drum_pcs = [0x94a6u16, 0x94ba, 0x94c0];
+    let (from, to) = (125, 1550);
+    let dry = run(music::colony8(), to + 4, SndEngines::new(), None, no_edit);
+    let picked: Vec<usize> =
+        (from..to).filter(|&i| dry.dec[i].confident != 0 && !dry.frames[i].edges.is_empty() && dry.frames[i].edges.iter().all(|e| drum_pcs.contains(&e.pc)) && dry.frames[i].edges.last().unwrap().tstate < 60_000).collect();
+    assert!(picked.len() >= 10, "{} drum-only frames", picked.len());
+    let r = run(music::colony8(), to + 4, SndEngines::new(), None, |i, _, edges| {
+        if let Some(edges) = edges.filter(|_| picked.contains(&i)) {
+            let last = *edges.last().unwrap();
+            let mut level = last.level;
+            for k in 0..6u32 {
+                level ^= 2;
+                edges.push(zx_edge { tstate: last.tstate + 2_000 + 600 * k, level, pc: TONAL });
+            }
+        }
+    });
+    let claimed: Vec<usize> = picked.iter().copied().filter(|&i| r.dec[i].confident != 0).collect();
+    println!("{} drum-only Colony 8 frames with tonal edges from an unlisted OUT added; claimed {claimed:?}", picked.len());
+    assert!(claimed.is_empty(), "frames claimed with unchecked tonal edges: {claimed:?}");
+}
+
+#[test]
+fn moved_on_needs_next_frame() {
+    // Castaway frames whose decision starts the next note after the frame's last edge (the engine
+    // moved on to it, read at the frame's end, nothing in the frame to check it by): with other
+    // code's edge added to the next frame (not the engine's), that note is not played there
+    let dry = run(music::castaway(), 1500, SndEngines::new(), None, no_edit);
+    let after_last = |dec: &SndFrame, f: &Frame| -> bool {
+        let last = f.edges.last().map_or(0, |e| e.tstate);
+        dec.confident != 0 && !f.edges.is_empty() && dec.events().iter().any(|e| e.voice < 3 && e.period_q8 != 0 && e.level != 0 && e.t > last)
+    };
+    let picked: Vec<usize> = (100..1490).filter(|&i| after_last(&dry.dec[i], &dry.frames[i]) && !dry.frames[i + 1].edges.is_empty()).collect();
+    assert!(picked.len() >= 5, "{} frames with a note after their last edge", picked.len());
+    let r = run(music::castaway(), 1500, SndEngines::new(), None, |i, _, edges| {
+        if let Some(edges) = edges.filter(|_| i > 0 && picked.contains(&(i - 1))) {
+            let last = *edges.last().unwrap();
+            edges.push(zx_edge { tstate: (last.tstate + 100).min(69_800), level: last.level ^ 2, pc: 0xf000 });
+        }
+    });
+    let played: Vec<usize> = picked.iter().copied().filter(|&i| after_last(&r.dec[i], &r.frames[i])).collect();
+    println!("{} Castaway frames with a note started after their last edge; with the next frame not the engine's, still started in {played:?}", picked.len());
+    assert!(played.is_empty(), "notes played with nothing to check them: {played:?}");
+}
+
+#[test]
+fn engine_tables_consistent() {
+    // every entry of the firmware's table and the test table: a site's channel is a channel of
+    // the entry (SND_CHAN_ANY only where each edge flips one channel: the check finds which), its
+    // offset inside the signature, and an entry with a pass has a pos per channel, in order, inside
+    // the pass (each entry's pos array length is checked at compile time)
+    for (what, b) in [("built-in", SndEngines::new()), ("test", SndEngines::new_test())] {
+        let entries = b.entries();
+        assert!(!entries.is_empty(), "{what}");
+        for en in &entries {
+            let name = &en.name;
+            assert!(en.channels >= 1 && en.channels as usize <= 3, "{what} {name}: {} channels", en.channels);
+            for s in &en.sites {
+                assert!([SND_SITE_TONAL, SND_SITE_DRUM, SND_SITE_STOP].contains(&s.role), "{what} {name}: role {}", s.role);
+                if s.chan == SND_CHAN_ANY {
+                    assert!(en.flips, "{what} {name}: a site of any channel without flips");
+                } else {
+                    assert!(s.chan < en.channels, "{what} {name}: site at +{:02X}h on channel {} of {}", s.off, s.chan, en.channels);
+                }
+                assert!(s.off < en.len, "{what} {name}: site at +{:02X}h past the signature ({:02X}h bytes)", s.off, en.len);
+            }
+            if en.pass != 0 {
+                assert_eq!(en.pos.len(), en.channels as usize, "{what} {name}");
+                assert_eq!(en.pos[0], 0, "{what} {name}: pos from channel 0's OUT");
+                assert!(en.pos.windows(2).all(|w| w[0] < w[1]) && en.pos.iter().all(|&p| p < en.pass), "{what} {name}: pos {:?}, pass {}", en.pos, en.pass);
+            }
+        }
+    }
+}
+
+#[test]
+fn readers_follow_the_loops() {
+    // Unison's and Cave Runner's title readers (their operands written into blank memory, no byte
+    // of the games') against the loops' half-periods as the truth readers state them: each
+    // channel's depends on both counts (the other channel's reloads fall in its half-period)
+    use music::truth::{half_unison, half_mm_title};
+    let b = SndEngines::new();
+    let idx = |name: &str| b.entries().iter().position(|e| e.name == name).unwrap_or_else(|| panic!("{name}"));
+    let near = |got: u32, half: f64| (f64::from(got) - 512.0 * half).abs() <= 1.0;
+    let (unison, title) = (idx("Unison"), idx("Cave Runner title"));
+    let regs = Machine::new().regs();
+    for n in [70u32, 184, 633, 4000] {
+        let mut m = Machine::new();
+        for (at, v) in [(0x8019u16, n), (0x802b, n - 1)] {
+            m.poke(at, v as u8);
+            m.poke(at + 1, (v >> 8) as u8);
+        }
+        let v = b.read(&m, unison, 0x8000, 0, &regs);
+        println!("Unison N {n}: periods {} {} (half-periods {:.1} {:.1})", v[0].period_q8, v[1].period_q8, half_unison(n, n - 1), half_unison(n - 1, n));
+        assert!(near(v[0].period_q8, half_unison(n, n - 1)) && near(v[1].period_q8, half_unison(n - 1, n)), "Unison N {n}: {v:?}");
+        assert!(v[0].level != 0 && v[1].level != 0 && v[2].period_q8 == 0);
+    }
+    let mut m = Machine::new();
+    m.poke(0x8019, 0);
+    m.poke(0x801a, 0);
+    m.poke(0x802b, 99);
+    let v = b.read(&m, unison, 0x8000, 0, &regs);
+    assert!(v[0].period_q8 == 0 && v[0].level == 0 && near(v[1].period_q8, half_unison(99, 0)), "Unison, one count 0: {v:?}");
+    for (n1, n2) in [(32u8, 38u8), (76, 77), (128, 0), (205, 51)] {
+        let mut m = Machine::new();
+        let mut r = regs;
+        r.iy = 0x9000;
+        for (k, x) in [4u8, n1, n2].into_iter().enumerate() {
+            m.poke(0x9000 + k as u16, x);
+        }
+        let v = b.read(&m, title, 0x8000, 0, &r);
+        let (h1, h2) = (half_mm_title(n1.into(), n2.into()), half_mm_title(n2.into(), n1.into()));
+        println!("Cave Runner title {n1}, {n2}: periods {} {} (half-periods {h1:.1} {h2:.1})", v[0].period_q8, v[1].period_q8);
+        assert!(near(v[0].period_q8, h1) && near(v[1].period_q8, h2), "Cave Runner title {n1}, {n2}: {v:?}");
+    }
 }
 
 

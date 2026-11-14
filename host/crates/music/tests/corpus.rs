@@ -270,7 +270,7 @@ fn unison_truth_digest() {
     // like Unison is not Unison; a test-built image with the PC in the loop and the operands set
     // reads N and N - 1 (no byte of Unison here), and is not recognised either
     use music::corpus::detect_engine;
-    use music::truth::{LOOP_UNISON, Engine::Unison};
+    use music::truth::Engine::Unison;
     let dir = temp("unison");
     std::fs::copy(repo().join("games/test/tune.sna"), dir.join("unison.sna")).unwrap();
     let out = temp("unisonout");
@@ -285,8 +285,11 @@ fn unison_truth_digest() {
     let mut r = m.regs();
     r.pc = 0x81c6;
     m.set_regs(&r);
-    let hz = |n: f64| 3_500_000.0 / (2.0 * n * LOOP_UNISON);
-    assert_eq!(Unison.read_channels(&m), Some(vec![(0, hz(184.0)), (1, hz(183.0))]));
+    // the half-period: 48 T a pass, 47.5 for each reload (its own, and n / n' of the other's)
+    let hz = |n: f64, o: f64| 3_500_000.0 / (2.0 * (48.0 * n + 47.5 * (1.0 + n / o)));
+    let got = Unison.read_channels(&m).expect("in the loop");
+    let want = [(0, hz(184.0, 183.0)), (1, hz(183.0, 184.0))];
+    assert!(got.len() == 2 && got.iter().zip(want).all(|(g, w)| g.0 == w.0 && (g.1 / w.1 - 1.0).abs() < 1e-12), "{got:?}");
     assert_eq!(detect_engine(&m), None);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&out);
