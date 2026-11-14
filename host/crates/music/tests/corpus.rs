@@ -4,7 +4,8 @@
 //! The corpus tool (`music::corpus`) on the pack's own files copied to a temp folder: TZX
 //! conversion, key scripts, report rows and the engine recognition.
 
-use music::corpus::{parse_keys, report_csv, report_txt, run_folder, Options, Step};
+use fmzx_pack::testprogs::{tape_tap, turbo_tzx, TAPE_DONE_BORDER};
+use music::corpus::{load, parse_keys, report_csv, report_txt, run_folder, Options, Step};
 use music::repo;
 use music::truth::Engine;
 use music::tzx::to_tap;
@@ -314,6 +315,25 @@ fn wav_failure_keeps_the_numbers() {
     let line = csv.lines().nth(1).unwrap();
     assert!(line.starts_with("tune.sna,ok,") && line.contains("wav not written"), "{line}");
     assert!(csv.lines().all(|l| l.matches(',').count() >= 20));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn corpus_loads_turbo() {
+    // a tape with its own turbo loader runs from the snapshot after its load (border green at
+    // frame 0 of the run); a standard tape beside it still runs
+    let dir = temp("turbo");
+    std::fs::write(dir.join("turbo.tzx"), turbo_tzx()).unwrap();
+    std::fs::write(dir.join("tape.tap"), tape_tap()).unwrap();
+    let out = temp("turboout");
+    let rows = run_folder(&dir, &Options { seconds: 5, wav: false, out: out.clone() }).expect("runs");
+    for f in ["turbo.tzx", "tape.tap"] {
+        let r = rows.iter().find(|r| r.file == f).unwrap_or_else(|| panic!("no row {f}"));
+        assert_eq!(r.status, "ok", "{f}");
+    }
+    let m = load(&dir.join("turbo.tzx")).expect("loads");
+    assert_eq!(m.border(), TAPE_DONE_BORDER, "frame 0 of the run is the loaded machine");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&out);
 }

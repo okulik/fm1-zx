@@ -135,9 +135,13 @@ beside the games.
     cd host
     cargo run --release -p music --bin music-corpus -- <folder> [--seconds N] [--wav] [-o <dir>]
 
-Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded (tapes autostart; `.tzx` must be
-standard-speed, any other block type reports "not loadable" and the game is skipped) and run for N
-seconds (default 40). The output goes to `build/music-corpus` (the repository's `build/`) unless
+Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded and run for N seconds (default
+40). A standard tape (a `.tap`, or a `.tzx` of standard-speed blocks) that loads through the ROM
+trap, as the device will load it, autostarts, and its run starts at the autostart. Any other
+`.tzx` (a turbo or custom loader, any 48K loader), and a standard tape the trap cannot load, is
+loaded first through the tape signal (as `fmzx-pack` does for the personal pack): its run, and its
+key script's times, start at the loaded snapshot, 2 s after the end of the tape. A game whose load
+fails the success test, and a 128K file, report "not loadable" with the reason, and are skipped. The output goes to `build/music-corpus` (the repository's `build/`) unless
 `-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_<ext>_beeper.wav`,
 `<name>_<ext>_fm.wav` (the mixer's output in FM: sound) and `<name>_<ext>_fm_b.wav` (in FM: engines), both 3 frames
 late to listen to the difference (`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx`

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `music-corpus <folder> [--seconds N] [--wav] [-o build/music-corpus]`: runs every `.tap`,
-//! `.tzx`, `.sna` and `.z80` of a folder and reports how much of its sound plays as FM. Reads
-//! the folder, writes only under the output directory. See BUILDING.md, "Music corpus".
+//! `.tzx` (any 48K loader), `.sna` and `.z80` of a folder and reports how much of its sound plays
+//! as FM. Reads the folder, writes only under the output directory. See BUILDING.md, "Music
+//! corpus".
 
 use music::corpus::{report_txt, run_folder, Options};
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ use std::process::ExitCode;
 
 fn usage() -> ExitCode {
     eprintln!("usage: music-corpus <folder> [--seconds N] [--wav] [-o <output dir, default <repo>/build/music-corpus>]");
+    eprintln!("runs every .tap, .tzx (any 48K loader), .sna and .z80 of the folder; 128K files are left out");
     ExitCode::from(2)
 }
 

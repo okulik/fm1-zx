@@ -412,7 +412,7 @@ fn tape_signal_error(data: &[u8], code: i32, bad_id: u8) -> String {
     match (code, data.starts_with(b"ZXTape!\x1a"), bad_id) {
         (sys::ZX_ERR_UNSUPPORTED, _, id) => format!("TZX block 0x{id:02X} is not loadable"),
         (_, true, 0) => "TZX header cut short".into(),
-        (_, true, id) => format!("TZX block 0x{id:02X}: a length or count is zero, out of range or past the end of the file"),
+        (_, true, id) => format!("TZX block 0x{id:02X} has a zero or out-of-range length or count or runs past the end of the file"),
         _ => "bad .tap: a block runs past the end of the file".into(),
     }
 }

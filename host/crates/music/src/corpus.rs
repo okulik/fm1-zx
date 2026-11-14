@@ -4,7 +4,8 @@
 //! The local game corpus: run every game of a folder, decode its beeper sound and report how much
 //! of it plays as FM in each FM choice (method A, the decoder; method B, the known engines). The
 //! same C decoder, engine table, synth and mixer as the firmware, through `zx-sys`.
-//! Games are only read; everything written goes under the output directory.
+//! Games are only read; everything written goes under the output directory. Tapes with a loader
+//! of their own are loaded through the tape signal first ([`load`]).
 //!
 //! Per game `<name>.<tap|tzx|sna|z80>` an optional `<name>.keys` beside it holds the key script:
 //! steps `ACTION@ms[+hold]` separated by commas or line breaks (`#` starts a comment line), where
@@ -15,6 +16,7 @@ use crate::score::{score, Score};
 use crate::truth::Engine;
 use crate::{capture, decode, hz_of_period_q8, played_hz, sample_rate, tzx, wav, Frame, RATE};
 use fmzx_pack::manifest::parse_action;
+use fmzx_pack::tapeload::{is_128k, load_signal, trap_trial};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use zx_sys::{
@@ -110,16 +112,35 @@ fn inputs(steps: &[Step], ms: u64) -> ([u8; 8], u8) {
     (rows, kemp)
 }
 
-/// A machine with the game file loaded (tapes autostart); `Err` says why it cannot be.
+/// A machine with the game file loaded; `Err` says why it cannot be. Time 0 of the run is the
+/// machine returned:
+///
+/// - a standard tape (`.tap`, or a `.tzx` of standard blocks) that the ROM trap's trial loads:
+///   the tape inserted and autostarted, as the device runs it (time 0 is the autostart);
+/// - any other `.tzx`, and a standard tape the trial rejects: the machine loaded through the
+///   tape signal, at the snapshot after the load and its settle time;
+/// - a 48K `.sna` or `.z80`: the snapshot;
+/// - a 128K file: `Err("128K")`.
 pub fn load(path: &Path) -> Result<Machine, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if is_128k(&data, &ext) {
+        return Err("128K".into());
+    }
     let mut m = Machine::new();
     match ext.as_str() {
         "tap" | "tzx" => {
-            let tap = if ext == "tzx" { tzx::to_tap(&data)? } else { data };
-            m.tape_insert(&tap).map_err(|e| format!("tape rejected ({e})"))?;
-            m.tape_autostart();
+            let tap = if ext == "tzx" { tzx::to_tap(&data).ok() } else { Some(data.clone()) };
+            let Some(tap) = tap else { return load_signal(&data) };
+            match trap_trial(&tap) {
+                Ok(()) => {
+                    m.tape_insert(&tap).map_err(|e| format!("tape rejected ({e})"))?;
+                    m.tape_autostart();
+                }
+                Err(trap) => {
+                    return load_signal(&data).map_err(|e| if e == trap { e } else { format!("{e} (through the ROM trap: {trap})") });
+                }
+            }
         }
         "sna" => m.load_sna(&data).map_err(|e| format!("snapshot rejected ({e})"))?,
         "z80" => m.load_z80(&data).map_err(|e| format!("snapshot rejected ({e})"))?,
