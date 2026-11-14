@@ -129,7 +129,11 @@ USB upload stays out of this stage (owner, 2026-11-14: "let's wait with USB for 
 - The whole tape is used. On the trap path, every data block was taken by LD-BYTES. On the signal
   path, the player reached the end.
 - Then, over the 2 s settle time:
-  - the CPU runs code in RAM (PC at 4000h or above) in at least half of the sampled frames;
+  - the program has not ended at the BASIC editor ("0 OK"): PC is not in the ROM's key wait in
+    at least half of the sampled frames, with the editor not serving a BASIC `INPUT`. (First
+    written as "code in RAM in at least half of the sampled frames"; the owner's folder showed
+    that this refuses games running in the ROM: a BASIC part playing `BEEP`, a menu printed
+    through `RST 10h`, a title tune through the ROM's BEEPER.)
   - it is not halted with interrupts off;
   - it is not sitting in the ROM's error report or back at the copyright screen.
 - A tape still being read when the time runs out (the loader polling port FEh) is a failure.
@@ -193,8 +197,9 @@ Timeouts and failures:
 - **Settle time 2 s** after the tape ends.
 - **Fallback.** A standard tape that the trap cannot load falls back to signal loading. It goes in
   as a snapshot, so its later levels from tape are not available.
-- **Success test.** As in section 6: the whole tape is used, then the CPU runs RAM code, is not
-  halted with interrupts off, and is not in the ROM's error report or at the copyright screen.
+- **Success test.** As in section 6: the whole tape is used, then the program has not ended at
+  the BASIC editor, is not halted with interrupts off, and is not in the ROM's error report or at
+  the copyright screen.
 - **Analysis tool.** It keeps the trap for standard tapes. A signal-loaded game's run starts at its
   snapshot.
 - **Personal output** goes under `build/personal/` (untracked), with the editable

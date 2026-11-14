@@ -27,17 +27,25 @@
 //! Over the settle time the machine is sampled at each frame end (100 samples). It fails:
 //!
 //! - when it is halted with interrupts off (in any sample: nothing wakes it);
-//! - "still loading", when in at least half of the samples the frame polled port FEh at least
-//!   [`POLL_READS`] times with PC within 256 bytes of where it was while the tape gave edges (the
-//!   last 50 frame ends inside a pulse) or in the ROM's LD-BYTES (0556h-0604h): the loader is
-//!   still waiting for the tape;
+//! - "still loading" (a heuristic), when in at least half of the samples the frame polled port
+//!   FEh at least [`POLL_READS`] times with PC within 256 bytes of where it was while the tape
+//!   gave edges (the last 50 frame ends inside a pulse) or in the ROM's LD-BYTES (0556h-0604h):
+//!   the loader is still waiting for the tape. A title loop that polls port FEh as hard near
+//!   those places would be taken for a loader;
 //! - at the copyright screen (a reset), when in at least half of the samples PC is in the ROM,
 //!   the BASIC program is empty (PROG, 5C53h, equals VARS, 5C4Bh) and the system variable ERR_NR
 //!   (5C3Ah) is 0 or FFh (the copyright screen leaves 0);
 //! - at the ROM's error report, when in at least half of the samples PC is in the ROM and ERR_NR
 //!   is not FFh otherwise (the ROM's error restart sets it to the report code less one; FFh is
 //!   "OK"), named by that report;
-//! - when PC is at 4000h or above (code in RAM) in fewer than half of the samples.
+//! - at the BASIC editor (the program ended with "0 OK"), when in at least half of the samples
+//!   PC is in the ROM's key wait (WAIT-KEY's loop through INPUT-AD, CALL-SUB and CALL-JUMP into
+//!   KEY-INPUT: 10A8h-10B4h, 15DEh-15FFh, 162Ch) and the system variable FLAGX (5C71h) has bit 5
+//!   clear (with it set, the editor is serving a BASIC `INPUT`: the program is still running).
+//!
+//! A program that runs in the ROM passes: a BASIC part playing `BEEP`, a menu printed through
+//! `RST 10h`, a `PAUSE 0`. (The design asked for code in RAM in half of the samples; that refuses
+//! such games, so the test names the one ROM state that means the program has ended.)
 //!
 //! # The snapshot ([`save_z80`])
 //!
@@ -72,7 +80,10 @@ pub const MAX_FILE: usize = 4 << 20;
 const LOADER_PCS: usize = 50;
 /// The ROM's LD-BYTES.
 const ROM_LD_BYTES: std::ops::RangeInclusive<u16> = 0x0556..=0x0604;
+/// The ROM's key wait at the editor (see the module docs).
+const ROM_KEY_WAIT: [std::ops::RangeInclusive<u16>; 3] = [0x10A8..=0x10B4, 0x15DE..=0x15FF, 0x162C..=0x162C];
 const ERR_NR: u16 = 0x5C3A;
+const FLAGX: u16 = 0x5C71;
 const VARS: u16 = 0x5C4B;
 const PROG: u16 = 0x5C53;
 
@@ -184,7 +195,7 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
     let peek16 = |m: &Machine, a: u16| u16::from_le_bytes([m.peek(a), m.peek(a + 1)]);
     m.port_fe_probe(true);
     m.take_port_fe_reads();
-    let (mut in_ram, mut polling, mut report, mut reset) = (0u32, 0u32, 0u32, 0u32);
+    let (mut editor, mut polling, mut report, mut reset) = (0u32, 0u32, 0u32, 0u32);
     let mut halted_di = false;
     let mut err_nr = 0xFF;
     for _ in 0..SETTLE_FRAMES {
@@ -192,8 +203,8 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
         let reads = m.take_port_fe_reads();
         let r = m.regs();
         halted_di |= m.halted() && r.iff1 == 0;
-        if r.pc >= 0x4000 {
-            in_ram += 1;
+        if ROM_KEY_WAIT.iter().any(|k| k.contains(&r.pc)) && m.peek(FLAGX) & 0x20 == 0 {
+            editor += 1;
         }
         if reads >= POLL_READS && near_loader(r.pc) {
             polling += 1;
@@ -214,13 +225,16 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
     if halted_di {
         Err("halted with interrupts off".into())
     } else if polling >= half {
-        Err("still loading: the loader is still reading the tape after its end".into())
+        Err(format!(
+            "still loading: after the tape, {polling} of {SETTLE_FRAMES} frames read port FEh {POLL_READS} times or more \
+             near where the loader ran (the still-loading heuristic)"
+        ))
     } else if report >= half {
         Err(format!("stopped at the ROM's error report {}", report_name(err_nr)))
     } else if reset >= half {
         Err("back at the copyright screen (the machine reset)".into())
-    } else if in_ram < half {
-        Err(format!("the game did not start: code in RAM at {in_ram} of {SETTLE_FRAMES} frame ends"))
+    } else if editor >= half {
+        Err("the program ended: the machine waits at the BASIC editor".into())
     } else {
         Ok(())
     }
@@ -365,9 +379,11 @@ pub fn save_z80(m: &Machine) -> Vec<u8> {
     debug_assert_eq!(h.len(), 30);
     let mut ext = [0u8; 54];
     ext[0..2].copy_from_slice(&pc.to_le_bytes());
-    // ext[2] = 0: a 48K; the T-state counter at frame T-state 0 (a quarter frame counts down)
+    // ext[2] = 0: a 48K; the T-state counter at frame T-state 0: the high counter (quarter
+    // frames, counting up modulo 4) is 3 just after the interrupt, and the low counter counts
+    // down from 17471 in each quarter
     ext[23..25].copy_from_slice(&(17_471u16).to_le_bytes());
-    ext[25] = 2;
+    ext[25] = 3;
     h.extend_from_slice(&54u16.to_le_bytes());
     h.extend_from_slice(&ext);
     for (page, base) in [(4u8, 0x8000u16), (5, 0xC000), (8, 0x4000)] {

@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use fmzx_pack::tapeload::{is_128k, load_signal, prepare, save_z80, trap_trial, Kind};
 use fmzx_pack::testprogs::{
-    halt_tap, hang_tzx, reset_tap, rom_copy_payload, rom_copy_tap, stop_tap, tape_tap, tune_sna, turbo_tzx, tzx_header,
-    wrap_tap_as_tzx, ROM_COPY_PAYLOAD_AT, TAPE_DONE_BORDER, TURBO_PAYLOAD, TURBO_PAYLOAD_AT,
+    halt_tap, hang_tzx, input_tap, ok_tap, pause_tap, reset_tap, rom_copy_payload, rom_copy_tap, stop_tap, tape_tap, tune_sna,
+    turbo_tzx, tzx_header, wrap_tap_as_tzx, ROM_COPY_PAYLOAD_AT, TAPE_DONE_BORDER, TURBO_PAYLOAD, TURBO_PAYLOAD_AT,
 };
 use zx_sys::{zx_regs, Machine};
 
@@ -64,6 +64,9 @@ fn snapshot_round_trip() {
     assert!(ram(&m2, 0x4000, 0xC000) == ram(&m, 0x4000, 0xC000), "48K of RAM");
     assert!(save_z80(&m2) == s, "saving again gives the same bytes");
     assert!(s.len() < 0xC000, "compressed: {} bytes", s.len());
+    // the T-state counter just after the interrupt: low 17471 (counting down), high 3
+    assert_eq!(u16::from_le_bytes([s[55], s[56]]), 17_471, "low T-state counter");
+    assert_eq!(s[57], 3, "high T-state counter");
 
     let screen = |m: &Machine| ram(m, 0x4000, 0x1B00);
     let b0 = m.peek(0x4000);
@@ -166,6 +169,14 @@ fn success_rules() {
     assert!(e.contains("copyright"), "{e}");
     let e = trap_trial(&halt_tap()).expect_err("DI; HALT fails");
     assert!(e.contains("halted with interrupts off"), "{e}");
+    let e = trap_trial(&ok_tap()).expect_err("a program that ends at the editor fails");
+    assert!(e.contains("BASIC editor"), "{e}");
+    let e = load_signal(&ok_tap()).err().expect("so it does through the signal");
+    assert!(e.contains("BASIC editor"), "{e}");
+    // a BASIC program still running in the ROM has started: PAUSE 0, INPUT
+    trap_trial(&pause_tap()).expect("PAUSE 0 runs");
+    trap_trial(&input_tap()).expect("INPUT runs");
+    load_signal(&pause_tap()).expect("PAUSE 0 runs through the signal");
 }
 
 #[test]

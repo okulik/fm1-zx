@@ -1338,6 +1338,26 @@ pub fn stop_tap() -> Vec<u8> {
     basic_tap("stop", vec![0xE2])
 }
 
+/// An autostarting BASIC tape whose program is `10 REM`: it ends with "0 OK" and the machine
+/// waits at the BASIC editor. Not one of [`PROGRAMS`].
+pub fn ok_tap() -> Vec<u8> {
+    basic_tap("ok", vec![0xEA])
+}
+
+/// An autostarting BASIC tape whose program is `10 PAUSE 0`: the program runs, in the ROM,
+/// waiting for a key. Not one of [`PROGRAMS`].
+pub fn pause_tap() -> Vec<u8> {
+    let mut body = vec![0xF2]; // PAUSE
+    basic_number(&mut body, 0.0);
+    basic_tap("pause", body)
+}
+
+/// An autostarting BASIC tape whose program is `10 INPUT a`: the program runs, in the ROM's
+/// editor in INPUT mode. Not one of [`PROGRAMS`].
+pub fn input_tap() -> Vec<u8> {
+    basic_tap("input", vec![0xEE, b'a'])
+}
+
 /// An autostarting BASIC tape whose program is `10 RANDOMIZE USR 0`: the machine resets to
 /// the copyright screen. Not one of [`PROGRAMS`].
 pub fn reset_tap() -> Vec<u8> {
