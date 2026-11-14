@@ -137,15 +137,14 @@ fn colony8_matches_truth() {
     assert!(false_drums.is_empty(), "drums where none sounds: {false_drums:?}");
 }
 
-/// The sounding pitches of every voice state a decision passes through: its start and after
-/// each of its events.
-fn states(f: &SndFrame) -> Vec<Vec<f64>> {
+/// Every voice state a decision passes through: its start and after each of its events.
+fn states(f: &SndFrame) -> Vec<[SndVoice; 3]> {
     let mut t = f.tone;
-    let mut v = vec![sounding(&t)];
+    let mut v = vec![t];
     for ev in f.events() {
         if (ev.voice as usize) < t.len() {
             t[ev.voice as usize] = SndVoice { period_q8: ev.period_q8, level: ev.level };
-            v.push(sounding(&t));
+            v.push(t);
         }
     }
     v
@@ -161,20 +160,35 @@ fn near_change(dec: &[SndFrame], i: usize, k: usize) -> bool {
     (i.saturating_sub(k)..=(i + k).min(dec.len() - 1)).any(|j| dec[j].events().iter().any(|e| e.voice < 3) || (j > 0 && sounding(&dec[j].tone) != sounding(&end_voices(&dec[j - 1]))))
 }
 
+/// B's voice on channel c moves within frames i-2..=i+2 (it changes pitch, starts or stops in a
+/// state B passes through there).
+fn moving(dec: &[SndFrame], i: usize, c: usize) -> bool {
+    let mut p = (i.saturating_sub(2)..=(i + 2).min(dec.len() - 1)).flat_map(|j| states(&dec[j])).map(|s| hz(&s)[c]);
+    let first = p.next().flatten();
+    p.any(|x| match (x, first) {
+        (Some(x), Some(y)) => (midi_of(x) - midi_of(y)).abs() > 0.5,
+        (None, None) => false,
+        _ => true,
+    })
+}
+
 #[test]
 fn agrees_with_a() {
-    // On the frames where A is confident: A's voices are the pitches it heard; B agrees when it
-    // claims the frame and plays each of them (within 0.5 semitone) in one of the voice states
-    // it passes through in the frame (its notes change inside frames, A's at their edges). A
-    // leaves out by rule what it cannot be sure of (a sweeping voice beside a held one), so a
-    // voice of B's that A does not report is no disagreement; a frame A calls silent agrees
-    // when it is silent (no edges: B's beeper is silence too) or B claims it. A contradicts B
-    // when both claim a frame and A hears a pitch B plays in none of its states, away from B's
-    // note changes.
+    // On the frames where A is confident, B agrees on every voice: B claims the frame and in
+    // one of the voice states it passes through in the frame (its notes change inside frames,
+    // A's at their edges) every voice of A's is within 0.5 semitone of one of B's and every
+    // sounding voice of B's within 0.5 semitone of one of A's. A frame A calls silent agrees
+    // with B silent in one of its states, or with B not claiming it when the frame has no edges
+    // (the beeper's silence). One exception, A's rule for time-slot channels (slots.c,
+    // snd_slots_voice: a channel has a voice only where a run of agreeing periods spans the
+    // moment): A reports nothing for a channel whose pitch moves (a slide, a note starting or
+    // ending), so a voice of B's that A lacks is excused when B's voice on that channel moves
+    // within 2 frames (A's look-ahead) of the frame. A contradicts B when both claim a frame and
+    // A hears a pitch B plays in none of its states, away from B's note changes.
     for (name, m, range) in [("castaway", music::castaway(), 150..1500), ("colony8", music::colony8(), 125..1550)] {
         let r = run(m, range.end + 4, SndEngines::new(), None, no_edit);
         let a = decode(r.frames.iter().map(|f| (f.edges.as_slice(), f.start_level)));
-        let (mut n, mut agree) = (0, 0);
+        let (mut n, mut agree, mut excused, mut silent) = (0, 0, 0, 0);
         let mut contra = Vec::new();
         for i in range.clone() {
             if a[i].confident == 0 {
@@ -184,14 +198,39 @@ fn agrees_with_a() {
             let av = music::voices_hz(&a[i]);
             let b = &r.dec[i];
             let bst = states(b);
-            let heard = |x: f64| bst.iter().any(|s| near(x, s, 0.5));
-            let ok = if av.is_empty() { r.frames[i].edges.is_empty() || b.confident != 0 } else { b.confident != 0 && av.iter().all(|&x| heard(x)) };
-            agree += usize::from(ok);
+            let heard = |x: f64| bst.iter().any(|s| near(x, &sounding(s), 0.5));
+            // per state: (agrees, agrees only with the exception)
+            let fits = |s: &[SndVoice; 3]| -> (bool, bool) {
+                let bv = sounding(s);
+                if !av.iter().all(|&x| near(x, &bv, 0.5)) {
+                    return (false, false);
+                }
+                let extra: Vec<usize> = (0..3).filter(|&c| hz(s)[c].is_some_and(|x| !near(x, &av, 0.5))).collect();
+                (extra.iter().all(|&c| moving(&r.dec, i, c)), !extra.is_empty())
+            };
+            let ok = if b.confident == 0 {
+                av.is_empty() && r.frames[i].edges.is_empty()
+            } else {
+                bst.iter().any(|s| fits(s).0)
+            };
+            if ok {
+                agree += 1;
+                if b.confident == 0 {
+                    silent += 1;
+                } else if !bst.iter().any(|s| fits(s) == (true, false)) {
+                    excused += 1;
+                }
+            }
             if b.confident != 0 && av.iter().any(|&x| !heard(x)) && !near_change(&r.dec, i, 2) {
-                contra.push((i, av.clone(), bst.clone()));
+                contra.push((i, av.clone(), bst.iter().map(sounding).collect::<Vec<_>>()));
             }
         }
-        println!("{name}: A confident in {n} frames, B agrees in {agree}; contradictions {}: {:?}", contra.len(), &contra[..contra.len().min(8)]);
+        println!(
+            "{name}: A confident in {n} frames, B agrees in {agree} ({excused} only with a voice A lacks on a moving channel, \
+             {silent} silent frames B leaves to the beeper); contradictions {}: {:?}",
+            contra.len(),
+            &contra[..contra.len().min(8)]
+        );
         assert!(n > 500, "{name}: A confident in {n} frames");
         assert!(agree * 100 >= n * 95, "{name}: B agrees with A in {agree} of {n} frames");
         assert!(contra.is_empty(), "{name}: A contradicts B in {} frames", contra.len());
@@ -316,6 +355,50 @@ fn mixed_frame_beeper() {
 }
 
 #[test]
+fn many_out_sites_not_b() {
+    // a burst frame whose edges also come from 12 other OUT addresses (more than the frame's
+    // listed sites and the addresses B looks up past them): not B's, and the frame after it is
+    const BASE: u16 = 0x8000;
+    let dry = run(burst(BASE), 100, SndEngines::new_test(), None, no_edit);
+    let busy = (40..90).find(|&i| dry.frames[i].edges.len() >= 6 && !dry.frames[i + 1].edges.is_empty()).unwrap();
+    assert!(dry.dec[busy].confident != 0, "claimed without the other code");
+    let r = run(burst(BASE), 100, SndEngines::new_test(), None, |i, _, edges| {
+        if let Some(edges) = edges.filter(|_| i == busy) {
+            let t0 = edges.last().unwrap().tstate + 200;
+            let mut level = edges.last().unwrap().level;
+            for k in 0..12u16 {
+                level ^= 2;
+                edges.push(zx_edge { tstate: t0 + 100 * k as u32, level, pc: 0xf000 + 4 * k });
+            }
+        }
+    });
+    println!("frame {busy}: confident {}, the next {}", r.dec[busy].confident, r.dec[busy + 1].confident);
+    assert_eq!(r.dec[busy].confident, 0, "a frame with 12 other OUTs is claimed");
+    assert_ne!(r.dec[busy + 1].confident, 0, "the frame after it is not claimed");
+}
+
+#[test]
+fn long_run_carry() {
+    // one note held for 10.5 minutes (burst_sna's melody made one note, its bursts 65,534 edges
+    // long, no gap): the check's state is carried frame to frame all that time, the channels the
+    // engine does not use never refreshed; B claims the note throughout (times carried from
+    // frames before stay bounded: no overflow, which host and device could resolve differently)
+    const BASE: u16 = 0x8000;
+    let frames = 31_500;
+    let mut m = burst(BASE);
+    for k in 0..BURST_HZ.len() as u16 {
+        let at = BASE + 0x2c + 5 * k;
+        for (j, v) in [253u8, 0xfe, 0xff, 1, 0].into_iter().enumerate() {
+            m.poke(at + j as u16, v); // n 253, 65,534 edges, a gap of one turn
+        }
+    }
+    let r = run(m, frames, SndEngines::new_test(), None, no_edit);
+    let off: Vec<usize> = (10..frames).filter(|&i| r.dec[i].confident == 0 || hz(&end_voices(&r.dec[i]))[0].is_none_or(|f| (f / BURST_HZ[0] - 1.0).abs() > 0.005)).collect();
+    println!("{frames} frames of one note: not claimed at it in {} frames {:?}", off.len(), &off[..off.len().min(10)]);
+    assert!(off.is_empty(), "the held note not claimed in {} frames", off.len());
+}
+
+#[test]
 fn edges_disagree_beeper() {
     let dry = run(music::castaway(), 1500, SndEngines::new(), None, no_edit);
     let picked: Vec<usize> = (200..1500).filter(|&i| dry.dec[i].confident != 0 && !sounding(&end_voices(&dry.dec[i])).is_empty() && dry.frames[i].edges.len() >= 20).step_by(5).collect();
@@ -346,6 +429,52 @@ fn edges_disagree_beeper() {
     }
     println!("{} frames with a square 3 semitones off the voice read; claimed {claimed:?}", picked.len());
     assert!(claimed.is_empty(), "frames claimed whose edges disagree with the voices: {claimed:?}");
+}
+
+#[test]
+fn edges_disagree_after_stop_beeper() {
+    // Colony 8: a note ends with the OUT after the loop (9521h) and the next often begins in the
+    // same frame. In frames with such a stop followed by the next note's edges, the edges after
+    // the stop are replaced by a regular square 3 semitones off the voice B reads at the frame's
+    // end (the next note's), from the same OUTs: those frames are not claimed
+    const STOP: u16 = 0x9521;
+    let tonal = [0x9505u16, 0x950d, 0x9517];
+    let (from, to) = (125, 1550);
+    let dry = run(music::colony8(), to + 4, SndEngines::new(), None, no_edit);
+    let after_stop = |i: usize| -> Option<usize> {
+        let e = &dry.frames[i].edges;
+        let k = e.iter().position(|x| x.pc == STOP)?;
+        (e[k + 1..].iter().filter(|x| tonal.contains(&x.pc)).count() >= 20).then_some(k)
+    };
+    let picked: Vec<usize> = (from..to).filter(|&i| dry.dec[i].confident != 0 && !sounding(&end_voices(&dry.dec[i])).is_empty() && after_stop(i).is_some()).collect();
+    assert!(picked.len() >= 30, "{} frames with a stop and the next note", picked.len());
+    let off = |i: usize| sounding(&end_voices(&dry.dec[i]))[0] * 2f64.powf(if i.is_multiple_of(2) { 3.0 } else { -3.0 } / 12.0);
+    let replace = |i: usize, edges: &mut Vec<zx_edge>| {
+        let k = after_stop(i).unwrap();
+        let pcs: Vec<u16> = edges[k + 1..].iter().map(|x| x.pc).filter(|p| tonal.contains(p)).collect();
+        let half = 3_500_000.0 / off(i) / 2.0;
+        let mut level = edges[k].level ^ 2;
+        let mut t = edges[k].tstate as f64 + 500.0;
+        edges.truncate(k + 1);
+        let mut n = 0;
+        while t < 69_800.0 {
+            edges.push(zx_edge { tstate: t as u32, level, pc: pcs[n % pcs.len()] });
+            level ^= 2;
+            n += 1;
+            t += half;
+        }
+    };
+    let r = run(music::colony8(), to + 4, SndEngines::new(), None, |i, _, edges| {
+        if let Some(edges) = edges.filter(|_| picked.contains(&i)) {
+            replace(i, edges);
+        }
+    });
+    let claimed: Vec<usize> = picked.iter().copied().filter(|&i| r.dec[i].confident != 0).collect();
+    for &i in claimed.iter().take(10) {
+        println!("  frame {i}: voices {:.1?}, square at {:.1} Hz", sounding(&end_voices(&dry.dec[i])), off(i));
+    }
+    println!("{} Colony 8 frames with a square 3 semitones off the next note after the stop; claimed {claimed:?}", picked.len());
+    assert!(claimed.is_empty(), "frames claimed whose edges after the stop disagree with the voices: {claimed:?}");
 }
 
 #[test]

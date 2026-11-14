@@ -33,6 +33,8 @@
 #define DRUM_GAP 4000u        /* T without a drum edge that ends a drum */
 #define DRUM_TAIL 1000u       /* the drum is released this long after its last edge */
 #define EPS 24u               /* T a channel's OUT may come early or late (contention, branches) */
+#define NEVER (INT32_MAX / 2) /* snd_b_track.set: a level not yet seen to change */
+#define OLDEST (-(1 << 24))   /* times carried from frames before are kept no older (240 frames) */
 
 /* ---- the table --------------------------------------------------------- */
 
@@ -134,7 +136,8 @@ typedef struct {          /* which site of the engine an edge came from */
 	uint32_t n_extra;
 } classifier;
 
-/* The engine's site index of an edge from pc, or NOWHERE (other code). */
+/* The engine's site index of an edge from pc, or NOWHERE (other code; also any OUT past the
+ * listed sites and EXTRA_PCS more: a frame with that many is no engine's music). */
 static uint32_t classify(classifier *c, uint16_t pc)
 {
 	uint32_t k, s = NOWHERE;
@@ -144,12 +147,11 @@ static uint32_t classify(classifier *c, uint16_t pc)
 		if (c->sites[k].pc == pc) return c->site_of[k];
 	for (k = 0; k < c->n_extra; k++)
 		if (c->extra_pc[k] == pc) return c->extra_site[k];
+	if (c->n_extra == EXTRA_PCS) return NOWHERE;
 	mt = find(c->b, c->zm, pc, &s);
 	if (mt != c->mine) s = NOWHERE;
-	if (c->n_extra < EXTRA_PCS) {
-		c->extra_pc[c->n_extra] = pc;
-		c->extra_site[c->n_extra++] = s;
-	}
+	c->extra_pc[c->n_extra] = pc;
+	c->extra_site[c->n_extra++] = s;
 	return s;
 }
 
@@ -178,7 +180,9 @@ static uint32_t tonal_role(classifier *c, const snd_engine *en, uint16_t pc, uin
  * (its time pinned to a pass). A frame contradicts its voices when a channel's consecutive rises
  * do not lie a whole number of its read periods apart (within a sixteenth of a period plus a
  * pass; more than one pair in eight), when a channel stays known at one level for longer than its
- * period (plus that tolerance), or when a silent channel is known high. A channel's state is
+ * period (plus that tolerance), when a silent channel is known high, or when a segment's edges
+ * leave a channel's level unknown (too few edges to tell the voices) or a new note's edges all
+ * fall too near its start to be checked. A channel's state is
  * carried into the next frame while its voice holds, so a low note gets its evidence over
  * frames. One-channel engines (pass 0): every change of the level is an edge of the channel. */
 
@@ -218,7 +222,7 @@ static void known(check_state *c, uint32_t ch, uint32_t level, int32_t t, int32_
 	}
 	/* a level known from a change pinned to a pass starts its time held there; one first known
 	 * here, from its next change */
-	tr->set = tr->bit != 2 && t - tr->obs <= (int32_t)(c->pass + c->pass / 2u + EPS) ? t : INT32_MAX / 2;
+	tr->set = tr->bit != 2 && t - tr->obs <= (int32_t)(c->pass + c->pass / 2u + EPS) ? t : NEVER;
 	tr->bit = (uint8_t)level;
 	tr->obs = until;
 }
@@ -249,6 +253,37 @@ static void restart(check_state *c, const snd_voice *v)
 		c->tr[ch].has_rise = 0;
 	}
 	voices(c, v);
+}
+
+/* A time of the frame before, as one of this frame (clamped at OLDEST, NEVER kept); 1 if
+ * clamped. */
+static int age(int32_t *t)
+{
+	if (*t >= NEVER) return 0;
+	*t -= (int32_t)FRAME_T;
+	if (*t >= OLDEST) return 0;
+	*t = OLDEST;
+	return 1;
+}
+
+/* Does a voice of v sound? */
+static int sounds(const snd_voice *v, const snd_engine *en)
+{
+	uint32_t ch;
+
+	for (ch = 0; ch < en->channels; ch++)
+		if (v[ch].period_q8) return 1;
+	return 0;
+}
+
+/* A channel's level not known (in the segment so far). */
+static int unknown(const check_state *c, const snd_engine *en)
+{
+	uint32_t ch;
+
+	for (ch = 0; ch < en->channels; ch++)
+		if (c->tr[ch].bit == 2) return 1;
+	return 0;
 }
 
 /* T-states from channel a's OUT to channel b's next one. */
@@ -301,7 +336,8 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 	check_state c;
 	uint32_t i, ch, s, chan = 0, seg = 0;
 	uint32_t first[SEGS], rises[SEGS][SND_TONAL], pairs[SEGS][SND_TONAL], bad[SEGS][SND_TONAL];
-	uint8_t held[SEGS][SND_TONAL];
+	uint8_t held[SEGS][SND_TONAL], blank[SEGS];   /* blank: a channel's level never known in it */
+	uint8_t any[SEGS] = { 0, 0, 0 };              /* tonal edges from its start on, checked or not */
 	int32_t pt = 0;          /* the edge before: time, channel, level */
 	uint32_t pj = 0, pl = 0;
 	int have = 0;
@@ -322,9 +358,9 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 		c.held[ch] = 0;
 		if (in && sg->v[0]) {
 			c.tr[ch] = in->tr[ch];
-			c.tr[ch].set -= (int32_t)FRAME_T;
-			c.tr[ch].obs -= (int32_t)FRAME_T;
-			c.tr[ch].rise -= (int32_t)FRAME_T;
+			age(&c.tr[ch].set);
+			age(&c.tr[ch].obs);
+			if (age(&c.tr[ch].rise)) c.tr[ch].has_rise = 0;
 		}
 	}
 	if (in && sg->v[0])
@@ -348,6 +384,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 				c.rises[ch] = c.pairs[ch] = c.bad[ch] = 0;
 				c.held[ch] = 0;
 			}
+			blank[seg] = unknown(&c, en);
 			seg++;
 			if (sg->pause[seg]) {
 				restart(&c, sg->v[seg]);
@@ -360,10 +397,11 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 		role = tonal_role(cl, en, e[i].pc, &chan);
 		level = (e[i].level >> 1) & 1u;
 		if (role == 0xFF) continue;
-		if (role == SND_SITE_STOP) {   /* the loop has ended */
+		if (role == SND_SITE_STOP) {   /* the loop ended: the next note starts afresh */
 			have = 0;
-			break;
+			continue;
 		}
+		any[seg] = 1;
 		if ((seg && sg->pause[seg] && (uint32_t)t < sg->at[seg] + MARGIN) ||
 		    (seg + 1u < sg->n && sg->pause[seg + 1u] && (uint32_t)t + MARGIN >= sg->at[seg + 1u])) {
 			have = 0;   /* near a pause */
@@ -390,6 +428,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 		bad[seg][ch] = c.bad[ch];
 		held[seg][ch] = c.held[ch];
 	}
+	blank[seg] = unknown(&c, en);
 	if (seg + 1u < sg->n) {   /* the last voices began after the last edge */
 		restart(&c, sg->v[sg->n - 1u]);
 		have = 0;
@@ -403,7 +442,9 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 		out->level = (uint8_t)pl;
 	}
 	for (s = 0; s < sg->n; s++) {
+		if (sg->v[s] && sg->pause[s] && any[s] && first[s] == NOWHERE && sounds(sg->v[s], en)) return 0;   /* a new note's edges, none checked */
 		if (!sg->v[s] || first[s] == NOWHERE) continue;
+		if (blank[s]) return 0;   /* too few edges to tell the voices */
 		for (ch = 0; ch < en->channels; ch++) {
 			if (!sg->v[s][ch].period_q8) {
 				if (rises[s][ch]) return 0;   /* a silent channel sounds */
@@ -421,7 +462,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 {
 	const snd_engine *en;
 	classifier cl;
-	uint32_t i, k, best = NOWHERE, best_t = 0, from = 0, row = 0, chan;
+	uint32_t i, k, best = NOWHERE, best_t = 0, from = 0, row = 0, chan, stop = 0;
 	uint32_t last_of[ZX_OUT_SITES];
 	int foreign = 0;
 	snd_b_read rd;
@@ -465,15 +506,14 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 	en = &b->table[cl.mine->entry - 1u];
 	r->entry = cl.mine->entry;
 
-	/* every edge: its site's role, or other code's */
+	/* every edge: its site's role, or other code's (the first ends it: the frame is not B's) */
+	r->last_mine = classify(&cl, e[n - 1u].pc) != NOWHERE;
 	for (i = 0; i < n; i++) {
 		uint32_t s = classify(&cl, e[i].pc);
 		if (s == NOWHERE) {
 			foreign = 1;
-			r->last_mine = 0;
-			continue;
+			break;
 		}
-		r->last_mine = 1;
 		for (k = 0; k < cl.ns; k++)
 			if (cl.sites[k].pc == e[i].pc) last_of[k] = e[i].tstate;
 		if (en->sites[s].role == SND_SITE_DRUM) {
@@ -484,6 +524,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 			if (r->t_first == NOWHERE) r->t_first = e[i].tstate;
 			r->t_last = e[i].tstate;
 			r->tonal = 1;
+			if (en->sites[s].role == SND_SITE_STOP) stop = e[i].tstate + 1u;
 		}
 	}
 	if (foreign) return;
@@ -549,6 +590,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 		}
 		if (rd.since != SND_B_SINCE_ALL && rd.since < best_t) from = best_t - rd.since;
 		if (rd.row != SND_B_SINCE_ALL && rd.row < best_t) row = best_t - rd.row;
+		if (row && row == from && row < stop) row = from = stop;   /* a note begins after the stop before it */
 		for (i = 0; i < n; i++) {
 			if (e[i].tstate >= from && tonal_role(&cl, en, e[i].pc, &chan) != 0xFF) {
 				r->t_row = e[i].tstate;
