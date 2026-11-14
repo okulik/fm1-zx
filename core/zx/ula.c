@@ -148,10 +148,13 @@ uint8_t zx_port_in(zx_machine *m, uint16_t port)
 	if (!(port & 1u)) {
 		uint8_t keys = 0x1F;
 		unsigned r;
+		uint8_t ear;
 
 		for (r = 0; r < 8u; r++)
 			if (!((port >> (8u + r)) & 1u)) keys &= (uint8_t)~m->keys[r];
-		return (uint8_t)(keys | 0xA0u | (m->ear_in << 6));
+		/* EAR: the tape signal while one plays (host only), else the last OUT's bit 4 */
+		ear = m->tape_ear ? m->tape_ear(m, m->io_t) : m->ear_in;
+		return (uint8_t)(keys | 0xA0u | (ear << 6));
 	}
 	if ((port & 0xFFu) == 0x1Fu) return m->kempston;
 	return floating_bus(m, m->io_t);

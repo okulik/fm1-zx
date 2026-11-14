@@ -88,8 +88,9 @@ fn main() {
         b.compile(name);
     };
 
-    // Our code is held to -Werror; the vendored libraries are built as they are. core/sound
-    // includes engines_test.c (the test fixtures' engines), which the firmware build leaves out.
+    // Our code is held to -Werror; the vendored libraries are built as they are. core/zx
+    // includes tapesig.c (the tape signal player) and core/sound engines_test.c (the test
+    // fixtures' engines), which the firmware build leaves out.
     build(c_files(&core_zx), "zxcore", true);
     build(c_files(&core_sound), "zxsound", true);
     build(c_files(&app), "fmzxapp", true);
@@ -115,6 +116,7 @@ fn main() {
 
     let mut gen = bindgen::Builder::default()
         .header(core_zx.join("zx.h").to_string_lossy())
+        .header(core_zx.join("tapesig.h").to_string_lossy())
         .header(core_sound.join("sound.h").to_string_lossy())
         .header(app.join("pixels.h").to_string_lossy())
         .header(app.join("lcdsched.h").to_string_lossy())

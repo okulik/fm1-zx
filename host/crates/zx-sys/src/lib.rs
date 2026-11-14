@@ -40,6 +40,9 @@ pub struct Machine {
     tape: Option<Box<[u8]>>,
     /// A ROM other than the built-in one ([`Machine::with_rom`]); the C core keeps a pointer to it.
     _rom: Option<Box<[u8]>>,
+    /// The inserted tape signal: the player's state and a copy of the file; the C core keeps
+    /// pointers to both.
+    sig: Option<(Box<sys::zx_tapesig>, Box<[u8]>)>,
     _not_sync: PhantomData<*const ()>,
 }
 
@@ -52,7 +55,7 @@ impl Machine {
         // SAFETY: the ROM is 'static, so it outlives the machine; `raw` is
         // boxed, so the CPU's context pointer to it stays valid.
         unsafe { sys::zx_init(&mut *raw, ROM_48.as_ptr()) };
-        Machine { raw, tape: None, _rom: None, _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: None, sig: None, _not_sync: PhantomData }
     }
 
     /// A powered-on machine with another 16K ROM (host tests: an altered copy of the 48K ROM).
@@ -64,12 +67,17 @@ impl Machine {
         // SAFETY: the ROM is a heap buffer the machine keeps (it does not move) for as long as
         // the C side may read it; `raw` is boxed, as in `new`.
         unsafe { sys::zx_init(&mut *raw, rom.as_ptr()) };
-        Machine { raw, tape: None, _rom: Some(rom), _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: Some(rom), sig: None, _not_sync: PhantomData }
     }
 
+    /// Runs one frame; an inserted tape signal is then advanced to the frame end.
     pub fn run_frame(&mut self) {
         // SAFETY: `raw` was initialised by zx_init.
         unsafe { sys::zx_run_frame(&mut *self.raw) }
+        if self.sig.is_some() {
+            // SAFETY: the player's state and data are alive in `self.sig`.
+            unsafe { sys::zx_tapesig_frame(&mut *self.raw) }
+        }
     }
 
     pub fn regs(&self) -> zx_regs {
@@ -181,8 +189,10 @@ impl Machine {
         // SAFETY: the pointer and length describe `data`.
         match unsafe { sys::zx_load_sna(&mut *self.raw, data.as_ptr(), data.len() as u32) } {
             0 => {
-                // the C side ejected the tape; free the buffer it was reading
+                // the C side ejected the tape; free the buffer it was reading, and eject the
+                // signal (a loaded game starts with no tape)
                 self.tape = None;
+                self.tape_signal_eject();
                 Ok(())
             }
             e => Err(e),
@@ -194,8 +204,10 @@ impl Machine {
         // SAFETY: the pointer and length describe `data`.
         match unsafe { sys::zx_load_z80(&mut *self.raw, data.as_ptr(), data.len() as u32) } {
             0 => {
-                // the C side ejected the tape; free the buffer it was reading
+                // the C side ejected the tape; free the buffer it was reading, and eject the
+                // signal (a loaded game starts with no tape)
                 self.tape = None;
+                self.tape_signal_eject();
                 Ok(())
             }
             e => Err(e),
@@ -236,10 +248,66 @@ impl Machine {
         self.raw.tape_pos
     }
 
-    /// Resets the machine and types `LOAD ""` + ENTER over the next frames.
+    /// Inserts a tape signal: a `.tzx` or `.tap` played as a cassette plays it, into bit 6 of
+    /// port FEh reads (the machine keeps its own copy). It starts now, and [`Machine::run_frame`]
+    /// advances it. `Err` says what is wrong with the file (naming the TZX block) and leaves
+    /// the previous signal, if any, in place.
+    pub fn tape_signal_insert(&mut self, data: &[u8]) -> Result<(), String> {
+        let buf: Box<[u8]> = data.into();
+        // SAFETY: zx_tapesig is plain data (integers and a pointer); all-zero is a valid value.
+        let mut st: Box<sys::zx_tapesig> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        let mut bad = 0u8;
+        // SAFETY: the pointer and length describe `buf`; `st` and `buf` are heap storage that
+        // `self.sig` keeps alive (it does not move) for as long as the C side may use them, and
+        // the C side only stores the pointers on success.
+        match unsafe { sys::zx_tapesig_insert(&mut *self.raw, &mut *st, buf.as_ptr(), buf.len() as u32, &mut bad) } {
+            0 => {
+                self.sig = Some((st, buf));
+                Ok(())
+            }
+            e => Err(tape_signal_error(data, e, bad)),
+        }
+    }
+
+    /// Removes the tape signal (port FEh bit 6 is the last `OUT`'s EAR bit again).
+    pub fn tape_signal_eject(&mut self) {
+        // SAFETY: `raw` was initialised by zx_init; the C side forgets the pointers first.
+        unsafe { sys::zx_tapesig_eject(&mut *self.raw) }
+        self.sig = None;
+    }
+
+    /// True once the signal is past its last pulse and pause (false with none inserted).
+    pub fn tape_signal_done(&self) -> bool {
+        // SAFETY: `raw` was initialised by zx_init; a NULL signal reads as not done.
+        unsafe { sys::zx_tapesig_done(&*self.raw) != 0 }
+    }
+
+    /// True while the signal is held by a stop (a TZX pause 0).
+    pub fn tape_signal_stopped(&self) -> bool {
+        // SAFETY: as in `tape_signal_done`.
+        unsafe { sys::zx_tapesig_stopped(&*self.raw) != 0 }
+    }
+
+    /// Starts the tape again after a stop.
+    pub fn tape_signal_play(&mut self) {
+        // SAFETY: `raw` was initialised by zx_init; a NULL signal is ignored.
+        unsafe { sys::zx_tapesig_play(&mut *self.raw) }
+    }
+
+    /// The border colour (0-7) in effect now.
+    pub fn border(&self) -> u8 {
+        self.raw.border_col
+    }
+
+    /// Resets the machine and types `LOAD ""` + ENTER over the next frames. An inserted tape
+    /// and tape signal stay inserted.
     pub fn tape_autostart(&mut self) {
+        // the reset clears the signal's two fields; the signal plays on through it
+        let (ear, sig) = (self.raw.tape_ear, self.raw.tape_sig);
         // SAFETY: `raw` was initialised by zx_init.
         unsafe { sys::zx_tape_autostart(&mut *self.raw) }
+        self.raw.tape_ear = ear;
+        self.raw.tape_sig = sig;
     }
 
     /// Host tests only: the current beeper level.
@@ -260,6 +328,32 @@ impl Machine {
         // SAFETY: `raw` was initialised by zx_init.
         unsafe { sys::zx_test_step(&mut *self.raw) }
     }
+}
+
+/// Why the tape signal player refused `data` (C error `code`, TZX block `bad_id`).
+fn tape_signal_error(data: &[u8], code: i32, bad_id: u8) -> String {
+    if data.is_empty() {
+        return "empty tape file".into();
+    }
+    match (code, data.starts_with(b"ZXTape!\x1a"), bad_id) {
+        (sys::ZX_ERR_UNSUPPORTED, _, id) => format!("TZX block 0x{id:02X} is not loadable"),
+        (_, true, 0) => "TZX header cut short".into(),
+        (_, true, id) => format!("TZX block 0x{id:02X}: a length or count is zero, out of range or past the end of the file"),
+        _ => "bad .tap: a block runs past the end of the file".into(),
+    }
+}
+
+/// Host tests only: the pulses the tape signal player plays for `data`, at most `max` entries
+/// (pulse lengths in T-states, a pause as one entry, a stop as 0); fewer at the end of the tape.
+pub fn test_tape_pulses(data: &[u8], max: usize) -> Result<Vec<u32>, String> {
+    let mut m = Machine::new();
+    m.tape_signal_insert(data)?;
+    let (st, _) = m.sig.as_mut().expect("inserted");
+    let mut out = vec![0u32; max];
+    // SAFETY: `out` holds `max` entries; the player's state and data are alive in `m`.
+    let n = unsafe { sys::zx_tapesig_test_pulses(&mut **st, out.as_mut_ptr(), max as u32) };
+    out.truncate(n as usize);
+    Ok(out)
 }
 
 /// Delay, in T-states, of a contended access that starts at frame T-state `tstate`.

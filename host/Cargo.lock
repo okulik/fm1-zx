@@ -607,6 +607,7 @@ dependencies = [
 name = "zx-tests"
 version = "0.1.0"
 dependencies = [
+ "fmzx-pack",
  "lz4_flex",
  "music",
  "zx-sys",

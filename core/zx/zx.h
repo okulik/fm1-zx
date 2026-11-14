@@ -42,6 +42,11 @@ typedef struct {
 	zx_regs regs;      /* the registers at its last such OUT (pc field = the OUT's address) */
 } zx_out_site;
 
+struct zx_machine;
+/* The tape level (0 or 1) at frame T-state frame_t, for bit 6 of port FEh reads. frame_t may
+ * pass ZX_FRAME_TSTATES in the instruction that overshoots the frame end. */
+typedef uint8_t (*zx_ear_fn)(struct zx_machine *m, uint32_t frame_t);
+
 typedef struct zx_machine {
 	Z80 cpu;
 	const uint8_t *rom;                       /* ZX_ROM_SIZE bytes, owned by the caller */
@@ -65,6 +70,8 @@ typedef struct zx_machine {
 	uint32_t tape_len, tape_pos;              /* tape_pos: offset of the next block */
 	uint8_t auto_step;                        /* autostart progress, 0 = idle (tape.c) */
 	uint8_t auto_timer;                       /* frames left in the current autostart step */
+	zx_ear_fn tape_ear;                       /* tape signal (tapesig.c); NULL: none, always so in the firmware */
+	void *tape_sig;                           /* the signal player's state, owned by the caller */
 
 	/* ULA state (ula.c). */
 	uint8_t keys[8];                          /* row r = A(8+r); bit set = pressed */
@@ -151,7 +158,7 @@ int zx_load_sna(zx_machine *m, const uint8_t *data, uint32_t len);
 int zx_load_z80(zx_machine *m, const uint8_t *data, uint32_t len);
 /* A successful load starts a clean game: it cancels a pending autostart
  * (releasing all keys, injected or held), ejects the tape, and makes the next frame
- * report every screen line dirty. */
+ * report every screen line dirty. It leaves tape_ear and tape_sig as they are. */
 
 /* Tape (tape.c). The whole .tap is validated by insert (every block's 2-byte
  * length must fit), then only the pointer is kept: `tap` must outlive its use.
@@ -162,7 +169,8 @@ int zx_tape_insert(zx_machine *m, const uint8_t *tap, uint32_t len);
  * does the same, whatever the pointer. */
 void zx_tape_eject(zx_machine *m);
 /* Resets the machine, then types LOAD "" + ENTER by itself over the frames
- * that follow, starting once the ROM's editor is waiting for a key. */
+ * that follow, starting once the ROM's editor is waiting for a key. An inserted
+ * tape stays inserted; a tape signal does not (zx_init clears tape_ear). */
 void zx_tape_autostart(zx_machine *m);
 
 /* Beeper renderer (beeper.c). Independent of zx_machine: each frame the caller

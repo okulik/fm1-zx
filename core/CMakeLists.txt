@@ -4,7 +4,9 @@
 # Keep the definitions and include dirs in step with DEFINES in host/crates/zx-sys/build.rs.
 # ZX_TESTING is host-only and is not defined here.
 
+# tapesig.c (the tape signal player) is for the host build only: the firmware's tape_ear stays NULL.
 file(GLOB ZX_CORE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/zx/*.c")
+list(FILTER ZX_CORE_SOURCES EXCLUDE REGEX "/tapesig\\.c$")
 set(ZX_VENDOR_SOURCES
   "${PROJECT_SOURCE_DIR}/third_party/Z80/sources/Z80.c"
   "${PROJECT_SOURCE_DIR}/third_party/Z80InsnClock/sources/Z80InsnClock.c")

@@ -353,6 +353,12 @@
 //! Each `BEEP` is a separate call of BEEPER, the interpreter's work between them a gap of
 //! silence (about 68,000 T). The program then stops with its report (0 OK) and waits in the
 //! editor.
+//!
+//! # TZX builders (not in the pack)
+//!
+//! [`tzx_header`] and one function per TZX block the tape signal player plays (0x10-0x14,
+//! 0x20, 0x24/0x25), for the signal tests; [`wrap_tap_as_tzx`] turns a `.tap` into standard
+//! blocks with the `.tap`'s 1000 ms pause.
 
 use std::path::{Path, PathBuf};
 
@@ -833,6 +839,108 @@ pub fn beep_tap() -> Vec<u8> {
     let mut tap = tap_header(0, "beep", prog.len() as u16, 10, prog.len() as u16);
     tap.extend(tap_block(0xFF, &prog));
     tap
+}
+
+/// The 10-byte TZX file header, version 1.20. TZX blocks follow it.
+pub fn tzx_header() -> Vec<u8> {
+    let mut d = b"ZXTape!\x1a".to_vec();
+    d.extend_from_slice(&[1, 20]);
+    d
+}
+
+/// TZX block 0x10, a standard-speed block: `block` is one `.tap` block without its length
+/// (flag, data, checksum), then `pause_ms` of silence.
+pub fn tzx_standard(pause_ms: u16, block: &[u8]) -> Vec<u8> {
+    let mut d = vec![0x10];
+    d.extend_from_slice(&pause_ms.to_le_bytes());
+    d.extend_from_slice(&(block.len() as u16).to_le_bytes());
+    d.extend_from_slice(block);
+    d
+}
+
+/// The timings of a TZX block 0x11 (turbo speed), in T-states.
+#[derive(Clone, Copy, Debug)]
+pub struct TzxTurbo {
+    pub pilot: u16,
+    pub sync1: u16,
+    pub sync2: u16,
+    pub zero: u16,
+    pub one: u16,
+    pub pilot_pulses: u16,
+    /// Bits of the last data byte that are played (1-8), from its top bit down.
+    pub last_bits: u8,
+    pub pause_ms: u16,
+}
+
+/// TZX block 0x11, a turbo-speed block.
+pub fn tzx_turbo(t: &TzxTurbo, data: &[u8]) -> Vec<u8> {
+    let mut d = vec![0x11];
+    for w in [t.pilot, t.sync1, t.sync2, t.zero, t.one, t.pilot_pulses] {
+        d.extend_from_slice(&w.to_le_bytes());
+    }
+    d.push(t.last_bits);
+    d.extend_from_slice(&t.pause_ms.to_le_bytes());
+    d.extend_from_slice(&(data.len() as u32).to_le_bytes()[..3]);
+    d.extend_from_slice(data);
+    d
+}
+
+/// TZX block 0x12, a pure tone: `count` pulses of `pulse` T-states.
+pub fn tzx_tone(pulse: u16, count: u16) -> Vec<u8> {
+    let mut d = vec![0x12];
+    d.extend_from_slice(&pulse.to_le_bytes());
+    d.extend_from_slice(&count.to_le_bytes());
+    d
+}
+
+/// TZX block 0x13, a sequence of pulses of the given lengths (at most 255).
+pub fn tzx_pulses(lens: &[u16]) -> Vec<u8> {
+    let mut d = vec![0x13, lens.len() as u8];
+    for l in lens {
+        d.extend_from_slice(&l.to_le_bytes());
+    }
+    d
+}
+
+/// TZX block 0x14, pure data: bits only, no pilot or sync.
+pub fn tzx_pure_data(zero: u16, one: u16, last_bits: u8, pause_ms: u16, data: &[u8]) -> Vec<u8> {
+    let mut d = vec![0x14];
+    d.extend_from_slice(&zero.to_le_bytes());
+    d.extend_from_slice(&one.to_le_bytes());
+    d.push(last_bits);
+    d.extend_from_slice(&pause_ms.to_le_bytes());
+    d.extend_from_slice(&(data.len() as u32).to_le_bytes()[..3]);
+    d.extend_from_slice(data);
+    d
+}
+
+/// TZX block 0x20: a pause of `ms` milliseconds, or with 0 a stop of the tape.
+pub fn tzx_pause(ms: u16) -> Vec<u8> {
+    let mut d = vec![0x20];
+    d.extend_from_slice(&ms.to_le_bytes());
+    d
+}
+
+/// TZX blocks 0x24 and 0x25 around `body`: the body played `count` times.
+pub fn tzx_loop(count: u16, body: &[u8]) -> Vec<u8> {
+    let mut d = vec![0x24];
+    d.extend_from_slice(&count.to_le_bytes());
+    d.extend_from_slice(body);
+    d.push(0x25);
+    d
+}
+
+/// A `.tap` as a TZX: each block becomes a block 0x10 with a 1000 ms pause. The `.tap`'s block
+/// lengths must fit it.
+pub fn wrap_tap_as_tzx(tap: &[u8]) -> Vec<u8> {
+    let mut d = tzx_header();
+    let mut i = 0;
+    while i < tap.len() {
+        let n = u16::from_le_bytes([tap[i], tap[i + 1]]) as usize;
+        d.extend(tzx_standard(1000, &tap[i + 2..i + 2 + n]));
+        i += 2 + n;
+    }
+    d
 }
 
 /// Writes every program into `dir` (created if needed); returns the paths written.

@@ -18,7 +18,7 @@ void zx_poke(zx_machine *m, uint16_t addr, uint8_t value)
 
 void zx_init(zx_machine *m, const uint8_t *rom)
 {
-	memset(m, 0, sizeof *m);
+	memset(m, 0, sizeof *m);   /* also tape_ear and tape_sig: NULL, no tape signal */
 	m->rom = rom;
 	memset(m->dirty, 0xFF, sizeof m->dirty);
 	m->force_dirty = 1;
