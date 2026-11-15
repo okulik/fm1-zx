@@ -18,6 +18,11 @@
  *   del_g   the delayed path: 1 in an FM mode once `mute` has run out;
  *   fm_g    within the delayed path, FM against the delayed beeper: follows
  *           the hysteresis' fm_on (one hysteresis, fed by the mode's method).
+ * The hysteresis leaves FM on the second unconfident decision in a row, not the
+ * first: a lone one inside music (a note boundary, a frame partly explained)
+ * keeps the synth's voices as they are (the last confident decision's), so the
+ * music does not drop to the beeper for 2-3 frames (a click); other sound loses
+ * its first frame.
  * Beeper -> FM: live_g fades out at once; `mute` holds del_g at 0 until the
  * ring reaches the switch frame's first sample, then del_g fades in, so the
  * two fades meet on the same sound (60 ms apart) and the 3 frames already
@@ -145,10 +150,12 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 		}
 	} else {
 		if (primed && (fm_mode || m->del_g)) {
-			if (!fr->confident) {   /* FM voices only what the method is sure of */
+			if (!fr->confident) {
+				/* FM voices only what the method is sure of; still in FM (a lone
+				 * unconfident decision), the synth's voices carry on as they are */
 				for (i = 0; i < SND_TONAL; i++) {
-					fr->tone[i].period_q8 = 0;
-					fr->tone[i].level = 0;
+					fr->tone[i].period_q8 = m->fm_on ? m->fm.v[i].period_q8 : 0;
+					fr->tone[i].level = m->fm_on ? (uint8_t)(m->fm.v[i].lvl_target >> 8) : 0;
 				}
 				fr->drum = 0;
 				fr->n_ev = 0;

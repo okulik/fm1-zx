@@ -26,12 +26,14 @@
 #define SND_MAX_FRAME_SAMPLES 1024u
 
 /* Mixer hysteresis, in decoder frames: FM starts after this many confident
- * frames in a row and stops after this many unconfident ones. Leaving is
- * immediate (confidence over coverage); the decoder itself keeps short rests
- * inside music confident. FM: engines (method B) starts after one claimed
+ * frames in a row and stops after this many unconfident ones. Leaving takes a
+ * second unconfident frame: a lone one inside music (a note boundary, a frame
+ * partly explained) holding the voices costs other sound at most a frame,
+ * while dropping to the beeper for it clicks; the decoder itself keeps short
+ * rests inside music confident. FM: engines (method B) starts after one claimed
  * frame: its claims are read from the engine, not guessed. */
 #define SND_ENTER_FRAMES 2u
-#define SND_LEAVE_FRAMES 1u
+#define SND_LEAVE_FRAMES 2u
 
 /* Crossfades (mode switches and FM/beeper decision changes) last
  * rate / SND_XFADE_DIV samples: 4 ms. */
@@ -493,7 +495,8 @@ void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n);
  *
  * One hysteresis: FM after SND_ENTER_FRAMES confident decisions in a row (FM_B: after one), the
  * beeper after SND_LEAVE_FRAMES unconfident ones; in Beeper mode it follows the last FM mode's
- * method (FM_A's after init).
+ * method (FM_A's after init). An unconfident decision that does not leave FM (a lone one inside
+ * music: a note boundary, a partly explained frame) keeps the synth's voices as they are.
  *
  * Mode switches: Beeper -> FM fades the live beeper out, plays silence, and
  * fades the delayed path in at the switch frame's first sample (60 ms later);

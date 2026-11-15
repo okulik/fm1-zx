@@ -7,7 +7,7 @@
 use music::synthetic::{frame_loop, xor_loop, xor_tune, Drum, FrameNote, Stream, FRAME_T};
 use music::{capture, castaway, render_stream, sample_rate, test_sna, Frame, RATE};
 use zx_sys::{
-    zx_edge, Beeper, Machine, SndDecoder, SndFm, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_ENTER_FRAMES,
+    zx_edge, Beeper, Machine, SndDecoder, SndFm, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_ENTER_FRAMES, SND_LEAVE_FRAMES,
     SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SndEngines,
 };
 
@@ -141,21 +141,41 @@ fn mode_switch_no_click() {
 }
 
 /// In an FM mode from the start: the output, the FM signal the mixer mixes in (rebuilt with a
-/// decoder and synth of our own: the decisions' voices when confident, silence otherwise), the
-/// delayed beeper, and the decisions (frame t's decision is about frame t - 3).
+/// decoder and synth of our own: the decisions' voices when confident; in FM, through a lone
+/// unconfident decision, the last confident one's voices; silence otherwise), the delayed beeper,
+/// and the decisions (frame t's decision is about frame t - 3).
 fn fm_signals(frames: &[Frame]) -> (Vec<i16>, Vec<i16>, Vec<i16>, Vec<SndFrame>) {
     let d = SND_DELAY_FRAMES as usize;
     let out = mix(frames, |_| SND_MODE_FM_A).concat();
     let (mut dec, mut fm) = (SndDecoder::new(), SndFm::new(RATE.0, RATE.1));
     let mut fm_out = Vec::new();
     let mut decisions = Vec::new();
+    // the mixer's hysteresis: FM after SND_ENTER_FRAMES confident decisions, the beeper after
+    // SND_LEAVE_FRAMES unconfident ones
+    let (mut on, mut run, mut held) = (false, 0u32, SndFrame::default());
     for (t, f) in frames.iter().enumerate() {
         let fr = dec.frame(&f.edges, f.start_level);
         decisions.push(fr);
         if t < d {
             fm_out.extend(std::iter::repeat_n(0, f.beeper.len()));
         } else {
-            let src = if fr.confident != 0 { fr } else { SndFrame::default() };
+            if (fr.confident != 0) == on {
+                run = 0;
+            } else {
+                run += 1;
+                if run >= if on { SND_LEAVE_FRAMES } else { SND_ENTER_FRAMES } {
+                    on = !on;
+                    run = 0;
+                }
+            }
+            let src = if fr.confident != 0 {
+                held = SndFrame { tone: fr.tone, ..SndFrame::default() };
+                fr
+            } else if on {
+                held
+            } else {
+                SndFrame::default()
+            };
             fm_out.extend(fm.render(&src, f.beeper.len()));
         }
     }
@@ -284,6 +304,61 @@ fn hysteresis_no_flutter() {
     assert!(sw.len() <= 1, "{} switches", sw.len());
 }
 
+/// The xor tune with stray short pulses (a third of its edges) added to `frames`, so the decoder is
+/// unsure of each of them.
+fn tune_with_strays(frames: &[usize]) -> Stream {
+    let mut s = xor_loop(&xor_tune(0));
+    let mut level = s.start_level;
+    let mut seed = 0x1234_5678u32;
+    for (i, f) in s.frames.iter_mut().enumerate() {
+        let start = level;
+        if frames.contains(&i) && !f.is_empty() {
+            let mut times: Vec<u32> = f.iter().map(|e| e.tstate).collect();
+            for _ in 0..times.len() / 6 {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let t = seed % (FRAME_T as u32 - 100);
+                times.extend([t, t + 30]);
+            }
+            times.sort();
+            *f = edges_from(&times, start);
+        }
+        level = f.last().map_or(start, |e| e.level);
+    }
+    s
+}
+
+#[test]
+fn lone_unsure_frame_stays_fm() {
+    // music the decoder is sure of except for single frames: FM holds through each of them with
+    // the voices it had (a drop to the beeper for 2-3 frames is a click in the music), and only
+    // a second unsure frame in a row leaves FM
+    let lone = [40usize, 60, 80];
+    let frames = render_stream(&tune_with_strays(&lone));
+    let out = mix(&frames, |_| SND_MODE_FM_A).concat();
+    let mut dec = SndDecoder::new();
+    let dec: Vec<SndFrame> = frames.iter().map(|f| dec.frame(&f.edges, f.start_level)).collect();
+    let d = SND_DELAY_FRAMES as usize;
+    let conf: String = (30..110).map(|i| if dec[i + d].confident != 0 { 'C' } else { '.' }).collect();
+    println!("decisions about frames 30-109: {conf}");
+    for &i in &lone {
+        assert!(dec[i + d].confident == 0, "frame {i}: the decoder is unsure");
+        assert!(dec[i - 1 + d].confident != 0 && dec[i + 1 + d].confident != 0, "frame {i}: sure around it");
+    }
+    // FM from frame 30 to 110 sounds all the time: the delayed beeper never comes in (where it
+    // differs from FM by much), and no 5 ms of the output is silent
+    let st = starts(&frames);
+    let bd = delayed_beeper(&frames);
+    let (a, b) = (st[30 + d], st[110 + d]);
+    let beeperish = (a..b).filter(|&p| out[p] == bd[p] && bd[p].abs() > 1000).count();
+    assert!(beeperish < ms(1.0), "{beeperish} samples of the delayed beeper in the music");
+    let w = ms(5.0);
+    for p in (a..b - w).step_by(w / 2) {
+        assert!(out[p..p + w].iter().any(|&x| x.abs() > 500), "silence at samples {p}..{}", p + w);
+    }
+}
+
 fn fnv(s: &[i16]) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
     for x in s {
@@ -314,11 +389,12 @@ fn mix_live(m: &mut Machine, frames: usize, mode_of: impl Fn(usize) -> u8) -> (V
 
 #[test]
 fn fm_a_unchanged() {
-    // FM: sound (method A) plays sample for sample as before method B and note events came;
-    // hashes computed at the commit before them (cb0f375)
+    // FM: sound (method A) plays sample for sample as it did when the mixer began holding FM
+    // through a lone unconfident decision (before that: unchanged since cb0f375, before method B
+    // and note events came)
     for (name, m, want) in [
-        ("castaway", castaway(), 0x1cec02944ff0d953u64),
-        ("colony8", music::colony8(), 0xbdc6bf364589bb9c),
+        ("castaway", castaway(), 0x0dcec5c3c69a9a4bu64),
+        ("colony8", music::colony8(), 0x01dc13a6cfa1fe5d),
     ] {
         let frames = capture(&mut { m }, &mut Beeper::new(RATE.0, RATE.1), 600);
         let dec = music::decode(frames.iter().map(|f| (f.edges.as_slice(), f.start_level)));
