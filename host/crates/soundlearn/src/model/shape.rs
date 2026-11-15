@@ -6,7 +6,7 @@
 
 use super::cfg::{bits_of, setup_paths, undecoded, Cfg, Item, SetupPath};
 use super::sym::{pair_index, slot_reg, Bit, Loc, Src, State, W};
-use super::{ChannelModel, Ctx, DurationModel, EngineModel, Family, Input, Refusal, Term};
+use super::{ChannelModel, Ctx, DurationModel, EngineModel, Family, Input, Refusal, Term, Why};
 use crate::z80::{Flow, Insn, MemRef, PortRef};
 use std::collections::BTreeSet;
 use zx_sys::{SND_LEARNED_LEN_MAX, SND_LEARNED_SITES_MAX, SND_TONAL};
@@ -174,6 +174,14 @@ struct DiamondRun {
     nodes: Vec<u16>,
 }
 
+impl DiamondRun {
+    /// T-states the zero (reload) arm takes beyond the other: a pass with the reload is this
+    /// much longer (the pass's time counts the other arm).
+    fn extra(&self) -> i64 {
+        self.zero.time - self.skip.time
+    }
+}
+
 struct DelayRun {
     counter: u8,
     value: Value,
@@ -183,7 +191,7 @@ struct DelayRun {
 
 /// Bit 4 of what `i` writes to the speaker, if it is a speaker `OUT` (an even port).
 fn speaker(st: &State, i: &Insn, ctx: &Ctx, out: u16) -> Result<Option<Bit>, Refusal> {
-    let refuse = |pc: u16| if pc == out { Refusal::NotSpeaker(pc) } else { Refusal::UnknownShape(pc) };
+    let refuse = |pc: u16| if pc == out { Refusal::NotSpeaker(pc) } else { Refusal::Unmodelled(Why::PortUnknown, pc) };
     match i.port_out {
         None => Ok(None),
         Some(PortRef::Imm(n)) => Ok((n & 1 == 0).then_some(st.v[super::sym::A].bits[4])),
@@ -333,35 +341,51 @@ impl Setup<'_> {
     /// Whether path `p` has no speaker `OUT` and leaves the level as the pass would: from the
     /// state at the test, the pass's own way round to where `p` re-enters and `p` itself, each
     /// followed by the pass from there and one more, give the same speaker bits wherever the
-    /// pass's depend on its state (`p` may set them to a constant); for Flips, `p` does not
-    /// write the shared level. Calls may change anything.
-    fn keeps_level(&self, p: &SetupPath) -> bool {
+    /// pass's depend on its state (`p` may set them to a constant); for Flips, `p` leaves the
+    /// shared level as it was or sets its speaker bit to a constant. Calls may change anything.
+    fn keeps_level(&self, p: &SetupPath) -> Result<(), Why> {
         let (cfg, items) = (self.cfg, self.items);
-        let Some(r) = items.iter().position(|it| it.pc() == p.reentry) else { return false };
-        let Some(at_test) = self.run(&items[..=self.test], self.start.clone()) else { return false };
+        let lost = Why::SetupLevel;
+        let r = items.iter().position(|it| it.pc() == p.reentry).ok_or(lost)?;
+        let at_test = self.run(&items[..=self.test], self.start.clone()).ok_or(lost)?;
         // the pass's own way: the test's staying side on to the re-entry
         let around: Vec<Item> = if r > self.test {
             items[self.test + 1..r].to_vec()
         } else {
             items[self.test + 1..].iter().chain(&items[..r]).cloned().collect()
         };
-        let Some(normal) = self.run(&around, at_test.end.clone()) else { return false };
+        let normal = self.run(&around, at_test.end.clone()).ok_or(lost)?;
         let mut st = at_test.end;
+        let mut called = false;
+        let mut set_shared = false;
         for pc in &p.nodes {
             let i = &cfg.n[pc];
-            let speaker = matches!(i.port_out, Some(PortRef::Imm(n)) if n & 1 == 0) || i.port_out == Some(PortRef::RegC);
-            if speaker || self.shared.iter().any(|&l| writes_loc(self.ctx.peek, i, l)) {
-                return false;
+            if matches!(i.port_out, Some(PortRef::Imm(n)) if n & 1 == 0) || i.port_out == Some(PortRef::RegC) {
+                return Err(Why::SetupOut);
             }
+            set_shared |= self.shared.iter().any(|&l| writes_loc(self.ctx.peek, i, l));
             match i.flow {
-                Flow::Call(_) | Flow::CondCall(_) | Flow::Rst(_) => st.clobber_all(),
+                Flow::Call(_) | Flow::CondCall(_) | Flow::Rst(_) => {
+                    called = true;
+                    st.clobber_all()
+                }
                 _ => st.step(i, self.ctx),
             }
         }
+        // the level the Flips channels share may be set (to a constant: a note starting from a
+        // known level), never left flipped or unknown
+        if set_shared && self.shared.iter().any(|&l| !matches!(bit_at(&st, l, 4), Bit::Z | Bit::O)) {
+            return Err(Why::SetupFlipsLevel);
+        }
         let on: Vec<Item> = items[r..].iter().chain(items).cloned().collect();
-        let (Some(a), Some(b)) = (self.run(&on, normal.end), self.run(&on, st)) else { return false };
-        a.outs.len() == b.outs.len()
-            && a.outs.iter().zip(&b.outs).all(|(x, y)| x.pc == y.pc && (!matches!(x.bit, Bit::E { .. }) || y.bit == x.bit || matches!(y.bit, Bit::Z | Bit::O)))
+        let (a, b) = (self.run(&on, normal.end).ok_or(lost)?, self.run(&on, st).ok_or(lost)?);
+        let same = a.outs.len() == b.outs.len()
+            && a.outs.iter().zip(&b.outs).all(|(x, y)| x.pc == y.pc && (!matches!(x.bit, Bit::E { .. }) || y.bit == x.bit || matches!(y.bit, Bit::Z | Bit::O)));
+        match (same, called) {
+            (true, _) => Ok(()),
+            (false, true) => Err(Why::SetupCall),
+            (false, false) => Err(lost),
+        }
     }
 }
 
@@ -379,7 +403,7 @@ struct Run {
 /// as at the pass's start); later ones only carry on (a port not known yet, in the first, is
 /// taken as a speaker's).
 fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, out: u16, first: bool) -> Result<Run, Refusal> {
-    let shape = Refusal::UnknownShape;
+    let un = Refusal::Unmodelled;
     let mut r = Run { outs: Vec::new(), delays: Vec::new(), diamonds: Vec::new(), t: Sum::default(), end: State::entry() };
     let spk = |s: &State, i: &Insn| match speaker(s, i, ctx, out) {
         Err(_) if first => Ok(Some(Bit::X)),
@@ -403,7 +427,7 @@ fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, ou
                 if first {
                     let wide = d.counter >= 8;
                     let value = if wide { conv.word(st.word(d.counter)) } else { conv.byte(st.v[d.counter as usize].src) };
-                    let value = value.ok_or(shape(*h))?;
+                    let value = value.ok_or(un(Why::UnnamedInput, *h))?;
                     r.t.add_count(d.per, d.konst, value, wide);
                     r.delays.push(DelayRun { counter: d.counter, value, seg: r.outs.len() });
                 }
@@ -431,13 +455,11 @@ fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, ou
                     Ok(a)
                 };
                 let (ta, fa) = (run_arm(taken, true)?, run_arm(fall, false)?);
-                if ta.time != fa.time {
-                    return Err(shape(*pc)); // unbalanced: each reload would shift the others
-                }
-                r.t.k += ta.time;
                 st = ta.end.join(&fa.end);
                 st.forget_bits();
                 let (zero, skip) = if *zero_taken { (ta, fa) } else { (fa, ta) };
+                // the pass's time counts the arm without the reload (see `DiamondRun::extra`)
+                r.t.k += skip.time;
                 let nodes = if *zero_taken { taken.clone() } else { fall.clone() };
                 r.diamonds.push(DiamondRun { pc: *pc, item: k, counter: *counter, zero, skip, nodes });
             }
@@ -449,7 +471,7 @@ fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, ou
 
 /// The model of the pass `items` through `out`.
 pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out: u16) -> Result<EngineModel, Refusal> {
-    let shape = Refusal::UnknownShape;
+    let un = Refusal::Unmodelled;
     // ---- the pass's instructions ----
     let mut main = BTreeSet::new();
     let mut inside = BTreeSet::new();
@@ -471,11 +493,8 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         }
     }
     let distinct: BTreeSet<u16> = all.iter().copied().collect();
-    if distinct.len() != all.len() {
-        return Err(shape(out));
-    }
-    if !distinct.contains(&out) {
-        return Err(shape(out));
+    if distinct.len() != all.len() || !distinct.contains(&out) {
+        return Err(un(Why::PassShape, out));
     }
     for &pc in &all {
         let i = &cfg.n[&pc];
@@ -483,53 +502,83 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         let contended = |a: u16, n: u16| (u32::from(a) + u32::from(n) > 0x4000) && a < 0x8000;
         let mem_contended = [i.mem_read, i.mem_write].iter().any(|m| matches!(m, Some(MemRef::Abs(a)) if contended(*a, 2)));
         if contended(pc, i.len.into()) || mem_contended {
-            return Err(shape(pc));
+            return Err(un(Why::Contended, pc));
         }
         // stores through pointers and the stack: not modelled
         let stack = i.reads & 1 << 13 != 0 || i.writes & 1 << 13 != 0;
-        if stack || matches!(i.mem_write, Some(MemRef::Reg16(_) | MemRef::Indexed(..) | MemRef::Sp)) {
-            return Err(shape(pc));
+        if stack || matches!(i.mem_write, Some(MemRef::Sp)) {
+            return Err(un(Why::StackOp, pc));
+        }
+        if matches!(i.mem_write, Some(MemRef::Reg16(_) | MemRef::Indexed(..))) {
+            return Err(un(Why::PointerStore, pc));
         }
     }
 
-    // a zero test leaving the pass counts down to it: nothing else in the pass writes its counter
-    // (else the side the pass takes is not known)
-    for it in &items {
-        if let Item::Test { pc, counter, .. } = it {
-            let (_, idiom) = cfg.zero_idiom(peek, &cfg.n[pc]).ok_or(shape(*pc))?;
-            if all.iter().any(|p| cfg.n[p].writes & bits_of(*counter) != 0 && !idiom.contains(p)) {
-                return Err(shape(*pc));
+    // the zero tests leaving the pass, with their counters (a pair, when the test's exit is its
+    // carry into the high half: the carry's instructions then belong to the routine, not to a
+    // setup path) and where they leave
+    let mut carries: Vec<u16> = Vec::new();
+    let mut tests: Vec<(usize, u16, u8, u16)> = Vec::new();
+    let mut carried: Vec<bool> = Vec::new();
+    for (k, it) in items.iter().enumerate() {
+        let Item::Test { pc, counter, exit, stay_taken } = it else { continue };
+        let i = &cfg.n[pc];
+        let stay = match (i.flow, stay_taken) {
+            (Flow::CondJump(t) | Flow::Djnz(t), true) => t,
+            _ => pc.wrapping_add(u16::from(i.len)),
+        };
+        match cfg.carry(peek, *exit, stay, *counter) {
+            Some((pair, nodes, past)) => {
+                carries.extend(nodes);
+                tests.push((k, *pc, pair, past));
+                carried.push(true);
+            }
+            None => {
+                tests.push((k, *pc, *counter, *exit));
+                carried.push(false);
             }
         }
     }
+    inside.extend(&carries);
+    // a zero test leaving the pass counts down to it: nothing else in the pass writes its counter
+    // (else the side the pass takes is not known)
+    for &(_, pc, counter, _) in &tests {
+        let (_, idiom) = cfg.zero_idiom(peek, &cfg.n[&pc]).ok_or(un(Why::BranchIdiom, pc))?;
+        if all.iter().any(|p| cfg.n[p].writes & bits_of(counter) != 0 && !idiom.contains(p)) {
+            return Err(un(Why::CounterReloaded, pc));
+        }
+    }
 
-    // ---- the setup paths, the routine's extent ----
-    let tests: Vec<(usize, u16, u8, u16)> = items
-        .iter()
-        .enumerate()
-        .filter_map(|(k, it)| match it {
-            Item::Test { pc, counter, exit, .. } => Some((k, *pc, *counter, *exit)),
-            _ => None,
-        })
-        .collect();
-    let paths: Vec<Vec<SetupPath>> = tests.iter().map(|t| setup_paths(cfg, t.3, &main, &inside)).collect();
+    let mut paths: Vec<Vec<SetupPath>> = tests.iter().map(|t| setup_paths(cfg, t.3, &main, &inside).ok_or(un(Why::SetupPaths, t.3))).collect::<Result<_, _>>()?;
+    // the code that runs straight into the pass from elsewhere (a routine called once a note or
+    // a burst, its setup before the loop): a path into the pass too; with one zero test, one of
+    // its setup paths
+    let leads = lead_ins(cfg, &main, &inside, &carries, &paths);
+    // the notes' setup loops back into the pass within the routine
+    let looped = paths.iter().any(|ps| !ps.is_empty());
     let mut region: BTreeSet<u16> = distinct.clone();
-    region.extend(paths.iter().flatten().flat_map(|p| p.nodes.iter().copied()));
-    let anchor = *region.first().ok_or(shape(out))?;
+    region.extend(&carries);
+    region.extend(paths.iter().chain([&leads]).flatten().flat_map(|p| p.nodes.iter().copied()));
+    if let [ps] = paths.as_mut_slice() {
+        ps.extend(leads.iter().cloned());
+    } else if leads.iter().flat_map(|p| &p.nodes).any(|pc| cfg.n[pc].port_out.is_some()) {
+        return Err(un(Why::SetupOut, leads[0].nodes[0]));
+    }
+    let anchor = *region.first().ok_or(un(Why::PassShape, out))?;
     let mut end = 0u32;
     for &pc in &region {
         let i = &cfg.n[&pc];
         if u32::from(pc) < end {
-            return Err(shape(pc)); // overlapping instructions
+            return Err(un(Why::OverlappingCode, pc));
         }
         if undecoded(peek, i) {
             return Err(Refusal::Undecoded(pc));
         }
         end = u32::from(pc) + u32::from(i.len);
     }
-    let code_end = u16::try_from(end).map_err(|_| shape(out))?;
+    let code_end = u16::try_from(end).map_err(|_| un(Why::TooLong, out))?;
     if code_end - anchor > SND_LEARNED_LEN_MAX {
-        return Err(shape(anchor));
+        return Err(un(Why::TooLong, anchor));
     }
     let owner = |a: u16| region.range(..=a).next_back().map(|pc| &cfg.n[pc]).filter(|i| u32::from(a) < u32::from(i.pc) + u32::from(i.len));
 
@@ -589,7 +638,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     let r3 = run(r2.end.clone(), false)?;
     let pcs = |r: &Run| r.outs.iter().map(|o| o.pc).collect::<Vec<_>>();
     if pcs(&r0) != pcs(&r1) || pcs(&r1) != pcs(&r2) || pcs(&r2) != pcs(&r3) {
-        return Err(shape(out));
+        return Err(un(Why::OutsVary, out));
     }
     let t = r0.t.clone();
     let outs: Vec<Out> = r1.outs.iter().zip(&r0.outs).map(|(o, o0)| Out { pc: o.pc, bit: o.bit, t: o0.t.clone(), item: o.item }).collect();
@@ -611,7 +660,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         (Family::Square, vec![square_channel(&levels, &outs, delays, &t, out)?], 0, vec![0], false)
     };
     if channels.len() > SND_TONAL || channels.iter().map(|c| c.sites.len()).sum::<usize>() > SND_LEARNED_SITES_MAX {
-        return Err(shape(out));
+        return Err(un(Why::TooManyChannels, out));
     }
     // the setup between notes makes no edges of its own: no speaker OUT, and the level the pass
     // carries comes back as the pass would leave it, or set (never flipped: a hidden channel)
@@ -625,8 +674,8 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         .collect();
     for (test, ps) in tests.iter().zip(&paths) {
         let setup = Setup { cfg, ctx: &ctx, conv: &conv, items: &items, start: &r0.end, test: test.0, shared: &shared, out };
-        if ps.iter().any(|p| !setup.keeps_level(p)) {
-            return Err(shape(test.3));
+        for p in ps {
+            setup.keeps_level(p).map_err(|w| un(w, test.3))?;
         }
     }
 
@@ -634,7 +683,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     let ends: Vec<Vec<(u16, State)>> = paths.iter().map(|ps| ps.iter().map(|p| (p.reentry, run_path(cfg, &ctx, p))).collect()).collect();
     let site_items: Vec<usize> = outs.iter().map(|o| o.item).chain(diamonds.iter().map(|d| d.item)).collect();
     let duration = match (tests.as_slice(), ends.as_slice()) {
-        ([test], [ends]) => duration(cfg, peek, &conv, &items, &site_items, *test, ends, &t),
+        ([test], [ends]) => duration(cfg, peek, &conv, &items, &site_items, *test, ends, &t).map(|d| DurationModel { carry: carried[0], ..d }),
         _ => None,
     };
 
@@ -651,13 +700,34 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     let table_walk = ends.iter().flatten().any(|(_, end)| inputs.iter().any(|&x| walked(end, x, anchor)));
 
     // ---- where the memory is not to be read: outside the pass ----
-    let lo = *distinct.first().ok_or(shape(out))?;
+    let lo = *distinct.first().ok_or(un(Why::PassShape, out))?;
     let hi = distinct.iter().map(|p| u32::from(*p) + u32::from(cfg.n[p].len)).max().unwrap_or(0);
     let bytes: u32 = distinct.iter().map(|p| u32::from(cfg.n[p].len)).sum();
     if hi - u32::from(lo) != bytes {
-        return Err(shape(lo)); // other code inside the pass's range
+        return Err(un(Why::PassNotContiguous, lo));
     }
     let hi = hi as u16;
+    let mut stale = Some((hi - anchor, lo.wrapping_sub(hi)));
+    // a routine its notes do not loop back into (called once a note or a burst: frames often
+    // end outside it) whose formulas read only registers at the site's last edge and bytes the
+    // signature fixes: nothing of them goes stale between notes, and the registers at the frame's
+    // end say nothing of the note's timing
+    let fixed = |x: &Input| match *x {
+        Input::Reg(_) => true,
+        Input::Rel(o) => !ctx.wild.contains(&anchor.wrapping_add(o)),
+        Input::Rel16(o) => !ctx.wild.contains(&anchor.wrapping_add(o)) && !ctx.wild.contains(&anchor.wrapping_add(o).wrapping_add(1)),
+        _ => false,
+    };
+    let stable = channels.iter().flat_map(|c| &c.half_period).all(|t| match t {
+        Term::Const(_) => true,
+        Term::Lin { x, .. } | Term::Recip { x, .. } => fixed(x),
+        Term::Prod { x, y, .. } => fixed(x) && fixed(y),
+    });
+    let mut duration = duration;
+    if !looped && stable {
+        stale = None;
+        duration = None;
+    }
     Ok(EngineModel {
         anchor,
         code_end,
@@ -667,11 +737,47 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         pos,
         flips,
         duration,
-        stale: Some((hi - anchor, lo.wrapping_sub(hi))),
+        stale,
         table_walk,
         wild: ctx.wild.iter().map(|a| a - anchor).collect(),
         reloc,
     })
+}
+
+/// The straight runs of code into the pass from elsewhere: for each instruction of the pass
+/// (`main`) entered from outside the pass's code (`main`, `inside`, `carries`) and the setup paths
+/// (`paths`), the run of instructions before it, back to one with other than a single
+/// predecessor running into it (at most `PATH_LEN`).
+fn lead_ins(cfg: &Cfg, main: &BTreeSet<u16>, inside: &BTreeSet<u16>, carries: &[u16], paths: &[Vec<SetupPath>]) -> Vec<SetupPath> {
+    const PATH_LEN: usize = 256;
+    let known: BTreeSet<u16> = paths.iter().flatten().flat_map(|p| p.nodes.iter().copied()).chain(carries.iter().copied()).collect();
+    let outside = |p: u16| !main.contains(&p) && !inside.contains(&p) && !known.contains(&p);
+    // p runs into q: falls through or jumps, with no other way out
+    let runs_into = |p: u16, q: u16| {
+        cfg.n.get(&p).is_some_and(|i| match i.flow {
+            Flow::Next => i.t == i.t_taken && i.pc.checked_add(u16::from(i.len)) == Some(q),
+            Flow::Jump(t) => t == q,
+            _ => false,
+        })
+    };
+    let mut leads = Vec::new();
+    for &pc in main {
+        for &p in cfg.preds.get(&pc).map(Vec::as_slice).unwrap_or(&[]) {
+            if !outside(p) || !runs_into(p, pc) {
+                continue;
+            }
+            let mut nodes = vec![p];
+            while nodes.len() < PATH_LEN {
+                let first = nodes[0];
+                match cfg.preds.get(&first).map(Vec::as_slice) {
+                    Some(&[q]) if outside(q) && runs_into(q, first) && !nodes.contains(&q) => nodes.insert(0, q),
+                    _ => break,
+                }
+            }
+            leads.push(SetupPath { nodes, reentry: pc });
+        }
+    }
+    leads
 }
 
 /// Whether input `x` was, at the end of a setup path, read through a pointer the path advanced:
@@ -691,12 +797,12 @@ fn walked(end: &State, x: Input, anchor: u16) -> bool {
 /// One channel toggled by every speaker `OUT` of the pass: half period = the pass over the
 /// number of `OUT`s.
 fn square_channel(levels: &[Bit], outs: &[Out], delays: &[DelayRun], t: &Sum, out: u16) -> Result<ChannelModel, Refusal> {
-    let shape = Refusal::UnknownShape;
+    let un = Refusal::Unmodelled;
     if outs.is_empty() || outs.iter().any(|o| matches!(o.bit, Bit::Acc { .. })) {
-        return Err(shape(out));
+        return Err(un(Why::PhaseShape, out));
     }
     if !toggles(levels) {
-        return Err(shape(out));
+        return Err(un(Why::NoToggle, out));
     }
     // the partition: one reload counter feeds every half period; two registers fed from one
     // source in different half periods may be two channels in unison
@@ -718,10 +824,10 @@ fn square_channel(levels: &[Bit], outs: &[Out], delays: &[DelayRun], t: &Sum, ou
         };
         let first = seg(1);
         if (2..=outs.len()).any(|s| seg(s) != first) {
-            return Err(shape(out)); // the halves count different things: a duty cycle
+            return Err(un(Why::DutyCycle, out)); // the halves count different things
         }
     }
-    let half = t.div(outs.len() as i64).ok_or(shape(out))?;
+    let half = t.div(outs.len() as i64).ok_or(un(Why::UnevenHalves, out))?;
     let mut sites: Vec<u16> = outs.iter().map(|o| o.pc).collect();
     sites.sort_unstable();
     Ok(ChannelModel { sites, half_period: half.terms(), silent_if_zero: None })
@@ -737,14 +843,15 @@ fn slots_channels(
     t: &Sum,
     out: u16,
 ) -> Result<(Vec<ChannelModel>, u16, Vec<u16>), Refusal> {
-    let shape = Refusal::UnknownShape;
-    let p = t.konst().filter(|&p| (1..=0xFFFF).contains(&p)).ok_or(shape(out))?;
+    let un = Refusal::Unmodelled;
+    let shape = |pc: u16| un(Why::PhaseShape, pc);
+    let p = t.konst().filter(|&p| (1..=0xFFFF).contains(&p)).ok_or(un(Why::PassTimeVaries, out))?;
     let mut order: Vec<&Out> = outs.iter().collect();
     order.sort_by_key(|o| o.pc);
     let mut channels = Vec::new();
     let mut pos = Vec::new();
     let mut used = BTreeSet::new();
-    let t0 = order[0].t.konst().ok_or(shape(out))?;
+    let t0 = order[0].t.konst().ok_or(un(Why::PassTimeVaries, out))?;
     for o in &order {
         let Bit::Acc { id, .. } = o.bit else { return Err(shape(o.pc)) };
         let acc = end.accs.get(id as usize).ok_or(shape(o.pc))?;
@@ -763,13 +870,13 @@ fn slots_channels(
         if !carried {
             return Err(shape(o.pc));
         }
-        let half = match conv.word(acc.step).ok_or(shape(o.pc))? {
+        let half = match conv.word(acc.step).ok_or(un(Why::UnnamedInput, o.pc))? {
             Value::K(0) => return Err(shape(o.pc)),
             Value::K(s) => Term::Const((HALF_PHASE * p + s / 2) / s),
             Value::In(x) => Term::Recip { num_t: HALF_PHASE * p, x },
         };
         channels.push(ChannelModel { sites: vec![o.pc], half_period: vec![half], silent_if_zero: None });
-        pos.push((o.t.konst().ok_or(shape(o.pc))? - t0).rem_euclid(p) as u16);
+        pos.push((o.t.konst().ok_or(un(Why::PassTimeVaries, o.pc))? - t0).rem_euclid(p) as u16);
     }
     Ok((channels, p as u16, pos))
 }
@@ -788,16 +895,24 @@ fn flips_channels(
     t: &Sum,
     out: u16,
 ) -> Result<Vec<ChannelModel>, Refusal> {
-    let shape = Refusal::UnknownShape;
+    let un = Refusal::Unmodelled;
+    let shape = |pc: u16| un(Why::FlipsShape, pc);
     if !outs.is_empty() {
         return Err(shape(out));
     }
-    let p = t.konst().ok_or(shape(out))?;
+    let p = t.konst().ok_or(un(Why::PassTimeVaries, out))?;
     let mut level: Option<Loc> = None;
-    let mut fed: Vec<(u8, Value, u16)> = Vec::new();
+    let mut fed: Vec<(u8, Value, u16, i64)> = Vec::new();
     let mut arms: BTreeSet<u16> = BTreeSet::new();
     if diamonds.len() != first.len() {
         return Err(shape(out));
+    }
+    // unbalanced arms: each reload would shift the other channels' flips (their half periods
+    // then depend on each other's counts); one channel alone just has a longer flipping pass
+    if diamonds.len() > 1 {
+        if let Some(d) = diamonds.iter().find(|d| d.extra() != 0) {
+            return Err(un(Why::UnbalancedFlips, d.pc));
+        }
     }
     for (d, d0) in diamonds.iter().zip(first) {
         arms.extend(&d.nodes);
@@ -819,33 +934,34 @@ fn flips_channels(
         }
         let (_, idiom) = cfg.zero_idiom(peek, &cfg.n[&d.pc]).ok_or(shape(d.pc))?;
         if all.iter().any(|pc| cfg.n[pc].writes & bits_of(d.counter) != 0 && !idiom.contains(pc) && !d.nodes.contains(pc)) {
-            return Err(shape(d.pc));
+            return Err(un(Why::CounterReloaded, d.pc));
         }
         // the reload, from the first traversal (registers as at the pass's start)
         let end0 = &d0.zero.end;
         let n = if d.counter >= 8 { conv.word(end0.word(d.counter)) } else { conv.byte(end0.v[d.counter as usize].src) };
-        fed.push((d.counter, n.ok_or(shape(d.pc))?, site));
+        fed.push((d.counter, n.ok_or(un(Why::UnnamedInput, d.pc))?, site, d.extra()));
     }
     // the level changes only in the channels' flips
     if let Some(l) = level {
         if all.iter().any(|pc| !arms.contains(pc) && writes_loc(peek, &cfg.n[pc], l)) {
-            return Err(shape(out));
+            return Err(un(Why::LevelWrittenElsewhere, out));
         }
     }
-    for &(r, v, _) in &fed {
-        if fed.iter().any(|&(r2, v2, _)| r2 == r && v2 != v) || fed.iter().filter(|f| f.0 == r).count() > 1 {
+    for &(r, v, _, _) in &fed {
+        if fed.iter().any(|&(r2, v2, _, _)| r2 == r && v2 != v) || fed.iter().filter(|f| f.0 == r).count() > 1 {
             return Err(shape(out)); // one counter, two diamonds
         }
-        if matches!(v, Value::In(_)) && fed.iter().any(|&(r2, v2, _)| v2 == v && r2 != r) {
+        if matches!(v, Value::In(_)) && fed.iter().any(|&(r2, v2, _, _)| v2 == v && r2 != r) {
             return Err(Refusal::Ambiguous(out));
         }
     }
     fed.sort_by_key(|f| f.2);
+    // n passes from flip to flip: n - 1 without the reload and the one with it
     Ok(fed
         .into_iter()
-        .map(|(r, v, site)| {
+        .map(|(r, v, site, extra)| {
             let mut s = Sum::default();
-            s.add_count(p, 0, v, r >= 8);
+            s.add_count(p, extra, v, r >= 8);
             ChannelModel { sites: vec![site], half_period: s.terms(), silent_if_zero: None }
         })
         .collect())
@@ -887,5 +1003,5 @@ fn duration(
     if ends.iter().any(|(_, e)| conv.start(e, c) != Some(first)) {
         return None;
     }
-    Some(DurationModel { counter: Input::Reg(c), per_unit_t: pass.terms(), counts_down_from: Some(first) })
+    Some(DurationModel { counter: Input::Reg(c), per_unit_t: pass.terms(), counts_down_from: Some(first), carry: false })
 }

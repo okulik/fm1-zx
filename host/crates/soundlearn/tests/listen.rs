@@ -4,6 +4,8 @@
 //! Listening to `games/test/tune.sna`: the speaker routine's period samples and snapshots, and
 //! the generic input schedule.
 
+mod fixtures;
+
 use soundlearn::listen::{listen, listen_with, schedule, Inputs, LISTEN_FRAMES};
 use zx_sys::Machine;
 
@@ -135,4 +137,28 @@ fn thinning_keeps_even_samples_with_their_snapshots() {
         let want = |pc: u16| full_snap.iter().find(|r| r.0 == pc && r.1 == 1).map(|r| r.3);
         assert!(value(0x801B).is_some() && value(0x801B) == want(0x801B) && value(0x801E) == want(0x801E), "sample {i}");
     }
+}
+
+/// A period an interrupt was accepted in is not a sample: square_one_counter run with
+/// interrupts on and an interrupt routine of about 700 T (`JP 9800h` from the IM 2 handler at
+/// FDFDh; 9800 PUSH AF; LD A,40; DEC A; JR NZ,$-1; POP AF; EI; RET), once a frame.
+#[test]
+fn interrupted_periods_are_not_samples() {
+    let fx = fixtures::square_one_counter();
+    let mut sna = fx.sna.clone();
+    sna[19] = 0x04; // IFF2: interrupts on
+    let at = |a: u16| 27 + usize::from(a - 0x4000);
+    sna[at(0xFDFD)..at(0xFDFD) + 3].copy_from_slice(&[0xC3, 0x00, 0x98]);
+    sna[at(0x9800)..at(0x9800) + 9].copy_from_slice(&[0xF5, 0x3E, 0x28, 0x3D, 0x20, 0xFD, 0xF1, 0xFB, 0xC9]);
+    let mut m = Machine::new();
+    m.load_sna(&sna).expect("loads");
+    let heard = listen(&mut m, &none(), 300);
+    let site = &heard.sites[0];
+    let periods: Vec<f64> = [250u8, 222, 198, 187, 166, 148, 131, 124].iter().map(|&n| 2.0 * (13.0 * f64::from(n) + 58.0)).collect();
+    let near = |p: f64| periods.iter().map(|&q| p - q).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(f64::MAX);
+    assert!(site.periods.len() > 1000, "{} samples", site.periods.len());
+    // every sample is a note's period but the one over each note's seam (the setup between
+    // notes: about 30 in 300 frames); an interrupt in every frame would spoil about 300 more
+    let off = site.periods.iter().filter(|s| near(s.period_t) != 0.0).count();
+    assert!(off <= 32, "{off} of {} samples are not a note's period", site.periods.len());
 }

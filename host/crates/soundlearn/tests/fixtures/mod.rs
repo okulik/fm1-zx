@@ -574,6 +574,69 @@ pub fn computed_jump() -> Fixture {
     Fixture { name: "computed_jump", sna: sna(&code, &[]), sites: vec![0x8002], kind: Kind::Square, truth: |_, _| vec![1346.0] }
 }
 
+
+/// One channel flipped by an uneven reload: each pass `DJNZ` counts B down, and the pass where
+/// it reaches 0 reloads it from C (the note's byte, from a table walked by HL), XORs the level in
+/// A and OUTs it, 13 T longer than the other passes (42 T against 29). A pass is 45 T, so a flip
+/// comes every `45n + 13` T. The note's passes are counted by E (`DEC E; JR NZ`) and, when E
+/// wraps, by D on a path out of the loop and back (`DEC D; JR NZ`): that path costs 11 T more,
+/// once every 256 passes, so a half period over it is `45n + 24` T.
+///
+/// ```text
+/// 8000 21 26 80     start: LD HL,8026h    the first record: n, passes (low, high)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A         the reload
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      the note's passes: (D - 1) x 256 + E
+/// 800C 23                  INC HL
+/// 800D 3E 10               LD A,10h       the level
+/// 800F 06 01               LD B,1         the first pass flips
+/// 8011 10 07        loop:  DJNZ skip      8 / 13
+/// 8013 41                  LD B,C         4    reload
+/// 8014 EE 10               XOR 10h        7
+/// 8016 D3 FE               OUT (FEh),A    11   the flip
+/// 8018 18 04               JR next        12
+/// 801A 00 00 00 00  skip:  NOP x 4        16
+/// 801E 1D           next:  DEC E          4
+/// 801F 20 F0               JR NZ,loop     12
+/// 8021 15                  DEC D          4
+/// 8022 20 ED               JR NZ,loop     12
+/// 8024 18 DD               JR note
+/// 8026                     records (n, low, high) and a 0
+/// ```
+pub fn flips_uneven() -> Fixture {
+    #[rustfmt::skip]
+    let mut code = vec![
+        0x21, 0x26, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23, 0x3E, 0x10, 0x06, 0x01,
+        // loop
+        0x10, 0x07, 0x41, 0xEE, 0x10, 0xD3, 0xFE, 0x18, 0x04, 0x00, 0x00, 0x00, 0x00,
+        // next
+        0x1D, 0x20, 0xF0, 0x15, 0x20, 0xED, 0x18, 0xDD,
+    ];
+    assert_eq!(code.len(), 0x26);
+    for n in [40u8, 45, 50, 60, 36, 45] {
+        code.extend_from_slice(&[n, 0, 0x20]);
+    }
+    code.push(0);
+    Fixture {
+        name: "flips_uneven",
+        sna: sna(&code, &[]),
+        sites: vec![0x8016],
+        kind: Kind::Flips,
+        // at the OUT, E has n decrements to go before the next flip: one of them wrapping it
+        // (E from 1 to n) takes the 11 T longer way round
+        truth: |_, r| {
+            let n = f64::from(match (r.bc & 0xFF) as u8 { 0 => 256, c => u32::from(c) });
+            let e = f64::from((r.de & 0xFF) as u8);
+            vec![45.0 * n + 13.0 + if (1.0..=n).contains(&e) { 11.0 } else { 0.0 }]
+        },
+    }
+}
+
 /// Every fixture.
 pub fn all() -> Vec<Fixture> {
     vec![
@@ -586,6 +649,7 @@ pub fn all() -> Vec<Fixture> {
         sweep(),
         siren(),
         computed_jump(),
+        flips_uneven(),
     ]
 }
 

@@ -10,7 +10,8 @@
 //! - a *flip* is an `OUT` to an even port that changes the speaker level (bit 4);
 //! - a *period sample* is the time from the site's flip `k-2` to flip `k`, less the contention
 //!   T-states between (the period the routine's code makes, not the ULA's delays); one for every
-//!   other flip, so no two share a half period;
+//!   other flip, so no two share a half period; a period an interrupt was accepted in is not a
+//!   sample (the interrupt routine's time is not the music routine's);
 //! - the samples span the whole run: at most 4,096 are kept per site, and when they fill up
 //!   every other one is dropped and the stride between kept candidates doubles;
 //! - a *snapshot* is taken at the site's next `OUT` after each flip that precedes a sampled
@@ -21,7 +22,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use zx_sys::{zx_regs, Machine, TraceEv, ZX_FRAME_TSTATES, ZX_TR_INSN, ZX_TR_OUT, ZX_TR_READ};
+use zx_sys::{zx_regs, Machine, TraceEv, ZX_FRAME_TSTATES, ZX_TR_INSN, ZX_TR_INTA, ZX_TR_OUT, ZX_TR_READ};
 
 /// Frame to (Spectrum key rows, Kempston bits).
 pub type Inputs = Box<dyn Fn(u32) -> ([u8; 8], u8)>;
@@ -196,6 +197,8 @@ struct Rec {
     sound_frames: u32,
     insn_reads: u8,
     seq: u64,
+    /// When the last interrupt was accepted (T-states since the start), if one was.
+    last_int: Option<u64>,
     reads: VecDeque<(u64, u16, u8, u16, u8)>,
     sites: Vec<Site>,
 }
@@ -227,6 +230,7 @@ impl Rec {
                 self.insn_reads = self.insn_reads.saturating_add(1);
             }
             ZX_TR_OUT if ev.addr & 1 == 0 => self.out(ev),
+            ZX_TR_INTA => self.last_int = Some(u64::from(self.frame) * u64::from(ZX_FRAME_TSTATES) + u64::from(ev.t)),
             _ => {}
         }
     }
@@ -254,7 +258,7 @@ impl Rec {
             }
             None => return,
         };
-        let (frame, seq) = (self.frame, self.seq);
+        let (frame, seq, last_int) = (self.frame, self.seq, self.last_int);
         let t = u64::from(frame) * u64::from(ZX_FRAME_TSTATES) + u64::from(ev.t);
         let Some(site) = self.sites.get_mut(at) else { return };
         if site.pending {
@@ -278,7 +282,11 @@ impl Rec {
         }
         // periods are taken from every other flip: the samples are independent (not two to a
         // period, sharing their halves)
-        if site.edges % 2 == 1 && site.flips.len() == 2 {
+        let quiet = site.flips.front().is_some_and(|old| last_int.is_none_or(|i| i < old.t));
+        if site.edges % 2 == 1 && site.flips.len() == 2 && !quiet {
+            site.held = None;
+        }
+        if site.edges % 2 == 1 && site.flips.len() == 2 && quiet {
             let keep = site.candidates % site.stride.max(1) == 0;
             site.candidates = site.candidates.wrapping_add(1);
             if let (true, Some(old), Some(snap)) = (keep, site.flips.front(), site.held.take()) {
@@ -340,7 +348,7 @@ pub fn listen_with(m: &mut Machine, inputs: &Inputs, frames: u32, keep: usize) -
                 r.event(ev);
             }
         })),
-        (1 << ZX_TR_INSN) | (1 << ZX_TR_READ) | (1 << ZX_TR_OUT),
+        (1 << ZX_TR_INSN) | (1 << ZX_TR_READ) | (1 << ZX_TR_OUT) | (1 << ZX_TR_INTA),
     );
     for f in 0..frames {
         let (rows, kemp) = inputs(f);

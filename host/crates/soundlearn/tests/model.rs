@@ -7,7 +7,7 @@
 mod fixtures;
 
 use fixtures::{Fixture, Kind};
-use soundlearn::model::{eval_terms, read_engine, scan_out_sites, EngineModel, Family, Input, Refusal, Term};
+use soundlearn::model::{eval_terms, read_engine, scan_out_sites, DurationModel, EngineModel, Family, Input, Refusal, Term, Why};
 use zx_sys::Machine;
 
 const CLOCK: f64 = 3_500_000.0;
@@ -325,7 +325,7 @@ fn refuses_contended_code() {
     let fx = fixtures::square_one_counter();
     let m = fixtures::machine(&fx.sna);
     let moved = |a: u16| if (0x6000..0x6040).contains(&a) { m.peek(a + 0x2000) } else { 0 };
-    assert!(matches!(read_engine(moved, 0x6010), Err(Refusal::UnknownShape(_))), "{:?}", read_engine(moved, 0x6010));
+    assert!(matches!(read_engine(moved, 0x6010), Err(Refusal::Unmodelled(Why::Contended, _))), "{:?}", read_engine(moved, 0x6010));
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn refuses_counter_reloaded_in_pass() {
     // the zero test's counter is set every pass: JR NZ,tog is never taken, the delay always runs
     // 8000 tog: XOR 10h; OUT (FEh),A; LD C,1; DEC C; JR NZ,tog; LD B,100; d: DJNZ d; JR tog
     let mem = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0x0E, 0x01, 0x0D, 0x20, 0xF7, 0x06, 0x64, 0x10, 0xFE, 0x18, 0xF1]);
-    assert_eq!(read_engine(mem, 0x8002), Err(Refusal::UnknownShape(0x8007)));
+    assert_eq!(read_engine(mem, 0x8002), Err(Refusal::Unmodelled(Why::CounterReloaded, 0x8007)));
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn refuses_unbalanced_flips() {
     let fx = fixtures::xor_unison();
     let m = fixtures::machine(&fx.sna);
     let mem = |a: u16| if (0x801B..0x801E).contains(&a) { 0 } else { m.peek(a) };
-    assert_eq!(read_engine(mem, 0x8036), Err(Refusal::UnknownShape(0x8019)));
+    assert_eq!(read_engine(mem, 0x8036), Err(Refusal::Unmodelled(Why::UnbalancedFlips, 0x8019)));
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn refuses_two_adds_to_one_phase() {
     // ADDs are not one accumulator seen twice
     let mem = at_8000(&[0x19, 0x19, 0x7C, 0xE6, 0x80, 0x0F, 0x0F, 0x0F, 0xD3, 0xFE, 0x18, 0xF4]);
     let got = read_engine(mem, 0x8008);
-    assert!(matches!(got, Err(Refusal::UnknownShape(_))), "{got:?}");
+    assert!(matches!(got, Err(Refusal::Unmodelled(Why::NoToggle, _))), "{got:?}");
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn refuses_setup_flipping_the_level() {
         0x3A, 0x00, 0x90, 0xEE, 0x10, 0x32, 0x00, 0x90, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1D, 0x20, 0xF0,
         0x1E, 0x05, 0x3A, 0x00, 0x90, 0xEE, 0x10, 0x32, 0x00, 0x90, 0x18, 0xE4,
     ]);
-    assert_eq!(read_engine(mem, 0x8008), Err(Refusal::UnknownShape(0x8010)));
+    assert_eq!(read_engine(mem, 0x8008), Err(Refusal::Unmodelled(Why::SetupLevel, 0x8010)));
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn refuses_setup_with_a_speaker_out() {
     // 8000 top: XOR 10h; OUT (FEh),A; LD B,C; DJNZ $; DEC E; JR NZ,top;
     // 800A LD E,5; OUT (FEh),A; OR A; JR Z,top; JR top
     let mem = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1D, 0x20, 0xF6, 0x1E, 0x05, 0xD3, 0xFE, 0xB7, 0x28, 0xEF, 0x18, 0xED]);
-    assert_eq!(read_engine(mem, 0x8002), Err(Refusal::UnknownShape(0x800A)));
+    assert_eq!(read_engine(mem, 0x8002), Err(Refusal::Unmodelled(Why::SetupOut, 0x800A)));
 }
 
 #[test]
@@ -438,4 +438,65 @@ fn table_walk_needs_the_advanced_pointer() {
     let md = read_engine(mem, 0x800F).expect("reads");
     assert_eq!(md.channels[0].half_period[0], Term::Lin { coef_t: 13, x: Input::Reg(3) });
     assert!(!md.table_walk);
+}
+
+// ---- Task 10: specific refusals ----------------------------------------------------------------
+
+/// A square loop whose setup path (from the zero test's exit at 800Ah) passes `n` two-way
+/// branches that meet again at once, so 2^n paths lead back into the pass:
+/// 8000 tog: XOR 10h; OUT (FEh),A; LD B,C; DJNZ $; DEC E; JR NZ,tog;
+/// 800A n x (JR Z,+1; NOP); LD E,5; JR tog
+fn forked_setup(n: usize) -> Vec<u8> {
+    let mut code = vec![0xEE, 0x10, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1D, 0x20, 0xF6];
+    for _ in 0..n {
+        code.extend([0x28, 0x01, 0x00]);
+    }
+    code.extend([0x1E, 0x05, 0x18]);
+    code.push((-(code.len() as i32 + 1)) as u8);
+    code
+}
+
+#[test]
+fn refuses_setup_paths_past_the_limit() {
+    // 2^7 = 128 paths: more than the reader follows, so one could go unchecked
+    let code = forked_setup(7);
+    let mem = |a: u16| code.get(usize::from(a.wrapping_sub(0x8000))).copied().filter(|_| a >= 0x8000).unwrap_or(0);
+    assert_eq!(read_engine(mem, 0x8002), Err(Refusal::Unmodelled(Why::SetupPaths, 0x800A)));
+    // 2^5 = 32 paths: all followed, the routine is read
+    let code = forked_setup(5);
+    let mem = |a: u16| code.get(usize::from(a.wrapping_sub(0x8000))).copied().filter(|_| a >= 0x8000).unwrap_or(0);
+    let md = read_engine(mem, 0x8002).expect("reads");
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(33)]);
+}
+
+#[test]
+fn reads_flips_uneven() {
+    // one channel whose reload pass is longer: n passes from flip to flip, n - 1 short and one
+    // long, so the half period is 45 x C + 13 (the pass with its other arm, plus the difference)
+    let fx = fixtures::flips_uneven();
+    let md = model(&fx);
+    assert_eq!(md.family, Family::Flips);
+    assert_eq!(md.channels.len(), 1);
+    assert_eq!(md.channels[0].sites, vec![0x8016]);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 45, x: Input::Reg(3) }, Term::Const(13)]);
+    assert!(md.table_walk);
+    // E counts the passes, carrying into D: DE is one counter, from the record's word
+    assert_eq!(md.duration, Some(DurationModel { counter: Input::Reg(9), per_unit_t: vec![Term::Const(45)], counts_down_from: Some(Input::Indexed(10, -2)), carry: true }));
+    // the formula is the note's half period; a span over the note counter's wrap takes the
+    // counter's 11 T longer path as well (the truth counts it)
+    let seen = compare(&fx, &md, 150);
+    assert!(seen.len() > 1000, "{} OUTs", seen.len());
+    let exact = seen.iter().filter(|(_, t, g)| t[0] == g[0]).count();
+    assert!(seen.iter().all(|(_, t, g)| t[0] == g[0] || t[0] == g[0] + 11.0), "{:?}", seen.iter().find(|(_, t, g)| t[0] != g[0] && t[0] != g[0] + 11.0));
+    assert!(exact * 100 >= seen.len() * 80, "{exact} of {}", seen.len());
+}
+
+#[test]
+fn refuses_setup_flipping_the_flips_level() {
+    // flips_uneven with its note setup flipping the level (XOR 10h) instead of setting it
+    // (LD A,10h): a flip between notes that no channel accounts for
+    let fx = fixtures::flips_uneven();
+    let m = fixtures::machine(&fx.sna);
+    let mem = |a: u16| if a == 0x800D { 0xEE } else { m.peek(a) };
+    assert_eq!(read_engine(mem, 0x8016), Err(Refusal::Unmodelled(Why::SetupFlipsLevel, 0x8024)));
 }

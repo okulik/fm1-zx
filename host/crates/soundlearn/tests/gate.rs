@@ -112,7 +112,7 @@ fn learns_tune_end_to_end() {
 /// each of their sites; a time-slot routine's sites follow every channel, and are not fitted.
 #[test]
 fn learns_other_families() {
-    for (fx, learned) in [(fixtures::xor_unison(), true), (fixtures::toggler_two_sites(), true), (fixtures::phase_slots(), false)] {
+    for (fx, learned) in [(fixtures::xor_unison(), true), (fixtures::toggler_two_sites(), true), (fixtures::flips_uneven(), true), (fixtures::phase_slots(), false)] {
         let load = || fixtures::machine(&fx.sna);
         let inputs = none();
         let mut m = load();

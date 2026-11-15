@@ -190,7 +190,7 @@ and method B playing them back); anything else stays on the beeper. After the ta
 line per game:
 
     tune: music learned (1 routine, heard, 1 channel)
-    border: no music learned (loop shape not understood at 801Ah)
+    border: no music learned (OUTs that do not always flip the speaker at 801Ah)
 
 `DIR/sound-report.txt` holds the same lines and, per routine, the speaker `OUT` it was read from,
 the routine, each channel's half period as a formula, the fit and replay figures, and why a
@@ -226,7 +226,7 @@ file of yours): it reads the folder you give it and writes only under the output
 beside the games.
 
     cd host
-    cargo run --release -p music --bin music-corpus -- <folder> [--seconds N] [--wav] [-o <dir>]
+    cargo run --release -p music --bin music-corpus -- <folder> [--seconds N] [--wav] [--no-learn] [-o <dir>]
 
 Every `.tap`, `.tzx`, `.sna` and `.z80` in the folder is loaded and run for N seconds (default
 40). A standard tape (a `.tap`, or a `.tzx` of standard-speed blocks) that loads through the ROM
@@ -260,6 +260,13 @@ What the report says, one row per game:
   beeper.
 - `B FM %`: the same in FM: engines (method B, the known music engines; FM from its first confident
   decision).
+- `L FM %`: the same with the music the personal pack would learn for the game (its learned
+  entries after the built-in ones; the same as `B FM %` when nothing was learned). The learner runs
+  as `fmzx-pack personal` runs it (3 minutes of emulated time, the key script if there is one) and
+  its results are cached in `<dir>/sound-cache/` by the game file's CRC, its key script and the
+  learner's version, so a second run of the same folder does not learn again; `--no-learn` skips
+  it. Its line per game follows the table, and `<dir>/sound-report.txt` holds the details, as the
+  personal pack's does.
 - `styles s/f/p %`: of those frames, the share decoded as time-slot music, speaker-flip music and
   short-pulse music; the remainder is sound with no music in it.
 - truth, for games whose music engine is recognised (by the code of its sound loop in memory:
@@ -267,10 +274,11 @@ What the report says, one row per game:
   notes are read from RAM and compared with what the decoder found: frame precision and recall,
   notes found of the true notes, and decoded notes that match no true note (`wrong`). After `B:`,
   the engines method B recognised and the same numbers for its notes (per voice, the last pitch it
-  sounded in each frame it is confident about). The CSV has the same columns.
+  sounded in each frame it is confident about). After `learned:`, the frames with sound a learned
+  entry claims and the same numbers with the learned entries. The CSV has the same columns.
 
-The run is fast: a folder of games takes seconds (3 games of 40 s took under 1 s on an Apple Silicon
-Mac). The Cave Runner and Unison entries of method B were made from the owner's local copies of those
+The run is fast: the games run in parallel, and the owner's folder of 29 games takes about 10 s on an
+Apple Silicon Mac when it learns, under 2 s from the cache. The Cave Runner and Unison entries of method B were made from the owner's local copies of those
 games, which are not in the repository; they are tested only locally, with this tool.
 
 ## Toolchain pin

@@ -66,7 +66,7 @@ pub fn refusal(r: &Refusal) -> String {
         Refusal::Undecoded(a) => format!("an instruction not decoded at {a:04X}h"),
         Refusal::ComputedJump(a) => format!("a computed jump at {a:04X}h"),
         Refusal::SelfModUnmodelled(a) => format!("code that rewrites itself at {a:04X}h"),
-        Refusal::UnknownShape(a) => format!("loop shape not understood at {a:04X}h"),
+        Refusal::Unmodelled(w, a) => format!("{} at {a:04X}h", w.text()),
         Refusal::Ambiguous(a) => format!("one channel or two in unison, not settled by the code at {a:04X}h"),
         Refusal::NotSpeaker(a) => format!("not a speaker OUT at {a:04X}h"),
     }

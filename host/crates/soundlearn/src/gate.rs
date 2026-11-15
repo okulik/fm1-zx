@@ -97,10 +97,20 @@ pub fn replay(load: &dyn Fn() -> Machine, inputs: &Inputs, frames: u32, entry: &
 
 /// [`replay`], and the other speaker `OUT`s heard while the entry's music played.
 pub fn replay_with_others(load: &dyn Fn() -> Machine, inputs: &Inputs, frames: u32, entry: &LearnedEntry) -> (ReplayStats, Vec<OtherSite>) {
+    replay_table(load, inputs, frames, entry, true)
+}
+
+/// [`replay_with_others`]; without the built-in table if not `builtins` (the entry alone, and no
+/// built-in claims: [`crate::learn::LearnOptions::ignore_builtins`]).
+pub fn replay_table(load: &dyn Fn() -> Machine, inputs: &Inputs, frames: u32, entry: &LearnedEntry, builtins: bool) -> (ReplayStats, Vec<OtherSite>) {
     let mut m = load();
-    let mine = SndEngines::new().entries().len() as u8 + 1;
-    let mut with = SndEngines::with_learned(&encode_list(std::slice::from_ref(entry))).ok();
-    let mut alone = SndEngines::new();
+    let list = encode_list(std::slice::from_ref(entry));
+    let (mine, mut with) = if builtins {
+        (SndEngines::new().entries().len() as u8 + 1, SndEngines::with_learned(&list).ok())
+    } else {
+        (1, SndEngines::with_learned_only(&list).ok())
+    };
+    let mut alone = builtins.then(SndEngines::new);
     let delay = SND_DELAY_FRAMES as usize;
     // per frame: the entry's sites sounded, the other OUTs that did; and from its decisions
     // (frame k's come with frame k + delay): the entry claimed it (with the note at its end, None
@@ -123,13 +133,13 @@ pub fn replay_with_others(load: &dyn Fn() -> Machine, inputs: &Inputs, frames: u
         sounded.push(!here.is_empty());
         others.push(foreign);
         let d = with.as_mut().map(|b| b.frame(&m, edges, level));
-        let b = alone.frame(&m, edges, level);
+        let b = alone.as_mut().map(|a| a.frame(&m, edges, level));
         let Some(k) = f.checked_sub(delay).filter(|&k| k < n) else { continue };
         if let Some(d) = d.filter(|d| d.confident != 0 && d.engine == mine) {
             claimed[k] = true;
-            notes[k] = Some(end_voices(&d)).filter(|v| v.iter().any(|&p| p != 0));
+            notes[k] = Some(sounded_notes(&d)).filter(|v| v.iter().any(|&p| p != 0));
         }
-        builtin[k] = b.confident != 0 && b.engine != 0;
+        builtin[k] = b.is_some_and(|b| b.confident != 0 && b.engine != 0);
     }
     let mut st = ReplayStats { routine_frames: 0, claimed: 0, music_gate: music_gate(&notes), builtin_claimed: 0 };
     for k in (0..n).filter(|&k| sounded[k]) {
@@ -165,10 +175,12 @@ fn is_site(entry: &LearnedEntry, pc: u16, m: &Machine) -> bool {
     entry.sites.iter().any(|s| digest(&peek, pc.wrapping_sub(s.0), entry.len, &entry.wild, &entry.reloc) == entry.digest)
 }
 
-/// The voices at a decision's frame end: its start's, then its events.
-fn end_voices(d: &SndFrame) -> [u32; SND_TONAL] {
-    let mut v = d.tone.map(|t| t.period_q8);
-    for e in d.events() {
+/// The notes a decision sounds: per voice, the last pitch it sounded in the frame (its start's,
+/// then its events'; a release keeps the pitch it ends). A routine that plays a short burst of its
+/// note each frame is released after each burst, so its voices at the frame's end are silent.
+fn sounded_notes(d: &SndFrame) -> [u32; SND_TONAL] {
+    let mut v = d.tone.map(|t| if t.level != 0 { t.period_q8 } else { 0 });
+    for e in d.events().iter().filter(|e| e.period_q8 != 0 && e.level != 0) {
         if let Some(p) = v.get_mut(e.voice as usize) {
             *p = e.period_q8;
         }
@@ -221,9 +233,15 @@ fn music_gate(notes: &[Option<[u32; SND_TONAL]>]) -> bool {
 /// ([`builtin_at`]), or whose replay the built-in table claims, is refused [`BUILTIN`] on either
 /// path.
 pub fn judge(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, replay: Option<&ReplayStats>, fit: Option<&FitResult>) -> Verdict {
+    judge_table(model, m, heard, replay, fit, true)
+}
+
+/// [`judge`]; the built-in entries not consulted if not `builtins`
+/// ([`crate::learn::LearnOptions::ignore_builtins`]).
+pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, replay: Option<&ReplayStats>, fit: Option<&FitResult>, builtins: bool) -> Verdict {
     let no = |why: String| Verdict::Refused(why);
     let mut pcs = model.channels.iter().flat_map(|c| c.sites.iter().copied()).chain([model.anchor]);
-    if replay.is_some_and(|r| r.builtin_claimed > 0) || pcs.any(|pc| builtin_at(m, pc).is_some()) {
+    if builtins && (replay.is_some_and(|r| r.builtin_claimed > 0) || pcs.any(|pc| builtin_at(m, pc).is_some())) {
         return no(BUILTIN.into());
     }
     if let Some(c) = model.channels.iter().position(|ch| !period_ok(ch)) {

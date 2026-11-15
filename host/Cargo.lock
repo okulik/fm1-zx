@@ -322,6 +322,7 @@ dependencies = [
 name = "music"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "fmzx-pack",
  "soundlearn",
  "zx-sys",

@@ -303,13 +303,37 @@ pub(crate) fn period_ok(ch: &ChannelModel) -> bool {
 pub(crate) fn timing_prog(d: &DurationModel) -> Option<Vec<Op>> {
     let wide = d.counter.wide();
     let mask: u32 = if wide { 0xFFFF } else { 0xFF };
+    let start = d.counts_down_from?;
     let mut ops = Vec::new();
-    match d.counts_down_from? {
-        Input::Indexed(r, dd) if wide => ops.extend([Op::PeekReg(r, dd), Op::PeekReg(r, dd.checked_add(1)?), Op::Shl(8), Op::Add]),
-        x => ops.push(input_op(&x)),
+    if d.carry {
+        // passes to go at the start, less those at the edge (see DurationModel)
+        let (sh, sl) = halves(&start)?;
+        let (ch, cl) = halves(&d.counter)?;
+        for (h, l) in [(sh, sl), (ch, cl)] {
+            ops.extend([h, Op::K(1), Op::Sub, Op::K(0xFF), Op::And, Op::Shl(8), l, Op::K(1), Op::Sub, Op::K(0xFF), Op::And, Op::Add, Op::K(1), Op::Add]);
+        }
+        ops.extend([Op::Sub, Op::K(mask), Op::And]);
+    } else {
+        match start {
+            Input::Indexed(r, dd) if wide => ops.extend([Op::PeekReg(r, dd), Op::PeekReg(r, dd.checked_add(1)?), Op::Shl(8), Op::Add]),
+            x => ops.push(input_op(&x)),
+        }
+        ops.extend([input_op(&d.counter), Op::Sub, Op::K(mask), Op::And]);
     }
-    ops.extend([input_op(&d.counter), Op::Sub, Op::K(mask), Op::And]);
     push_sum(&mut ops, &d.per_unit_t, 1);
     ops.push(Op::Mul);
     (encode_prog(&ops).len() <= SND_PROG_MAX && f64::from(mask) * sum_max(&d.per_unit_t, 1) <= f64::from(u32::MAX)).then_some(ops)
+}
+
+/// The ops that push a 16-bit input's high and low bytes.
+fn halves(x: &Input) -> Option<(Op, Op)> {
+    Some(match *x {
+        Input::Rel16(o) => (Op::PeekRel(o.checked_add(1)?), Op::PeekRel(o)),
+        Input::Abs16(a) => (Op::Peek(a.checked_add(1)?), Op::Peek(a)),
+        Input::Indexed(r, d) => (Op::PeekReg(r, d.checked_add(1)?), Op::PeekReg(r, d)),
+        Input::Reg(8) => (Op::Reg(2), Op::Reg(3)),
+        Input::Reg(9) => (Op::Reg(4), Op::Reg(5)),
+        Input::Reg(10) => (Op::Reg(6), Op::Reg(7)),
+        _ => return None,
+    })
 }

@@ -23,8 +23,8 @@
 //! What it says is in [`crate::report`].
 
 use crate::entry::{encode_list, LearnedEntry};
-use crate::fit::{check_fit, to_entry};
-use crate::gate::{add_drum, builtin_at, drum_ok, judge, replay, replay_with_others, Verdict, BUILTIN, NOT_REPLAYED};
+use crate::fit::{check_fit, to_entry, FitResult};
+use crate::gate::{ReplayStats, add_drum, builtin_at, drum_ok, judge_table, replay_table, Verdict, BUILTIN, NOT_REPLAYED};
 use crate::listen::{listen, Inputs, SiteHeard, LISTEN_FRAMES};
 use crate::model::{read_engine, scan_out_sites, EngineModel};
 use crate::report::{self, Routine};
@@ -34,7 +34,7 @@ use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX};
 
 /// The learner's version: part of the personal pack's cache key, so bump it when learning
 /// changes.
-pub const LEARNER_VERSION: u32 = 1;
+pub const LEARNER_VERSION: u32 = 2;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
@@ -54,11 +54,25 @@ pub struct GameSound {
     pub details: String,
 }
 
+/// How [`learn_with`] learns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LearnOptions {
+    /// The built-in entries are not consulted: a routine they match is read, judged and replayed
+    /// like any other, through method B with the learned entry alone (tests: a learned entry
+    /// measured against the built-in one for the same routine). Never for a pack.
+    pub ignore_builtins: bool,
+}
+
 /// Learns the music routines of the game `load` gives (time 0 of the run), under `inputs` (see
 /// the module docs). Never panics: a panic in the learner is caught and gives
 /// `no music learned (learner error: ...)`.
 pub fn learn(load: &dyn Fn() -> Machine, inputs: &Inputs) -> GameSound {
-    match catch_unwind(AssertUnwindSafe(|| learn_game(load, inputs))) {
+    learn_with(load, inputs, &LearnOptions::default())
+}
+
+/// [`learn`] with options.
+pub fn learn_with(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) -> GameSound {
+    match catch_unwind(AssertUnwindSafe(|| learn_game(load, inputs, opts))) {
         Ok(s) => s,
         Err(p) => {
             let why = p
@@ -85,13 +99,13 @@ fn same_code(a: &Machine, b: &Machine, pc: u16) -> bool {
 
 /// A site's routine: the built-in entry it lies in, or the model read from the first of `mems`
 /// that gives one (a later one only where its code differs). Err: the first refusal.
-fn read_site<'m>(pc: u16, mems: &[&'m Machine]) -> Result<(EngineModel, &'m Machine), String> {
+fn read_site<'m>(pc: u16, mems: &[&'m Machine], builtins: bool) -> Result<(EngineModel, &'m Machine), String> {
     let mut first = None;
     for (i, &m) in mems.iter().enumerate() {
         if i > 0 && same_code(mems[0], m, pc) {
             continue;
         }
-        if let Some(b) = builtin_at(m, pc) {
+        if let Some(b) = builtin_at(m, pc).filter(|_| builtins) {
             first.get_or_insert_with(|| format!("{BUILTIN} at {b:04X}h"));
             break;
         }
@@ -113,7 +127,8 @@ struct Judged {
     sounding: u32,
 }
 
-fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs) -> GameSound {
+fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) -> GameSound {
+    let builtins = !opts.ignore_builtins;
     let start = load();
     let mut end = load();
     let heard = listen(&mut end, inputs, LISTEN_FRAMES);
@@ -139,7 +154,7 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs) -> GameSound {
             continue;
         }
         let site_heard = heard_at(pc).map(|s| (s.frames_with_edges, s.edges));
-        let (model, mem) = match read_site(pc, &mems) {
+        let (model, mem) = match read_site(pc, &mems, builtins) {
             Ok(got) => got,
             Err(why) => {
                 let routine = Routine { site: pc, heard: site_heard, model: None, fit: None, replay: None, drums: Vec::new(), outcome: Err(why) };
@@ -151,7 +166,7 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs) -> GameSound {
         if !anchors.insert(model.anchor) {
             continue;
         }
-        done.push(judge_routine(load, inputs, &heard.sites, pc, model, mem));
+        done.push(judge_routine(load, inputs, &heard.sites, pc, model, mem, builtins));
     }
 
     // the entries kept: heard first, then by sounding frames; at most SND_LEARNED_MAX, and only
@@ -183,8 +198,11 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs) -> GameSound {
 }
 
 /// The verdict on a routine read from `mem` at `pc`, with its entry if learned.
-fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard], pc: u16, model: EngineModel, mem: &Machine) -> Judged {
+fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard], pc: u16, model: EngineModel, mem: &Machine, builtins: bool) -> Judged {
     let peek = |a: u16| mem.peek(a);
+    let judge = |model: &EngineModel, mem: &Machine, heard: Option<&SiteHeard>, replay: Option<&ReplayStats>, fit: Option<&FitResult>| {
+        judge_table(model, mem, heard, replay, fit, builtins)
+    };
     // the routine's site heard in the most frames
     let site = model
         .channels
@@ -210,7 +228,7 @@ fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard
             routine.fit = Some(fit.clone());
             match judge(&model, mem, Some(site), None, fit.as_ref().ok()) {
                 Verdict::Refused(why) if why == NOT_REPLAYED => {
-                    let (stats, others) = replay_with_others(load, inputs, LISTEN_FRAMES, &entry);
+                    let (stats, others) = replay_table(load, inputs, LISTEN_FRAMES, &entry, builtins);
                     let v = judge(&model, mem, Some(site), Some(&stats), fit.as_ref().ok());
                     routine.replay = Some(stats);
                     if v == (Verdict::Learned { heard: true }) {
@@ -232,7 +250,7 @@ fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard
                             }
                             let Some(grown) = add_drum(&entry, anchor, o.pc, peek) else { continue };
                             tried += 1;
-                            let stats = replay(load, inputs, LISTEN_FRAMES, &grown);
+                            let stats = replay_table(load, inputs, LISTEN_FRAMES, &grown, builtins).0;
                             if judge(&model, mem, Some(site), Some(&stats), fit.as_ref().ok()) == v {
                                 // add_drum moves the anchor back to a drum before it
                                 if o.pc.wrapping_sub(anchor) >= 0x8000 {

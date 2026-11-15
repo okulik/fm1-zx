@@ -813,9 +813,9 @@ struct Learned {
 }
 
 impl Learned {
-    /// Decodes `list` (an entry list) after the built-in table; Err(`ZX_ERR_FORMAT`) if it is not
-    /// valid.
-    fn new(list: &[u8]) -> Result<Learned, i32> {
+    /// Decodes `list` (an entry list) after the built-in table (none if not `builtins`);
+    /// Err(`ZX_ERR_FORMAT`) if it is not valid.
+    fn new(list: &[u8], builtins: bool) -> Result<Learned, i32> {
         let mut words = vec![0u32; list.len().div_ceil(4)].into_boxed_slice();
         for (w, b) in words.iter_mut().zip(list.chunks(4)) {
             let mut x = [0u8; 4];
@@ -837,8 +837,9 @@ impl Learned {
             return Err(rc);
         }
         let (builtin, count) = engine_table(Table::Builtin);
-        // SAFETY: the built-in table is a 'static C array of `count` entries.
-        let mut table: Vec<sys::snd_engine> = unsafe { std::slice::from_raw_parts(builtin, count as usize) }.to_vec();
+        let count = if builtins { count as usize } else { 0 };
+        // SAFETY: the built-in table is a 'static C array of at least `count` entries.
+        let mut table: Vec<sys::snd_engine> = unsafe { std::slice::from_raw_parts(builtin, count) }.to_vec();
         table.extend_from_slice(&en[..n as usize]);
         Ok(Learned { table: table.into_boxed_slice(), _ext: ext, _list: words })
     }
@@ -881,7 +882,17 @@ impl SndEngines {
     /// With the built-in engines followed by the learned entries of `list` (a game's entry list,
     /// as the pack's sound section holds it); Err(`ZX_ERR_FORMAT`) if the decoder refuses it.
     pub fn with_learned(list: &[u8]) -> Result<Self, i32> {
-        let learned = Learned::new(list)?;
+        Self::learned_table(list, true)
+    }
+
+    /// With the learned entries of `list` alone, no built-in engine (host tests: a learned
+    /// entry measured against the built-in one for the same routine).
+    pub fn with_learned_only(list: &[u8]) -> Result<Self, i32> {
+        Self::learned_table(list, false)
+    }
+
+    fn learned_table(list: &[u8], builtins: bool) -> Result<Self, i32> {
+        let learned = Learned::new(list, builtins)?;
         let mut raw: Box<sys::snd_b> = boxed_zeroed();
         // SAFETY: `raw` is a valid, exclusively owned snd_b; the table, the records' ext data and
         // the list copy are heap buffers kept with it in `_learned`, so they outlive its use.
@@ -1068,7 +1079,7 @@ impl SndMixer {
     /// ([`SndEngines::with_learned`]); Err(`ZX_ERR_FORMAT`), and the engines unchanged, if the
     /// decoder refuses it.
     pub fn set_learned(&mut self, list: &[u8]) -> Result<(), i32> {
-        let learned = Learned::new(list)?;
+        let learned = Learned::new(list, true)?;
         // SAFETY: `raw` was initialised by snd_mixer_init; the table and what it points to are
         // heap buffers kept in `self._learned` until the engines change again.
         unsafe { sys::snd_mixer_set_engines(&mut *self.raw, learned.table.as_ptr(), learned.table.len() as u32) };

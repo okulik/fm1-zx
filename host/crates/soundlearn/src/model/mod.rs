@@ -140,11 +140,22 @@ pub struct ChannelModel {
 /// width; a start of 0 counts 2^bits). For a 16-bit counter an `Indexed(r, d)` start is the
 /// word at r + d. `counts_down_from` None would be a counter counting up from 0 (not found by
 /// this reader yet).
+///
+/// A `carry` counter is a pair whose low byte counts the passes and whose high byte counts the
+/// low byte's runs (`DEC l; JR NZ,loop; DEC h; JR NZ,loop`): its value `hl` has
+/// `((h - 1) & 255) x 256 + ((l - 1) & 255) + 1` passes to go (a byte of 0 counts 256), and the
+/// note has held the passes from its start's to its value's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DurationModel {
     pub counter: Input,
     pub per_unit_t: Vec<Term>,
     pub counts_down_from: Option<Input>,
+    pub carry: bool,
+}
+
+/// A carry counter's passes to go at the pair value `w` (see [`DurationModel`]).
+pub fn carry_to_go(w: u32) -> u32 {
+    (((w >> 8).wrapping_sub(1) & 0xFF) << 8) | ((w.wrapping_sub(1) & 0xFF) + 1)
 }
 
 impl DurationModel {
@@ -160,7 +171,8 @@ impl DurationModel {
             x => x.read(peek, anchor, regs)?,
         };
         let mask = if wide { 0xFFFF } else { 0xFF };
-        Some(f64::from(start.wrapping_sub(now) & mask) * eval_terms(&self.per_unit_t, peek, anchor, regs)?)
+        let passes = if self.carry { carry_to_go(start).wrapping_sub(carry_to_go(now)) } else { start.wrapping_sub(now) } & mask;
+        Some(f64::from(passes) * eval_terms(&self.per_unit_t, peek, anchor, regs)?)
     }
 }
 
@@ -197,9 +209,170 @@ pub enum Refusal {
     Undecoded(u16),
     ComputedJump(u16),
     SelfModUnmodelled(u16),
-    UnknownShape(u16),
+    /// A construct the reader does not model ([`Why`] says which).
+    Unmodelled(Why, u16),
     Ambiguous(u16),
     NotSpeaker(u16),
+}
+
+/// Which construct the reader did not model (a [`Refusal::Unmodelled`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Why {
+    /// Code, or a fixed address it reads or writes, in 4000h-7FFFh.
+    Contended,
+    /// A stack operation (`PUSH`, `POP`, `EX (SP)`, `LD SP`) in the pass.
+    StackOp,
+    /// A store through a pointer in the pass.
+    PointerStore,
+    /// A `CALL` or `RST` in the pass.
+    CallInPass,
+    /// A return in the pass.
+    ReturnInPass,
+    /// `HALT` in the pass.
+    HaltInPass,
+    /// A repeating block instruction (`LDIR`, `OTIR`, ...) in the pass.
+    BlockRepeat,
+    /// A conditional branch that is not a counter's zero test: a zero test of flags some other
+    /// instruction set (a compare, `AND`, `BIT`, ...).
+    BranchIdiom,
+    /// A branch on the carry flag (an overflow, a compare).
+    BranchCarry,
+    /// A branch on the sign or parity flag.
+    BranchSign,
+    /// A jump into the middle of a delay loop.
+    IntoDelay,
+    /// The pass leaves the decoded window.
+    LeavesWindow,
+    /// The pass is longer than the reader follows.
+    PassTooLong,
+    /// The pass runs some instruction twice, or does not hold the `OUT`.
+    PassShape,
+    /// A zero test's counter is written elsewhere in the pass.
+    CounterReloaded,
+    /// The pass's `OUT`s differ from one traversal to the next.
+    OutsVary,
+    /// A delay count, reload or step that the formulas cannot name.
+    UnnamedInput,
+    /// A diamond whose two arms take different times.
+    UnbalancedFlips,
+    /// A pass time that depends on an input (Slots, Flips).
+    PassTimeVaries,
+    /// A speaker level that does not change at every `OUT` (Square).
+    NoToggle,
+    /// The half periods count different things (a duty cycle).
+    DutyCycle,
+    /// The half period does not divide evenly between the `OUT`s.
+    UnevenHalves,
+    /// Phase accumulators mixed with plain levels, or not carried from pass to pass.
+    PhaseShape,
+    /// Diamonds that are not one shared level flipped and output in each reload arm.
+    FlipsShape,
+    /// The shared level is written outside the channels' flips.
+    LevelWrittenElsewhere,
+    /// The port of an `OUT (C)` is not known, or a block output.
+    PortUnknown,
+    /// Instructions that overlap.
+    OverlappingCode,
+    /// Other code inside the pass's address range.
+    PassNotContiguous,
+    /// The routine is longer than an entry's signature can be.
+    TooLong,
+    /// More channels or sites than an entry holds.
+    TooManyChannels,
+    /// More setup paths than the reader follows.
+    SetupPaths,
+    /// A setup path with a speaker `OUT`.
+    SetupOut,
+    /// A setup path that writes the level the channels share.
+    SetupFlipsLevel,
+    /// A setup path with a call that may change the level the pass carries.
+    SetupCall,
+    /// A setup path that leaves the level the pass carries flipped or unknown.
+    SetupLevel,
+}
+
+impl Why {
+    /// A short stable label (for counting refusals).
+    pub fn label(self) -> &'static str {
+        match self {
+            Why::Contended => "contended",
+            Why::StackOp => "stack-op",
+            Why::PointerStore => "pointer-store",
+            Why::CallInPass => "call-in-pass",
+            Why::ReturnInPass => "return-in-pass",
+            Why::HaltInPass => "halt-in-pass",
+            Why::BlockRepeat => "block-repeat",
+            Why::BranchIdiom => "branch-flag-test",
+            Why::BranchCarry => "branch-carry",
+            Why::BranchSign => "branch-sign",
+            Why::IntoDelay => "into-delay",
+            Why::LeavesWindow => "leaves-window",
+            Why::PassTooLong => "pass-too-long",
+            Why::PassShape => "pass-shape",
+            Why::CounterReloaded => "counter-reloaded",
+            Why::OutsVary => "outs-vary",
+            Why::UnnamedInput => "unnamed-input",
+            Why::UnbalancedFlips => "unbalanced-flips",
+            Why::PassTimeVaries => "pass-time-varies",
+            Why::NoToggle => "no-toggle",
+            Why::DutyCycle => "duty-cycle",
+            Why::UnevenHalves => "uneven-halves",
+            Why::PhaseShape => "phase-shape",
+            Why::FlipsShape => "flips-shape",
+            Why::LevelWrittenElsewhere => "level-written-elsewhere",
+            Why::PortUnknown => "port-unknown",
+            Why::OverlappingCode => "overlapping-code",
+            Why::PassNotContiguous => "pass-not-contiguous",
+            Why::TooLong => "too-long",
+            Why::TooManyChannels => "too-many-channels",
+            Why::SetupPaths => "setup-paths",
+            Why::SetupOut => "setup-out",
+            Why::SetupFlipsLevel => "setup-flips-level",
+            Why::SetupCall => "setup-call",
+            Why::SetupLevel => "setup-level",
+        }
+    }
+
+    /// What it means, in words.
+    pub fn text(self) -> &'static str {
+        match self {
+            Why::Contended => "code or data in contended memory",
+            Why::StackOp => "a stack operation in the sound loop",
+            Why::PointerStore => "a store through a pointer in the sound loop",
+            Why::CallInPass => "a call in the sound loop",
+            Why::ReturnInPass => "a return in the sound loop",
+            Why::HaltInPass => "a HALT in the sound loop",
+            Why::BlockRepeat => "a repeating block instruction in the sound loop",
+            Why::BranchIdiom => "a zero test that is not a counter's",
+            Why::BranchCarry => "a branch on the carry flag",
+            Why::BranchSign => "a branch on the sign or parity flag",
+            Why::IntoDelay => "a jump into a delay loop",
+            Why::LeavesWindow => "the sound loop leaves the code read",
+            Why::PassTooLong => "a sound loop too long to follow",
+            Why::PassShape => "a sound loop that runs code twice",
+            Why::CounterReloaded => "a note counter set inside the sound loop",
+            Why::OutsVary => "OUTs that change from pass to pass",
+            Why::UnnamedInput => "a count the formulas cannot name",
+            Why::UnbalancedFlips => "unbalanced channel reloads",
+            Why::PassTimeVaries => "a pass time that varies",
+            Why::NoToggle => "OUTs that do not always flip the speaker",
+            Why::DutyCycle => "a duty cycle",
+            Why::UnevenHalves => "half periods that do not divide evenly",
+            Why::PhaseShape => "a phase accumulator not understood",
+            Why::FlipsShape => "channel flips not understood",
+            Why::LevelWrittenElsewhere => "the speaker level written outside the flips",
+            Why::PortUnknown => "an OUT (C) to an unknown port",
+            Why::OverlappingCode => "overlapping instructions",
+            Why::PassNotContiguous => "other code inside the sound loop",
+            Why::TooLong => "a routine too long for an entry",
+            Why::TooManyChannels => "too many channels or OUTs for an entry",
+            Why::SetupPaths => "too many paths between notes to follow",
+            Why::SetupOut => "a speaker OUT between notes",
+            Why::SetupFlipsLevel => "the level flipped between notes",
+            Why::SetupCall => "a call between notes that may change the level",
+            Why::SetupLevel => "the level changed between notes",
+        }
+    }
 }
 
 /// The memory and the bytes the routine rewrites.
@@ -235,8 +408,10 @@ pub fn read_engine(peek: impl Fn(u16) -> u8, out_pc: u16) -> Result<EngineModel,
         Some(PortRef::RegC) if first.flow == Flow::Next && first.t == first.t_taken => {}
         _ => return Err(Refusal::NotSpeaker(out_pc)),
     }
-    let g = cfg::build(peek, out_pc);
+    let mut g = cfg::build(peek, out_pc);
     let items = cfg::walk(&g, peek, out_pc)?;
+    let main = items.iter().map(cfg::Item::pc).collect();
+    g.add_callers(peek, out_pc, &main);
     shape::analyse(peek, &g, items, out_pc)
 }
 

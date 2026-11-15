@@ -16,9 +16,14 @@ use crate::score::{score, Score};
 use crate::truth::Engine;
 use crate::{capture, decode, hz_of_period_q8, played_hz, sample_rate, tzx, wav, Frame, RATE};
 pub use fmzx_pack::keys::{inputs, parse_keys, Step};
-use fmzx_pack::tapeload::{is_128k, load_signal, trap_trial, LEFT_OUT_128K};
+use fmzx_pack::personal::{cache_decode, cache_encode};
+use fmzx_pack::tapeload::{is_128k, load_signal, save_z80, trap_trial, LEFT_OUT_128K};
+use soundlearn::listen::{schedule, Inputs};
+use soundlearn::{encode_list, learn, LEARNER_VERSION};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use zx_sys::{
     Beeper, Machine, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_A, SND_MODE_FM_B, SND_STYLE_FLIPS, SND_STYLE_PULSES,
     SND_STYLE_SLOTS,
@@ -32,11 +37,14 @@ pub struct Options {
     pub seconds: u32,
     pub wav: bool,
     pub out: PathBuf,
+    /// Learn each game's music as the personal pack does ([`soundlearn::learn`], cached under
+    /// `<out>/sound-cache/`) and measure FM: engines with it too.
+    pub learn: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { seconds: 40, wav: false, out: crate::repo().join("build/music-corpus") }
+        Options { seconds: 40, wav: false, out: crate::repo().join("build/music-corpus"), learn: true }
     }
 }
 
@@ -65,6 +73,18 @@ pub struct Row {
     /// B against the engine's own notes: in each frame B is confident about, per voice the last
     /// pitch it sounded in the frame.
     pub b_truth: Option<Score>,
+    /// As `b_fm_pct`, with the game's learned entries after the built-in table (the same as
+    /// `b_fm_pct` when none were learned, or learning was off).
+    pub learned_fm_pct: f64,
+    /// Frames with sound that method B gave to a learned entry.
+    pub learned_frames: usize,
+    /// The learner's line for the game (`music learned (...)` or `no music learned (...)`);
+    /// empty when learning was off.
+    pub learned_line: String,
+    /// The learner's details for the game (the blocks of `sound-report.txt`).
+    pub learned_details: String,
+    /// As `b_truth`, with the learned entries.
+    pub learned_truth: Option<Score>,
     /// Anything that went wrong beside the measurements (a WAV that could not be written).
     pub note: String,
 }
@@ -86,25 +106,57 @@ impl Row {
 /// - a 48K `.sna` or `.z80`: the snapshot;
 /// - a 128K file, or a tape whose load writes to a 128K's paging port: `Err("128K")`.
 pub fn load(path: &Path) -> Result<Machine, String> {
+    load_start(path).map(|(m, _)| m)
+}
+
+/// How a loaded game starts again (the learner runs it many times): its tape inserted and
+/// autostarted, or a snapshot.
+enum Start {
+    Tape(Vec<u8>),
+    Sna(Vec<u8>),
+    Z80(Vec<u8>),
+}
+
+impl Start {
+    fn machine(&self) -> Machine {
+        let mut m = Machine::new();
+        // each loaded once already, in `load_start`
+        let _ = match self {
+            Start::Tape(tap) => m.tape_insert(tap).map(|()| m.tape_autostart()),
+            Start::Sna(d) => m.load_sna(d),
+            Start::Z80(d) => m.load_z80(d),
+        };
+        m
+    }
+}
+
+/// [`load`], and how to start the game again: a tape the signal loaded is its machine's `.z80`,
+/// as the personal pack stores it.
+fn load_start(path: &Path) -> Result<(Machine, Start), String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if is_128k(&data, &ext) {
         return Err("128K".into());
     }
     let mut m = Machine::new();
-    match ext.as_str() {
+    let signal = |m: Machine| {
+        let z = save_z80(&m);
+        (m, Start::Z80(z))
+    };
+    let start = match ext.as_str() {
         "tap" | "tzx" => {
             let tap = if ext == "tzx" { tzx::to_tap(&data).ok() } else { Some(data.clone()) };
             let short_128k = |e: String| if e == LEFT_OUT_128K { "128K".to_string() } else { e };
-            let Some(tap) = tap else { return load_signal(&data).map_err(short_128k) };
+            let Some(tap) = tap else { return load_signal(&data).map(signal).map_err(short_128k) };
             match trap_trial(&tap) {
                 Ok(()) => {
                     m.tape_insert(&tap).map_err(|e| format!("tape rejected ({e})"))?;
                     m.tape_autostart();
+                    Start::Tape(tap)
                 }
                 Err(trap) if trap == LEFT_OUT_128K => return Err("128K".into()),
                 Err(trap) => {
-                    return load_signal(&data).map_err(|e| {
+                    return load_signal(&data).map(signal).map_err(|e| {
                         if e == trap || e == LEFT_OUT_128K {
                             short_128k(e)
                         } else {
@@ -114,11 +166,50 @@ pub fn load(path: &Path) -> Result<Machine, String> {
                 }
             }
         }
-        "sna" => m.load_sna(&data).map_err(|e| format!("snapshot rejected ({e})"))?,
-        "z80" => m.load_z80(&data).map_err(|e| format!("snapshot rejected ({e})"))?,
+        "sna" => {
+            m.load_sna(&data).map_err(|e| format!("snapshot rejected ({e})"))?;
+            Start::Sna(data)
+        }
+        "z80" => {
+            m.load_z80(&data).map_err(|e| format!("snapshot rejected ({e})"))?;
+            Start::Z80(data)
+        }
         _ => return Err("unknown file type".into()),
+    };
+    Ok((m, start))
+}
+
+/// The game's learned entries (None: none), the learner's line and details: from
+/// `<out>/sound-cache/` when it holds them (keyed by the CRC-32 of the game file and its key
+/// script, and the learner's version), else learned and cached. The inputs are the personal
+/// pack's: the key script's steps from time 0, or the generic run seeded by the file's CRC-32.
+fn learned(path: &Path, start: &Start, steps: &[Step], out: &Path) -> (Option<Vec<u8>>, String, String) {
+    let data = std::fs::read(path).unwrap_or_default();
+    let script = std::fs::read_to_string(path.with_extension("keys")).ok();
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(&data);
+    if let Some(t) = &script {
+        crc.update(t.as_bytes());
     }
-    Ok(m)
+    let dir = out.join("sound-cache");
+    let file = dir.join(format!("{:08x}-{LEARNER_VERSION}.bin", crc.finalize()));
+    if let Some(got) = std::fs::read(&file).ok().as_deref().and_then(cache_decode) {
+        return got;
+    }
+    let run: Inputs = if steps.is_empty() {
+        schedule(u64::from(crc32fast::hash(&data)))
+    } else {
+        let steps = steps.to_vec();
+        Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS))
+    };
+    let got = learn(&|| start.machine(), &run);
+    let list = (!got.entries.is_empty()).then(|| encode_list(&got.entries));
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = dir.join(format!("{}.tmp", wav_stem(path)));
+    if std::fs::write(&tmp, cache_encode(list.as_deref(), &got.line, &got.details)).is_ok() && std::fs::rename(&tmp, &file).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    (list, got.line, got.details)
 }
 
 /// A music engine's sound loop in memory: `len` bytes from `base`, the operand bytes the engine
@@ -195,8 +286,8 @@ fn sounded_hz(f: &SndFrame) -> Vec<f64> {
 pub fn run_game(path: &Path, opts: &Options) -> Row {
     let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut row = Row { file: file.clone(), ..Row::default() };
-    let mut m = match load(path) {
-        Ok(m) => m,
+    let (mut m, start) = match load_start(path) {
+        Ok(got) => got,
         Err(e) => {
             row.status = format!("not loadable: {e}");
             return row;
@@ -212,6 +303,14 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         },
         Err(_) => Vec::new(),
     };
+    let list = if opts.learn {
+        let (list, line, details) = learned(path, &start, &steps, &opts.out);
+        row.learned_line = line;
+        row.learned_details = details;
+        list
+    } else {
+        None
+    };
     let frames = opts.seconds as usize * 1000 / FRAME_MS as usize;
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let mut run: Vec<Frame> = Vec::with_capacity(frames);
@@ -223,9 +322,16 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
     // decisions are the mixer's)
     let (mut mix_a, mut mix_b) = (SndMixer::new(RATE.0, RATE.1), SndMixer::new(RATE.0, RATE.1));
     let mut eng = SndEngines::new();
+    // FM: engines with the learned entries too (when there are some)
+    let mut mix_l = SndMixer::new(RATE.0, RATE.1);
+    let mut eng_l = list.as_deref().and_then(|l| SndEngines::with_learned(l).ok());
+    if eng_l.is_none() || list.as_deref().is_some_and(|l| mix_l.set_learned(l).is_err()) {
+        eng_l = None;
+    }
+    let builtins = eng.entries().len() as u8;
     let (mut fm, mut fm_b) = (Vec::new(), Vec::new());
-    let (mut on_a, mut on_b) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
-    let mut b_dec = Vec::with_capacity(frames);
+    let (mut on_a, mut on_b, mut on_l) = (Vec::with_capacity(frames), Vec::with_capacity(frames), Vec::with_capacity(frames));
+    let (mut b_dec, mut l_dec) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
     let mut level = 0;
     for k in 0..frames {
         let (rows, kemp) = inputs(&steps, k as u64 * FRAME_MS);
@@ -239,6 +345,10 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         let a = mix_a.frame(SND_MODE_FM_A, None, &f.edges, f.start_level, &f.beeper);
         let b = mix_b.frame(SND_MODE_FM_B, Some(&m), &f.edges, f.start_level, &f.beeper);
         b_dec.push(eng.frame(&m, &f.edges, f.start_level));
+        if let Some(e) = eng_l.as_mut() {
+            mix_l.frame(SND_MODE_FM_B, Some(&m), &f.edges, f.start_level, &f.beeper);
+            l_dec.push(e.frame(&m, &f.edges, f.start_level));
+        }
         if opts.wav {
             fm.extend(a);
             fm_b.extend(b);
@@ -246,6 +356,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         if k >= SND_DELAY_FRAMES as usize {
             on_a.push(mix_a.fm_on());
             on_b.push(mix_b.fm_on());
+            on_l.push(mix_l.fm_on());
         }
         level = f.edges.last().map_or(f.start_level, |e| e.level);
         run.push(f);
@@ -256,10 +367,18 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         mix_a.frame(SND_MODE_FM_A, None, &[], level, &quiet);
         mix_b.frame(SND_MODE_FM_B, Some(&m), &[], level, &quiet);
         b_dec.push(eng.frame(&m, &[], level));
+        if let Some(e) = eng_l.as_mut() {
+            mix_l.frame(SND_MODE_FM_B, Some(&m), &[], level, &quiet);
+            l_dec.push(e.frame(&m, &[], level));
+        }
         on_a.push(mix_a.fm_on());
         on_b.push(mix_b.fm_on());
+        on_l.push(mix_l.fm_on());
     }
     b_dec.drain(..SND_DELAY_FRAMES as usize);
+    if eng_l.is_some() {
+        l_dec.drain(..SND_DELAY_FRAMES as usize);
+    }
     let dec = decode(run.iter().map(|f| (f.edges.as_slice(), f.start_level)));
     // frames with sound: a speaker level change in the frame
     let sounding: Vec<usize> = (0..run.len())
@@ -274,6 +393,12 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
     row.sound_frames = sounding.len();
     row.fm_pct = pct(sounding.iter().filter(|&&i| on_a[i]).count());
     row.b_fm_pct = pct(sounding.iter().filter(|&&i| on_b[i]).count());
+    if eng_l.is_some() {
+        row.learned_fm_pct = pct(sounding.iter().filter(|&&i| on_l[i]).count());
+        row.learned_frames = sounding.iter().filter(|&&i| l_dec[i].confident != 0 && l_dec[i].engine > builtins).count();
+    } else {
+        row.learned_fm_pct = row.b_fm_pct;
+    }
     for (k, style) in [SND_STYLE_SLOTS, SND_STYLE_FLIPS, SND_STYLE_PULSES].into_iter().enumerate() {
         row.style_pct[k] = pct(sounding.iter().filter(|&&i| dec[i].style == style).count());
     }
@@ -287,6 +412,10 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
     if truth.iter().any(Option::is_some) {
         row.truth = Some(score(&truth, &played_hz(&dec)));
         row.b_truth = Some(score(&truth, &b_dec.iter().map(sounded_hz).collect::<Vec<_>>()));
+        row.learned_truth = match eng_l {
+            Some(_) => Some(score(&truth, &l_dec.iter().map(sounded_hz).collect::<Vec<_>>())),
+            None => row.b_truth.clone(),
+        };
     }
     if opts.wav {
         let stem = wav_stem(path);
@@ -316,22 +445,46 @@ pub fn game_files(folder: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(v)
 }
 
-/// Runs every game of `folder` and writes `report.txt` and `report.csv` under `opts.out`.
+/// Runs every game of `folder` (in parallel, one thread per core) and writes `report.txt`,
+/// `report.csv` and, when learning, `sound-report.txt` (each game's learner line and details)
+/// under `opts.out`.
 pub fn run_folder(folder: &Path, opts: &Options) -> Result<Vec<Row>, String> {
     std::fs::create_dir_all(&opts.out).map_err(|e| format!("{}: {e}", opts.out.display()))?;
     let files = game_files(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
-    let rows: Vec<Row> = files
-        .iter()
-        .map(|p| {
-            let r = run_game(p, opts);
-            eprintln!("{}: {}", r.file, r.status);
-            r
-        })
-        .collect();
-    for (name, text) in [("report.txt", report_txt(&rows, opts)), ("report.csv", report_csv(&rows))] {
+    let next = AtomicUsize::new(0);
+    let done: Vec<Mutex<Option<Row>>> = files.iter().map(|_| Mutex::new(None)).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let (Some(p), Some(slot)) = (files.get(i), done.get(i)) else { break };
+                let r = run_game(p, opts);
+                eprintln!("{}: {}", r.file, r.status);
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+            });
+        }
+    });
+    let rows: Vec<Row> = done.into_iter().filter_map(|d| d.into_inner().unwrap_or_else(|e| e.into_inner())).collect();
+    let mut reports = vec![("report.txt", report_txt(&rows, opts)), ("report.csv", report_csv(&rows))];
+    if opts.learn {
+        reports.push(("sound-report.txt", sound_report(&rows)));
+    }
+    for (name, text) in reports {
         std::fs::write(opts.out.join(name), text).map_err(|e| format!("{name}: {e}"))?;
     }
     Ok(rows)
+}
+
+/// Each game's learner line and details.
+pub fn sound_report(rows: &[Row]) -> String {
+    let mut s = String::from("# The music the learner learned for each game (soundlearn::learn, as the personal pack runs it).\n\n");
+    for r in rows.iter().filter(|r| !r.learned_line.is_empty()) {
+        let _ = writeln!(s, "{}: {}", r.file, r.learned_line);
+        s += &r.learned_details;
+        s.push('\n');
+    }
+    s
 }
 
 fn engine_name(e: Option<Engine>) -> &'static str {
@@ -363,11 +516,12 @@ pub fn report_txt(rows: &[Row], opts: &Options) -> String {
          after the mixer's hysteresis), of the frames with sound, in FM: sound (A) and FM: engines (B). styles\n\
          (A): slots / flips / pulses, % of the frames with sound. Truth (engines read from RAM): frame precision\n\
          and recall of the confident decisions, notes found of true notes, detected notes matching no true note\n\
-         (wrong); for B, after the engines it recognised.\n\n",
+         (wrong); for B, after the engines it recognised. L = FM: engines with the game's learned entries too\n\
+         (the same as B when none were learned); learned frames = frames with sound a learned entry claims.\n\n",
         rows.len(),
         opts.seconds
     );
-    let _ = writeln!(s, "{:<28} {:>7} {:>6} {:>6}  {:<17}  truth", "game", "sound s", "FM %", "B FM %", "styles s/f/p %");
+    let _ = writeln!(s, "{:<28} {:>7} {:>6} {:>6} {:>6}  {:<17}  truth", "game", "sound s", "FM %", "B FM %", "L FM %", "styles s/f/p %");
     for r in rows {
         if r.status != "ok" {
             let _ = writeln!(s, "{:<28} {}", r.file, r.status);
@@ -379,19 +533,31 @@ pub fn report_txt(rows: &[Row], opts: &Options) -> String {
             let sep = if truth.is_empty() { "" } else { "; " };
             truth = format!("{truth}{sep}B: {}:{b}", r.b_engines.join(" + "));
         }
+        if r.learned_frames > 0 {
+            let l = r.learned_truth.as_ref().map_or(String::new(), |t| format!(" {}", score_txt(t)));
+            let sep = if truth.is_empty() { "" } else { "; " };
+            truth = format!("{truth}{sep}learned: {} frames{l}", r.learned_frames);
+        }
         let truth = if r.note.is_empty() { truth } else { format!("{truth} ({})", r.note) };
         let _ = writeln!(
             s,
-            "{:<28} {:>7.1} {:>6.1} {:>6.1}  {:>5.1}/{:>5.1}/{:>5.1}  {}",
+            "{:<28} {:>7.1} {:>6.1} {:>6.1} {:>6.1}  {:>5.1}/{:>5.1}/{:>5.1}  {}",
             r.file,
             r.sound_seconds(),
             r.fm_pct,
             r.b_fm_pct,
+            r.learned_fm_pct,
             r.style_pct[0],
             r.style_pct[1],
             r.style_pct[2],
             truth
         );
+    }
+    if rows.iter().any(|r| !r.learned_line.is_empty()) {
+        s.push_str("\nlearned (details in sound-report.txt):\n");
+        for r in rows.iter().filter(|r| !r.learned_line.is_empty()) {
+            let _ = writeln!(s, "{}: {}", r.file, r.learned_line);
+        }
     }
     s
 }
@@ -408,7 +574,8 @@ fn csv_field(s: &str) -> String {
 pub fn report_csv(rows: &[Row]) -> String {
     let mut s = String::from(
         "file,status,sound_seconds,fm_percent,slots_percent,flips_percent,pulses_percent,engine,truth_frames,precision_percent,recall_percent,notes_true,notes_found,wrong_notes,\
-         b_fm_percent,b_engines,b_precision_percent,b_recall_percent,b_notes_found,b_wrong_notes,note\n",
+         b_fm_percent,b_engines,b_precision_percent,b_recall_percent,b_notes_found,b_wrong_notes,\
+         learned_fm_percent,learned_frames,learned_line,learned_precision_percent,learned_recall_percent,learned_notes_found,learned_wrong_notes,note\n",
     );
     for r in rows {
         let _ = write!(s, "{},{}", csv_field(&r.file), csv_field(&r.status));
@@ -445,8 +612,15 @@ pub fn report_csv(rows: &[Row]) -> String {
                 }
                 None => s.push_str(",,,,"),
             }
+            let _ = write!(s, ",{:.1},{},{}", r.learned_fm_pct, r.learned_frames, csv_field(&r.learned_line));
+            match &r.learned_truth {
+                Some(t) => {
+                    let _ = write!(s, ",{:.1},{:.1},{},{}", 100.0 * t.precision(), 100.0 * t.recall(), t.notes_found, t.wrong.len());
+                }
+                None => s.push_str(",,,,"),
+            }
         } else {
-            s.push_str(",,,,,,,,,,,,,,,,,,");
+            s.push_str(",,,,,,,,,,,,,,,,,,,,,,,,,");
         }
         let _ = write!(s, ",{}", csv_field(&r.note));
         s.push('\n');

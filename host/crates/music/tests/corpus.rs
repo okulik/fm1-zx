@@ -103,7 +103,7 @@ fn corpus_runs_on_pack() {
     let before: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
 
     let out = temp("out");
-    let opts = Options { seconds: 30, wav: true, out: out.join("report") };
+    let opts = Options { seconds: 30, wav: true, out: out.join("report"), learn: true };
     let rows = run_folder(&dir, &opts).expect("runs");
     assert_eq!(rows.len(), 4, "readme.txt is not a game");
     let by = |f: &str| rows.iter().find(|r| r.file == f).unwrap_or_else(|| panic!("no row {f}"));
@@ -127,7 +127,23 @@ fn corpus_runs_on_pack() {
     assert_eq!(txt, report_txt(&rows, &opts));
     assert_eq!(csv, report_csv(&rows));
     assert_eq!(csv.lines().count(), 5);
-    assert!(csv.lines().all(|l| l.matches(',').count() == 20), "{csv}");
+    // fields: the commas outside quotes (a learned line holds commas)
+    let fields = |l: &str| l.chars().fold((0, false), |(n, q), ch| (n + usize::from(ch == ',' && !q), q ^ (ch == '"'))).0;
+    assert!(csv.lines().all(|l| fields(l) == 27), "{csv}");
+    // the learned column: the tune's routine learned and claimed, Castaway's left to its
+    // built-in entry; each game's line and details in sound-report.txt, the results cached
+    let tune = by("tune.sna");
+    assert!(tune.learned_line.starts_with("music learned (1 routine, heard"), "{}", tune.learned_line);
+    assert!(tune.learned_frames > 0 && tune.learned_fm_pct > 90.0 && tune.b_fm_pct < 1.0, "{tune:?}");
+    assert!(c.learned_line.contains("built-in entry"), "{}", c.learned_line);
+    assert_eq!((c.learned_frames, c.learned_fm_pct), (0, c.b_fm_pct));
+    assert!(by("turbo.tzx").learned_line.is_empty());
+    let sound = std::fs::read_to_string(opts.out.join("sound-report.txt")).unwrap();
+    assert!(sound.contains(&format!("tune.sna: {}\n", tune.learned_line)) && sound.contains("OUT at 8014h"), "{sound}");
+    assert!(txt.contains("L FM %") && txt.contains(&format!("tune.sna: {}", tune.learned_line)), "{txt}");
+    assert!(csv.lines().next().is_some_and(|h| h.contains("learned_fm_percent,learned_frames,learned_line")), "{csv}");
+    let cached = std::fs::read_dir(opts.out.join("sound-cache")).unwrap().count();
+    assert_eq!(cached, 3, "one cache file per loadable game");
     for f in ["castawy_tap_beeper.wav", "castawy_tap_fm.wav", "castawy_tap_fm_b.wav", "castawy_tzx_beeper.wav", "castawy_tzx_fm.wav", "tune_sna_fm.wav"] {
         let w = std::fs::read(opts.out.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
         assert_eq!(&w[..4], b"RIFF");
@@ -147,7 +163,7 @@ fn corpus_reports_b() {
     std::fs::copy(repo().join("third_party/games/castaway/castawy.tap"), dir.join("castawy.tap")).unwrap();
     std::fs::copy(repo().join("third_party/games/colony8/colony8.tap"), dir.join("colony8.tap")).unwrap();
     let out = temp("bout");
-    let opts = Options { seconds: 30, wav: true, out: out.clone() };
+    let opts = Options { seconds: 30, wav: true, out: out.clone(), learn: false };
     let rows = run_folder(&dir, &opts).expect("runs");
     let txt = report_txt(&rows, &opts);
     println!("{txt}");
@@ -178,7 +194,7 @@ fn keys_file_applies() {
     std::fs::copy(repo().join("games/test/border.sna"), dir.join("border.sna")).unwrap();
     std::fs::write(dir.join("border.keys"), "key.BOGUS@1").unwrap();
     let out = temp("keysout");
-    let rows = run_folder(&dir, &Options { seconds: 3, wav: false, out: out.clone() }).unwrap();
+    let rows = run_folder(&dir, &Options { seconds: 3, wav: false, out: out.clone(), learn: false }).unwrap();
     assert_eq!(rows.iter().find(|r| r.file == "tune.sna").unwrap().status, "ok");
     assert!(rows.iter().find(|r| r.file == "border.sna").unwrap().status.contains("key script"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -253,7 +269,7 @@ fn engine_not_taken_from_the_name() {
     std::fs::copy(repo().join("games/test/tune.sna"), dir.join("cave_runner_x.sna")).unwrap();
     std::fs::copy(repo().join("games/test/tune.sna"), dir.join("cave.tap.sna")).unwrap();
     let out = temp("namesout");
-    let rows = run_folder(&dir, &Options { seconds: 20, wav: false, out: out.clone() }).unwrap();
+    let rows = run_folder(&dir, &Options { seconds: 20, wav: false, out: out.clone(), learn: false }).unwrap();
     let r = rows.iter().find(|r| r.file == "renamed_game.tap").unwrap();
     assert_eq!(r.engine, Some(Engine::Castaway));
     assert!(r.truth.is_some());
@@ -275,7 +291,7 @@ fn unison_truth_digest() {
     let dir = temp("unison");
     std::fs::copy(repo().join("games/test/tune.sna"), dir.join("unison.sna")).unwrap();
     let out = temp("unisonout");
-    let rows = run_folder(&dir, &Options { seconds: 5, wav: false, out: out.clone() }).unwrap();
+    let rows = run_folder(&dir, &Options { seconds: 5, wav: false, out: out.clone(), learn: false }).unwrap();
     assert!(rows[0].engine.is_none() && rows[0].truth.is_none() && rows[0].b_engines.is_empty(), "{:?}", rows[0]);
     let mut m = music::test_sna("tune.sna");
     assert_eq!(Unison.read(&m), None, "the PC is not in the loop");
@@ -303,7 +319,7 @@ fn wav_failure_keeps_the_numbers() {
     std::fs::copy(repo().join("games/test/tune.sna"), dir.join("tune.sna")).unwrap();
     let out = temp("wavfailout");
     std::fs::create_dir_all(out.join("tune_sna_fm.wav")).unwrap();
-    let opts = Options { seconds: 5, wav: true, out: out.clone() };
+    let opts = Options { seconds: 5, wav: true, out: out.clone(), learn: false };
     let rows = run_folder(&dir, &opts).unwrap();
     let r = &rows[0];
     assert_eq!(r.status, "ok");
@@ -327,7 +343,7 @@ fn corpus_loads_turbo() {
     std::fs::write(dir.join("turbo.tzx"), turbo_tzx()).unwrap();
     std::fs::write(dir.join("tape.tap"), tape_tap()).unwrap();
     let out = temp("turboout");
-    let rows = run_folder(&dir, &Options { seconds: 5, wav: false, out: out.clone() }).expect("runs");
+    let rows = run_folder(&dir, &Options { seconds: 5, wav: false, out: out.clone(), learn: false }).expect("runs");
     for f in ["turbo.tzx", "tape.tap"] {
         let r = rows.iter().find(|r| r.file == f).unwrap_or_else(|| panic!("no row {f}"));
         assert_eq!(r.status, "ok", "{f}");
@@ -375,5 +391,58 @@ fn schedule_keys_match_parse_action() {
         } else {
             assert_eq!((row, mask), (a as usize / 5, 1 << (a % 5)), "{name}");
         }
+    }
+}
+
+/// The sounding pitches of a decision (period_q8 of its tonal voices at the frame's start), in
+/// order.
+fn voices(d: &zx_sys::SndFrame) -> Vec<u32> {
+    let mut v: Vec<u32> = d.tone.iter().filter(|t| t.level != 0 && t.period_q8 != 0).map(|t| t.period_q8).collect();
+    v.sort_unstable();
+    v
+}
+
+/// The learner with the built-in table disabled, on the repo's two games that have built-in
+/// entries (the spec's built-in agreement): each routine it learns plays the pitches the
+/// built-in entry plays, within 0.2%, on every frame both claim; Castaway's sliding tune is left
+/// out with a reason.
+#[test]
+fn builtins_agree() {
+    use soundlearn::listen::schedule;
+    use soundlearn::{learn_with, LearnOptions};
+    use zx_sys::SndEngines;
+    for (game, machine) in [("castaway", music::castaway as fn() -> zx_sys::Machine), ("colony8", music::colony8)] {
+        let got = learn_with(&machine, &schedule(1), &LearnOptions { ignore_builtins: true });
+        eprintln!("{game}: {}\n{}", got.line, got.details);
+        if got.entries.is_empty() {
+            // left out by the code reader: a shape it does not model (not a gate's figures)
+            let why = got.line.strip_prefix("no music learned (").unwrap_or_else(|| panic!("{game}: {}", got.line));
+            assert!(!["fit", "replay", "code only", "built-in", "learner error", "no speaker"].iter().any(|g| why.starts_with(g)), "{game}: {}", got.line);
+            continue;
+        }
+        let list = soundlearn::encode_list(&got.entries);
+        let (mut builtin, mut learned) = (SndEngines::new(), SndEngines::with_learned_only(&list).expect("decodes"));
+        let mut m = machine();
+        let inputs = schedule(1);
+        let (mut both, mut off) = (0, Vec::new());
+        for f in 0..3000u32 {
+            let (rows, kemp) = inputs(f);
+            m.set_keys(rows);
+            m.set_kempston(kemp);
+            m.run_frame();
+            let (edges, level) = (m.edges().to_vec(), m.edges_start_level());
+            let (b, l) = (builtin.frame(&m, &edges, level), learned.frame(&m, &edges, level));
+            if b.confident == 0 || b.engine == 0 || l.confident == 0 || l.engine == 0 {
+                continue;
+            }
+            both += 1;
+            let (vb, vl) = (voices(&b), voices(&l));
+            let agree = vb.len() == vl.len() && vb.iter().zip(&vl).all(|(&x, &y)| (f64::from(x) - f64::from(y)).abs() <= 0.002 * f64::from(x));
+            if !agree {
+                off.push((f, vb, vl));
+            }
+        }
+        assert!(both > 0, "{game}: no frame both claim");
+        assert!(off.is_empty(), "{game}: {} of {both} frames differ, first {:?}", off.len(), off.first());
     }
 }

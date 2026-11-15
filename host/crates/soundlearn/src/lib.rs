@@ -21,5 +21,5 @@ pub mod report;
 pub mod z80;
 
 pub use entry::{encode_list, LearnedEntry};
-pub use learn::{learn, GameSound, LEARNER_VERSION};
+pub use learn::{learn, learn_with, GameSound, LearnOptions, LEARNER_VERSION};
 pub use prog::{encode_prog, eval_prog, Op};

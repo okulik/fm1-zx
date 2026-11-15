@@ -388,7 +388,7 @@ fn learn_job(job: &Job, steps: Option<Vec<crate::keys::Step>>) -> (Option<Vec<u8
 
 /// A cache file: the magic, the CRC-32 of the rest (u32, little-endian), then the entry list,
 /// the line and the details, each a u32 length and its bytes; an empty list is none.
-fn cache_encode(list: Option<&[u8]>, line: &str, details: &str) -> Vec<u8> {
+pub fn cache_encode(list: Option<&[u8]>, line: &str, details: &str) -> Vec<u8> {
     let mut payload = Vec::new();
     for part in [list.unwrap_or(&[]), line.as_bytes(), details.as_bytes()] {
         payload.extend((part.len() as u32).to_le_bytes());
@@ -403,7 +403,7 @@ fn cache_encode(list: Option<&[u8]>, line: &str, details: &str) -> Vec<u8> {
 /// A cache file's contents; None if it is not one, its CRC does not match, or method B's
 /// decoder refuses its list (the cache is not trusted: a list goes into the pack only as the
 /// decoder takes it).
-fn cache_decode(b: &[u8]) -> Option<(Option<Vec<u8>>, String, String)> {
+pub fn cache_decode(b: &[u8]) -> Option<(Option<Vec<u8>>, String, String)> {
     let rest = b.strip_prefix(CACHE_MAGIC)?;
     let (crc, mut rest) = (u32::from_le_bytes(rest.get(..4)?.try_into().ok()?), rest.get(4..)?);
     if crc32fast::hash(rest) != crc {
