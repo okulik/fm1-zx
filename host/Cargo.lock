@@ -208,6 +208,7 @@ dependencies = [
  "music",
  "serde",
  "sha2",
+ "soundlearn",
  "toml",
  "zx-sys",
  "zx-tests",

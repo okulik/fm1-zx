@@ -179,6 +179,25 @@ out, with why:
     left out:
       big.z80: 128K
 
+**The music.** The command also learns each game's music, so that the Sound choice FM: engines
+(docs/controls.md) plays it as FM. It runs each game on the host for 3 minutes of emulated time,
+as the FM-1 starts it: 40 s untouched, then ENTER, SPACE, 0, 1 and Kempston fire in turn, then
+random play from a fixed seed (the same game gives the same run). A key script beside the game
+file, `<name>.keys` for `<name>.tzx` (the music corpus' format below, its times from the start),
+replaces that run. The learner reads the code of the routines it heard and of the speaker `OUT`s
+it finds in memory, and keeps a routine only when it is sure of it (the same notes heard as read,
+and method B playing them back); anything else stays on the beeper. After the table it prints one
+line per game:
+
+    tune: music learned (1 routine, heard, 1 channel)
+    border: no music learned (loop shape not understood at 801Ah)
+
+`DIR/sound-report.txt` holds the same lines and, per routine, the speaker `OUT` it was read from,
+the routine, each channel's half period as a formula, the fit and replay figures, and why a
+routine was left out. The games are learned in parallel, a few seconds each; the results are
+cached in `DIR/sound-cache/` (by the converted game's CRC, its key script and the learner's
+version), which runs keep, so a re-run learns only new or changed games.
+
 A pack that does not fit fails: the command lists every game by packed size, largest first, and
 writes no pack or packages (those of an earlier run are removed). Then comment out some entries in
 `personal-games.toml` and run again. The output folder must be a personal pack's: one that holds
@@ -194,8 +213,8 @@ warnings: FM-1 ZX has not run on a real FM-1 yet.
 
 The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
 (the games file, the converted games in `DIR/converted/` with a manifest of their own,
-`DIR/games.bin`, `DIR/keymaps.json` and the table; `--app`, required, gives the images, whose size
-sets the room), then
+`DIR/games.bin` with the learned music, `DIR/keymaps.json`, `DIR/sound-report.txt` and the table;
+`--app`, required, gives the images, whose size sets the room), then
 those steps. `emu-gate`'s `tests/fw_personal.rs` runs the script on a folder of our own generated
 test programs and boots the result in fm1-emu.
 

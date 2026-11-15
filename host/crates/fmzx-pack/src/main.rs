@@ -136,6 +136,7 @@ fn personal(args: &[String]) -> Result<(), String> {
     print!("{}", personal::table(&r));
     let games = r.rows.iter().filter(|w| w.packed.is_some()).count();
     println!("{}: {} bytes, {games} games", Path::new(out).join("games.bin").display(), r.used);
+    println!("{}: the learned music's details", Path::new(out).join(personal::SOUND_REPORT).display());
     Ok(())
 }
 

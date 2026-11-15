@@ -6,16 +6,20 @@
 //! device). This crate holds the learner's parts: listening to a game ([`listen`]), a Z80
 //! decoder ([`z80`]), the code reader that models a music routine from its code ([`model`]), the
 //! fit of a model to what was heard and the entry built from it ([`fit`]), the gates and the
-//! replay through method B ([`gate`]), and the encoder of the programs ([`prog`]) and the entry
-//! lists ([`entry`]).
+//! replay through method B ([`gate`]), the encoder of the programs ([`prog`]) and the entry
+//! lists ([`entry`]), and the pipeline for one game ([`learn`](mod@learn)) with what it says
+//! ([`report`]).
 
 pub mod entry;
 pub mod fit;
 pub mod gate;
+pub mod learn;
 pub mod listen;
 pub mod model;
 pub mod prog;
+pub mod report;
 pub mod z80;
 
 pub use entry::{encode_list, LearnedEntry};
+pub use learn::{learn, GameSound, LEARNER_VERSION};
 pub use prog::{encode_prog, eval_prog, Op};

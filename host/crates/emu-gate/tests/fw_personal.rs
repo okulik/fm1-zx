@@ -5,12 +5,15 @@
 //! own generated test programs (the turbo tape, `tape.tap`, `tune.sna`; never anyone's games)
 //! into a temporary folder, then its release package booted in fm1-emu as fm1-emu's web page
 //! boots one. The picker lists the three games, each starts, and the turbo game (its loaded
-//! snapshot) shows its border at once.
+//! snapshot) shows its border at once. The pack learned the tune's music: in FM: engines the
+//! device plays the host mixer's output with that learned entry, sample for sample, and it is FM,
+//! not the delayed beeper.
 //!
 //! Needs the device builds (`build/fm1` and `build/fm1-preview`, from `tools/make-packages`)
 //! and the SDK files cached in `build/ac79/` (the script runs offline). From `host/`,
 //! `FMZX_FM1_BUILD=$PWD/../build/fm1` as for the other firmware tests.
 
+use emu_gate::budgets::{choose_sound, SOUND_FM_B};
 use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
 use fmzx_pack::inputs::Pins;
 use fmzx_pack::package::{verify, PRODUCT};
@@ -21,6 +24,9 @@ use std::process::Command;
 const PLAY: u8 = 12;
 const SELECT: u8 = 0;
 const BOOT_MS: u64 = 1500;
+const MASTER_ADC: u8 = 4;
+/// The audio out's rate: 750,000 / 17 frames a second.
+const RATE: (u32, u32) = (750_000, 17);
 const OPT: BootOpt = BootOpt { rgb565: true, divider: 0 };
 
 fn repo() -> PathBuf {
@@ -154,4 +160,78 @@ fn fw_personal() {
     let waited = waited.unwrap_or_else(|| panic!("no border {TAPE_DONE_BORDER} within 2 s (LCD {:04X?}, {:?})", lcd_border(&m), m.stats()));
     println!("turbo: border {TAPE_DONE_BORDER} {waited} ms after PLAY");
     assert_eq!(m.resets(), 0);
+
+    fm_engines_plays_learned_tune(&fw, &pkg, &pack);
+}
+
+/// Index of `needle` in `hay`.
+fn find(hay: &[i16], needle: &[i16]) -> Option<usize> {
+    (0..=hay.len().checked_sub(needle.len())?).find(|&p| hay[p..p + needle.len()] == *needle)
+}
+
+/// The tune (game 1) with its learned entry: started with MASTER at full, FM: engines chosen
+/// from the HOME menu, 3 s recorded. The device plays the host mixer's output in FM: engines
+/// with the pack's learned list for the tune, sample for sample; the mixer plays FM, and the
+/// audio is not the delayed beeper.
+fn fm_engines_plays_learned_tune(fw: &Firmware, pkg: &[u8], pack: &[u8]) {
+    use zx_sys::{SndMixer, SND_DELAY_FRAMES, SND_MODE_BEEPER, SND_MODE_FM_B};
+    const TUNE: u32 = 1;
+    const FRAMES: usize = 150; // 3 s
+    let list = fmzx_pack::pack::sound_list(pack, TUNE).expect("the tune's learned list").to_vec();
+    assert_eq!(list[0], 1, "one learned entry");
+
+    let mut m = Machine::boot_package(fw, pkg, Some(OPT));
+    m.set_adc(MASTER_ADC, 1023);
+    m.run_ms(BOOT_MS);
+    assert_eq!(m.resets(), 0);
+    m.turn(SELECT, TUNE as i32);
+    m.run_ms(200);
+    m.press(PLAY, 30);
+    m.run_ms(20);
+    assert_eq!((m.stats().view, m.stats().game), (zx_sys::view::GAME as u32, TUNE));
+    let fm_from = choose_sound(&mut m, SOUND_FM_B) as usize;
+    m.run_ms(3300);
+    let dev = m.audio_left();
+    let s = m.stats();
+    assert_eq!((s.underruns, s.overflows, m.resets()), (0, 0, 0), "{s:?}");
+
+    // the host: the same frames through the beeper and the mixer with the learned list, FM:
+    // engines from the same frame
+    let g = zx_sys::pack_game_at(pack, TUNE).expect("the tune's entry");
+    let sna = g.extract(zx_sys::PACK_MAX_RAW as usize).expect("extracts");
+    let mut zx = zx_sys::Machine::new();
+    zx.load_sna(&sna).expect("loads");
+    let mut beeper = zx_sys::Beeper::new(RATE.0, RATE.1);
+    let mut mix = SndMixer::new(RATE.0, RATE.1);
+    mix.set_learned(&list).expect("the mixer takes the learned list");
+    let (mut beeped, mut mixed, mut starts, mut fm_on) = (vec![], vec![], vec![0usize], 0);
+    for i in 0..fm_from + FRAMES + 10 {
+        zx.run_frame();
+        let level = zx.edges_start_level();
+        beeper.set_level(level);
+        let b = beeper.render(zx.edges());
+        let mode = if i >= fm_from { SND_MODE_FM_B } else { SND_MODE_BEEPER };
+        let out = mix.frame(mode, Some(&zx), zx.edges(), level, &b);
+        assert_eq!(out.len(), b.len(), "the mixer gives a frame's samples");
+        mixed.extend(out);
+        fm_on += usize::from(i >= fm_from + 10 && i < fm_from + FRAMES && mix.fm_on());
+        beeped.extend(b);
+        starts.push(mixed.len());
+    }
+
+    // sample for sample from the switch on, for 3 s
+    let probe = starts[fm_from + 8];
+    let p = find(&dev, &mixed[probe..probe + 2000]).expect("the host's FM: engines mix is not in the device audio");
+    let (from, to) = (starts[fm_from], starts[fm_from + FRAMES]);
+    assert!(dev.len() >= p + to - probe, "only {} samples recorded", dev.len());
+    assert!(dev[p + from - probe..p + to - probe] == mixed[from..to], "the device's FM: engines audio differs from the host's mix");
+
+    // FM: the mixer plays B's FM, and the frames are not the beeper delayed
+    let scored = FRAMES - 10;
+    println!("tune in FM: engines: FM on in {fm_on} of {scored} frames");
+    assert!(fm_on * 10 >= scored * 9, "FM on in only {fm_on} of {scored} frames");
+    let d = SND_DELAY_FRAMES as usize;
+    let delayed = |t: usize| &beeped[starts[t - d]..starts[t - d + 1]];
+    let differ = (fm_from + 10..fm_from + FRAMES).filter(|&t| dev[p + starts[t] - probe..p + starts[t + 1] - probe] != *delayed(t)).count();
+    assert!(differ * 10 >= scored * 9, "only {differ} of {scored} frames differ from the delayed beeper");
 }

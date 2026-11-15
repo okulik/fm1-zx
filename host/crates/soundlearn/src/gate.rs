@@ -28,6 +28,8 @@ use zx_sys::{Machine, SndEngines, SndFrame, SND_DELAY_FRAMES, SND_LEARNED_LEN_MA
 
 /// The refusal of a routine a built-in entry matches.
 pub const BUILTIN: &str = "built-in entry";
+/// The refusal of a heard routine judged without a replay, its other gates passed: replay it.
+pub const NOT_REPLAYED: &str = "heard, but not replayed";
 /// Fit: inlier share, distinct notes, pitch span (semitones), highest frequency.
 const INLIERS: f64 = 0.85;
 const NOTES: u32 = 3;
@@ -250,7 +252,7 @@ pub fn judge(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, replay
     if f.max_hz > MAX_HZ {
         return no(format!("fit: a note at {:.0} Hz (at most {MAX_HZ:.0})", f.max_hz));
     }
-    let Some(r) = replay else { return no("heard, but not replayed".into()) };
+    let Some(r) = replay else { return no(NOT_REPLAYED.into()) };
     if r.routine_frames == 0 || r.claimed * 10 < r.routine_frames * CLAIM_TENTHS {
         return no(format!("replay: method B claims {} of the {} frames it sounds in (at least 90%)", r.claimed, r.routine_frames));
     }
