@@ -11,6 +11,8 @@
 //! - a *period sample* is the time from the site's flip `k-2` to flip `k`, less the contention
 //!   T-states between (the period the routine's code makes, not the ULA's delays); one for every
 //!   other flip, so no two share a half period;
+//! - the samples span the whole run: at most 4,096 are kept per site, and when they fill up
+//!   every other one is dropped and the stride between kept candidates doubles;
 //! - a *snapshot* is taken at the site's next `OUT` after each flip that precedes a sampled
 //!   one (`k-1`): the registers then, and every value read since the flip before it (`k-2`), by
 //!   (reader pc, read index in that instruction), the last value for each key. A period sample
@@ -28,7 +30,7 @@ pub type Inputs = Box<dyn Fn(u32) -> ([u8; 8], u8)>;
 pub const LISTEN_FRAMES: u32 = 9000;
 /// Frames before the first start key.
 const QUIET_FRAMES: u32 = 2000;
-/// Per site: period samples and snapshots kept (the newest).
+/// Per site: period samples (and their snapshots) kept; more are thinned evenly over the run.
 const KEEP: usize = 4096;
 /// Sites kept (the first ones heard).
 const MAX_SITES: usize = 64;
@@ -137,9 +139,9 @@ pub struct SiteHeard {
     /// Flips of the speaker level.
     pub edges: u32,
     pub frames_with_edges: u32,
-    /// The newest 4,096.
+    /// At most 4,096, evenly spread over the run.
     pub periods: Vec<PeriodSample>,
-    /// The newest 4,096.
+    /// One for each period sample, in the same order.
     pub snapshots: Vec<Snapshot>,
 }
 
@@ -175,11 +177,13 @@ struct Site {
     /// The site's last two flips, oldest first.
     flips: VecDeque<Flip>,
     pending: bool,
-    /// Absolute index of the snapshot taken after the site's latest flip but one.
-    last_snap: Option<u64>,
-    snap_count: u64,
-    periods: VecDeque<(f64, u32, u64)>,
-    snaps: VecDeque<Snapshot>,
+    /// The snapshot taken after the site's latest flip but one, for the coming sample.
+    held: Option<Snapshot>,
+    /// Sample candidates seen, and the stride between those kept.
+    candidates: u64,
+    stride: u64,
+    /// Kept samples with their snapshots.
+    periods: Vec<(f64, u32, Snapshot)>,
 }
 
 #[derive(Default)]
@@ -192,6 +196,20 @@ struct Rec {
     seq: u64,
     reads: VecDeque<(u64, u16, u8, u16, u8)>,
     sites: Vec<Site>,
+}
+
+/// The registers at the `OUT` and the last value read at each (reader pc, read index) since
+/// read number `from`.
+fn snapshot(log: &VecDeque<(u64, u16, u8, u16, u8)>, from: u64, ev: &TraceEv) -> Snapshot {
+    let mut reads: Vec<(u16, u8, u16, u8)> = Vec::new();
+    for &(_, pc, idx, addr, val) in log.iter().rev().take_while(|r| r.0 >= from) {
+        // newest first: the first of each (pc, index) is its last value
+        if !reads.iter().any(|r| r.0 == pc && r.1 == idx) {
+            reads.push((pc, idx, addr, val));
+        }
+    }
+    reads.sort_unstable_by_key(|r| (r.0, r.1));
+    Snapshot { regs: ev.regs, reads }
 }
 
 impl Rec {
@@ -225,10 +243,10 @@ impl Rec {
                     last_edge_frame: None,
                     flips: VecDeque::new(),
                     pending: false,
-                    last_snap: None,
-                    snap_count: 0,
-                    periods: VecDeque::new(),
-                    snaps: VecDeque::new(),
+                    held: None,
+                    candidates: 0,
+                    stride: 1,
+                    periods: Vec::new(),
                 });
                 self.sites.len() - 1
             }
@@ -239,21 +257,10 @@ impl Rec {
         let Some(site) = self.sites.get_mut(at) else { return };
         if site.pending {
             site.pending = false;
-            let from = site.flips.front().map_or(seq, |f| f.seq);
-            let mut reads: Vec<(u16, u8, u16, u8)> = Vec::new();
-            for &(_, pc, idx, addr, val) in self.reads.iter().rev().take_while(|r| r.0 >= from) {
-                // newest first: the first of each (pc, index) is its last value
-                if !reads.iter().any(|r| r.0 == pc && r.1 == idx) {
-                    reads.push((pc, idx, addr, val));
-                }
+            // only for a sample that will be kept
+            if site.candidates % site.stride.max(1) == 0 {
+                site.held = Some(snapshot(&self.reads, site.flips.front().map_or(seq, |f| f.seq), ev));
             }
-            reads.sort_unstable_by_key(|r| (r.0, r.1));
-            if site.snaps.len() >= KEEP {
-                site.snaps.pop_front();
-            }
-            site.snaps.push_back(Snapshot { regs: ev.regs, reads });
-            site.last_snap = Some(site.snap_count);
-            site.snap_count += 1;
         }
         if !flip {
             return;
@@ -268,14 +275,22 @@ impl Rec {
             self.sound_frames += 1;
         }
         // periods are taken from every other flip: the samples are independent (not two to a
-        // period, sharing their halves), and the kept 4,096 reach twice as far back
+        // period, sharing their halves)
         if site.edges % 2 == 1 && site.flips.len() == 2 {
-            if let (Some(old), Some(snap)) = (site.flips.front(), site.last_snap) {
+            let keep = site.candidates % site.stride.max(1) == 0;
+            site.candidates = site.candidates.wrapping_add(1);
+            if let (true, Some(old), Some(snap)) = (keep, site.flips.front(), site.held.take()) {
                 let p = t.wrapping_sub(old.t).wrapping_sub(u64::from(ev.cont.wrapping_sub(old.cont)));
+                site.periods.push((p as f64, frame, snap));
                 if site.periods.len() >= KEEP {
-                    site.periods.pop_front();
+                    // thin to every other sample, the stride doubling: the kept ones always span the run
+                    let mut i = 0;
+                    site.periods.retain(|_| {
+                        i += 1;
+                        i % 2 == 1
+                    });
+                    site.stride = site.stride.saturating_mul(2);
                 }
-                site.periods.push_back((p as f64, frame, snap));
             }
         }
         if site.flips.len() == 2 {
@@ -290,19 +305,13 @@ impl Rec {
             .sites
             .drain(..)
             .map(|s| {
-                let first = s.snap_count - s.snaps.len() as u64;
-                SiteHeard {
-                    pc: s.pc,
-                    edges: s.edges,
-                    frames_with_edges: s.frames_with_edges,
-                    periods: s
-                        .periods
-                        .iter()
-                        .filter(|p| p.2 >= first)
-                        .map(|&(period_t, at_frame, snap)| PeriodSample { period_t, at_frame, snap: (snap - first) as u32 })
-                        .collect(),
-                    snapshots: s.snaps.into(),
+                let mut periods = Vec::with_capacity(s.periods.len());
+                let mut snapshots = Vec::with_capacity(s.periods.len());
+                for (period_t, at_frame, snap) in s.periods {
+                    periods.push(PeriodSample { period_t, at_frame, snap: snapshots.len() as u32 });
+                    snapshots.push(snap);
                 }
+                SiteHeard { pc: s.pc, edges: s.edges, frames_with_edges: s.frames_with_edges, periods, snapshots }
             })
             .collect();
         Heard { sites, frames, sound_frames: self.sound_frames }

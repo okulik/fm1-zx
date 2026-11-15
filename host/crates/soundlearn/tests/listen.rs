@@ -68,3 +68,39 @@ fn listen_is_fast() {
     eprintln!("listen_is_fast: {secs:.2} s, {} periods", heard.sites.iter().map(|s| s.periods.len()).sum::<usize>());
     assert!(secs < 5.0, "{secs} s");
 }
+
+/// A run far longer than the 4,096 kept samples: they span the whole run, and each sample's
+/// snapshot holds the reload values of its own note.
+#[test]
+fn long_run_keeps_the_whole_run() {
+    let heard = listen(&mut tune(), &none(), LISTEN_FRAMES);
+    let site = &heard.sites[0];
+    assert!(site.periods.len() > 1000 && site.periods.len() <= 4096, "{}", site.periods.len());
+    assert_eq!(site.snapshots.len(), site.periods.len());
+    let (first, last) = (site.periods[0].at_frame, site.periods[site.periods.len() - 1].at_frame);
+    assert!(first < 600 && last > LISTEN_FRAMES - 600, "samples span frames {first}..{last}");
+    // the periods are in time order and spread: no gap over a tenth of the run
+    assert!(site.periods.windows(2).all(|w| w[0].at_frame <= w[1].at_frame && w[1].at_frame - w[0].at_frame < 900));
+    // per note: the (B, C) reload values the table read gave (read 1 of the two reloads)
+    let mut per_note: Vec<std::collections::HashMap<(u8, u8), usize>> = vec![Default::default(); 8];
+    let mut total = 0;
+    for p in &site.periods {
+        let snap = &site.snapshots[p.snap as usize];
+        let value = |pc: u16| snap.reads.iter().find(|r| r.0 == pc && r.1 == 1).map(|r| r.3);
+        let Some(i) = TUNE_HZ.iter().position(|hz| (p.period_t - 3.5e6 / hz).abs() / (3.5e6 / hz) <= 0.005) else { continue };
+        let (Some(b), Some(c)) = (value(0x801B), value(0x801E)) else { continue };
+        *per_note[i].entry((b, c)).or_default() += 1;
+        total += 1;
+    }
+    assert!(total > 1000, "{total} samples with their reloads");
+    let mut modes = Vec::new();
+    for (i, n) in per_note.iter().enumerate() {
+        let sum: usize = n.values().sum();
+        let (mode, top) = n.iter().max_by_key(|e| *e.1).map(|e| (*e.0, *e.1)).expect("note heard");
+        assert!(top * 10 >= sum * 9, "note {i}: reloads {n:?}");
+        modes.push(mode);
+    }
+    modes.sort_unstable();
+    modes.dedup();
+    assert_eq!(modes.len(), 8, "each note has its own reloads");
+}
