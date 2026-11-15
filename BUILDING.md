@@ -97,6 +97,7 @@ downloaded; on Apple silicon the image runs under amd64 emulation).
     tools/web-demo --no-serve       # build only
     tools/web-demo --skip-firmware  # no Docker: repack build/fm1's device build offline
     tools/web-demo --port N         # serve on another port
+    tools/web-demo --packages DIR   # DIR's packages instead (tools/make-personal-pack's, below)
 
 puts the release package (`build/fm1/fmzx.fwsc`, as `tools/make-packages` makes it) into
 fm1-emu's own web page: the emulator compiled to WebAssembly, with our one-entry catalog
@@ -124,6 +125,71 @@ anything; add it with `rustup target add wasm32-unknown-unknown`.
 Speed: the smoke test prints emulated seconds per wall second (about 1.7 in node on the picker
 and the tone test, 2026-11-12). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
 a browser, and games cost more than the picker: the page is a preview, not a promise of real time.
+
+## Your own games
+
+    tools/make-personal-pack ~/games            # build/personal/fmzx.fwsc and fmzx-preview.fwsc
+    tools/make-personal-pack build/personal/personal-games.toml   # from the games file, as written
+    tools/make-personal-pack ~/games --try      # then the browser test bench with these packages
+
+builds the two update packages with the games of a folder of yours instead of the built-in pack.
+They stay on your computer: everything goes under `build/personal/` (`-o DIR` for another
+folder), which git ignores, and the folder of games is only read. It needs the device builds
+(`build/fm1` and `build/fm1-preview`: run `tools/make-packages` once first); `--offline` and
+`--cache DIR` work as for `tools/make-packages`.
+
+**The games file.** Given a folder, the command writes `build/personal/personal-games.toml`, one
+entry per loadable `.sna`, `.z80`, `.tap` or `.tzx` file of the folder (not its subfolders), in the
+syntax of `games/games.toml` with `file` an absolute path. The name is the file name without its
+extension, its `(...)` and `[...]` tags and anything from a ` - ` on (`Night Raid II - Avenging
+Angel - 48k.tzx` is "Night Raid II"); the id is made from the name; there is no `[game.keys]` table,
+so the game gets the default key map. Edit it: a name (at most 28 characters), a `[game.keys]`
+table (docs/controls.md), a `crop`. On the next run from the folder your edits stay byte for byte,
+new files are added at the end, and a game whose file is gone stays, marked with a `# missing:`
+line above it; nothing is reordered. To leave games out, delete their entries and build from the
+file itself (a run from the folder would add them back): given a games file, the command uses it
+as written (a relative `file` is taken from the file's folder) and changes nothing in it.
+
+**How each game goes in.** `.sna` and 48K `.z80` files go in as they are ("as is"). A `.tap`, or a
+`.tzx` of standard blocks only, goes in as a tape ("tape") when a trial load through the ROM's
+tape trap on the host succeeds: on the FM-1 it then loads instantly and can load more from the
+tape while it runs. Any other `.tzx` (a turbo loader, say) is loaded on the host by playing its
+tape signal into the emulated Spectrum until the tape ends, and goes in as a snapshot of the
+loaded machine ("loaded"); so does a standard tape whose trial fails because it reads part of the
+tape with a loader of its own ("loaded (own loader)"). A game loaded as a snapshot has only what
+it had loaded when the tape ended: a multi-load game (later levels from the tape) gets its first
+part only. 128K files, and files that fail to load (the tape never finishes, or the program
+ends at the BASIC editor, an error report or a reset: `host/crates/fmzx-pack/src/tapeload.rs`),
+are left out with the reason.
+
+**The table.** The command prints each game, how it went in, its packed size and its file; the
+space used and left in the app slot (about 472 KB beside the current image); and the games left
+out, with why:
+
+      name                         how                     packed  file
+      tape                         tape                    1.2 KB  tape.tap
+      tune                         as is                   0.4 KB  tune.sna
+      turbo                        loaded                  1.1 KB  turbo.tzx
+    used 3.2 of 472.2 KB, 469.1 KB free
+    left out:
+      big.z80: 128K
+
+A pack that does not fit fails: the command lists every game by packed size, largest first, and
+writes no pack or packages (those of an earlier run are removed). Then delete entries from
+`personal-games.toml` and build from it. The packages are made and verified by
+`tools/make-packages`' own steps, given the pack and the output folder (`FMZX_PACKAGES_PACK`,
+`FMZX_PACKAGES_OUT`).
+
+**Trying and installing.** `--try` serves the browser demo with `DIR/fmzx.fwsc` and the games'
+key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware). Install
+`build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`, with the same
+warnings: FM-1 ZX has not run on a real FM-1 yet.
+
+The pieces: `fmzx-pack personal <folder | games.toml> -o DIR [--app <app.bin>]...` (the games
+file, the converted games in `DIR/converted/` with a manifest of their own, `DIR/games.bin`,
+`DIR/keymaps.json` and the table; `--app` gives the images, whose size sets the room), then
+those steps. `emu-gate`'s `tests/fw_personal.rs` runs the script on a folder of our own generated
+test programs and boots the result in fm1-emu.
 
 ## Music corpus
 

@@ -15,6 +15,7 @@ pub mod lz4blk;
 pub mod manifest;
 pub mod pack;
 pub mod package;
+pub mod personal;
 pub mod tapeload;
 pub mod testprogs;
 pub mod tzx;

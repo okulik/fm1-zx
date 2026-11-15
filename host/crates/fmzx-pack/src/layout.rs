@@ -28,6 +28,12 @@ pub fn pack_xip(image_len: usize) -> u32 {
     AREA_XIP + pack_offset(image_len) as u32
 }
 
+/// The bytes a game pack may take beside an image of `image_len` bytes: the app slot from the
+/// pack's offset to its end (0 when the image alone fills it).
+pub fn pack_room(image_len: usize) -> u32 {
+    (APP_SLOT as usize).saturating_sub(pack_offset(image_len) - APP_OFFSET as usize) as u32
+}
+
 /// The app slot's contents (from [`APP_OFFSET`]): the image, 0xFF up to the pack, the pack.
 /// Not padded to the slot's end. Errors when they do not fit the slot.
 pub fn slot_contents(image: &[u8], pack: &[u8]) -> Result<Vec<u8>, String> {
@@ -58,6 +64,15 @@ mod tests {
         assert_eq!(pack_offset(0x1000 - 0x120), 0x1000);
         assert_eq!(pack_offset(0x1000 - 0x120 + 1), 0x2000);
         assert_eq!(pack_xip(68_056), 0x0201_1000);
+    }
+
+    #[test]
+    fn pack_room_is_what_slot_contents_takes() {
+        let image = vec![0u8; 70_000];
+        let room = pack_room(image.len()) as usize;
+        assert!(slot_contents(&image, &vec![0; room]).is_ok());
+        assert!(slot_contents(&image, &vec![0; room + 1]).is_err());
+        assert_eq!(pack_room(APP_SLOT as usize), 0);
     }
 
     #[test]

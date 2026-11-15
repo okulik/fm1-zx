@@ -7,6 +7,8 @@
 // all pass, 1 otherwise. The preview package (RGB565) boots in a second instance as the colour
 // reference for the release package's RGB444.
 //   node web/check.mjs build/web build/fm1/fmzx-preview.fwsc
+// With FMZX_CHECK_SOUND=info (tools/web-demo --packages: someone's own games, whose second game
+// need not make a sound at once) the sound check is reported but does not fail the run.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -78,17 +80,22 @@ const halted = x.fm1_halted();
 const releasePicker = lcd.slice();
 report("picker", halted === 0 && lit > PICKER_LIT, `halted ${halted}, ${lit} lit pixels after 3 s`);
 
-// OCT+ moves the picker to the second entry, "Border and tone test"; PLAY starts it
+// OCT+ moves the picker to the second entry (in the built-in pack "Border and tone test"); PLAY
+// starts it
 press(OCT_UP);
 const quiet = run(0.5);
 press(PLAY);
 run(1.0 - 0.1);
 const loud = run(1.0);
-report(
-  "sound",
-  loud > 0.001 && loud > 10 * quiet,
-  `RMS ${quiet.toFixed(4)} before PLAY, ${loud.toFixed(4)} in the second after it`,
-);
+{
+  const ok = loud > 0.001 && loud > 10 * quiet;
+  const detail = `RMS ${quiet.toFixed(4)} before PLAY, ${loud.toFixed(4)} in the second after it`;
+  if (process.env.FMZX_CHECK_SOUND === "info") {
+    console.log(`sound: ${ok ? "OK" : "none"} (${detail}; informational for these packages)`);
+  } else {
+    report("sound", ok, detail);
+  }
+}
 
 const emulated = x.fm1_ms() / 1000;
 const wall = (performance.now() - start) / 1000;

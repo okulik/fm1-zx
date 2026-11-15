@@ -87,6 +87,16 @@ fn valid_id(id: &str) -> bool {
 
 /// Parses and validates the manifest text. Key strings are checked too.
 pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
+    parse(text, false)
+}
+
+/// [`parse_manifest`] for a personal games file (`personal-games.toml`): `file` may also be an
+/// absolute path.
+pub fn parse_personal_manifest(text: &str) -> Result<Manifest, String> {
+    parse(text, true)
+}
+
+fn parse(text: &str, absolute_ok: bool) -> Result<Manifest, String> {
     let raw: RawManifest = toml::from_str(text).map_err(|e| format!("manifest: {e}"))?;
     let mut game: Vec<Game> = Vec::new();
     for g in raw.game {
@@ -108,7 +118,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         if g.file.is_empty() {
             return Err(format!("game {id}: file is empty"));
         }
-        if Path::new(&g.file).is_absolute() || g.file.starts_with('/') || g.file.starts_with('\\') {
+        if !absolute_ok && (Path::new(&g.file).is_absolute() || g.file.starts_with('/') || g.file.starts_with('\\')) {
             return Err(format!("game {id}: file {:?} must be relative to the manifest", g.file));
         }
         encode_keymap(&g.keys).map_err(|e| format!("game {id}: {e}"))?;
@@ -120,7 +130,8 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
     Ok(Manifest { game })
 }
 
-/// The game file's path: `file` resolved against the manifest's directory.
+/// The game file's path: `file` resolved against the manifest's directory (an absolute `file`
+/// stays as it is).
 pub fn game_path(manifest_dir: &Path, game: &Game) -> PathBuf {
     manifest_dir.join(&game.file)
 }

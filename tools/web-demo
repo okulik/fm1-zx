@@ -9,7 +9,9 @@
 #   tools/web-demo --no-serve       build only
 #   tools/web-demo --skip-firmware  no device builds (Docker): repack build/fm1's firmware offline
 #   tools/web-demo --port N         serve on another port
-# Steps: the packages (tools/make-packages); fm1-emu fetched at the revision
+#   tools/web-demo --packages DIR   serve DIR's packages (tools/make-personal-pack's) instead of build/fm1's
+# Steps: the packages (tools/make-packages; with --packages, DIR's fmzx.fwsc, fmzx-preview.fwsc and
+# keymaps.json, built by nothing here); fm1-emu fetched at the revision
 # host/crates/emu-gate/Cargo.toml pins into build/fm1-emu (shallow, only when HEAD differs),
 # restored to pristine and patched (web/patch-emu.sh); upstream's web/build.sh with the active
 # Rust toolchain (it needs the wasm32-unknown-unknown target); our files on top, the page
@@ -17,7 +19,7 @@
 set -eu -o pipefail
 
 usage() {
-    sed -n '5,11s/^# \{0,1\}//p' "$0" >&2
+    sed -n '5,12s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 
@@ -25,6 +27,7 @@ check=0
 serve=1
 skip_firmware=0
 port=8642
+packages=
 while [ $# -gt 0 ]; do
     case $1 in
     --check) check=1 ;;
@@ -33,6 +36,11 @@ while [ $# -gt 0 ]; do
     --port)
         [ $# -ge 2 ] || usage
         port=$2
+        shift
+        ;;
+    --packages)
+        [ $# -ge 2 ] || usage
+        packages=$2
         shift
         ;;
     -h | --help) usage ;;
@@ -61,8 +69,15 @@ die() {
     exit 1
 }
 
-# 1. the packages (the release one is served; with --skip-firmware the device builds are reused)
-if [ "$skip_firmware" = 1 ]; then
+# 1. the packages (the release one is served; with --skip-firmware the device builds are reused;
+# with --packages they are DIR's)
+if [ -n "$packages" ]; then
+    [ -d "$packages" ] || die "--packages: no folder $packages"
+    fm1=$(cd "$packages" && pwd)
+    for f in fmzx.fwsc fmzx-preview.fwsc keymaps.json; do
+        [ -f "$fm1/$f" ] || die "--packages: no $fm1/$f (tools/make-personal-pack writes it)"
+    done
+elif [ "$skip_firmware" = 1 ]; then
     FMZX_SKIP_DEVICE_BUILD=1 "$root/tools/make-packages" --offline
 else
     "$root/tools/make-packages"
@@ -114,7 +129,11 @@ cp "$fm1/fmzx.fwsc" "$out/fmzx.fwsc"
 sed "s/@VERSION@/$short/" "$root/web/firmwares.json" >"$out/firmwares.json"
 printf '{"commit":"%s","short":"%s","commit_date":"%s","dirty":%s,"built":"%s","fm1_emu":"%s"}\n' \
     "$commit" "$short" "$commit_date" "$dirty" "$built" "$rev" >"$out/version.json"
-"$root/host/target/release/fmzx-pack" keymaps "$root/games/games.toml" -o "$out/keymaps.json"
+if [ -n "$packages" ]; then
+    cp "$fm1/keymaps.json" "$out/keymaps.json"
+else
+    "$root/host/target/release/fmzx-pack" keymaps "$root/games/games.toml" -o "$out/keymaps.json"
+fi
 cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
 "$root/web/patch-page.sh" "$out"
 mkdir -p "$out/licenses"
@@ -124,6 +143,10 @@ echo "$out: fm1-emu $rev with FM-1 ZX $short"
 
 # 5. check or serve
 if [ "$check" = 1 ]; then
+    if [ -n "$packages" ]; then
+        # the sound check plays the built-in pack's second game; DIR's may be silent there
+        FMZX_CHECK_SOUND=info exec "$root/web/check.sh" "$out" "$fm1/fmzx-preview.fwsc"
+    fi
     exec "$root/web/check.sh" "$out" "$fm1/fmzx-preview.fwsc"
 fi
 if [ "$serve" = 1 ]; then

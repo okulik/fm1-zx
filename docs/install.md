@@ -73,6 +73,11 @@ By hand, the same steps:
 `FM-1_948`). The loader must be the pinned Felucca 1.6.1 loader that the `felucca_loader`
 target builds (8,216 bytes, `third_party/felucca-loader/VENDORED.md`).
 
+With your own games: `tools/make-personal-pack <folder>` builds the same two packages with the
+games of a folder of yours, as `build/personal/fmzx.fwsc` and `build/personal/fmzx-preview.fwsc`
+(BUILDING.md, "Your own games"). They install, and try in the browser, as the packages here do;
+`tools/web-demo --packages build/personal` runs them in the local browser demo.
+
 ## Trying it in the browser first
 
 `tools/web-demo` runs the release package itself in a local browser page, with sound and the

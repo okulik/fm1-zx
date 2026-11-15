@@ -14,11 +14,15 @@
 #   tools/make-packages --offline           (use build/ac79/ only, fetch nothing)
 #   tools/make-packages --cache DIR         (another cache directory)
 # FMZX_SKIP_DEVICE_BUILD=1 skips the device builds (they must be up to date).
+# FMZX_PACKAGES_PACK=FILE packs that game pack instead of building one from games/games.toml, and
+# FMZX_PACKAGES_OUT=DIR writes the packages and the licence text to DIR instead of build/fm1
+# (tools/make-personal-pack uses both).
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 b="$root/build/fm1"
 p="$root/build/fm1-preview"
+out="${FMZX_PACKAGES_OUT:-$b}"
 
 if [ "${FMZX_SKIP_DEVICE_BUILD:-0}" != 1 ]; then
     for preset in fm1 fm1-preview; do
@@ -32,13 +36,16 @@ cargo build --quiet --release -p fmzx-pack
 pack="$root/host/target/release/fmzx-pack"
 loader="$b/third_party/felucca-loader/loader.bin"
 
-"$pack" games "$root/games/games.toml" -o "$b/games.bin"
-"$pack" fwsc --app "$b/platform/fm1/fmzx_app.bin" --pack "$b/games.bin" --loader "$loader" \
-    -o "$b/fmzx.fwsc" "$@"
-"$pack" fwsc --app "$p/platform/fm1/fmzx_app.bin" --pack "$b/games.bin" --loader "$loader" \
-    -o "$b/fmzx-preview.fwsc" "$@"
-"$pack" verify "$b/fmzx.fwsc"
-"$pack" verify "$b/fmzx-preview.fwsc"
+games="${FMZX_PACKAGES_PACK:-$b/games.bin}"
+if [ -z "${FMZX_PACKAGES_PACK:-}" ]; then
+    "$pack" games "$root/games/games.toml" -o "$games"
+fi
+"$pack" fwsc --app "$b/platform/fm1/fmzx_app.bin" --pack "$games" --loader "$loader" \
+    -o "$out/fmzx.fwsc" "$@"
+"$pack" fwsc --app "$p/platform/fm1/fmzx_app.bin" --pack "$games" --loader "$loader" \
+    -o "$out/fmzx-preview.fwsc" "$@"
+"$pack" verify "$out/fmzx.fwsc"
+"$pack" verify "$out/fmzx-preview.fwsc"
 # the SDK files' licence travels with the packages (LICENSING.md)
-cp "$root/docs/third-party/AC79-SDK-Apache-2.0.txt" "$b/AC79-SDK-Apache-2.0.txt"
-echo "$b/AC79-SDK-Apache-2.0.txt: the licence of the JieLi AC79 SDK files in the packages"
+cp "$root/docs/third-party/AC79-SDK-Apache-2.0.txt" "$out/AC79-SDK-Apache-2.0.txt"
+echo "$out/AC79-SDK-Apache-2.0.txt: the licence of the JieLi AC79 SDK files in the packages"

@@ -7,14 +7,17 @@
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
 //!     [--product FM-1_948] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_948]`
+//! `fmzx-pack personal <folder | games.toml> -o <dir> [--app <app.bin>]...` (the personal pack,
+//!     `tools/make-personal-pack`; `--app`: the images it goes with, which set the room for it)
 
 use fmzx_pack::inputs::{check_loader, default_cache, load_sdk, sha256_hex, Pins};
 use fmzx_pack::keymaps::keymaps_json;
 use fmzx_pack::manifest::parse_manifest;
 use fmzx_pack::pack::build_pack;
 use fmzx_pack::package::{self, PRODUCT};
+use fmzx_pack::personal;
 use fmzx_pack::testprogs::write_all;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
@@ -22,7 +25,8 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack testprogs <dir>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
                       [--product FM-1_948] [--cache DIR] [--offline]
-       fmzx-pack verify <pkg.fwsc> [--product FM-1_948]";
+       fmzx-pack verify <pkg.fwsc> [--product FM-1_948]
+       fmzx-pack personal <folder | games.toml> -o <dir> [--app <app.bin>]...";
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -111,6 +115,24 @@ fn verify(args: &[String]) -> Result<(), String> {
     }
 }
 
+fn personal(args: &[String]) -> Result<(), String> {
+    let o = opts(args, &["-o", "--app"], &[])?;
+    let [input] = &o.free[..] else { return Err(USAGE.to_string()) };
+    let out = o.need("-o")?;
+    // the room beside the largest image the pack goes with
+    let mut limit = None;
+    for (_, app) in o.values.iter().filter(|(k, _)| k == "--app") {
+        let len = std::fs::metadata(app).map_err(|e| format!("{app}: {e}"))?.len();
+        let room = fmzx_pack::layout::pack_room(usize::try_from(len).unwrap_or(usize::MAX));
+        limit = Some(limit.map_or(room, |l: u32| l.min(room)));
+    }
+    let r = personal::run_with_limit(Path::new(input), Path::new(out), limit)?;
+    print!("{}", personal::table(&r));
+    let games = r.rows.iter().filter(|w| w.packed.is_some()).count();
+    println!("{}: {} bytes, {games} games", Path::new(out).join("games.bin").display(), r.used);
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     match args {
         [cmd, manifest, flag, out] if cmd == "games" && flag == "-o" => {
@@ -135,6 +157,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         [cmd, rest @ ..] if cmd == "fwsc" => fwsc(rest),
         [cmd, rest @ ..] if cmd == "verify" => verify(rest),
+        [cmd, rest @ ..] if cmd == "personal" => personal(rest),
         _ => Err(USAGE.to_string()),
     }
 }
