@@ -61,6 +61,16 @@ pub struct FitResult {
 /// module docs); Err when the site is not the model's, the family cannot be fitted from a
 /// site's flips, or no sample could be evaluated.
 pub fn check_fit(model: &EngineModel, heard: &SiteHeard) -> Result<FitResult, String> {
+    fit_periods(model, heard, false)
+}
+
+/// [`check_fit`] against the periods as played, contention left in: what a routine whose times
+/// depend on where its stack lies sounded.
+pub fn check_fit_played(model: &EngineModel, heard: &SiteHeard) -> Result<FitResult, String> {
+    fit_periods(model, heard, true)
+}
+
+fn fit_periods(model: &EngineModel, heard: &SiteHeard, played: bool) -> Result<FitResult, String> {
     let ch = model
         .channels
         .iter()
@@ -87,7 +97,7 @@ pub fn check_fit(model: &EngineModel, heard: &SiteHeard) -> Result<FitResult, St
         let silent = ch.silent_if_zero.is_some_and(|x| x.read(&peek, model.anchor, &snap.regs) == Some(0));
         let half = eval_terms(&ch.half_period, &peek, model.anchor, &snap.regs);
         match half {
-            Some(h) if !missing.get() && !silent && h > 0.0 => pairs.push((p.period_t, per_sample * h)),
+            Some(h) if !missing.get() && !silent && h > 0.0 => pairs.push((p.period_t + if played { p.contention_t } else { 0.0 }, per_sample * h)),
             _ => {}
         }
     }

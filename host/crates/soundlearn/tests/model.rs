@@ -500,3 +500,62 @@ fn refuses_setup_flipping_the_flips_level() {
     let mem = |a: u16| if a == 0x800D { 0xEE } else { m.peek(a) };
     assert_eq!(read_engine(mem, 0x8016), Err(Refusal::Unmodelled(Why::SetupFlipsLevel, 0x8024)));
 }
+
+#[test]
+fn reads_toggler_saved_nested() {
+    // one channel from two sites: the counts B and C are saved and put back around each half's
+    // nested delay, so both halves count the same registers (one counter, two places)
+    let fx = fixtures::toggler_saved_nested();
+    for site in fx.sites.clone() {
+        let md = read(&fx, site).unwrap_or_else(|e| panic!("from {site:04X}: {e:?}"));
+        assert_eq!(md.family, Family::Square);
+        assert_eq!(md.channels.len(), 1);
+        assert_eq!(md.channels[0].sites, vec![0x8016, 0x8021]);
+        // 13 x B + 3339 x C - 3282.5, the half constant rounded
+        assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(2) }, Term::Lin { coef_t: 3339, x: Input::Reg(3) }, Term::Const(-3282)]);
+        assert!(md.stack, "it pushes and pops");
+        // called once a note: frames end outside it, and its formula reads registers only
+        assert_eq!((md.stale, md.duration.is_none()), (None, true));
+        agrees(&fx, &md, 150, 0.0004); // the half constant's half T
+    }
+}
+
+#[test]
+fn refuses_unmatched_stack() {
+    let fx = fixtures::toggler_saved_nested();
+    let m = fixtures::machine(&fx.sna);
+    // the second POP BC gone: each pass leaves a pair more on the stack
+    let mem = |a: u16| if a == 0x8028 { 0x00 } else { m.peek(a) };
+    assert!(matches!(read_engine(mem, 0x8016), Err(Refusal::Unmodelled(Why::StackOp, _))), "{:?}", read_engine(mem, 0x8016));
+    // POP DE takes what PUSH BC put
+    let mem = |a: u16| if a == 0x801D { 0xD1 } else { m.peek(a) };
+    assert_eq!(read_engine(mem, 0x8016), Err(Refusal::Unmodelled(Why::StackOp, 0x8016)));
+    // the stack pointer moved in the pass (INC SP for the second PUSH)
+    let mem = |a: u16| if a == 0x801E { 0x33 } else { m.peek(a) };
+    assert_eq!(read_engine(mem, 0x8016), Err(Refusal::Unmodelled(Why::StackOp, 0x801E)));
+}
+
+#[test]
+fn nested_delay_only_without_a_reload() {
+    // 8000 tog: XOR 10h; OUT (FEh),A; LD C,3; d: DJNZ d; NOP; NOP; DEC C; JR NZ,d; JR tog: the
+    // inner loop counts B (0 after it, 256 each further time), the outer C
+    let nested = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0x0E, 0x03, 0x10, 0xFE, 0x00, 0x00, 0x0D, 0x20, 0xF9, 0x18, 0xF1]);
+    let md = read_engine(nested, 0x8002).expect("reads");
+    // 7 + 11 + 7 + (13 B - 5) + 3 x (256 x 13 - 5 + 12 + 12) - (256 x 13 - 5 + 12 - 7) + 12
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(2) }, Term::Const(7 + 11 + 7 - 5 + 3 * 3347 - 3328 - 5 + 12 + 5)]);
+    // LD B,5 in the outer loop's body: each inner run counts 5, a product the reader does not
+    // take: not a nested delay, and the loop is refused
+    let reload = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0x0E, 0x03, 0x10, 0xFE, 0x06, 0x05, 0x0D, 0x20, 0xF9, 0x18, 0xF1]);
+    let got = read_engine(reload, 0x8002);
+    assert!(got.is_err(), "{got:?}");
+}
+
+#[test]
+fn registers_not_given_back_are_not_inputs() {
+    // the first POP BC; PUSH BC become NOPs: the second half counts B and C from 0 (256 each),
+    // so its delay is a constant while the first half's counts the note: a duty cycle
+    let fx = fixtures::toggler_saved_nested();
+    let m = fixtures::machine(&fx.sna);
+    let mem = |a: u16| if a == 0x801D || a == 0x801E { 0x00 } else { m.peek(a) };
+    assert!(read_engine(mem, 0x8016).is_err(), "{:?}", read_engine(mem, 0x8016));
+}

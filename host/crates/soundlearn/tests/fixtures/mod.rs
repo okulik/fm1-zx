@@ -637,6 +637,75 @@ pub fn flips_uneven() -> Fixture {
     }
 }
 
+/// One channel toggled from two sites by a routine called once a note (from a table walked by
+/// HL), which saves the note's counts on the stack around each half period's nested delay: the
+/// inner `DJNZ` counts B down, then runs 256 times for each further count of C (`DEC C; JR NZ`),
+/// `13B + 3339C - 3333` T in all; `POP BC; PUSH BC` puts the counts back. From site 1 to site 2
+/// the delay plus 39 T, back the delay plus 62 T: half period `13B + 3339C - 3282.5` T. DE counts
+/// the note's cycles.
+///
+/// ```text
+/// 8000 21 2F 80     start: LD HL,802Fh    the first record: B, C, cycles (16 bits)
+/// 8003 7E           next:  LD A,(HL)      B (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 47                  LD B,A
+/// 8008 23                  INC HL
+/// 8009 4E                  LD C,(HL)
+/// 800A 23                  INC HL
+/// 800B 5E                  LD E,(HL)
+/// 800C 23                  INC HL
+/// 800D 56                  LD D,(HL)
+/// 800E 23                  INC HL
+/// 800F CD 14 80            CALL note
+/// 8012 18 EF               JR next
+/// 8014 C5           note:  PUSH BC        11
+/// 8015 AF                  XOR A          4
+/// 8016 D3 FE               OUT (FEh),A    11   site 1: low
+/// 8018 10 FE        d1:    DJNZ d1        13B - 5, then 3,323 for each further C
+/// 801A 0D                  DEC C          4
+/// 801B 20 FB               JR NZ,d1       12 / 7
+/// 801D C1                  POP BC         10
+/// 801E C5                  PUSH BC        11
+/// 801F 3E 10               LD A,10h       7
+/// 8021 D3 FE               OUT (FEh),A    11   site 2: high
+/// 8023 10 FE        d2:    DJNZ d2
+/// 8025 0D                  DEC C
+/// 8026 20 FB               JR NZ,d2
+/// 8028 C1                  POP BC         10
+/// 8029 1B                  DEC DE         6
+/// 802A 7A                  LD A,D         4
+/// 802B B3                  OR E           4
+/// 802C 20 E6               JR NZ,note     12
+/// 802E C9                  RET
+/// 802F                     records (B, C, cycles) and a 0
+/// ```
+pub fn toggler_saved_nested() -> Fixture {
+    #[rustfmt::skip]
+    let mut code = vec![
+        0x21, 0x2F, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x47, 0x23, 0x4E, 0x23, 0x5E, 0x23, 0x56, 0x23,
+        0xCD, 0x14, 0x80, 0x18, 0xEF,
+        // note
+        0xC5, 0xAF, 0xD3, 0xFE, 0x10, 0xFE, 0x0D, 0x20, 0xFB, 0xC1, 0xC5, 0x3E, 0x10, 0xD3, 0xFE,
+        0x10, 0xFE, 0x0D, 0x20, 0xFB, 0xC1, 0x1B, 0x7A, 0xB3, 0x20, 0xE6, 0xC9,
+    ];
+    assert_eq!(code.len(), 0x2F);
+    for (b, c) in [(200u8, 1u8), (150, 1), (250, 1), (100, 2), (60, 2), (120, 1)] {
+        code.extend_from_slice(&[b, c, 150, 0]);
+    }
+    code.push(0);
+    Fixture {
+        name: "toggler_saved_nested",
+        sna: sna(&code, &[]),
+        sites: vec![0x8016, 0x8021],
+        kind: Kind::Square,
+        truth: |_, r| {
+            let count = |x: u16| f64::from(match x & 0xFF { 0 => 256, v => v });
+            vec![13.0 * count(r.bc >> 8) + 3339.0 * count(r.bc) - 3282.5]
+        },
+    }
+}
+
 /// Every fixture.
 pub fn all() -> Vec<Fixture> {
     vec![
@@ -650,6 +719,7 @@ pub fn all() -> Vec<Fixture> {
         siren(),
         computed_jump(),
         flips_uneven(),
+        toggler_saved_nested(),
     ]
 }
 

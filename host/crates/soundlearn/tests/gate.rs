@@ -204,7 +204,7 @@ fn fit_samples(samples: &[(u16, f64)]) -> soundlearn::fit::FitResult {
     for (i, &(bc, got)) in samples.iter().enumerate() {
         let mut regs = tune.regs();
         regs.bc = bc;
-        site.periods.push(PeriodSample { period_t: got, at_frame: i as u32, snap: i as u32 });
+        site.periods.push(PeriodSample { period_t: got, contention_t: 0.0, at_frame: i as u32, snap: i as u32 });
         site.snapshots.push(Snapshot { regs, reads: Vec::new() });
     }
     check_fit(&model, &site).expect("evaluates")
@@ -365,4 +365,38 @@ fn strict_refuses_constant_junk() {
 fn strict_keeps_true_entry() {
     let stats = tune_with(|p| p.to_vec());
     assert!(stats.claimed * 10 >= stats.routine_frames * 9, "{stats:?}");
+}
+
+#[test]
+fn learns_saved_nested_toggler() {
+    // the routine called once a note, saving its counts on the stack: heard, fitted to the
+    // periods as played too (its stack in uncontended RAM), replayed and learned
+    let fx = fixtures::toggler_saved_nested();
+    let (model, entry, stats, verdict) = learn_fixture(&fx.sna, 300);
+    assert!(model.stack);
+    assert_eq!(verdict, Verdict::Learned { heard: true }, "{stats:?}");
+    assert!(entry.stale.is_none() && entry.timing.is_none());
+}
+
+#[test]
+fn stack_contention_must_not_move_the_pitch() {
+    // the same routine with its samples as if its stack lay in contended RAM: played periods 2%
+    // longer than the code's (the fit of the code's periods passes; the fit as played does not)
+    let fx = fixtures::toggler_saved_nested();
+    let load = || fixtures::machine(&fx.sna);
+    let mut m = load();
+    let heard = listen(&mut m, &none(), 300);
+    let mut site = heard.sites.iter().max_by_key(|s| s.edges).expect("heard").clone();
+    let model = model_at(&m, site.pc);
+    let stats = ReplayStats { routine_frames: 290, claimed: 290, music_gate: true, builtin_claimed: 0 };
+    let fit = check_fit(&model, &site).expect("fits");
+    assert_eq!(judge(&model, &m, Some(&site), Some(&stats), Some(&fit)), Verdict::Learned { heard: true });
+    for p in &mut site.periods {
+        p.contention_t = 0.02 * p.period_t;
+    }
+    let fit = check_fit(&model, &site).expect("fits");
+    let v = judge(&model, &m, Some(&site), Some(&stats), Some(&fit));
+    assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("fit as played")), "{v:?}");
+    // and code only, a routine using the stack is never learned
+    assert!(matches!(judge(&model, &m, None, None, None), Verdict::Refused(why) if why.contains("stack")));
 }

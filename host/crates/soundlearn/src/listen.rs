@@ -150,6 +150,8 @@ pub struct SiteHeard {
 #[derive(Clone, Copy, Debug)]
 pub struct PeriodSample {
     pub period_t: f64,
+    /// The contention taken out (the period played was `period_t + contention_t`).
+    pub contention_t: f64,
     /// The frame of flip `k`.
     pub at_frame: u32,
     /// Index into the site's snapshots: the reads and registers for this period.
@@ -183,8 +185,8 @@ struct Site {
     /// Sample candidates seen, and the stride between those kept.
     candidates: u64,
     stride: u64,
-    /// Kept samples with their snapshots.
-    periods: Vec<(f64, u32, Snapshot)>,
+    /// Kept samples (period, contention) with their snapshots.
+    periods: Vec<(f64, f64, u32, Snapshot)>,
 }
 
 #[derive(Default)]
@@ -290,8 +292,9 @@ impl Rec {
             let keep = site.candidates % site.stride.max(1) == 0;
             site.candidates = site.candidates.wrapping_add(1);
             if let (true, Some(old), Some(snap)) = (keep, site.flips.front(), site.held.take()) {
-                let p = t.wrapping_sub(old.t).wrapping_sub(u64::from(ev.cont.wrapping_sub(old.cont)));
-                site.periods.push((p as f64, frame, snap));
+                let cont = ev.cont.wrapping_sub(old.cont);
+                let p = t.wrapping_sub(old.t).wrapping_sub(u64::from(cont));
+                site.periods.push((p as f64, f64::from(cont), frame, snap));
                 if site.periods.len() >= self.keep.max(2) {
                     // thin to every other sample, the stride doubling: the kept ones always span the run
                     let mut i = 0;
@@ -317,8 +320,8 @@ impl Rec {
             .map(|s| {
                 let mut periods = Vec::with_capacity(s.periods.len());
                 let mut snapshots = Vec::with_capacity(s.periods.len());
-                for (period_t, at_frame, snap) in s.periods {
-                    periods.push(PeriodSample { period_t, at_frame, snap: snapshots.len() as u32 });
+                for (period_t, contention_t, at_frame, snap) in s.periods {
+                    periods.push(PeriodSample { period_t, contention_t, at_frame, snap: snapshots.len() as u32 });
                     snapshots.push(snap);
                 }
                 SiteHeard { pc: s.pc, edges: s.edges, frames_with_edges: s.frames_with_edges, periods, snapshots }

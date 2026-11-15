@@ -161,6 +161,16 @@ pub(super) struct Acc {
     pub stored: u32,
 }
 
+/// A register pair pushed on the stack: its two bytes and, for a pointer, where it pointed from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Pushed {
+    pub hi: Val,
+    pub lo: Val,
+    pub base: u32,
+    pub off: i32,
+    pub advanced: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct State {
     pub v: [Val; NSLOT],
@@ -173,6 +183,10 @@ pub(super) struct State {
     /// base was set.
     pub advanced: u8,
     pub accs: Vec<Acc>,
+    /// The pairs pushed (`PUSH`), the last on top.
+    pub stack: Vec<Pushed>,
+    /// A `POP` found the stack empty, or two paths met with different stacks.
+    pub stack_lost: bool,
     next: u32,
 }
 
@@ -187,7 +201,70 @@ impl State {
             mem_lost: false,
             advanced: 0,
             accs: Vec::new(),
+            stack: Vec::new(),
+            stack_lost: false,
             next: 8,
+        }
+    }
+
+    /// The registers (decoder bits, as [`super::cfg::bits_of`]) that hold their value at the
+    /// start: A, B-L, A', and a pair (BC, DE, HL, IX, IY, BC', DE', HL') when both its halves do
+    /// and it still points from where it did.
+    pub(super) fn unchanged(&self) -> u32 {
+        let own = |s: usize| self.v[s].src == Src::Entry(s as u8);
+        let mut m = 0u32;
+        for (s, bit) in [(0usize, 0u32), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 14)] {
+            if own(s) {
+                m |= 1 << bit;
+            }
+        }
+        for (i, &p) in PAIRS.iter().enumerate() {
+            let (h, l) = PAIR_SLOTS[i];
+            if own(h) && own(l) && self.base[i] == i as u32 && self.off[i] == 0 {
+                m |= 1 << p;
+            }
+        }
+        m
+    }
+
+    /// What `PUSH` of pair `pair` (a [`PAIRS`] number, or 7 for AF) pushes now.
+    pub(super) fn pushed(&self, pair: u8) -> Pushed {
+        match pair_index(pair) {
+            Some(i) => {
+                let (h, l) = PAIR_SLOTS[i];
+                Pushed { hi: self.v[h], lo: self.v[l], base: self.base[i], off: self.off[i], advanced: self.advanced >> i & 1 != 0 }
+            }
+            None => Pushed { hi: self.v[A], lo: self.v[F], base: 0, off: 0, advanced: false },
+        }
+    }
+
+    fn push(&mut self, pair: u8) {
+        let p = self.pushed(pair);
+        self.stack.push(p);
+    }
+
+    fn pop(&mut self, pair: u8) {
+        let p = self.stack.pop().unwrap_or_else(|| {
+            self.stack_lost = true;
+            Pushed { hi: Val::UNKNOWN, lo: Val::UNKNOWN, base: u32::MAX, off: 0, advanced: false }
+        });
+        match pair_index(pair) {
+            Some(i) => {
+                let (h, l) = PAIR_SLOTS[i];
+                self.v[h] = p.hi;
+                self.v[l] = p.lo;
+                if p.base == u32::MAX {
+                    self.new_base(i);
+                } else {
+                    self.base[i] = p.base;
+                    self.off[i] = p.off;
+                    self.advanced = self.advanced & !(1 << i) | u8::from(p.advanced) << i;
+                }
+            }
+            None => {
+                self.v[A] = p.hi;
+                self.v[F] = p.lo;
+            }
         }
     }
 
@@ -243,6 +320,7 @@ impl State {
         }
         s.mem_lost |= o.mem_lost;
         s.advanced |= o.advanced;
+        s.stack_lost |= o.stack_lost || s.stack != o.stack;
         s
     }
 
@@ -520,6 +598,8 @@ impl State {
             }
             0xEB => self.swap_pairs(1, 2),
             0x10 => self.set(2, Val::UNKNOWN),
+            0xC5 | 0xD5 | 0xE5 | 0xF5 => self.push(stack_pair(op, idx)),
+            0xC1 | 0xD1 | 0xE1 | 0xF1 => self.pop(stack_pair(op, idx)),
             _ => {
                 if matches!(i.flow, Flow::Next) || i.writes != 0 || i.mem_write.is_some() {
                     self.clobber(i);
@@ -698,6 +778,17 @@ impl State {
             0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x71 | 0x79 | 0x46 | 0x56 | 0x5E | 0x47 | 0x4F => {}
             _ => self.clobber(i),
         }
+    }
+}
+
+/// The pair a `PUSH` or `POP` (opcode `op`, after an index prefix `idx`) moves: a [`PAIRS`]
+/// number, or 7 for AF.
+pub(super) fn stack_pair(op: u8, idx: Option<u8>) -> u8 {
+    match (op >> 4) & 3 {
+        0 => 8,
+        1 => 9,
+        2 => idx.unwrap_or(10),
+        _ => 7,
     }
 }
 

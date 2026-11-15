@@ -9,12 +9,19 @@
 //!
 //! The instructions reachable from the `OUT` within 512 bytes either side form a graph
 //! (`cfg`). Counted delay loops (`DJNZ`, `DEC r; JR NZ`, `DEC rr; LD A,h; OR l; JR NZ`, `JP NZ`
-//! too) become single steps of `per x n + konst` T-states. The pass is then walked from the
+//! too) become single steps of `per x n + konst` T-states, and so does a delay loop nested in
+//! another counter's loop (the inner one counting from 0 after its first run: two `Lin` terms).
+//! The pass is then walked from the
 //! `OUT` until it comes back: a zero test of a counter (the idioms above, `JR`/`JP` `Z`/`NZ`
 //! or `DJNZ`) either leaves the pass for the next note's setup (it goes on by the other side)
 //! or, when its two sides meet again within a few straight instructions and one holds an `OUT`,
 //! is a diamond: a channel's counter reload. Anything else in the pass is refused. The setup
-//! paths from each zero test's exit back into the pass are followed too (calls stepped over).
+//! paths from each zero test's exit back into the pass are followed too (calls stepped over); a
+//! zero test whose exit is `DEC h; JR NZ` back into the pass counts a pair (`DurationModel`'s
+//! carry). The straight code that runs into the pass from elsewhere (a routine called once a note
+//! or a burst, found from the calls and jumps to just before it) is a path into it as well.
+//! `PUSH` and `POP` in the pass are followed when each `POP` takes what a `PUSH` of the same pair
+//! put (the pass going round): a pair saved and given back around a delay is still an input.
 //!
 //! One symbolic run of the pass (`sym`) gives, for every register and fixed-address byte,
 //! where its value came from and each of its bits; from that:
@@ -28,7 +35,8 @@
 //!   (`ADD HL,rr`, kept in memory or in HL): half period `32768 x pass / step`.
 //! - **Flips**: every speaker `OUT` in a diamond's reload arm, each flipping one level all
 //!   channels share (Unison style, but only balanced: both arms of every diamond the same time):
-//!   half period `n x pass`, `n` the counter's reload.
+//!   half period `n x pass`, `n` the counter's reload. One channel alone may have a longer reload
+//!   arm: `n x pass + extra`.
 //!
 //! The pass time must be constant for Slots and Flips. The note's timing comes from the pass's
 //! one zero test (see [`DurationModel`]); the music player's evidence (`table_walk`) is an input
@@ -38,12 +46,14 @@
 //!
 //! An undecoded instruction, a computed jump in the pass, a self-modification other than of an
 //! immediate operand by the setup, any branch that is not one of the above, a call, return,
-//! `HALT`, stack operation or store through a pointer in the pass, unbalanced diamonds, an
+//! `HALT`, store through a pointer or stack operation in the pass (but matched `PUSH` and `POP`),
+//! unbalanced diamonds of several channels, more setup paths than it follows, an
 //! input the formulas cannot name, a setup path with a speaker `OUT` or that flips the level the
 //! pass carries (a hidden channel), other code inside the pass's address range, a routine longer
 //! than `SND_LEARNED_LEN_MAX`, more than three channels or 16 sites, and code or fixed-address
 //! data in the contended range (4000h-7FFFh): its delays are fractions of a T-state per
-//! instruction on average, which whole-T coefficients cannot carry.
+//! instruction on average, which whole-T coefficients cannot carry. Each refusal says which
+//! construct ([`Why`]) and where.
 
 mod cfg;
 mod shape;
@@ -201,6 +211,9 @@ pub struct EngineModel {
     pub wild: Vec<u16>,
     /// Offsets of the absolute addresses (words) inside the routine, ascending.
     pub reloc: Vec<u16>,
+    /// The pass pushes and pops: its times hold only while the stack lies in uncontended RAM
+    /// (the code reader cannot know where; the gates check what was heard).
+    pub stack: bool,
 }
 
 /// Why a routine gets no model; the address is where the reader stopped.
@@ -245,8 +258,13 @@ pub enum Why {
     LeavesWindow,
     /// The pass is longer than the reader follows.
     PassTooLong,
-    /// The pass runs some instruction twice, or does not hold the `OUT`.
+    /// The pass runs some instruction twice.
     PassShape,
+    /// The `OUT` is on a side of a branch in the loop that is not a channel's reload.
+    OutOffPath,
+    /// The loop the walk from the `OUT` comes round in does not hold the `OUT` (a loop inside
+    /// the pass that is not a delay the reader knows).
+    OutNotInLoop,
     /// A zero test's counter is written elsewhere in the pass.
     CounterReloaded,
     /// The pass's `OUT`s differ from one traversal to the next.
@@ -309,6 +327,8 @@ impl Why {
             Why::LeavesWindow => "leaves-window",
             Why::PassTooLong => "pass-too-long",
             Why::PassShape => "pass-shape",
+            Why::OutOffPath => "out-off-path",
+            Why::OutNotInLoop => "out-not-in-loop",
             Why::CounterReloaded => "counter-reloaded",
             Why::OutsVary => "outs-vary",
             Why::UnnamedInput => "unnamed-input",
@@ -350,6 +370,8 @@ impl Why {
             Why::LeavesWindow => "the sound loop leaves the code read",
             Why::PassTooLong => "a sound loop too long to follow",
             Why::PassShape => "a sound loop that runs code twice",
+            Why::OutOffPath => "an OUT on a side branch of the sound loop",
+            Why::OutNotInLoop => "an inner loop not understood",
             Why::CounterReloaded => "a note counter set inside the sound loop",
             Why::OutsVary => "OUTs that change from pass to pass",
             Why::UnnamedInput => "a count the formulas cannot name",

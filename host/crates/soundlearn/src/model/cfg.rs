@@ -137,6 +137,11 @@ impl Cfg {
 
 /// A counted delay loop: from `head` to the branch back at `branch`, `per * n + konst` T-states
 /// for a counter of `n` at entry (0: 256, or 65,536 for a pair), the counter 0 after it.
+///
+/// Nested (`outer`): that loop is the body of an outer one counted by a second register (the
+/// inner loop, then straight code to the outer counter's zero test back to `head`). The inner
+/// counter is 0 after its first run, so each later run counts it from 0 (256, or 65,536): the
+/// outer loop adds `per2 * n2 + konst2` T-states for an outer count of `n2`.
 #[derive(Clone, Debug)]
 pub(super) struct Delay {
     pub head: u16,
@@ -146,6 +151,8 @@ pub(super) struct Delay {
     pub per: i64,
     pub konst: i64,
     pub nodes: Vec<u16>,
+    /// The outer counter, `per2` and `konst2`.
+    pub outer: Option<(u8, i64, i64)>,
 }
 
 /// `DEC r` (one byte): r's register number.
@@ -300,12 +307,78 @@ impl Cfg {
                 per: body + i64::from(b.t_taken),
                 konst: i64::from(b.t) - i64::from(b.t_taken),
                 nodes,
+                outer: None,
             });
         }
         for d in found {
             if self.delays.contains_key(&d.head) || d.nodes.iter().any(|p| self.in_delay.contains_key(p)) {
                 continue;
             }
+            for &p in &d.nodes {
+                self.in_delay.insert(p, d.head);
+            }
+            self.delays.insert(d.head, d);
+        }
+        self.find_nested(peek);
+    }
+
+    /// Nested delays (see [`Delay`]): a delay loop, then straight code (no `OUT`, no store,
+    /// nothing writing either counter but the idiom) ending in another counter's zero idiom whose
+    /// branch goes back to the delay's head.
+    fn find_nested(&mut self, peek: &dyn Fn(u16) -> u8) {
+        let mut found = Vec::new();
+        for d in self.delays.values().filter(|d| d.outer.is_none()) {
+            let mut body: Vec<&Insn> = Vec::new();
+            let mut pc = d.exit;
+            let branch = loop {
+                if body.len() > 8 || self.in_delay.contains_key(&pc) {
+                    break None;
+                }
+                let Some(i) = self.n.get(&pc) else { break None };
+                match i.flow {
+                    Flow::Djnz(t) | Flow::CondJump(t) if t == d.head => break Some(i),
+                    _ => {}
+                }
+                match self.straight(peek, pc) {
+                    Some(i) => {
+                        body.push(i);
+                        pc = i.pc.wrapping_add(u16::from(i.len));
+                    }
+                    None => break None,
+                }
+            };
+            let Some(b) = branch else { continue };
+            // the outer counter's idiom: DJNZ, DEC r; JR/JP NZ, DEC rr; LD A,h; OR l; JR/JP NZ
+            let ops: Vec<u8> = body.iter().map(|i| peek(i.pc)).collect();
+            let n = ops.len();
+            let (counter, idiom) = match b.flow {
+                Flow::Djnz(_) => (2, 0),
+                _ if !matches!(peek(b.pc), 0x20 | 0xC2) => continue,
+                _ if n >= 1 && body[n - 1].len == 1 && dec8(ops[n - 1]).is_some() => (dec8(ops[n - 1]).unwrap_or(0), 1),
+                _ if n >= 3 && body[n - 3..].iter().all(|i| i.len == 1) => match (dec16(ops[n - 3]), ld_a(ops[n - 2]), or_r(ops[n - 1])) {
+                    (Some((pair, h, l)), Some(x), Some(y)) if (x, y) == (h, l) || (x, y) == (l, h) => (pair, 3),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            // two separate counters, neither written in the body but by the outer's idiom
+            if bits_of(counter) & bits_of(d.counter) != 0 || body[..n - idiom].iter().any(|i| i.writes & (bits_of(counter) | bits_of(d.counter)) != 0) {
+                continue;
+            }
+            let wraps: i64 = if d.counter >= 8 { 65536 } else { 256 };
+            let straight: i64 = body.iter().map(|i| i64::from(i.t)).sum();
+            let (taken, fall) = (i64::from(b.t_taken), i64::from(b.t));
+            let mut nodes = d.nodes.clone();
+            nodes.extend(body.iter().map(|i| i.pc));
+            nodes.push(b.pc);
+            found.push(Delay {
+                exit: b.pc.wrapping_add(u16::from(b.len)),
+                nodes,
+                outer: Some((counter, wraps * d.per + d.konst + straight + taken, fall - taken - wraps * d.per - d.konst)),
+                ..d.clone()
+            });
+        }
+        for d in found {
             for &p in &d.nodes {
                 self.in_delay.insert(p, d.head);
             }

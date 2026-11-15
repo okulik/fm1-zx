@@ -19,7 +19,7 @@
 //!   [`add_drum`]).
 
 use crate::entry::{encode_list, LearnedEntry};
-use crate::fit::{digest, period_ok, timing_prog, FitResult};
+use crate::fit::{check_fit_played, digest, period_ok, timing_prog, FitResult};
 use crate::listen::{Inputs, SiteHeard};
 use crate::model::EngineModel;
 use crate::prog::Op;
@@ -248,6 +248,9 @@ pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, 
         return no(format!("channel {c}'s formula does not fit a program"));
     }
     if heard.is_none() {
+        if model.stack {
+            return no("code only: the sound loop uses the stack, which may lie in contended RAM".into());
+        }
         if !model.table_walk {
             return no("code only: the notes are not read from a table".into());
         }
@@ -256,6 +259,14 @@ pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, 
             Some(d) if timing_prog(d).is_none() => no("code only: the note's timing does not fit a program".into()),
             Some(_) => Verdict::Learned { heard: false },
         };
+    }
+    // a stack in contended RAM slows the pushes and pops: the periods as played must fit too
+    if let Some(h) = heard.filter(|_| model.stack) {
+        match check_fit_played(model, h) {
+            Ok(p) if p.inliers >= INLIERS => {}
+            Ok(p) => return no(format!("fit as played (the stack's contention): {:.0}% inliers (at least {:.0}%)", 100.0 * p.inliers, 100.0 * INLIERS)),
+            Err(e) => return no(format!("fit as played: {e}")),
+        }
     }
     let Some(f) = fit else { return no("heard, but its periods do not fit the formula".into()) };
     if f.inliers < INLIERS {

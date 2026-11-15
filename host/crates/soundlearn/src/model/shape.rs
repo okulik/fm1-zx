@@ -5,7 +5,7 @@
 //! the family and channels it shows, their formulas, the note's timing and the table walk.
 
 use super::cfg::{bits_of, setup_paths, undecoded, Cfg, Item, SetupPath};
-use super::sym::{pair_index, slot_reg, Bit, Loc, Src, State, W};
+use super::sym::{pair_index, slot_reg, stack_pair, Bit, Loc, Pushed, Src, State, W};
 use super::{ChannelModel, Ctx, DurationModel, EngineModel, Family, Input, Refusal, Term, Why};
 use crate::z80::{Flow, Insn, MemRef, PortRef};
 use std::collections::BTreeSet;
@@ -72,6 +72,9 @@ struct Conv<'a> {
     /// Registers must keep their value over the whole pass (several sites, or the pass does
     /// not start at the one site).
     strict: bool,
+    /// Registers (decoder bits) that hold their value at the pass's start at every speaker `OUT`
+    /// and at its end (a pair saved and restored around a delay that counts it down).
+    restored: u32,
 }
 
 impl Conv<'_> {
@@ -90,7 +93,7 @@ impl Conv<'_> {
         })
     }
     fn kept(&self, reg: u8) -> bool {
-        !self.strict || self.pass_writes & bits_of(reg) == 0
+        !self.strict || self.pass_writes & bits_of(reg) == 0 || self.restored & bits_of(reg) == bits_of(reg)
     }
     /// A byte of the pass's symbolic run (registers as at the pass's start).
     fn byte(&self, s: Src) -> Option<Value> {
@@ -156,6 +159,8 @@ struct Out {
     bit: Bit,
     t: Sum,
     item: usize,
+    /// The registers (decoder bits) holding their value at the pass's start here.
+    kept: u32,
 }
 
 struct Arm {
@@ -190,8 +195,8 @@ struct DelayRun {
 }
 
 /// Bit 4 of what `i` writes to the speaker, if it is a speaker `OUT` (an even port).
-fn speaker(st: &State, i: &Insn, ctx: &Ctx, out: u16) -> Result<Option<Bit>, Refusal> {
-    let refuse = |pc: u16| if pc == out { Refusal::NotSpeaker(pc) } else { Refusal::Unmodelled(Why::PortUnknown, pc) };
+fn speaker(st: &State, i: &Insn, ctx: &Ctx) -> Result<Option<Bit>, Refusal> {
+    let refuse = |pc: u16| Refusal::Unmodelled(Why::PortUnknown, pc);
     match i.port_out {
         None => Ok(None),
         Some(PortRef::Imm(n)) => Ok((n & 1 == 0).then_some(st.v[super::sym::A].bits[4])),
@@ -242,6 +247,25 @@ fn toggles(levels: &[Bit]) -> bool {
         };
         levels.windows(2).all(|w| ev(&w[0]) != ev(&w[1]))
     })
+}
+
+/// A `PUSH` (true) or `POP` (false) of a pair, and the pair ([`stack_pair`]).
+fn push_pop(peek: &dyn Fn(u16) -> u8, i: &Insn) -> Option<(bool, u8)> {
+    let (b0, b1) = (peek(i.pc), peek(i.pc.wrapping_add(1)));
+    let (idx, op) = match b0 {
+        0xDD if i.len == 2 => (Some(11), b1),
+        0xFD if i.len == 2 => (Some(12), b1),
+        _ if i.len == 1 => (None, b0),
+        _ => return None,
+    };
+    if idx.is_some() && op & 0xEF != 0xE1 && op & 0xEF != 0xE5 {
+        return None;
+    }
+    match op {
+        0xC5 | 0xD5 | 0xE5 | 0xF5 => Some((true, stack_pair(op, idx))),
+        0xC1 | 0xD1 | 0xE1 | 0xF1 => Some((false, stack_pair(op, idx))),
+        _ => None,
+    }
 }
 
 /// Whether `i` writes place `loc`.
@@ -330,12 +354,11 @@ struct Setup<'a> {
     test: usize,
     /// The level the Flips channels share.
     shared: &'a [Loc],
-    out: u16,
 }
 
 impl Setup<'_> {
     fn run(&self, items: &[Item], st: State) -> Option<Run> {
-        run_pass(self.cfg, self.ctx, self.conv, items, st, self.out, false).ok()
+        run_pass(self.cfg, self.ctx, self.conv, items, st, false).ok()
     }
 
     /// Whether path `p` has no speaker `OUT` and leaves the level as the pass would: from the
@@ -402,10 +425,10 @@ struct Run {
 /// Runs the pass from `st`. The first traversal names the delay loops' counts (from registers
 /// as at the pass's start); later ones only carry on (a port not known yet, in the first, is
 /// taken as a speaker's).
-fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, out: u16, first: bool) -> Result<Run, Refusal> {
+fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, first: bool) -> Result<Run, Refusal> {
     let un = Refusal::Unmodelled;
     let mut r = Run { outs: Vec::new(), delays: Vec::new(), diamonds: Vec::new(), t: Sum::default(), end: State::entry() };
-    let spk = |s: &State, i: &Insn| match speaker(s, i, ctx, out) {
+    let spk = |s: &State, i: &Insn| match speaker(s, i, ctx) {
         Err(_) if first => Ok(Some(Bit::X)),
         x => x,
     };
@@ -414,7 +437,7 @@ fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, ou
             Item::Op(pc) | Item::Test { pc, .. } => {
                 let i = &cfg.n[pc];
                 if let Some(bit) = spk(&st, i)? {
-                    r.outs.push(Out { pc: *pc, bit, t: r.t.clone(), item: k });
+                    r.outs.push(Out { pc: *pc, bit, t: r.t.clone(), item: k, kept: st.unchanged() });
                 }
                 st.step(i, ctx);
                 r.t.k += match it {
@@ -424,17 +447,22 @@ fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, ou
             }
             Item::Delay(h) => {
                 let d = &cfg.delays[h];
+                let counters = [Some((d.counter, d.per, d.konst)), d.outer];
                 if first {
-                    let wide = d.counter >= 8;
-                    let value = if wide { conv.word(st.word(d.counter)) } else { conv.byte(st.v[d.counter as usize].src) };
-                    let value = value.ok_or(un(Why::UnnamedInput, *h))?;
-                    r.t.add_count(d.per, d.konst, value, wide);
-                    r.delays.push(DelayRun { counter: d.counter, value, seg: r.outs.len() });
+                    for (counter, per, konst) in counters.into_iter().flatten() {
+                        let wide = counter >= 8;
+                        let value = if wide { conv.word(st.word(counter)) } else { conv.byte(st.v[counter as usize].src) };
+                        let value = value.ok_or(un(Why::UnnamedInput, *h))?;
+                        r.t.add_count(per, konst, value, wide);
+                        r.delays.push(DelayRun { counter, value, seg: r.outs.len() });
+                    }
                 }
                 for p in &d.nodes {
                     st.clobber(&cfg.n[p]);
                 }
-                st.zero(d.counter);
+                for (counter, _, _) in counters.into_iter().flatten() {
+                    st.zero(counter);
+                }
             }
             Item::Diamond { pc, zero_taken, taken, fall, counter, .. } => {
                 let b = &cfg.n[pc];
@@ -493,7 +521,10 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         }
     }
     let distinct: BTreeSet<u16> = all.iter().copied().collect();
-    if distinct.len() != all.len() || !distinct.contains(&out) {
+    if !distinct.contains(&out) {
+        return Err(un(Why::OutNotInLoop, out));
+    }
+    if distinct.len() != all.len() {
         return Err(un(Why::PassShape, out));
     }
     for &pc in &all {
@@ -504,15 +535,42 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         if contended(pc, i.len.into()) || mem_contended {
             return Err(un(Why::Contended, pc));
         }
-        // stores through pointers and the stack: not modelled
-        let stack = i.reads & 1 << 13 != 0 || i.writes & 1 << 13 != 0;
-        if stack || matches!(i.mem_write, Some(MemRef::Sp)) {
+        // stores through pointers and the stack: not modelled, but for PUSH and POP in the pass's
+        // straight code (matched below)
+        let stack = i.reads & 1 << 13 != 0 || i.writes & 1 << 13 != 0 || matches!(i.mem_write, Some(MemRef::Sp));
+        if stack && (push_pop(peek, i).is_none() || inside.contains(&pc)) {
             return Err(un(Why::StackOp, pc));
         }
         if matches!(i.mem_write, Some(MemRef::Reg16(_) | MemRef::Indexed(..))) {
             return Err(un(Why::PointerStore, pc));
         }
     }
+
+    // PUSH and POP in the pass: each POP takes what a PUSH of the same pair put, the pass going
+    // round (a POP before any PUSH takes what the end of the pass pushes); the pass starts with
+    // those pushed, as it leaves them (checked after the runs)
+    let mut open: Vec<u8> = Vec::new();
+    let mut leading: Vec<u8> = Vec::new();
+    for it in &items {
+        let (Item::Op(pc) | Item::Test { pc, .. }) = it else { continue };
+        match push_pop(peek, &cfg.n[pc]) {
+            Some((true, p)) => open.push(p),
+            Some((false, p)) => match open.pop() {
+                Some(q) if q == p => {}
+                Some(_) => return Err(un(Why::StackOp, *pc)),
+                None => leading.push(p),
+            },
+            None => {}
+        }
+    }
+    if leading.iter().rev().ne(open.iter()) {
+        return Err(un(Why::StackOp, out));
+    }
+    let uses_stack = !open.is_empty() || all.iter().any(|pc| push_pop(peek, &cfg.n[pc]).is_some());
+    let seed: Vec<Pushed> = {
+        let entry = State::entry();
+        open.iter().map(|&p| entry.pushed(p)).collect()
+    };
 
     // the zero tests leaving the pass, with their counters (a pair, when the test's exit is its
     // carry into the high half: the carry's instructions then belong to the routine, not to a
@@ -621,33 +679,49 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         pass_writes |= i.writes;
         pass_mem.extend(abs_writes(peek, i));
     }
-    let conv = Conv {
+    let mut start = State::entry();
+    start.stack = seed.clone();
+    let mut conv = Conv {
         ctx: &ctx,
         anchor,
         code_end,
         pass_mem,
         pass_writes,
-        strict: !(n_outs == 1 && matches!(items.first(), Some(Item::Op(pc)) if *pc == out)),
+        strict: false,
+        restored: 0,
     };
+    // the registers the pass gives back: from a run that takes every register as kept
+    if let Ok(r) = run_pass(cfg, &ctx, &conv, &items, start.clone(), true) {
+        if r.diamonds.is_empty() && !r.end.stack_lost {
+            conv.restored = r.outs.iter().fold(r.end.unchanged(), |m, o| m & o.kept);
+        }
+    }
+    conv.strict = !(n_outs == 1 && matches!(items.first(), Some(Item::Op(pc)) if *pc == out));
+    let conv = conv;
     // values from the first traversal (registers as at the pass's start); bits and ports from
     // later ones, when what the pass's tail computes is in place
-    let run = |st: State, first: bool| run_pass(cfg, &ctx, &conv, &items, st, out, first);
-    let r0 = run(State::entry(), true)?;
+    let run = |st: State, first: bool| run_pass(cfg, &ctx, &conv, &items, st, first);
+    let r0 = run(start, true)?;
     let r1 = run(r0.end.clone(), false)?;
     let r2 = run(r1.end.clone(), false)?;
     let r3 = run(r2.end.clone(), false)?;
+    // the pass leaves on the stack what it started with: the values it pushes at its end are
+    // those its POPs at the start take
+    if [&r0, &r1, &r2, &r3].iter().any(|r| r.end.stack_lost) || r0.end.stack.iter().map(|p| (p.hi.src, p.lo.src, p.base, p.off)).ne(seed.iter().map(|p| (p.hi.src, p.lo.src, p.base, p.off))) {
+        return Err(un(Why::StackOp, out));
+    }
     let pcs = |r: &Run| r.outs.iter().map(|o| o.pc).collect::<Vec<_>>();
     if pcs(&r0) != pcs(&r1) || pcs(&r1) != pcs(&r2) || pcs(&r2) != pcs(&r3) {
         return Err(un(Why::OutsVary, out));
     }
     let t = r0.t.clone();
-    let outs: Vec<Out> = r1.outs.iter().zip(&r0.outs).map(|(o, o0)| Out { pc: o.pc, bit: o.bit, t: o0.t.clone(), item: o.item }).collect();
+    let outs: Vec<Out> = r1.outs.iter().zip(&r0.outs).map(|(o, o0)| Out { pc: o.pc, bit: o.bit, t: o0.t.clone(), item: o.item, kept: o0.kept }).collect();
     let levels: Vec<Bit> = [&r1, &r2, &r3].iter().flat_map(|r| r.outs.iter().map(|o| o.bit)).collect();
     let (delays, diamonds) = (&r0.delays, &r1.diamonds);
     // ---- the family and its channels ----
     let in_pass = |site: u16| outs.iter().any(|o| o.pc == site) || diamonds.iter().any(|d| d.zero.outs.iter().any(|o| o.0 == site));
     if !in_pass(out) {
-        return Err(Refusal::NotSpeaker(out));
+        return Err(un(Why::OutOffPath, out));
     }
     let (family, channels, pass_t, pos, flips) = if !diamonds.is_empty() {
         let channels = flips_channels(cfg, peek, &conv, &all, &outs, diamonds, &r0.diamonds, &t, out)?;
@@ -673,7 +747,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         })
         .collect();
     for (test, ps) in tests.iter().zip(&paths) {
-        let setup = Setup { cfg, ctx: &ctx, conv: &conv, items: &items, start: &r0.end, test: test.0, shared: &shared, out };
+        let setup = Setup { cfg, ctx: &ctx, conv: &conv, items: &items, start: &r0.end, test: test.0, shared: &shared };
         for p in ps {
             setup.keeps_level(p).map_err(|w| un(w, test.3))?;
         }
@@ -741,6 +815,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         table_walk,
         wild: ctx.wild.iter().map(|a| a - anchor).collect(),
         reloc,
+        stack: uses_stack,
     })
 }
 

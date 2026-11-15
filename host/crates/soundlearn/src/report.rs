@@ -68,7 +68,7 @@ pub fn refusal(r: &Refusal) -> String {
         Refusal::SelfModUnmodelled(a) => format!("code that rewrites itself at {a:04X}h"),
         Refusal::Unmodelled(w, a) => format!("{} at {a:04X}h", w.text()),
         Refusal::Ambiguous(a) => format!("one channel or two in unison, not settled by the code at {a:04X}h"),
-        Refusal::NotSpeaker(a) => format!("not a speaker OUT at {a:04X}h"),
+        Refusal::NotSpeaker(a) => format!("not a speaker OUT in the memory read at {a:04X}h"),
     }
 }
 

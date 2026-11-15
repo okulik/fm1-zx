@@ -12,7 +12,7 @@
 //!    start was read from another site. A site is read in the memory at the end of the run, and
 //!    in the memory at frame 0 if that fails and the code there differs (a site found only at
 //!    frame 0: there only).
-//! 4. **Judge** each routine ([`judge`]): a routine with a heard site is fitted to that site (the
+//! 4. **Judge** each routine ([`judge`](crate::gate::judge)): a routine with a heard site is fitted to that site (the
 //!    one heard in the most frames) and, if the fit's gates pass, replayed through method B with
 //!    its entry. A learned heard routine then gets the drums the replay shows
 //!    ([`drum_ok`], [`add_drum`]), each kept only if the routine, replayed with it, still passes.
@@ -26,7 +26,7 @@ use crate::entry::{encode_list, LearnedEntry};
 use crate::fit::{check_fit, to_entry, FitResult};
 use crate::gate::{ReplayStats, add_drum, builtin_at, drum_ok, judge_table, replay_table, Verdict, BUILTIN, NOT_REPLAYED};
 use crate::listen::{listen, Inputs, SiteHeard, LISTEN_FRAMES};
-use crate::model::{read_engine, scan_out_sites, EngineModel};
+use crate::model::{read_engine, scan_out_sites, EngineModel, Refusal};
 use crate::report::{self, Routine};
 use std::collections::{BTreeSet, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -101,6 +101,7 @@ fn same_code(a: &Machine, b: &Machine, pc: u16) -> bool {
 /// that gives one (a later one only where its code differs). Err: the first refusal.
 fn read_site<'m>(pc: u16, mems: &[&'m Machine], builtins: bool) -> Result<(EngineModel, &'m Machine), String> {
     let mut first = None;
+    let mut not_out = None;
     for (i, &m) in mems.iter().enumerate() {
         if i > 0 && same_code(mems[0], m, pc) {
             continue;
@@ -111,12 +112,16 @@ fn read_site<'m>(pc: u16, mems: &[&'m Machine], builtins: bool) -> Result<(Engin
         }
         match read_engine(|a| m.peek(a), pc) {
             Ok(model) => return Ok((model, m)),
+            // the site is not an OUT in this memory (its code changed): the other's reason counts
+            Err(r @ Refusal::NotSpeaker(_)) => {
+                not_out.get_or_insert_with(|| report::refusal(&r));
+            }
             Err(r) => {
                 first.get_or_insert_with(|| report::refusal(&r));
             }
         }
     }
-    Err(first.unwrap_or_else(|| "not read".into()))
+    Err(first.or(not_out).unwrap_or_else(|| "not read".into()))
 }
 
 /// One routine's outcome: its report and, if learned, its entry and whether it was heard.
