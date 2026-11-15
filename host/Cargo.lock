@@ -142,6 +142,7 @@ dependencies = [
  "music",
  "object",
  "png",
+ "soundlearn",
  "zx-sys",
 ]
 

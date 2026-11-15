@@ -18,6 +18,7 @@ png = "0.18"
 
 [dev-dependencies]
 music = { path = "../music" }
+soundlearn = { path = "../soundlearn" }
 zx-sys = { path = "../zx-sys" }
 
 [lints]

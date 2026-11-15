@@ -18,10 +18,18 @@
 //! `sites-var.sna` it changes every frame (B looks every one up, every frame).
 //! `Machine::cost_of` counts at the caller's interrupt depth, so the audio ISR (`fm1_alnk0_irq`,
 //! measured on its own) and the key-scan timer interrupt are not in it.
+//!
+//! Learned entries (`cpu_per_frame_with_learned_entries`), in FM: engines, Crop and Border: the
+//! personal pack of `tune.sna` (built as `tools/make-personal-pack` builds it, the tune's
+//! learned entry in its sound section) while the tune plays, its learned entry claiming it; and
+//! the decoder's worst legitimate list (8 entries matching `SND_LEARNED_WORK_MAX` site-signature
+//! bytes, each a relocated word every 2 bytes, never matching) on `sites.sna` and
+//! `sites-var.sna`, whose four OUT sites no entry knows: method B tries every entry's every site
+//! at them, every frame for `sites-var.sna`.
 
 use emu_gate::budgets::*;
 use emu_gate::fw::{build_dir, BootOpt, Firmware, APP_SLOT};
-use fmzx_pack::testprogs::{noise_sna, out_sites_sna};
+use fmzx_pack::testprogs::{noise_sna, out_sites_sna, tune_sna};
 use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
@@ -223,4 +231,144 @@ fn cpu_per_frame_and_audio_isr() {
     for (k, &(same, var)) in sites.iter().enumerate() {
         assert!(same * 2 < var, "{}: four unknown OUT sites cost the mixer {same} with the code unchanged, {var} changing", run_name(RUNS[k]));
     }
+}
+
+/// The worst frame the Border and scroll measurements gave before learned entries (Border with
+/// scroll.sna): a learned entry playing must cost no more.
+const BORDER_SCROLL_WORST: u64 = 2_500_000;
+/// The audio out's rate: 750,000 / 17 frames a second.
+const RATE: (u32, u32) = (750_000, 17);
+
+/// The personal pack of `tune.sna` alone, as `tools/make-personal-pack` builds it (its learned
+/// list in the sound section), in the build directory.
+fn tune_personal_pack() -> Vec<u8> {
+    let dir = build_dir().join("learned-pack");
+    let (games, out) = (dir.join("games"), dir.join("out"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&games).expect("create the learned pack's folder");
+    std::fs::write(games.join("tune.sna"), tune_sna()).expect("write tune.sna");
+    let r = fmzx_pack::personal::run(&games, &out).expect("the personal pack of tune.sna");
+    assert_eq!(r.sound, ["tune: music learned (1 routine, heard, 1 channel)"], "{r:?}");
+    std::fs::read(out.join("games.bin")).expect("games.bin")
+}
+
+/// The decoder's worst legitimate list for the matching: 8 entries of `SND_LEARNED_LEN_MAX`
+/// bytes and one site each (`SND_LEARNED_WORK_MAX` in all), a relocated word every 2 bytes (two
+/// reads a byte), half with their site first and half last (the window method B hashes is two
+/// signatures long), and digests no code has.
+fn stress_list() -> Vec<u8> {
+    use soundlearn::{encode_list, LearnedEntry, Op};
+    let len = zx_sys::SND_LEARNED_LEN_MAX;
+    let entries: Vec<LearnedEntry> = (0..8u16)
+        .map(|k| LearnedEntry {
+            kind: 0,
+            digest: 0x5EED_0000_0000_0000 | u64::from(k),
+            len,
+            wild: vec![],
+            reloc: (0..255).map(|i| 2 * i).collect(),
+            sites: vec![(if k % 2 == 0 { 0 } else { len - 1 }, zx_sys::SND_SITE_TONAL, 0)],
+            pass: 0,
+            pos: vec![0],
+            flips: false,
+            drum: 0,
+            stale: None,
+            level: vec![200],
+            progs: vec![vec![Op::K(300)]],
+            timing: None,
+        })
+        .collect();
+    assert_eq!(entries.iter().map(LearnedEntry::work).sum::<usize>(), zx_sys::SND_LEARNED_WORK_MAX);
+    let list = encode_list(&entries);
+    let table = zx_sys::SndEngines::with_learned(&list).expect("the decoder takes the stress list");
+    assert_eq!(table.entries().len(), zx_sys::SndEngines::new().entries().len() + 8);
+    list
+}
+
+/// `sites.sna` and `sites-var.sna` in a pack of their own, each with the stress list. Ids in
+/// pack order.
+fn stress_pack() -> (Vec<u8>, [&'static str; 2]) {
+    let dir = build_dir().join("stress-pack");
+    std::fs::create_dir_all(&dir).expect("create the stress pack's folder");
+    let progs = [("sites", "Four OUT sites", out_sites_sna(false)), ("sites-var", "Four OUT sites, changing", out_sites_sna(true))];
+    let mut toml = String::new();
+    for (id, name, sna) in &progs {
+        std::fs::write(dir.join(format!("{id}.sna")), sna).expect("write a test program");
+        toml += &format!("[[game]]\nid = \"{id}\"\nname = \"{name}\"\nfile = \"{id}.sna\"\n");
+    }
+    std::fs::write(dir.join("games.toml"), toml).expect("write the stress manifest");
+    let mut pack = fmzx_pack::pack::build_pack(&dir.join("games.toml")).expect("build the stress pack");
+    let list = stress_list();
+    fmzx_pack::pack::attach_sound(&mut pack, &[Some(list.clone()), Some(list)]).expect("attach the stress lists");
+    (pack, progs.map(|p| p.0))
+}
+
+/// Frames of `frames` (from the tune's start) in which the host mixer, in FM: engines with the
+/// tune's learned list, plays FM: the learned entry claims the tune then (no built-in matches it).
+fn tune_fm_frames(list: &[u8], frames: std::ops::Range<usize>) -> usize {
+    let mut zx = zx_sys::Machine::new();
+    zx.load_sna(&tune_sna()).expect("loads");
+    let mut beeper = zx_sys::Beeper::new(RATE.0, RATE.1);
+    let mut mix = zx_sys::SndMixer::new(RATE.0, RATE.1);
+    mix.set_learned(list).expect("the mixer takes the learned list");
+    let mut on = 0;
+    for i in 0..frames.end {
+        zx.run_frame();
+        let level = zx.edges_start_level();
+        beeper.set_level(level);
+        let b = beeper.render(zx.edges());
+        mix.frame(zx_sys::SND_MODE_FM_B, Some(&zx), zx.edges(), level, &b);
+        on += usize::from(frames.contains(&i) && mix.fm_on());
+    }
+    on
+}
+
+#[test]
+fn cpu_per_frame_with_learned_entries() {
+    let fw = firmware();
+    let tune_pack = tune_personal_pack();
+    let list = fmzx_pack::pack::sound_list(&tune_pack, 0).expect("the tune's learned list").to_vec();
+    assert_eq!(list[0], 1, "one learned entry");
+    // the measured window, in the tune's frames: its learned entry plays it throughout
+    let window = (SETTLE_MS / 20) as usize..((SETTLE_MS + 10_000) / 20) as usize;
+    let on = tune_fm_frames(&list, window.clone());
+    println!("tune: the learned entry plays FM in {on} of the window's {} frames (host)", window.len());
+    assert!(on * 10 >= window.len() * 9, "the learned entry plays the tune in only {on} of {} frames", window.len());
+
+    let (stress, stress_ids) = stress_pack();
+    let (fw_tune, fw_stress, fw_fix) = (fw.with_pack(&tune_pack), fw.with_pack(&stress), fw.with_pack(&fixture_pack().0));
+    // (name, firmware, game index): sites-var without a learned list too, for the comparison
+    let mut games: Vec<(String, &Firmware, u32)> = vec![("tune (learned)".into(), &fw_tune, 0)];
+    games.extend(stress_ids.iter().enumerate().map(|(i, id)| (format!("{id} (stress list)"), &fw_stress, i as u32)));
+    games.push(("sites-var (no list)".into(), &fw_fix, 2));
+    let opt = BootOpt { rgb565: false, divider: 1 };
+    let screens = [SCREEN_CROP, SCREEN_BORDER];
+    let runs: Vec<(String, u32, Measure)> = std::thread::scope(|s| {
+        let hs: Vec<_> = screens
+            .iter()
+            .flat_map(|&screen| games.iter().map(move |g| (screen, g)))
+            .map(|(screen, (name, fw, index))| {
+                s.spawn(move || (name.clone(), screen, measure_in(fw, opt, *index, &[], SETTLE_MS, 10_000, SOUND_FM_B, screen)))
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().expect("game run")).collect()
+    });
+    let (mut tune_worst, mut stress_worst) = (0u64, 0u64);
+    for (name, screen, r) in &runs {
+        let mode = run_name((SOUND_FM_B, *screen));
+        let (max, avg) = (*r.cpu.iter().max().unwrap_or(&0), r.cpu.iter().sum::<u64>() / r.cpu.len().max(1) as u64);
+        let snd_max = *r.snd.iter().max().unwrap_or(&0);
+        println!("{name} ({mode}): {} frames, CPU per frame max {max} avg {avg}, of it the mixer max {snd_max}", r.frames);
+        assert_eq!(r.resets, 0, "{name} ({mode}): the firmware reset");
+        assert_eq!((r.sound, r.screen), (SOUND_FM_B, *screen), "{name} ({mode}): the Sound and Screen choices");
+        assert!(r.frames.abs_diff(500) <= 2, "{name} ({mode}): {} frames in 10 s", r.frames);
+        assert!(r.cpu.len() + 2 >= r.frames as usize && r.snd.len() + 2 >= r.frames as usize, "{name} ({mode}): frames missed");
+        assert!(max <= CPU_PER_FRAME, "{name} ({mode}): {max} > {CPU_PER_FRAME}");
+        if name.starts_with("tune") {
+            tune_worst = tune_worst.max(max);
+        } else if name.contains("stress") {
+            stress_worst = stress_worst.max(max);
+        }
+    }
+    println!("learned entry playing: worst frame {tune_worst}; the stress list: worst frame {stress_worst} (cap {CPU_PER_FRAME}, Border with scroll {BORDER_SCROLL_WORST})");
+    assert!(tune_worst < BORDER_SCROLL_WORST, "the tune with its learned entry: worst frame {tune_worst}, over {BORDER_SCROLL_WORST}");
 }
