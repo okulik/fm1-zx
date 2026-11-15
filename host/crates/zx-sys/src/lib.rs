@@ -186,6 +186,17 @@ impl Machine {
         out
     }
 
+    /// LCD row `row` (0-239) in screen mode `mode` (`PIX_CROP` ...) as panel bytes of format
+    /// `fmt` (`PixFormat::raw`); `crop_x` is used by Crop only.
+    pub fn compose_row_mode(&self, row: usize, mode: u32, crop_x: usize, fmt: i32) -> Vec<u8> {
+        let mut out = vec![0u8; sys::LCD_MAX_ROW_BYTES as usize];
+        // SAFETY: `raw` was initialised by zx_init; `out` holds the longest packed row.
+        unsafe { sys::pix_compose_row(&*self.raw, row as u32, mode, crop_x as u32, fmt, out.as_mut_ptr()) };
+        // SAFETY: pure function.
+        out.truncate(unsafe { sys::pix_row_bytes(fmt) } as usize);
+        out
+    }
+
     /// Loads a 48K `.sna` snapshot; `Err` carries the C error code and leaves
     /// the machine unchanged.
     pub fn load_sna(&mut self, data: &[u8]) -> Result<(), i32> {
@@ -932,7 +943,8 @@ pub enum PixFormat {
 }
 
 impl PixFormat {
-    fn raw(self) -> i32 {
+    /// The C format code (`PIX_RGB444`, `PIX_RGB565`).
+    pub fn raw(self) -> i32 {
         match self {
             PixFormat::Rgb444 => sys::PIX_RGB444 as i32,
             PixFormat::Rgb565 => sys::PIX_RGB565 as i32,
@@ -952,6 +964,28 @@ impl PixFormat {
         unsafe { sys::pix_pack(self.raw(), idx.as_ptr(), out.as_mut_ptr()) };
         out
     }
+}
+
+/// Screen modes (`pix_compose_row`).
+pub const PIX_CROP: u32 = sys::PIX_CROP;
+pub const PIX_FIT: u32 = sys::PIX_FIT;
+pub const PIX_FIT_SMOOTH: u32 = sys::PIX_FIT_SMOOTH;
+pub const PIX_BORDER: u32 = sys::PIX_BORDER;
+
+/// The LCD rows (bit `r & 7` of byte `r >> 3`) whose bytes in `mode` depend on paper line `y`.
+pub fn pix_mark_paper_line(mode: u32, y: usize) -> [u8; 30] {
+    let mut d = [0u8; 30];
+    // SAFETY: `d` is LCD_ROWS / 8 bytes.
+    unsafe { sys::pix_mark_paper_line(mode, y as u32, d.as_mut_ptr()) };
+    d
+}
+
+/// The LCD rows whose bytes in `mode` depend on the border colour of frame line `line`.
+pub fn pix_mark_border_line(mode: u32, line: usize) -> [u8; 30] {
+    let mut d = [0u8; 30];
+    // SAFETY: `d` is LCD_ROWS / 8 bytes.
+    unsafe { sys::pix_mark_border_line(mode, line as u32, d.as_mut_ptr()) };
+    d
 }
 
 /// `150000 / (divider + 1)` bytes per frame.
