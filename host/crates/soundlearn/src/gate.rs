@@ -5,7 +5,8 @@
 //! runs the game again through method B with the candidate entry ([`replay`]).
 //!
 //! - **Built-in entries win:** a routine the built-in table matches gets no entry
-//!   ([`builtin_at`] before the code is read; the replay's built-in claims after).
+//!   (an anchor or site of the routine inside a built-in's matching signature, [`builtin_at`];
+//!   or the replay's built-in claims). [`builtin_at`] also serves a site the code reader refuses.
 //! - **Heard:** the fit shows at least 85% inliers, 3 distinct notes, a span of half a
 //!   semitone and nothing above 5 kHz; the replay claims at least 90% of the frames the
 //!   routine's sites sound in; and the music gate passes over the claimed frames: at least 60% of
@@ -14,7 +15,7 @@
 //! - **Code-only** (never heard): the notes come from a table walked by a pointer, the note's
 //!   timing is known, and every formula fits a program.
 //! - **Drums:** a heard site of another routine whose output does not fit (noise) and that sounds
-//!   only between the claimed notes of an entry becomes that entry's drum site ([`drum_ok`],
+//!   only between the claimed notes of an entry (outside its routine) becomes that entry's drum site ([`drum_ok`],
 //!   [`add_drum`]).
 
 use crate::entry::{encode_list, LearnedEntry};
@@ -75,12 +76,12 @@ pub enum Verdict {
     Refused(String),
 }
 
-/// The anchor of the built-in entry whose signature matches in `m` with one of its sites at
-/// `pc`, if any.
+/// The anchor of a built-in entry whose signature matches in `m` with `pc` inside it (from its
+/// anchor to its last byte), if any.
 pub fn builtin_at(m: &Machine, pc: u16) -> Option<u16> {
     let b = SndEngines::new();
     b.entries().iter().enumerate().find_map(|(i, e)| {
-        e.sites.iter().map(|s| pc.wrapping_sub(s.off)).find(|&anchor| b.digest(m, i, anchor) == e.digest)
+        (0..e.len).map(|back| pc.wrapping_sub(back)).find(|&anchor| b.digest(m, i, anchor) == e.digest)
     })
 }
 
@@ -212,11 +213,15 @@ fn music_gate(notes: &[Option<[u32; SND_TONAL]>]) -> bool {
     held * 10 >= total * HELD_TENTHS && recurs && !sweep
 }
 
-/// The verdict on `model` (see the module docs): `heard` the site it was heard at (None: never
-/// heard, the code-only gates), `replay` and `fit` what they showed.
-pub fn judge(model: &EngineModel, heard: Option<&SiteHeard>, replay: Option<&ReplayStats>, fit: Option<&FitResult>) -> Verdict {
+/// The verdict on `model` (see the module docs), read from `m`'s memory: `heard` the site it was
+/// heard at (None: never heard, the code-only gates), `replay` and `fit` what they showed. A
+/// routine with its anchor or a site inside a built-in entry's matching signature in `m`
+/// ([`builtin_at`]), or whose replay the built-in table claims, is refused [`BUILTIN`] on either
+/// path.
+pub fn judge(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, replay: Option<&ReplayStats>, fit: Option<&FitResult>) -> Verdict {
     let no = |why: String| Verdict::Refused(why);
-    if replay.is_some_and(|r| r.builtin_claimed > 0) {
+    let mut pcs = model.channels.iter().flat_map(|c| c.sites.iter().copied()).chain([model.anchor]);
+    if replay.is_some_and(|r| r.builtin_claimed > 0) || pcs.any(|pc| builtin_at(m, pc).is_some()) {
         return no(BUILTIN.into());
     }
     if let Some(c) = model.channels.iter().position(|ch| !period_ok(ch)) {
@@ -266,10 +271,12 @@ pub fn drum_ok(other: &OtherSite, fit: Option<&FitResult>) -> bool {
 /// `entry` with a drum site at `pc` (another routine's speaker `OUT`), its strength 200: the
 /// signature grows to cover it (from an anchor moved back to it, if it lies before), so the
 /// whole span between must stay as it is now in `peek`. None if the span would exceed
-/// `SND_LEARNED_LEN_MAX` or the sites `SND_LEARNED_SITES_MAX`. A grown signature holds code the
+/// `SND_LEARNED_LEN_MAX` or the sites `SND_LEARNED_SITES_MAX`, or if the drum's `OUT` lies in
+/// the entry's own routine (a drum is another routine's). A grown signature holds code the
 /// reader never read: the caller replays the entry with the drum before keeping it.
 pub fn add_drum(entry: &LearnedEntry, anchor: u16, pc: u16, peek: impl Fn(u16) -> u8) -> Option<LearnedEntry> {
-    if entry.sites.len() >= SND_LEARNED_SITES_MAX {
+    let inside = |a: u16| a.wrapping_sub(anchor) < entry.len;
+    if entry.sites.len() >= SND_LEARNED_SITES_MAX || inside(pc) || inside(pc.wrapping_add(1)) {
         return None;
     }
     // the new anchor and how far the old offsets move

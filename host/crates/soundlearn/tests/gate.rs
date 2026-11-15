@@ -10,7 +10,7 @@ mod fixtures;
 
 use soundlearn::fit::{check_fit, to_entry};
 use soundlearn::gate::{add_drum, builtin_at, drum_ok, judge, replay, replay_with_others, OtherSite, ReplayStats, Verdict, BUILTIN};
-use soundlearn::listen::{listen, Inputs};
+use soundlearn::listen::{listen, Inputs, PeriodSample, SiteHeard, Snapshot};
 use soundlearn::model::{read_engine, EngineModel, Term};
 use soundlearn::{encode_list, eval_prog, LearnedEntry};
 use zx_sys::{Machine, SndEngines, SND_SITE_DRUM, SND_SITE_TONAL, SND_TONAL};
@@ -42,7 +42,7 @@ fn learn_fixture(sna: &[u8], frames: u32) -> (EngineModel, LearnedEntry, ReplayS
     let fit = check_fit(&model, site);
     let entry = to_entry(&model, |a| m.peek(a));
     let stats = replay(&load, &inputs, frames, &entry);
-    let verdict = judge(&model, Some(site), Some(&stats), fit.as_ref().ok());
+    let verdict = judge(&model, &m, Some(site), Some(&stats), fit.as_ref().ok());
     eprintln!("fit {fit:?}\nreplay {stats:?}\nverdict {verdict:?}");
     (model, entry, stats, verdict)
 }
@@ -122,7 +122,7 @@ fn learns_other_families() {
             let model = model_at(&m, site.pc);
             let fit = check_fit(&model, site);
             let stats = replay(&load, &inputs, 300, &to_entry(&model, |a| m.peek(a)));
-            let verdict = judge(&model, Some(site), Some(&stats), fit.as_ref().ok());
+            let verdict = judge(&model, &m, Some(site), Some(&stats), fit.as_ref().ok());
             eprintln!("{} {:04X}: {fit:?} {stats:?} {verdict:?}", fx.name, site.pc);
             if learned {
                 assert!(fit.as_ref().is_ok_and(|f| f.inliers > 0.95), "{}: {fit:?}", fx.name);
@@ -139,7 +139,7 @@ fn refuses_sweep() {
     let fx = fixtures::sweep();
     let (model, _, _, verdict) = learn_fixture(&fx.sna, 300);
     assert!(matches!(verdict, Verdict::Refused(_)), "heard: {verdict:?}");
-    let code_only = judge(&model, None, None, None);
+    let code_only = judge(&model, &fixtures::machine(&fx.sna), None, None, None);
     assert!(matches!(code_only, Verdict::Refused(_)), "code-only: {code_only:?}");
 }
 
@@ -148,7 +148,7 @@ fn refuses_siren() {
     let fx = fixtures::siren();
     let (model, _, _, verdict) = learn_fixture(&fx.sna, 300);
     assert!(matches!(verdict, Verdict::Refused(_)), "heard: {verdict:?}");
-    let code_only = judge(&model, None, None, None);
+    let code_only = judge(&model, &fixtures::machine(&fx.sna), None, None, None);
     assert!(matches!(code_only, Verdict::Refused(_)), "code-only: {code_only:?}");
 }
 
@@ -165,13 +165,71 @@ fn builtin_wins() {
     for pc in tune {
         assert_eq!(builtin_at(&m, pc), Some(0xC864), "{pc:04X}");
     }
+    // anywhere inside the built-in's signature, not only at its sites
+    let len = SndEngines::new().entries()[0].len;
+    assert!(len > 0x20);
+    assert_eq!(builtin_at(&m, 0xC874), Some(0xC864));
+    assert_eq!(builtin_at(&m, 0xC864 + len - 1), Some(0xC864));
     // nothing else is a built-in's
+    assert_eq!(builtin_at(&m, 0xC864 + len), None);
     assert_eq!(builtin_at(&m, 0x8000), None);
-    // a replay that the built-in table claims is refused for it, whatever else it shows
-    let model = model_at(&fixtures::machine(&fixtures::square_tune().sna), 0x8014);
+
+    // a code-only candidate inside Castaway's tune routine (tune.sna's model, moved there: a table
+    // walk and a duration, so the code-only gates pass) is refused for the built-in
+    let tune = fixtures::machine(&fixtures::square_tune().sna);
+    let mut model = model_at(&tune, 0x8014);
+    assert_eq!(judge(&model, &tune, None, None, None), Verdict::Learned { heard: false });
+    let shift = 0xC864u16.wrapping_sub(model.anchor);
+    model.anchor = 0xC864;
+    model.code_end = model.code_end.wrapping_add(shift);
+    model.channels[0].sites = vec![0xC874];
+    assert_eq!(judge(&model, &m, None, None, None), Verdict::Refused(BUILTIN.into()));
+    // one whose sites lie elsewhere but whose anchor is in it, too
+    model.channels[0].sites = vec![0x8014];
+    assert_eq!(judge(&model, &m, None, None, None), Verdict::Refused(BUILTIN.into()));
+    // and a replay that the built-in table claims, whatever else it shows
+    let model = model_at(&tune, 0x8014);
     let stats = ReplayStats { routine_frames: 500, claimed: 500, music_gate: true, builtin_claimed: 450 };
-    assert_eq!(judge(&model, None, Some(&stats), None), Verdict::Refused(BUILTIN.into()));
+    assert_eq!(judge(&model, &tune, None, Some(&stats), None), Verdict::Refused(BUILTIN.into()));
     assert_eq!(BUILTIN, "built-in entry");
+}
+
+/// A site heard with the samples `(predicted half period = BC, measured full period)`, against
+/// tune's model with its half period replaced by `BC` T.
+fn fit_samples(samples: &[(u16, f64)]) -> soundlearn::fit::FitResult {
+    let tune = fixtures::machine(&fixtures::square_tune().sna);
+    let mut model = model_at(&tune, 0x8014);
+    model.channels[0].half_period = vec![Term::Lin { coef_t: 1, x: soundlearn::model::Input::Reg(8) }];
+    let mut site = SiteHeard { pc: 0x8014, edges: 0, frames_with_edges: 0, periods: Vec::new(), snapshots: Vec::new() };
+    for (i, &(bc, got)) in samples.iter().enumerate() {
+        let mut regs = tune.regs();
+        regs.bc = bc;
+        site.periods.push(PeriodSample { period_t: got, at_frame: i as u32, snap: i as u32 });
+        site.snapshots.push(Snapshot { regs, reads: Vec::new() });
+    }
+    check_fit(&model, &site).expect("evaluates")
+}
+
+#[test]
+fn fit_counts_notes_and_inliers_soundly() {
+    let exact = |bc: u16, n: usize| std::iter::repeat_n((bc, 2.0 * f64::from(bc)), n);
+    // three notes, 8 samples each: all inliers
+    let f = fit_samples(&exact(600, 8).chain(exact(800, 8)).chain(exact(1000, 8)).collect::<Vec<_>>());
+    assert_eq!((f.inliers, f.distinct_notes), (1.0, 3), "{f:?}");
+    // a predicted period with fewer than 8 samples agrees with nothing
+    let f = fit_samples(&exact(600, 8).chain(exact(800, 7)).collect::<Vec<_>>());
+    assert_eq!(f.distinct_notes, 1, "{f:?}");
+    assert!((f.inliers - 8.0 / 15.0).abs() < 1e-9, "{f:?}");
+    // two predictions 1 T apart (0.2%) are one note: a two-pitch siren stays two notes
+    let f = fit_samples(&exact(500, 20).chain(exact(501, 20)).chain(exact(1000, 20)).collect::<Vec<_>>());
+    assert_eq!((f.inliers, f.distinct_notes), (1.0, 2), "{f:?}");
+    assert!((f.span_semitones - 12.0).abs() < 0.01, "{f:?}");
+    // predictions that never repeat, every sample 10% off: no inliers (not 160 T of slack each)
+    let f = fit_samples(&(0..30).map(|k| (350 + 3 * k, 1.1 * 2.0 * f64::from(350 + 3 * k))).collect::<Vec<_>>());
+    assert_eq!((f.inliers, f.distinct_notes), (0.0, 0), "{f:?}");
+    // a note whose samples are 10% off, many of them: its trimmed mean disagrees
+    let f = fit_samples(&std::iter::repeat_n((700u16, 1540.0), 50).collect::<Vec<_>>());
+    assert_eq!((f.inliers, f.distinct_notes), (0.0, 0), "{f:?}");
 }
 
 #[test]
@@ -194,7 +252,7 @@ fn partial_formula_refused() {
     let stats = replay(&load, &none(), frames, &to_entry(&partial, |a| m.peek(a)));
     eprintln!("without the delay: {stats:?}");
     assert!(stats.routine_frames > 200 && stats.claimed * 10 < stats.routine_frames * 9, "{stats:?}");
-    let verdict = judge(&partial, Some(site), Some(&stats), Some(&full_fit(&model, site)));
+    let verdict = judge(&partial, &m, Some(site), Some(&stats), Some(&full_fit(&model, site)));
     assert!(matches!(&verdict, Verdict::Refused(why) if why.starts_with("replay")), "{verdict:?}");
     // without its constant (13n): 1.8-3.6% flat, inside the check's tolerance (1/16 of a period),
     // so the replay passes; the fit (0.6%) catches it
@@ -204,7 +262,7 @@ fn partial_formula_refused() {
     let fit = check_fit(&partial, site).expect("evaluates");
     eprintln!("without the constant: {stats:?}, {fit:?}");
     assert!(fit.inliers < 0.5, "{fit:?}");
-    let verdict = judge(&partial, Some(site), Some(&stats), Some(&fit));
+    let verdict = judge(&partial, &m, Some(site), Some(&stats), Some(&fit));
     assert!(matches!(&verdict, Verdict::Refused(why) if why.starts_with("fit")), "{verdict:?}");
 }
 
@@ -266,4 +324,9 @@ fn drum_between_notes() {
     assert_eq!(b.digest(&m, learned_engine() as usize - 1, 0x80F0), before.digest);
     // out of reach
     assert!(add_drum(&entry, model.anchor, 0x8100 + 0x400, |a| m.peek(a)).is_none());
+    // not another routine's: the entry's own site, inside its routine, or overlapping its start
+    for pc in [0x8103, 0x8105, model.anchor + entry.len - 1, model.anchor - 1] {
+        assert!(add_drum(&entry, model.anchor, pc, |a| m.peek(a)).is_none(), "{pc:04X}");
+    }
+    assert!(add_drum(&entry, model.anchor, model.anchor - 2, |a| m.peek(a)).is_some());
 }

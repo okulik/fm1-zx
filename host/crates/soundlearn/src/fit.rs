@@ -39,13 +39,17 @@ const CLOCK: f64 = 3_500_000.0;
 const LEVEL: u8 = 200;
 /// T-states x 256, and two half periods to the period.
 const PERIOD_SCALE: i64 = 512;
+/// Fewest samples of one predicted period that can agree with it.
+const MIN_GROUP: usize = 8;
+/// Notes closer than this (relative) are one.
+const NOTE_TOL: f64 = 0.006;
 
 /// How a model's channel agrees with a heard site's period samples.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FitResult {
     /// The share of the samples (those the model could be evaluated for) within tolerance.
     pub inliers: f64,
-    /// Predicted periods with two inliers or more.
+    /// Agreeing predicted periods, those within 0.6% of each other counted once.
     pub distinct_notes: u32,
     /// From the lowest of those notes to the highest.
     pub span_semitones: f64,
@@ -90,28 +94,49 @@ pub fn check_fit(model: &EngineModel, heard: &SiteHeard) -> Result<FitResult, St
     if pairs.is_empty() {
         return Err(format!("no period sample of {:04X}h could be evaluated", heard.pc));
     }
-    // per predicted period (to half a T-state): samples, inliers
+    // per predicted period (to half a T-state): the measured periods
     let key = |pr: f64| (pr * 2.0).round() as i64;
-    let mut groups: HashMap<i64, (u32, u32, f64)> = HashMap::new();
-    for &(_, pr) in &pairs {
-        groups.entry(key(pr)).or_insert((0, 0, pr)).0 += 1;
-    }
-    let mut inliers = 0usize;
+    let mut groups: HashMap<i64, (f64, Vec<f64>)> = HashMap::new();
     for &(got, pr) in &pairs {
-        let g = groups.get_mut(&key(pr)).expect("grouped");
-        if (got - pr).abs() <= 0.006 * pr + 160.0 / f64::from(g.0) {
-            g.1 += 1;
-            inliers += 1;
+        groups.entry(key(pr)).or_insert((pr, Vec::new())).1.push(got);
+    }
+    // a group agrees (the spike's check): at least MIN_GROUP samples, their trimmed mean within
+    // 0.6% + 160/n T of the prediction; its inliers are its samples within that too
+    let mut inliers = 0usize;
+    let mut notes: Vec<f64> = Vec::new();
+    for (pr, got) in groups.values() {
+        let n = got.len();
+        let tol = 0.006 * pr + 160.0 / n as f64;
+        if n < MIN_GROUP || (trimmed_mean(got) - pr).abs() > tol {
+            continue;
+        }
+        inliers += got.iter().filter(|&&g| (g - pr).abs() <= tol).count();
+        notes.push(pr / ch.sites.len() as f64);
+    }
+    // notes within the tolerance of each other are one
+    notes.sort_by(f64::total_cmp);
+    let mut distinct: Vec<f64> = Vec::new();
+    for p in notes {
+        if distinct.last().is_none_or(|&d| p > d * (1.0 + NOTE_TOL)) {
+            distinct.push(p);
         }
     }
-    let notes: Vec<f64> = groups.values().filter(|g| g.1 >= 2).map(|g| g.2 / ch.sites.len() as f64).collect();
-    let (lo, hi) = notes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), &p| (lo.min(p), hi.max(p)));
+    let (lo, hi) = (distinct.first().copied().unwrap_or(0.0), distinct.last().copied().unwrap_or(0.0));
     Ok(FitResult {
         inliers: inliers as f64 / pairs.len() as f64,
-        distinct_notes: notes.len() as u32,
-        span_semitones: if notes.is_empty() { 0.0 } else { 12.0 * (hi / lo).log2() },
-        max_hz: if notes.is_empty() { 0.0 } else { CLOCK / lo },
+        distinct_notes: distinct.len() as u32,
+        span_semitones: if distinct.is_empty() { 0.0 } else { 12.0 * (hi / lo).log2() },
+        max_hz: if distinct.is_empty() { 0.0 } else { CLOCK / lo },
     })
+}
+
+/// The mean of the values within 6% of their median (the spike's).
+fn trimmed_mean(v: &[f64]) -> f64 {
+    let mut w = v.to_vec();
+    w.sort_by(f64::total_cmp);
+    let med = w[w.len() / 2];
+    let near: Vec<f64> = w.into_iter().filter(|x| (x - med).abs() <= 0.06 * med).collect();
+    near.iter().sum::<f64>() / near.len() as f64
 }
 
 /// The learned entry of `model`, with `peek` the memory the routine sits in: the digest over
