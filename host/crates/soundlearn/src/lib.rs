@@ -8,6 +8,7 @@
 
 pub mod entry;
 pub mod prog;
+pub mod z80;
 
 pub use entry::{encode_list, LearnedEntry};
 pub use prog::{encode_prog, eval_prog, Op};
