@@ -16,10 +16,8 @@ use crate::score::{score, Score};
 use crate::truth::Engine;
 use crate::{capture, decode, hz_of_period_q8, played_hz, sample_rate, tzx, wav, Frame, RATE};
 pub use fmzx_pack::keys::{inputs, parse_keys, Step};
-use fmzx_pack::personal::{cache_decode, cache_encode};
-use fmzx_pack::tapeload::{is_128k, load_signal, save_z80, trap_trial, LEFT_OUT_128K};
-use soundlearn::listen::{schedule, Inputs};
-use soundlearn::{encode_list, learn, LEARNER_VERSION};
+use fmzx_pack::personal::{converted_ext, learn_music};
+use fmzx_pack::tapeload::{self, is_128k, load_signal, trap_trial, LEFT_OUT_128K};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -106,57 +104,25 @@ impl Row {
 /// - a 48K `.sna` or `.z80`: the snapshot;
 /// - a 128K file, or a tape whose load writes to a 128K's paging port: `Err("128K")`.
 pub fn load(path: &Path) -> Result<Machine, String> {
-    load_start(path).map(|(m, _)| m)
-}
-
-/// How a loaded game starts again (the learner runs it many times): its tape inserted and
-/// autostarted, or a snapshot.
-enum Start {
-    Tape(Vec<u8>),
-    Sna(Vec<u8>),
-    Z80(Vec<u8>),
-}
-
-impl Start {
-    fn machine(&self) -> Machine {
-        let mut m = Machine::new();
-        // each loaded once already, in `load_start`
-        let _ = match self {
-            Start::Tape(tap) => m.tape_insert(tap).map(|()| m.tape_autostart()),
-            Start::Sna(d) => m.load_sna(d),
-            Start::Z80(d) => m.load_z80(d),
-        };
-        m
-    }
-}
-
-/// [`load`], and how to start the game again: a tape the signal loaded is its machine's `.z80`,
-/// as the personal pack stores it.
-fn load_start(path: &Path) -> Result<(Machine, Start), String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if is_128k(&data, &ext) {
         return Err("128K".into());
     }
     let mut m = Machine::new();
-    let signal = |m: Machine| {
-        let z = save_z80(&m);
-        (m, Start::Z80(z))
-    };
-    let start = match ext.as_str() {
+    match ext.as_str() {
         "tap" | "tzx" => {
             let tap = if ext == "tzx" { tzx::to_tap(&data).ok() } else { Some(data.clone()) };
             let short_128k = |e: String| if e == LEFT_OUT_128K { "128K".to_string() } else { e };
-            let Some(tap) = tap else { return load_signal(&data).map(signal).map_err(short_128k) };
+            let Some(tap) = tap else { return load_signal(&data).map_err(short_128k) };
             match trap_trial(&tap) {
                 Ok(()) => {
                     m.tape_insert(&tap).map_err(|e| format!("tape rejected ({e})"))?;
                     m.tape_autostart();
-                    Start::Tape(tap)
                 }
                 Err(trap) if trap == LEFT_OUT_128K => return Err("128K".into()),
                 Err(trap) => {
-                    return load_signal(&data).map(signal).map_err(|e| {
+                    return load_signal(&data).map_err(|e| {
                         if e == trap || e == LEFT_OUT_128K {
                             short_128k(e)
                         } else {
@@ -166,50 +132,26 @@ fn load_start(path: &Path) -> Result<(Machine, Start), String> {
                 }
             }
         }
-        "sna" => {
-            m.load_sna(&data).map_err(|e| format!("snapshot rejected ({e})"))?;
-            Start::Sna(data)
-        }
-        "z80" => {
-            m.load_z80(&data).map_err(|e| format!("snapshot rejected ({e})"))?;
-            Start::Z80(data)
-        }
+        "sna" => m.load_sna(&data).map_err(|e| format!("snapshot rejected ({e})"))?,
+        "z80" => m.load_z80(&data).map_err(|e| format!("snapshot rejected ({e})"))?,
         _ => return Err("unknown file type".into()),
-    };
-    Ok((m, start))
+    }
+    Ok(m)
 }
 
-/// The game's learned entries (None: none), the learner's line and details: from
-/// `<out>/sound-cache/` when it holds them (keyed by the CRC-32 of the game file and its key
-/// script, and the learner's version), else learned and cached. The inputs are the personal
-/// pack's: the key script's steps from time 0, or the generic run seeded by the file's CRC-32.
-fn learned(path: &Path, start: &Start, steps: &[Step], out: &Path) -> (Option<Vec<u8>>, String, String) {
-    let data = std::fs::read(path).unwrap_or_default();
-    let script = std::fs::read_to_string(path.with_extension("keys")).ok();
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(&data);
-    if let Some(t) = &script {
-        crc.update(t.as_bytes());
-    }
-    let dir = out.join("sound-cache");
-    let file = dir.join(format!("{:08x}-{LEARNER_VERSION}.bin", crc.finalize()));
-    if let Some(got) = std::fs::read(&file).ok().as_deref().and_then(cache_decode) {
-        return got;
-    }
-    let run: Inputs = if steps.is_empty() {
-        schedule(u64::from(crc32fast::hash(&data)))
-    } else {
-        let steps = steps.to_vec();
-        Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS))
+/// The game's learned entries (None: none), the learner's line and details, as the personal pack
+/// learns them ([`fmzx_pack::personal::learn_music`]: the game converted by
+/// [`tapeload::prepare`], its key script, cached in `<out>/sound-cache/`).
+fn learned(path: &Path, out: &Path) -> (Option<Vec<u8>>, String, String) {
+    let l = match tapeload::prepare(path) {
+        Ok(l) => l,
+        Err(e) => return (None, format!("no music learned (the game does not load: {e})"), String::new()),
     };
-    let got = learn(&|| start.machine(), &run);
-    let list = (!got.entries.is_empty()).then(|| encode_list(&got.entries));
-    let _ = std::fs::create_dir_all(&dir);
-    let tmp = dir.join(format!("{}.tmp", wav_stem(path)));
-    if std::fs::write(&tmp, cache_encode(list.as_deref(), &got.line, &got.details)).is_ok() && std::fs::rename(&tmp, &file).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    (list, got.line, got.details)
+    let file = format!("{}.{}", wav_stem(path), converted_ext(&l, path));
+    let cache = out.join("sound-cache");
+    let _ = std::fs::create_dir_all(&cache);
+    let s = learn_music(&file, &l.data, &path.with_extension("keys"), &cache);
+    (s.list, s.line, s.details)
 }
 
 /// A music engine's sound loop in memory: `len` bytes from `base`, the operand bytes the engine
@@ -286,8 +228,8 @@ fn sounded_hz(f: &SndFrame) -> Vec<f64> {
 pub fn run_game(path: &Path, opts: &Options) -> Row {
     let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut row = Row { file: file.clone(), ..Row::default() };
-    let (mut m, start) = match load_start(path) {
-        Ok(got) => got,
+    let mut m = match load(path) {
+        Ok(m) => m,
         Err(e) => {
             row.status = format!("not loadable: {e}");
             return row;
@@ -304,7 +246,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         Err(_) => Vec::new(),
     };
     let list = if opts.learn {
-        let (list, line, details) = learned(path, &start, &steps, &opts.out);
+        let (list, line, details) = learned(path, &opts.out);
         row.learned_line = line;
         row.learned_details = details;
         list

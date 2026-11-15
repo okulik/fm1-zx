@@ -262,11 +262,11 @@ What the report says, one row per game:
   decision).
 - `L FM %`: the same with the music the personal pack would learn for the game (its learned
   entries after the built-in ones; the same as `B FM %` when nothing was learned). The learner runs
-  as `fmzx-pack personal` runs it (3 minutes of emulated time, the key script if there is one) and
-  its results are cached in `<dir>/sound-cache/` by the game file's CRC, its key script and the
-  learner's version, so a second run of the same folder does not learn again; `--no-learn` skips
-  it. Its line per game follows the table, and `<dir>/sound-report.txt` holds the details, as the
-  personal pack's does.
+  as `fmzx-pack personal` runs it, on the game as the pack converts it (3 minutes of emulated time,
+  the key script if there is one), and its results are cached in `<dir>/sound-cache/` by the
+  converted game's CRC, its key script and the learner's version, so a second run of the same
+  folder does not learn again; `--no-learn` skips it. Its line per game follows the table, and
+  `<dir>/sound-report.txt` holds the details, as the personal pack's does.
 - `styles s/f/p %`: of those frames, the share decoded as time-slot music, speaker-flip music and
   short-pulse music; the remainder is sound with no music in it.
 - truth, for games whose music engine is recognised (by the code of its sound loop in memory:
@@ -277,8 +277,8 @@ What the report says, one row per game:
   sounded in each frame it is confident about). After `learned:`, the frames with sound a learned
   entry claims and the same numbers with the learned entries. The CSV has the same columns.
 
-The run is fast: the games run in parallel, and the owner's folder of 29 games takes about 8 s on an
-Apple Silicon Mac when it learns, under 3 s from the cache. The Cave Runner and Unison entries of
+The run is fast: the games run in parallel, and the owner's folder of 29 games takes about 10 s on an
+Apple Silicon Mac when it learns, under 5 s from the cache. The Cave Runner and Unison entries of
 method B were made from the owner's local copies of those games, which are not in the repository;
 they are tested only locally, with this tool.
 

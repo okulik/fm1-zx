@@ -279,11 +279,11 @@ struct Job {
 /// What was learned of a game: its entry list (None: none), its line without the name, its
 /// details, and the key script's problem if it had one.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Sound {
-    list: Option<Vec<u8>>,
-    line: String,
-    details: String,
-    keys_error: Option<String>,
+pub struct Sound {
+    pub list: Option<Vec<u8>>,
+    pub line: String,
+    pub details: String,
+    pub keys_error: Option<String>,
 }
 
 /// The key script's problem as a details line, if any.
@@ -346,14 +346,23 @@ const CACHE_MAGIC: &[u8; 8] = b"FMZXSND2";
 
 /// A game's music: from the cache, or learned and then cached.
 fn learn_cached(job: &Job, cache: &Path) -> Sound {
-    let script = std::fs::read_to_string(&job.keys).ok();
+    learn_music(&job.file, &job.data, &job.keys, cache)
+}
+
+/// The music of a game as the personal pack learns it: `file` and `data` its converted file
+/// ([`tapeload::prepare`]'s data, named with [`converted_ext`]), `keys` where its key script
+/// would be, `cache` the cache folder (it must exist). From the cache, or learned under the key
+/// script's steps (or the generic run, seeded by the converted data's CRC-32) and then cached.
+/// `music-corpus` learns through this too, so both learn the same.
+pub fn learn_music(file: &str, data: &[u8], keys: &Path, cache: &Path) -> Sound {
+    let script = std::fs::read_to_string(keys).ok();
     let (steps, keys_error) = match script.as_deref().map(parse_keys) {
         Some(Ok(steps)) => (Some(steps), None),
         Some(Err(e)) => (None, Some(e)),
         None => (None, None),
     };
     let mut crc = crc32fast::Hasher::new();
-    crc.update(&job.data);
+    crc.update(data);
     if let Some(t) = &script {
         crc.update(t.as_bytes());
     }
@@ -361,9 +370,9 @@ fn learn_cached(job: &Job, cache: &Path) -> Sound {
     if let Some((list, line, details)) = std::fs::read(&path).ok().as_deref().and_then(cache_decode) {
         return Sound { list, line, details, keys_error };
     }
-    let (list, line, details) = learn_job(job, steps);
+    let (list, line, details) = learn_converted(file, data, steps);
     // written whole, then renamed: a half-written file is never read
-    let tmp = cache.join(format!("{}.tmp", job.file));
+    let tmp = cache.join(format!("{file}.tmp"));
     if std::fs::write(&tmp, cache_encode(list.as_deref(), &line, &details)).is_ok() && std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -372,16 +381,16 @@ fn learn_cached(job: &Job, cache: &Path) -> Sound {
 
 /// Learns a game's music under its key script's steps, or the generic run: its entry list (None:
 /// none), line and details.
-fn learn_job(job: &Job, steps: Option<Vec<crate::keys::Step>>) -> (Option<Vec<u8>>, String, String) {
-    if let Err(e) = machine(&job.file, &job.data) {
+fn learn_converted(file: &str, data: &[u8], steps: Option<Vec<crate::keys::Step>>) -> (Option<Vec<u8>>, String, String) {
+    if let Err(e) = machine(file, data) {
         return (None, format!("no music learned (the game does not load: {e})"), String::new());
     }
     let run: Inputs = match steps {
         Some(steps) => Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS)),
-        None => schedule(u64::from(crc32fast::hash(&job.data))),
+        None => schedule(u64::from(crc32fast::hash(data))),
     };
     // it loaded just now, so it loads again: the fallback is never used
-    let got = learn(&|| machine(&job.file, &job.data).unwrap_or_else(|_| Machine::new()), &run);
+    let got = learn(&|| machine(file, data).unwrap_or_else(|_| Machine::new()), &run);
     let list = (!got.entries.is_empty()).then(|| encode_list(&got.entries));
     (list, got.line, got.details)
 }
@@ -519,7 +528,7 @@ fn reason(e: &str) -> String {
 
 /// The converted file's extension: a tape is a `.tap`, a snapshot taken as it is keeps its own,
 /// a loaded one is a `.z80`.
-fn converted_ext(l: &Loaded, source: &Path) -> String {
+pub fn converted_ext(l: &Loaded, source: &Path) -> String {
     match l.kind {
         Kind::Tape => "tap".into(),
         Kind::Snapshot if l.frames == 0 => {

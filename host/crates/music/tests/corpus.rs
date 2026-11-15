@@ -143,7 +143,8 @@ fn corpus_runs_on_pack() {
     assert!(txt.contains("L FM %") && txt.contains(&format!("tune.sna: {}", tune.learned_line)), "{txt}");
     assert!(csv.lines().next().is_some_and(|h| h.contains("learned_fm_percent,learned_frames,learned_line")), "{csv}");
     let cached = std::fs::read_dir(opts.out.join("sound-cache")).unwrap().count();
-    assert_eq!(cached, 3, "one cache file per loadable game");
+    // learned as the personal pack converts the games: Castaway's .tap and .tzx are one tape
+    assert_eq!(cached, 2, "one cache file per converted game");
     for f in ["castawy_tap_beeper.wav", "castawy_tap_fm.wav", "castawy_tap_fm_b.wav", "castawy_tzx_beeper.wav", "castawy_tzx_fm.wav", "tune_sna_fm.wav"] {
         let w = std::fs::read(opts.out.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
         assert_eq!(&w[..4], b"RIFF");
@@ -394,55 +395,32 @@ fn schedule_keys_match_parse_action() {
     }
 }
 
-/// The sounding pitches of a decision (period_q8 of its tonal voices at the frame's start), in
-/// order.
-fn voices(d: &zx_sys::SndFrame) -> Vec<u32> {
-    let mut v: Vec<u32> = d.tone.iter().filter(|t| t.level != 0 && t.period_q8 != 0).map(|t| t.period_q8).collect();
-    v.sort_unstable();
-    v
-}
-
 /// The learner with the built-in table disabled, on the repo's two games that have built-in
-/// entries (the spec's built-in agreement): each routine it learns plays the pitches the
-/// built-in entry plays, within 0.2%, on every frame both claim; Castaway's sliding tune is left
-/// out with a reason.
+/// entries (the spec's built-in agreement): neither tune routine is learned. The code reader
+/// leaves both out, at the same construct: a zero test of flags that are not a counter's
+/// (Castaway's channel counters, Colony 8's phase overflow), so no learned entry exists to set
+/// against the built-in one. (A reader that learns either must add that agreement here: the
+/// learned periods within 0.2% of the built-in reader's on every frame both claim.)
 #[test]
 fn builtins_agree() {
     use soundlearn::listen::schedule;
+    use soundlearn::model::{Refusal, Why};
     use soundlearn::{learn_with, LearnOptions};
-    use zx_sys::SndEngines;
-    for (game, machine) in [("castaway", music::castaway as fn() -> zx_sys::Machine), ("colony8", music::colony8)] {
+    for (game, machine, sites, at) in [
+        ("castaway", music::castaway as fn() -> zx_sys::Machine, &[0xC87Cu16, 0xC886][..], 0xC88Au16),
+        ("colony8", music::colony8, &[0x950D, 0x9517, 0x9505][..], 0x9519),
+    ] {
         let got = learn_with(&machine, &schedule(1), &LearnOptions { ignore_builtins: true });
-        eprintln!("{game}: {}\n{}", got.line, got.details);
-        if got.entries.is_empty() {
-            // left out by the code reader: a shape it does not model (not a gate's figures)
-            let why = got.line.strip_prefix("no music learned (").unwrap_or_else(|| panic!("{game}: {}", got.line));
-            assert!(!["fit", "replay", "code only", "built-in", "learner error", "no speaker"].iter().any(|g| why.starts_with(g)), "{game}: {}", got.line);
-            continue;
+        let why = soundlearn::report::refusal(&Refusal::Unmodelled(Why::BranchIdiom, at));
+        assert!(got.entries.is_empty(), "{game}: {}", got.line);
+        assert_eq!(got.line, format!("no music learned ({why})"), "{game}");
+        // each of the tune's heard sites is read, and left out for that reason
+        for site in sites {
+            let block = format!("  OUT at {site:04X}h, heard in ");
+            let at = got.details.find(&block).unwrap_or_else(|| panic!("{game}: {site:04X}h not heard\n{}", got.details));
+            let rest = &got.details[at..];
+            let end = rest[1..].find("\n  OUT at ").map_or(rest.len(), |e| e + 2);
+            assert!(rest[..end].contains(&format!("    left out: {why}\n")), "{game} {site:04X}h: {}", &rest[..end]);
         }
-        let list = soundlearn::encode_list(&got.entries);
-        let (mut builtin, mut learned) = (SndEngines::new(), SndEngines::with_learned_only(&list).expect("decodes"));
-        let mut m = machine();
-        let inputs = schedule(1);
-        let (mut both, mut off) = (0, Vec::new());
-        for f in 0..3000u32 {
-            let (rows, kemp) = inputs(f);
-            m.set_keys(rows);
-            m.set_kempston(kemp);
-            m.run_frame();
-            let (edges, level) = (m.edges().to_vec(), m.edges_start_level());
-            let (b, l) = (builtin.frame(&m, &edges, level), learned.frame(&m, &edges, level));
-            if b.confident == 0 || b.engine == 0 || l.confident == 0 || l.engine == 0 {
-                continue;
-            }
-            both += 1;
-            let (vb, vl) = (voices(&b), voices(&l));
-            let agree = vb.len() == vl.len() && vb.iter().zip(&vl).all(|(&x, &y)| (f64::from(x) - f64::from(y)).abs() <= 0.002 * f64::from(x));
-            if !agree {
-                off.push((f, vb, vl));
-            }
-        }
-        assert!(both > 0, "{game}: no frame both claim");
-        assert!(off.is_empty(), "{game}: {} of {both} frames differ, first {:?}", off.len(), off.first());
     }
 }

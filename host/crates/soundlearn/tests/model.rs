@@ -560,9 +560,9 @@ fn registers_not_given_back_are_not_inputs() {
     assert!(read_engine(mem, 0x8016).is_err(), "{:?}", read_engine(mem, 0x8016));
 }
 
-/// A routine called once a burst (Bee Line' shape, written fresh): the call's target sets the
-/// burst's passes (HL, a pair counted with a carry), IX and the level, then the loop flips the
-/// speaker every (IX+0) passes, its reload arm 28 T longer than the other:
+/// A routine called once a burst (a short burst of its note each call): the call's target sets
+/// the burst's passes (HL, a pair counted with a carry), IX and the level, then the loop flips
+/// the speaker every (IX+0) passes, its reload arm 28 T longer than the other:
 /// 8000 main: CALL burst; JR main; 8010 burst: LD HL,0300h; LD IX,9000h; LD A,10h; LD B,1;
 /// 801B loop: DJNZ skip; LD B,(IX+0); XOR 10h; OUT (FEh),A; JR next; 8026 skip: NOP x 4;
 /// 802A next: DEC L; JR NZ,loop; DEC H; JR NZ,loop; RET
