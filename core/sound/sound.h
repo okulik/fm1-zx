@@ -341,9 +341,10 @@ typedef struct snd_engine {   /* one table entry */
 	const snd_engine_site *sites;
 	const uint16_t *pos;      /* per channel: its OUT's T-state in a pass, from channel 0's */
 	/* Reads the voices at the end of the frame: m the machine (its memory and registers at the
-	 * frame's end), anchor the matched code, r the registers at the last edge of tonal site
-	 * `site` (index in sites). */
-	void (*read)(const zx_machine *m, uint16_t anchor, uint32_t site, const zx_regs *r, snd_b_read *out);
+	 * frame's end), en this entry, anchor the matched code, r the registers at the last edge of
+	 * tonal site `site` (index in sites). */
+	void (*read)(const zx_machine *m, const struct snd_engine *en, uint16_t anchor, uint32_t site, const zx_regs *r,
+	             snd_b_read *out);
 	uint8_t drum;             /* the drum's strength, for entries with drum sites */
 	/* 0, or: each edge flips one channel's level, the speaker sounds their XOR (engines.c, flip;
 	 * pass 0) */
@@ -352,6 +353,8 @@ typedef struct snd_engine {   /* one table entry */
 	 * exactly the period read; engines.c, observe_calls), and a note shorter than this (T) is
 	 * not B's (ROM BEEP) */
 	uint32_t min_len;
+	const void *data;         /* the reader's data: NULL for the built-in entries; a learned entry's
+	                           * snd_learned_ext (learned.c) */
 } snd_engine;
 
 extern const snd_engine snd_engine_table[];   /* the built-in engines */
@@ -368,6 +371,34 @@ extern const uint32_t snd_engine_test_count;
 /* Also there: ROM BEEP's entry alone, its reader's period a semitone too long (a misread). */
 extern const snd_engine snd_engine_misread_table[];
 extern const uint32_t snd_engine_misread_count;
+
+/* Learned entries (learned.c): a game's music routines, learned by the personal-pack builder and
+ * stored in the pack as data (docs/pack-format.md). Each entry is an snd_engine whose reader runs
+ * small programs: bytecode for a stack machine of uint32_t values, at most 8 deep and
+ * SND_PROG_MAX bytes long, that compute a channel's period (T-states x 256) or the note's timing
+ * from memory (at the frame's end) and registers. */
+#define SND_LEARNED_MAX 8u          /* learned entries per game */
+#define SND_PROG_MAX 64u            /* bytes of a program */
+#define SND_LEARNED_LEN_MAX 1024u   /* signature bytes of a learned entry (the matching's work) */
+#define SND_LEARNED_SITES_MAX 16u   /* sites of a learned entry */
+
+typedef struct {          /* a learned entry's programs and rules (snd_engine.data), pointing into its list */
+	const uint8_t *prog[SND_TONAL];   /* per channel: its period; 0 (or silent) = the channel is silent */
+	uint8_t prog_len[SND_TONAL];
+	const uint8_t *timing;            /* the note's T-states so far, from the registers given; NULL: not known */
+	uint8_t timing_len;
+	uint16_t stale_from, stale_len;   /* frame-end pcs (from the anchor) where the memory is not to be read */
+	uint8_t level[SND_TONAL];
+} snd_learned_ext;
+
+/* Runs the program p[0..len) with the machine m (memory at the frame's end), the anchor and the
+ * registers ctx: 0 with the result in *out, 1 silent (a zero divisor or a zero popped by the
+ * silence op), -1 invalid. */
+int snd_prog_eval(const uint8_t *p, uint32_t len, const zx_machine *m, uint16_t anchor, const zx_regs *ctx, uint32_t *out);
+/* Decodes a game's entry list (list[0..avail), 4-byte aligned) into en[0..*n) and ext[0..*n),
+ * their arrays and programs pointing into list: ZX_OK, or ZX_ERR_FORMAT (then *n = 0) for any
+ * bound or program that is not valid, or more than max entries. */
+int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_learned_ext *ext, uint32_t max, uint32_t *n);
 
 #define SND_B_MATCHES 8u      /* anchors remembered */
 #define SND_B_UNKNOWN 8u      /* OUT addresses remembered as matching no entry */

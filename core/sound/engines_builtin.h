@@ -31,13 +31,14 @@ static uint32_t cw_passes(const zx_machine *m, uint16_t a, uint32_t ix, int whol
 	return passes;
 }
 
-static void read_castaway(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_castaway(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	static const uint8_t n_at[2] = { 0x09, 0x16 }, wrap_at[2] = { 0x0D, 0x1D }, mask_at[2] = { 0x11, 0x21 };
 	static const uint8_t slide_at[2] = { 0x3C, 0x2E }, jr_at[2] = { 0x37, 0x29 };
 	uint32_t c, passes = cw_passes(m, a, r->ix, 0), row = cw_passes(m, a, r->ix, 1), now_passes;
 	zx_regs now;
 
+	(void)en;
 	(void)site;
 	for (c = 0; c < 2; c++) {
 		uint32_t n = zx_peek(m, (uint16_t)(a + n_at[c]));
@@ -78,7 +79,7 @@ _Static_assert(sizeof cw_pos / sizeof cw_pos[0] == 2, "a pos per channel");
 
 #define SND_ENGINE_CASTAWAY {                                                                          \
 	"Castaway", 0x45eefa6915ef8919ull, 0x53, sizeof cw_wild / sizeof cw_wild[0], sizeof cw_reloc / sizeof cw_reloc[0], \
-	sizeof cw_sites / sizeof cw_sites[0], 2, 156, cw_wild, cw_reloc, cw_sites, cw_pos, read_castaway, 0, 0, 0, \
+	sizeof cw_sites / sizeof cw_sites[0], 2, 156, cw_wild, cw_reloc, cw_sites, cw_pos, read_castaway, 0, 0, 0, 0, \
 }
 
 /* Escape from Colony 8's music (anchor 9493h in the pack: the tone-burst drum, the ROM-noise drum,
@@ -101,13 +102,14 @@ static uint32_t c8_left(uint32_t de)
 	return (e ? e : 256u) + 256u * (d ? d - 1u : 255u);
 }
 
-static void read_colony8(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_colony8(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	static const uint8_t thr_at[3] = { 0x6D, 0x77, 0x7F };
 	static const uint8_t op_at[3] = { 0x5C, 0x63, 0x66 };
 	uint32_t c, step[3], de, de0, left0, left;
 	zx_regs now;
 
+	(void)en;
 	zx_get_regs(m, &now);
 	de0 = zx_peek(m, (uint16_t)(a + 0x59)) | (uint32_t)zx_peek(m, (uint16_t)(a + 0x5A)) << 8;
 	left0 = c8_left(de0);
@@ -164,7 +166,7 @@ _Static_assert(sizeof c8_pos / sizeof c8_pos[0] == 3, "a pos per channel");
 
 #define SND_ENGINE_COLONY8 {                                                                           \
 	"Colony 8", 0xae5de8a81485ea1full, 0x93, sizeof c8_wild / sizeof c8_wild[0], sizeof c8_reloc / sizeof c8_reloc[0], \
-	sizeof c8_sites / sizeof c8_sites[0], 3, 155, c8_wild, c8_reloc, c8_sites, c8_pos, read_colony8, 200, 0, 0, \
+	sizeof c8_sites / sizeof c8_sites[0], 3, 155, c8_wild, c8_reloc, c8_sites, c8_pos, read_colony8, 200, 0, 0, 0, \
 }
 
 /* The 48K ROM's BEEPER (anchor 03B5h, 43h bytes to its RET; BASIC's BEEP and the key click call
@@ -178,11 +180,12 @@ _Static_assert(sizeof c8_pos / sizeof c8_pos[0] == 3, "a pos per channel");
  * are DE at the OUT (DEC DE follows the low OUT), so the note goes on (2 DE + 1) half-periods
  * after a high OUT (bit 4 of A), 2 DE after a low one, and ends half a period after that. The
  * absolute operands at +0Eh (the slide) and +28h (the loop) move with the code. */
-static void read_beep(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_beep(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	const uint32_t slide = (uint16_t)(r->ix - a - 0x1C), de = r->de < 4096u ? r->de : 4096u;
 	uint32_t half;
 
+	(void)en;
 	(void)m;
 	(void)site;
 	if (slide > 3) return;   /* not BEEPER's state: no note */
@@ -197,7 +200,7 @@ static const snd_engine_site beep_sites[] = { { 0x2C, SND_SITE_TONAL, 0 } };
 static const uint16_t beep_pos[] = { 0 };
 
 #define SND_ENGINE_ROM_BEEP_READ(rd) {                                                                 \
-	"ROM BEEP", 0x51a995b5e20f53abull, 0x43, 0, 2, 1, 1, 0, 0, beep_reloc, beep_sites, beep_pos, rd, 0, 0, 70000u, \
+	"ROM BEEP", 0x51a995b5e20f53abull, 0x43, 0, 2, 1, 1, 0, 0, beep_reloc, beep_sites, beep_pos, rd, 0, 0, 70000u, 0, \
 }
 #define SND_ENGINE_ROM_BEEP SND_ENGINE_ROM_BEEP_READ(read_beep)   /* min_len 70,000 T: 20 ms */
 
@@ -217,11 +220,12 @@ static uint32_t peek16(const zx_machine *m, uint32_t a)
  * average: half = (56 + 11/256) n + 23 (1 + n / n') T, f = 3.5 MHz / (2 x half) (within 0.03% of
  * the spacing of its flips). B (from 0) and C (from the length) count the note's passes; the
  * CALLs at +0Eh and +17h move with the code. */
-static void read_mm_title(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_mm_title(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	const uint32_t k = 256u * ((zx_peek(m, r->iy) - r->bc) & 0xFFu) + ((0u - (r->bc >> 8)) & 0xFFu);   /* passes */
 	uint32_t c, n[2], q = 14336u * k;   /* 56 x 256 per pass */
 
+	(void)en;
 	(void)a;
 	(void)site;
 	for (c = 0; c < 2; c++) {
@@ -240,7 +244,7 @@ static const uint16_t mmt_reloc[] = { 0x0F, 0x18 };
 static const snd_engine_site mmt_sites[] = { { 0x1C, SND_SITE_TONAL, SND_CHAN_ANY } };
 
 #define SND_ENGINE_MM_TITLE {                                                                          \
-	"Cave Runner title", 0x21ad39e14d5cbeddull, 0x33, 0, 2, 1, 2, 0, 0, mmt_reloc, mmt_sites, beep_pos, read_mm_title, 0, 1, 0, \
+	"Cave Runner title", 0x21ad39e14d5cbeddull, 0x33, 0, 2, 1, 2, 0, 0, mmt_reloc, mmt_sites, beep_pos, read_mm_title, 0, 1, 0, 0, \
 }
 
 /* Cave Runner's in-game tune (anchor 881Fh, the music flag test to the burst loop's end at 885Eh).
@@ -249,10 +253,11 @@ static const snd_engine_site mmt_sites[] = { { 0x1C, SND_SITE_TONAL, SND_CHAN_AN
  * plays its note E, the tune table's (the operand at +29h) byte (index & 7Eh) / 2: one channel
  * flipping the OUT at +33h every E passes, f = 3.5 MHz / (2 x E x 40). Music off: no voice, so
  * its edges fail the check (the game's sounds are the beeper's). */
-static void read_mm_game(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_mm_game(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	uint32_t e;
 
+	(void)en;
 	(void)site;
 	(void)r;
 	if (zx_peek(m, (uint16_t)peek16(m, a + 0x01u)) & 2u) return;
@@ -265,7 +270,7 @@ static const uint16_t mmg_reloc[] = { 0x01, 0x1C, 0x20, 0x29, 0x2D };
 static const snd_engine_site mmg_sites[] = { { 0x33, SND_SITE_TONAL, 0 } };
 
 #define SND_ENGINE_MM_GAME {                                                                           \
-	"Cave Runner in game", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, mmg_reloc, mmg_sites, beep_pos, read_mm_game, 0, 1, 0, \
+	"Cave Runner in game", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, mmg_reloc, mmg_sites, beep_pos, read_mm_game, 0, 1, 0, 0, \
 }
 
 /* Unison's music (anchor 81B4h, the melody to the last drum's end at 82A6h). The melody (+12h):
@@ -277,10 +282,11 @@ static const snd_engine_site mmg_sites[] = { { 0x33, SND_SITE_TONAL, 0 } };
  * times on average: half = 48 n + 47.5 (1 + n / n') T, f = 3.5 MHz / (2 x half) (within 0.04% of
  * the spacing of its flips). The interrupt routine (+36h) sequences it and runs the four drums
  * (+A3h, +B6h, +CAh, +DEh), each OUTing from two sites, until the next interrupt. */
-static void read_unison(const zx_machine *m, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_unison(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	uint32_t c, n[2];
 
+	(void)en;
 	(void)site;
 	(void)r;
 	for (c = 0; c < 2; c++)
@@ -304,7 +310,7 @@ static const snd_engine_site unison_sites[] = {
 
 #define SND_ENGINE_UNISON {                                                                             \
 	"Unison", 0xf45d15034e0cc08dull, 0xF3, 4, sizeof unison_reloc / sizeof unison_reloc[0], sizeof unison_sites / sizeof unison_sites[0], 2, 0, \
-	unison_wild, unison_reloc, unison_sites, beep_pos, read_unison, 200, 1, 0, \
+	unison_wild, unison_reloc, unison_sites, beep_pos, read_unison, 200, 1, 0, 0, \
 }
 
 #define SND_ENGINES_BUILTIN SND_ENGINE_CASTAWAY, SND_ENGINE_COLONY8, SND_ENGINE_ROM_BEEP, SND_ENGINE_MM_TITLE, \

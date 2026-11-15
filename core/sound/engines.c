@@ -704,7 +704,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 	rd.step = 0;
 	rd.stale = 0;
 	rd.left = 0;
-	en->read(zm, cl.mine->anchor, cl.site_of[best], &cl.sites[best].regs, &rd);
+	en->read(zm, en, cl.mine->anchor, cl.site_of[best], &cl.sites[best].regs, &rd);
 	if (en->min_len) {
 		observe_calls(b, en, e, n, &rd, r);
 		return;

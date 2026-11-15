@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 zx-sys = { path = "../zx-sys" }
 fmzx-pack = { path = "../fmzx-pack" }
+soundlearn = { path = "../soundlearn" }
 
 [lints]
 workspace = true

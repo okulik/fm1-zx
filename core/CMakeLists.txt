@@ -40,6 +40,9 @@ target_compile_definitions(zx_core PUBLIC
 # engines_test.c (the test fixtures' engine table) is for the host build only.
 file(GLOB ZX_SOUND_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sound/*.c")
 list(FILTER ZX_SOUND_SOURCES EXCLUDE REGEX "/engines_test\\.c$")
+# learned.c (learned entries: the interpreter, the decoder and the generic reader) runs from flash,
+# not SRAM: the firmware builds it itself (Task 4 of plan 9).
+list(FILTER ZX_SOUND_SOURCES EXCLUDE REGEX "/learned\\.c$")
 add_library(zx_sound STATIC ${ZX_SOUND_SOURCES})
 target_compile_options(zx_sound PRIVATE -Wall -Wextra -Werror)
 # Method B (engines.c) runs a few reads and one pass over the frame's edges: built for size, as

@@ -801,10 +801,55 @@ fn engine_table(which: Table) -> (*const sys::snd_engine, u32) {
     }
 }
 
+/// A method B table of the built-in engines followed by a game's learned entries
+/// (`snd_learned_decode`): the C side keeps pointers into all three, so they stay here, boxed (they
+/// never move), as long as the `snd_b` that uses them.
+struct Learned {
+    table: Box<[sys::snd_engine]>,
+    /// The entries' programs and rules (each learned entry's `data`).
+    _ext: Box<[sys::snd_learned_ext]>,
+    /// A copy of the list, as words (4-byte aligned): the entries' arrays and programs point into it.
+    _list: Box<[u32]>,
+}
+
+impl Learned {
+    /// Decodes `list` (an entry list) after the built-in table; Err(`ZX_ERR_FORMAT`) if it is not
+    /// valid.
+    fn new(list: &[u8]) -> Result<Learned, i32> {
+        let mut words = vec![0u32; list.len().div_ceil(4)].into_boxed_slice();
+        for (w, b) in words.iter_mut().zip(list.chunks(4)) {
+            let mut x = [0u8; 4];
+            x[..b.len()].copy_from_slice(b);
+            *w = u32::from_ne_bytes(x);
+        }
+        let max = sys::SND_LEARNED_MAX as usize;
+        // SAFETY: plain data (integers, pointers, a nullable fn pointer): all-zero is valid, and
+        // the decoder fills the records it reports.
+        let mut en: Vec<sys::snd_engine> = (0..max).map(|_| unsafe { MaybeUninit::zeroed().assume_init() }).collect();
+        let mut ext: Box<[sys::snd_learned_ext]> = (0..max).map(|_| unsafe { MaybeUninit::zeroed().assume_init() }).collect();
+        let mut n = 0u32;
+        // SAFETY: `words` holds list.len() bytes (and the zero padding after), 4-byte aligned; `en`
+        // and `ext` hold `max` records each.
+        let rc = unsafe {
+            sys::snd_learned_decode(words.as_ptr().cast(), list.len() as u32, en.as_mut_ptr(), ext.as_mut_ptr(), max as u32, &mut n)
+        };
+        if rc != 0 {
+            return Err(rc);
+        }
+        let (builtin, count) = engine_table(Table::Builtin);
+        // SAFETY: the built-in table is a 'static C array of `count` entries.
+        let mut table: Vec<sys::snd_engine> = unsafe { std::slice::from_raw_parts(builtin, count as usize) }.to_vec();
+        table.extend_from_slice(&en[..n as usize]);
+        Ok(Learned { table: table.into_boxed_slice(), _ext: ext, _list: words })
+    }
+}
+
 /// Method B, the known music engines: feed it each frame's machine and edges, get its decision
 /// about the frame `SND_DELAY_FRAMES` earlier.
 pub struct SndEngines {
     raw: Box<sys::snd_b>,
+    /// The table [`SndEngines::with_learned`] made (`raw` points into it).
+    _learned: Option<Learned>,
 }
 
 impl SndEngines {
@@ -830,7 +875,18 @@ impl SndEngines {
         // SAFETY: `raw` is a valid, exclusively owned snd_b; the table is a 'static C array of n
         // entries.
         unsafe { sys::snd_b_init(&mut *raw, table, n) };
-        SndEngines { raw }
+        SndEngines { raw, _learned: None }
+    }
+
+    /// With the built-in engines followed by the learned entries of `list` (a game's entry list,
+    /// as the pack's sound section holds it); Err(`ZX_ERR_FORMAT`) if the decoder refuses it.
+    pub fn with_learned(list: &[u8]) -> Result<Self, i32> {
+        let learned = Learned::new(list)?;
+        let mut raw: Box<sys::snd_b> = boxed_zeroed();
+        // SAFETY: `raw` is a valid, exclusively owned snd_b; the table, the records' ext data and
+        // the list copy are heap buffers kept with it in `_learned`, so they outlive its use.
+        unsafe { sys::snd_b_init(&mut *raw, learned.table.as_ptr(), learned.table.len() as u32) };
+        Ok(SndEngines { raw, _learned: Some(learned) })
     }
 
     /// Feeds frame t (`m` right after its `run_frame`, its edges and the level they start
@@ -891,17 +947,40 @@ impl SndEngines {
     /// The voices entry `index`'s reader gives with its anchor at `anchor` in `m`, `site` the tonal
     /// site whose registers `regs` are (host tests: a reader's formula).
     pub fn read(&self, m: &Machine, index: usize, anchor: u16, site: u32, regs: &zx_regs) -> [SndVoice; SND_TONAL] {
+        self.read_full(m, index, anchor, site, regs).v
+    }
+
+    /// All the reader gives, as [`SndEngines::read`], from the state method B starts it with.
+    pub fn read_full(&self, m: &Machine, index: usize, anchor: u16, site: u32, regs: &zx_regs) -> SndRead {
         assert!(index < self.raw.n as usize, "entry {index}");
         // SAFETY: as in `digest`; snd_b_read is plain data, zero a valid start.
         unsafe {
             let en = &*self.raw.table.add(index);
             assert!((site as usize) < en.n_sites as usize, "site {site}");
             let mut out: sys::snd_b_read = MaybeUninit::zeroed().assume_init();
-            (en.read.expect("a reader"))(&*m.raw, anchor, site, regs, &mut out);
-            out.v.map(|v| SndVoice { period_q8: v.period_q8, level: v.level })
+            out.since = sys::SND_B_SINCE_ALL;
+            out.row = sys::SND_B_SINCE_ALL;
+            (en.read.expect("a reader"))(&*m.raw, en, anchor, site, regs, &mut out);
+            SndRead { v: out.v.map(|v| SndVoice { period_q8: v.period_q8, level: v.level }), since: out.since, row: out.row, stale: out.stale }
         }
     }
 }
+
+/// What a method B reader found (`snd_b_read`, in part).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SndRead {
+    /// Channel c's voice (period 0: silent).
+    pub v: [SndVoice; SND_TONAL],
+    /// T-states the voices have held ([`SND_B_SINCE_ALL`]: not known).
+    pub since: u32,
+    /// T-states since the note began ([`SND_B_SINCE_ALL`]: not known).
+    pub row: u32,
+    /// 0: the voices of the site's last edge; 1: the engine moved on after it; 2: not to be read now.
+    pub stale: u8,
+}
+
+/// [`SndRead::since`] and [`SndRead::row`]: not known.
+pub const SND_B_SINCE_ALL: u32 = sys::SND_B_SINCE_ALL;
 
 /// One site of a [`SndEngineEntry`] (`snd_engine_site`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -932,6 +1011,14 @@ pub const SND_SITE_TONAL: u8 = sys::snd_site_role_SND_SITE_TONAL as u8;
 pub const SND_SITE_DRUM: u8 = sys::snd_site_role_SND_SITE_DRUM as u8;
 pub const SND_SITE_STOP: u8 = sys::snd_site_role_SND_SITE_STOP as u8;
 pub const SND_CHAN_ANY: u8 = sys::SND_CHAN_ANY as u8;
+/// Most learned entries a game's list may hold (`snd_learned_decode`).
+pub const SND_LEARNED_MAX: usize = sys::SND_LEARNED_MAX as usize;
+/// Most bytes of a learned entry's program.
+pub const SND_PROG_MAX: usize = sys::SND_PROG_MAX as usize;
+/// Most signature bytes of a learned entry.
+pub const SND_LEARNED_LEN_MAX: u16 = sys::SND_LEARNED_LEN_MAX as u16;
+/// Most sites of a learned entry.
+pub const SND_LEARNED_SITES_MAX: usize = sys::SND_LEARNED_SITES_MAX as usize;
 
 impl Default for SndEngines {
     fn default() -> Self {
@@ -939,10 +1026,22 @@ impl Default for SndEngines {
     }
 }
 
+/// Runs a learned entry's program `prog` (`snd_prog_eval`) with `m`'s memory, the anchor and the
+/// registers `ctx` (host tests: the C interpreter against the Rust reference): (0, the result),
+/// (1, _) silent or (-1, _) invalid.
+pub fn snd_prog_eval(prog: &[u8], m: &Machine, anchor: u16, ctx: &zx_regs) -> (i32, u32) {
+    let mut v = 0u32;
+    // SAFETY: the pointer and length describe `prog`; `m.raw` is an initialised machine.
+    let rc = unsafe { sys::snd_prog_eval(prog.as_ptr(), prog.len() as u32, &*m.raw, anchor, ctx, &mut v) };
+    (rc, v)
+}
+
 /// The mixer: Beeper mode copies the beeper samples; an FM mode plays all sound 3 frames late,
 /// FM where its method is confident, the beeper elsewhere. Owns both methods and a synth.
 pub struct SndMixer {
     raw: Box<sys::snd_mixer>,
+    /// The table [`SndMixer::set_learned`] made (`raw` points into it).
+    _learned: Option<Learned>,
 }
 
 impl SndMixer {
@@ -951,7 +1050,7 @@ impl SndMixer {
         let mut raw: Box<sys::snd_mixer> = boxed_zeroed();
         // SAFETY: `raw` is a valid, exclusively owned snd_mixer.
         unsafe { sys::snd_mixer_init(&mut *raw, num, den) };
-        SndMixer { raw }
+        SndMixer { raw, _learned: None }
     }
 
     /// Method B with the test engine table instead of the built-in one.
@@ -960,6 +1059,19 @@ impl SndMixer {
         // SAFETY: `raw` was initialised by snd_mixer_init; the table is a 'static C array of n
         // entries.
         unsafe { sys::snd_mixer_set_engines(&mut *self.raw, table, n) };
+        self._learned = None;
+    }
+
+    /// Method B with the built-in engines followed by the learned entries of `list`
+    /// ([`SndEngines::with_learned`]); Err(`ZX_ERR_FORMAT`), and the engines unchanged, if the
+    /// decoder refuses it.
+    pub fn set_learned(&mut self, list: &[u8]) -> Result<(), i32> {
+        let learned = Learned::new(list)?;
+        // SAFETY: `raw` was initialised by snd_mixer_init; the table and what it points to are
+        // heap buffers kept in `self._learned` until the engines change again.
+        unsafe { sys::snd_mixer_set_engines(&mut *self.raw, learned.table.as_ptr(), learned.table.len() as u32) };
+        self._learned = Some(learned);
+        Ok(())
     }
 
     /// One frame: the machine right after its `run_frame` (None: nothing is method B's), its
