@@ -355,6 +355,8 @@ typedef struct snd_engine {   /* one table entry */
 	uint32_t min_len;
 	const void *data;         /* the reader's data: NULL for the built-in entries; a learned entry's
 	                           * snd_learned_ext (learned.c) */
+	uint8_t strict;           /* 1: consecutive rises must lie one period apart, not a whole number
+	                           * of periods (engines.c, known; learned entries); 0: the built-ins */
 } snd_engine;
 
 extern const snd_engine snd_engine_table[];   /* the built-in engines */

@@ -264,6 +264,7 @@ static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ex
 	en->flips = e[17];
 	en->min_len = 0;
 	en->data = x;
+	en->strict = 1;
 	return 1;
 }
 

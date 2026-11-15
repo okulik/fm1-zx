@@ -12,7 +12,7 @@ use soundlearn::fit::{check_fit, to_entry};
 use soundlearn::gate::{add_drum, builtin_at, drum_ok, judge, replay, replay_with_others, OtherSite, ReplayStats, Verdict, BUILTIN};
 use soundlearn::listen::{listen, Inputs, PeriodSample, SiteHeard, Snapshot};
 use soundlearn::model::{read_engine, EngineModel, Term};
-use soundlearn::{encode_list, eval_prog, LearnedEntry};
+use soundlearn::{encode_list, eval_prog, LearnedEntry, Op};
 use zx_sys::{Machine, SndEngines, SND_SITE_DRUM, SND_SITE_TONAL, SND_TONAL};
 
 const CLOCK: f64 = 3_500_000.0;
@@ -329,4 +329,40 @@ fn drum_between_notes() {
         assert!(add_drum(&entry, model.anchor, pc, |a| m.peek(a)).is_none(), "{pc:04X}");
     }
     assert!(add_drum(&entry, model.anchor, model.anchor - 2, |a| m.peek(a)).is_some());
+}
+
+/// Tune's learned entry with its period program replaced by `prog` (the original's ops given),
+/// replayed for 600 frames.
+fn tune_with(prog: impl Fn(&[Op]) -> Vec<Op>) -> ReplayStats {
+    let fx = fixtures::square_tune();
+    let load = || fixtures::machine(&fx.sna);
+    let (_, mut entry, _, verdict) = learn_fixture(&fx.sna, 600);
+    assert_eq!(verdict, Verdict::Learned { heard: true });
+    entry.progs[0] = prog(&entry.progs[0]);
+    let stats = replay(&load, &none(), 600, &entry);
+    eprintln!("replay {stats:?}");
+    assert!(stats.routine_frames > 400, "{stats:?}");
+    stats
+}
+
+/// Method B checks a learned entry strictly: a predicted period of half the true one (an octave
+/// high) is refused, though every rise lies a whole number (2) of its periods apart.
+#[test]
+fn strict_refuses_sub_multiple() {
+    let stats = tune_with(|p| [p, &[Op::Shr(1)]].concat());
+    assert!(stats.claimed * 50 <= stats.routine_frames, "{stats:?}");
+}
+
+/// A constant 116 T period (30 kHz, junk) on tune's anchor is refused.
+#[test]
+fn strict_refuses_constant_junk() {
+    let stats = tune_with(|_| vec![Op::K(116 * 256)]);
+    assert!(stats.claimed * 50 <= stats.routine_frames, "{stats:?}");
+}
+
+/// The true learned entry is still claimed under the strict check.
+#[test]
+fn strict_keeps_true_entry() {
+    let stats = tune_with(|p| p.to_vec());
+    assert!(stats.claimed * 10 >= stats.routine_frames * 9, "{stats:?}");
 }

@@ -225,13 +225,14 @@ static uint32_t tonal_role(classifier *c, const snd_engine *en, uint16_t pc, uin
  *    OUT by less than one pass).
  * A rise is counted when a channel known low is next known high within one and a half passes
  * (its time pinned to a pass). A frame contradicts its voices when a channel's consecutive rises
- * do not lie a whole number of its read periods apart (within a sixteenth of a period plus a
- * pass; more than one pair in eight), when a channel stays known at one level for longer than its
- * period (plus that tolerance), when a silent channel is known high, or when a segment's edges
- * leave a channel's level unknown (too few edges to tell the voices) or a new note's edges all
- * fall too near its start to be checked. A channel's state is
- * carried into the next frame while its voice holds, so a low note gets its evidence over
- * frames. One-channel engines (pass 0): every change of the level is an edge of the channel. */
+ * do not lie a whole number of its read periods apart (one period, for a strict entry: a learned
+ * one), within a sixteenth of a period plus a pass (more than one pair in eight), when a channel
+ * stays known at one level for longer than its period (plus that tolerance), when a silent
+ * channel is known high, or when a segment's edges leave a channel's level unknown (too few edges
+ * to tell the voices) or a new note's edges all fall too near its start to be checked. A
+ * channel's state is carried into the next frame while its voice holds, so a low note gets its
+ * evidence over frames. One-channel engines (pass 0): every change of the level is an edge of
+ * the channel. */
 
 #define MARGIN 400u   /* T either side of where the voices changed that the check leaves out */
 
@@ -241,6 +242,7 @@ typedef struct {
 	uint8_t held[SND_TONAL];     /* known at one level for longer than its period */
 	uint32_t period[SND_TONAL], tol[SND_TONAL], pass;
 	uint8_t blind;               /* the voices are not known: follow the levels only */
+	uint8_t strict;              /* rises one period apart only (snd_engine.strict) */
 } check_state;
 
 /* Channel ch's level is `level` from time t (its first OUT with it) to `until`. */
@@ -261,7 +263,7 @@ static void known(check_state *c, uint32_t ch, uint32_t level, int32_t t, int32_
 			uint32_t k = (d + p / 2u) / p;
 			uint32_t off = k ? (d > k * p ? d - k * p : k * p - d) : d;
 			c->pairs[ch]++;
-			if (!k || off > c->tol[ch]) c->bad[ch]++;
+			if (!k || off > c->tol[ch] || (k > 1u && c->strict)) c->bad[ch]++;
 		}
 		c->rises[ch]++;
 		tr->has_rise = 1;
@@ -438,6 +440,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 	int have = 0;
 
 	c.pass = en->pass;
+	c.strict = en->strict;
 	for (ch = 0; ch < SND_TONAL; ch++)
 		c.period[ch] = 0;
 	restart(&c, sg->v[0]);
