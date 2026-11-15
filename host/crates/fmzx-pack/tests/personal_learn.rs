@@ -3,7 +3,8 @@
 
 //! The personal pack learns each game's music: `tune.sna`'s routine gets a learned entry in the
 //! pack's sound section, the border tone and the scroller get none, the result lines and
-//! `sound-report.txt` say so, and a second run reads the cache. Games the learner cannot read
+//! `sound-report.txt` say so, and a second run reads the cache (a corrupt cache file is learned
+//! again). Games the learner cannot read
 //! (a machine halted for good, a speaker loop with an undecoded instruction) get "no music
 //! learned" and the pack still builds. A key script beside a game is part of the cache key, and
 //! one that does not parse is reported. Every folder holds only generated test programs.
@@ -167,4 +168,24 @@ fn keys_file_guides_the_run() {
     let report = std::fs::read_to_string(out.0.join("sound-report.txt")).unwrap();
     assert!(report.contains("tune.keys: ") && report.contains("the generic run was used"), "{report}");
     assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 2);
+}
+
+#[test]
+fn corrupt_cache_is_relearned() {
+    let games = Tmp::new("corrupt");
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("corrupt-out");
+    run(&games.0, &out.0);
+    let pack = std::fs::read(out.0.join("games.bin")).unwrap();
+    let cache = std::fs::read_dir(out.0.join("sound-cache")).unwrap().next().expect("one cache file").unwrap().path();
+    let good = std::fs::read(&cache).unwrap();
+    // a byte of the learned entry's digest (26 bytes in: past the cache file's head and the
+    // list's and entry's first bytes), so the list's structure stays intact
+    let mut bad = good.clone();
+    bad[26] ^= 0x5A;
+    std::fs::write(&cache, &bad).unwrap();
+    let (r, _) = run(&games.0, &out.0);
+    assert!(line(&table(&r), "tune").starts_with("tune: music learned ("), "{}", table(&r));
+    assert!(std::fs::read(out.0.join("games.bin")).unwrap() == pack, "the corrupt list went into the pack");
+    assert!(std::fs::read(&cache).unwrap() == good, "the cache file is not learned again and rewritten");
 }

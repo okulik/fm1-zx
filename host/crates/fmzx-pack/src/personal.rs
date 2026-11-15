@@ -57,7 +57,10 @@
 //! (`<name>: music learned (...)` or `<name>: no music learned (<reason>)`), and
 //! `<out>/sound-report.txt` holds them with each routine's details. The results are cached in
 //! `<out>/sound-cache/<crc>-<version>.bin` (the CRC-32 of the converted file and of the key
-//! script, the learner's version), which runs keep: an unchanged game is not learned again.
+//! script, the learner's version), which runs keep: an unchanged game is not learned again. A
+//! cache file is used only if its CRC matches and method B's decoder takes its list; otherwise
+//! the game is learned again. A panic while learning a game gives that game a learner error,
+//! and the pack is still built.
 
 use crate::keymaps::keymaps_json;
 use crate::keys::{inputs, parse_keys};
@@ -71,7 +74,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use zx_sys::{pack_game_at, Machine, PACK_MAX_RAW};
+use zx_sys::{pack_game_at, Machine, SndEngines, PACK_MAX_RAW};
 
 /// The editable games file, in the output folder.
 pub const GAMES_FILE: &str = "personal-games.toml";
@@ -314,27 +317,32 @@ fn learn_all(jobs: &[Job], cache: &Path) -> Vec<Sound> {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let (Some(job), Some(slot)) = (jobs.get(i), done.get(i)) else { break };
-                let got = learn_cached(job, cache);
+                let got = isolated(|| learn_cached(job, cache));
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(got);
             });
         }
     });
-    done.into_iter()
-        .map(|d| {
-            d.into_inner().unwrap_or_else(|e| e.into_inner()).unwrap_or_else(|| Sound {
-                list: None,
-                line: "no music learned (learner error: its thread stopped)".into(),
-                details: String::new(),
-                keys_error: None,
-            })
-        })
-        .collect()
+    // every job's slot is filled (its panics caught by `isolated`), so the default is never used
+    done.into_iter().map(|d| d.into_inner().unwrap_or_else(|e| e.into_inner()).unwrap_or_else(|| learner_error("no result"))).collect()
+}
+
+/// `f`'s result, or a learner error if it panics: one game's failure never fails the pack.
+fn isolated(f: impl FnOnce() -> Sound) -> Sound {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
+        let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
+        learner_error(why.as_deref().unwrap_or("a panic"))
+    })
+}
+
+/// A game's music when learning it failed.
+fn learner_error(why: &str) -> Sound {
+    Sound { list: None, line: format!("no music learned (learner error: {why})"), details: format!("  learner error: {why}\n"), keys_error: None }
 }
 
 /// Milliseconds per Spectrum frame, for the key scripts' times.
 const FRAME_MS: u64 = 20;
 /// The start of a cache file.
-const CACHE_MAGIC: &[u8; 8] = b"FMZXSND1";
+const CACHE_MAGIC: &[u8; 8] = b"FMZXSND2";
 
 /// A game's music: from the cache, or learned and then cached.
 fn learn_cached(job: &Job, cache: &Path) -> Sound {
@@ -378,20 +386,29 @@ fn learn_job(job: &Job, steps: Option<Vec<crate::keys::Step>>) -> (Option<Vec<u8
     (list, got.line, got.details)
 }
 
-/// A cache file: the magic, then the entry list, the line and the details, each a u32 length
-/// (little-endian) and its bytes; an empty list is none.
+/// A cache file: the magic, the CRC-32 of the rest (u32, little-endian), then the entry list,
+/// the line and the details, each a u32 length and its bytes; an empty list is none.
 fn cache_encode(list: Option<&[u8]>, line: &str, details: &str) -> Vec<u8> {
-    let mut b = CACHE_MAGIC.to_vec();
+    let mut payload = Vec::new();
     for part in [list.unwrap_or(&[]), line.as_bytes(), details.as_bytes()] {
-        b.extend((part.len() as u32).to_le_bytes());
-        b.extend(part);
+        payload.extend((part.len() as u32).to_le_bytes());
+        payload.extend(part);
     }
+    let mut b = CACHE_MAGIC.to_vec();
+    b.extend(crc32fast::hash(&payload).to_le_bytes());
+    b.extend(payload);
     b
 }
 
-/// A cache file's contents, None if it is not one.
+/// A cache file's contents; None if it is not one, its CRC does not match, or method B's
+/// decoder refuses its list (the cache is not trusted: a list goes into the pack only as the
+/// decoder takes it).
 fn cache_decode(b: &[u8]) -> Option<(Option<Vec<u8>>, String, String)> {
-    let mut rest = b.strip_prefix(CACHE_MAGIC)?;
+    let rest = b.strip_prefix(CACHE_MAGIC)?;
+    let (crc, mut rest) = (u32::from_le_bytes(rest.get(..4)?.try_into().ok()?), rest.get(4..)?);
+    if crc32fast::hash(rest) != crc {
+        return None;
+    }
     let mut part = || -> Option<Vec<u8>> {
         let len = u32::from_le_bytes(rest.get(..4)?.try_into().ok()?) as usize;
         let bytes = rest.get(4..4 + len)?.to_vec();
@@ -399,7 +416,7 @@ fn cache_decode(b: &[u8]) -> Option<(Option<Vec<u8>>, String, String)> {
         Some(bytes)
     };
     let (list, line, details) = (part()?, part()?, part()?);
-    if !rest.is_empty() {
+    if !rest.is_empty() || (!list.is_empty() && SndEngines::with_learned(&list).is_err()) {
         return None;
     }
     Some(((!list.is_empty()).then_some(list), String::from_utf8(line).ok()?, String::from_utf8(details).ok()?))
@@ -744,6 +761,29 @@ mod tests {
         let got = mark_missing(text, &[("a.sna".into(), true), ("b.sna".into(), false)]).unwrap();
         assert_eq!(got, "# top\n# missing: a.sna\n[[game]]\nid = \"a\"\n[[game]] # b\nid = \"b\"\n");
         assert!(mark_missing(text, &[("a.sna".into(), false)]).is_err());
+    }
+
+    #[test]
+    fn cache_files() {
+        let empty = cache_encode(None, "no music learned (x)", "  d\n");
+        assert_eq!(cache_decode(&empty), Some((None, "no music learned (x)".into(), "  d\n".into())));
+        // any byte changed fails the CRC
+        for i in 8..empty.len() {
+            let mut bad = empty.clone();
+            bad[i] ^= 1;
+            assert_eq!(cache_decode(&bad), None, "byte {i}");
+        }
+        // a list method B's decoder refuses (one entry announced, none there), its CRC right
+        assert_eq!(cache_decode(&cache_encode(Some(&[1, 0, 0, 0]), "music learned (x)", "")), None);
+    }
+
+    #[test]
+    fn a_panic_is_one_games_learner_error() {
+        let got = isolated(|| panic!("broken game"));
+        assert_eq!((got.list, got.line.as_str()), (None, "no music learned (learner error: broken game)"));
+        assert_eq!(got.details, "  learner error: broken game\n");
+        let fine = learner_error("x");
+        assert_eq!(isolated(|| fine.clone()), fine);
     }
 
     #[test]
