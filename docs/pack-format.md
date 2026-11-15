@@ -79,7 +79,8 @@ The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole lis
 - the list is at least 4 bytes and 4-byte aligned in memory, and `count` is at most 8;
 - the entry's 36 fixed bytes lie in the list; `size` is at least 36, a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
 - `kind` is 0 and `channels` is 1-3; `flips` and `timing` are 0 or 1;
-- `len` is 1 to 1024 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
+- `len` is 1 to 512 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
+- over the whole list, the sum of `n_sites x len` is at most 4096 (`SND_LEARNED_WORK_MAX`): method B hashes each site's signature for an `OUT` no entry is known at yet, so this bounds that work per frame;
 - `prog_len[c]` is 1-64 for each channel and 0 for the unused ones; `timing_len` is 1-64 with a timing program, else 0;
 - the arrays and programs together fit in `size` after the 36 fixed bytes;
 - `wild` offsets strictly ascend and are below `len`; `reloc` offsets ascend at least 2 apart and are below `len`;

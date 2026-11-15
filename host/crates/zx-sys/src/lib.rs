@@ -1032,6 +1032,8 @@ pub const SND_PROG_MAX: usize = sys::SND_PROG_MAX as usize;
 pub const SND_LEARNED_LEN_MAX: u16 = sys::SND_LEARNED_LEN_MAX as u16;
 /// Most sites of a learned entry.
 pub const SND_LEARNED_SITES_MAX: usize = sys::SND_LEARNED_SITES_MAX as usize;
+/// Most site-signature bytes (sites x len) over a game's learned entries.
+pub const SND_LEARNED_WORK_MAX: usize = sys::SND_LEARNED_WORK_MAX as usize;
 
 impl Default for SndEngines {
     fn default() -> Self {

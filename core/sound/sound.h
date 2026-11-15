@@ -382,8 +382,10 @@ extern const uint32_t snd_engine_misread_count;
  * from memory (at the frame's end) and registers. */
 #define SND_LEARNED_MAX 8u          /* learned entries per game */
 #define SND_PROG_MAX 64u            /* bytes of a program */
-#define SND_LEARNED_LEN_MAX 1024u   /* signature bytes of a learned entry (the matching's work) */
+#define SND_LEARNED_LEN_MAX 512u    /* signature bytes of a learned entry (the matching's work) */
 #define SND_LEARNED_SITES_MAX 16u   /* sites of a learned entry */
+#define SND_LEARNED_WORK_MAX 4096u  /* sites x signature bytes over a game's entries: the digest
+                                     * bytes find() hashes for an OUT no entry is known at */
 
 typedef struct {          /* a learned entry's programs and rules (snd_engine.data), pointing into its list */
 	const uint8_t *prog[SND_TONAL];   /* per channel: its period; 0 (or silent) = the channel is silent */

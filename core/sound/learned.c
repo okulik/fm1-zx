@@ -22,8 +22,11 @@
  * another depth at the end) is invalid. Memory is read through zx_peek, so any address is safe.
  *
  * The list comes from the pack: the decoder trusts nothing in it. It checks every count, size and
- * offset against the list and the entry, and dry-runs every program (the interpreter with no
- * machine: every op and operand checked, every read 0, nothing silent) before an entry is used.
+ * offset against the list and the entry, bounds the matching's work (SND_LEARNED_LEN_MAX bytes a
+ * signature, SND_LEARNED_WORK_MAX sites x signature bytes over the list: engines.c's find()
+ * hashes each site's signature for an OUT no entry is known at), and dry-runs every program
+ * (the interpreter with no machine: every op and operand checked, every read 0, nothing silent)
+ * before an entry is used.
  *
  * Built into flash, not SRAM, on the device (the reader runs only for frames a learned entry
  * claims). uint32_t arithmetic only (no 64-bit division). */
@@ -270,7 +273,7 @@ static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ex
 
 int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_learned_ext *ext, uint32_t max, uint32_t *n)
 {
-	uint32_t count, k, off = HEAD;
+	uint32_t count, k, off = HEAD, work = 0;
 
 	*n = 0;
 	if (avail < HEAD || ((uintptr_t)list & 3u)) return ZX_ERR_FORMAT;
@@ -282,6 +285,8 @@ int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_
 		size = rd16(list + off);
 		if (size < ENTRY || size % 4u || size > avail - off) return ZX_ERR_FORMAT;
 		if (!entry(list + off, size, &en[k], &ext[k])) return ZX_ERR_FORMAT;
+		work += (uint32_t)en[k].n_sites * en[k].len;   /* at most 16 x 512 an entry */
+		if (work > SND_LEARNED_WORK_MAX) return ZX_ERR_FORMAT;
 		off += size;
 	}
 	*n = count;

@@ -339,3 +339,24 @@ fn generic_reader() {
     at_end(&mut m, 0x0005, 0);
     assert_eq!(b2.read_full(&m, b2.entries().len() - 1, 0x0000, 0, &site(1, 0)).stale, 2);
 }
+
+/// A game's entries bound the matching's work (engines.c `find`: every site of every entry
+/// hashed over its signature for an OUT no entry is known at): a signature of at most 512 bytes,
+/// and at most 4096 site-signature bytes (sites x len) over the game's list.
+#[test]
+fn decode_bounds_the_matching_work() {
+    let sized = |len: u16, n: u16| LearnedEntry { len, wild: vec![], reloc: vec![], sites: (0..n).map(|k| (k, SND_SITE_TONAL, 0)).collect(), ..base() };
+    let ok = |l: &[LearnedEntry]| SndEngines::with_learned(&encode_list(l)).is_ok();
+    assert!(ok(&[sized(512, 1)]));
+    assert!(!ok(&[sized(513, 1)]), "a signature of 513 bytes");
+    // 16 sites x 256 bytes: the whole budget in one entry; a byte more is over it
+    assert!(ok(&[sized(256, 16)]));
+    assert!(!ok(&[sized(257, 16)]), "16 x 257");
+    // eight entries of 512 bytes, one site each: 4096; a site more in any is over
+    let eight = vec![sized(512, 1); 8];
+    assert!(ok(&eight));
+    let mut over = eight.clone();
+    over[3] = sized(512, 2);
+    assert!(!ok(&over), "4608 over the list");
+    assert_eq!((zx_sys::SND_LEARNED_LEN_MAX, zx_sys::SND_LEARNED_WORK_MAX), (512, 4096));
+}
