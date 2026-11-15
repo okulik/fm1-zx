@@ -9,8 +9,8 @@
 //! are loaded and past their menus (`budgets::SETTLE_MS`), in Crop with all three Sound choices:
 //! Beeper (the default; the mixer still runs both methods every frame for their look-ahead), FM:
 //! sound and FM: engines; and in the other Screen choices (Fit, Fit smooth, Border) with FM:
-//! engines, the heaviest Sound choice (screen work and sound work share nothing and add up, so
-//! not every pair is run). Besides the pack's games, three test programs (testprogs, in a pack of their
+//! engines (screen work and sound work are independent and add up, so not every pair is run;
+//! the worst unmeasured pair, estimated, is Border with Sopwith under FM: sound, about 2.37M). Besides the pack's games, three test programs (testprogs, in a pack of their
 //! own, never committed): `noise.sna` gives the decoder its busiest sound, 250 speaker edges a
 //! frame at pseudo-random spacings; `sites.sna` and `sites-var.sna` drive the speaker from four
 //! OUT addresses a frame that match no engine, method B's matching worst case: in `sites.sna`

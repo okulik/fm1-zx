@@ -78,7 +78,8 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] FM: engines: set Sound to "FM: engines" and start Castaway: its title tune plays as FM with two voices, in tune.
 - [ ] The Sound choice survives Reset game and starting another game from the picker (it is back to Beeper after power-off).
 - [ ] Screen modes: in Castaway, set Screen to each choice in turn and resume. Crop looks as before. Fit shows the whole width, sharp, with no colour other than the Spectrum's. Fit smooth shows the whole width with soft column edges. Border shows the whole picture smaller with a thin border at the sides, the border colour above and below, and no stretched or squashed shapes. In every choice the picture is complete at once after leaving the menu, with no leftover rows from the previous choice.
-- [ ] Border with a changing border: set Screen to Border and start the Tape multi-load test; when its border turns from blue to green, the green fills the side columns and the rows above and below the picture at once, with no leftover blue row.
+- [ ] Border with a changing border: set Screen to Border and start the Border and tone test ("Border and tone test"). Its stripes cover many lines and blend into the side columns: check that the stripes look right, including the blended side columns, and that no row is left over from an earlier frame.
+- [ ] Device speed of the flash-run modes: Scroll test and ZX Sopwith in Screen: Border and in Screen: Fit smooth, at LCD speed 4, then 1, then 0: the picture keeps up as in Crop, and the sound has no crackle. (`fw_budget` counts instructions and cannot see flash wait states on the real silicon; this is where they show.)
 - [ ] The HOME menu, the on-screen keyboard and PAUSED look the same in Border and Fit smooth as in Crop, and the game rows around the keyboard keep the chosen mode.
 - [ ] The Screen choice survives Reset game and starting another game from the picker (it is back to Crop after power-off).
 - [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the screen shows eight static bars, which do not change with the notes.
@@ -107,7 +108,7 @@ observe instead is its effect: an underrun is a short gap in the sound, heard as
 or click.
 
 - [ ] Play each game for a few minutes at the fastest clean LCD speed with the volume up,
-      listening for crackles, and again at divider 4. Note any game, screen or speed that
+      listening for crackles, and again at divider 4, and in Screen: Border. Note any game, screen or speed that
       crackles: that is where the CPU budget runs short on the real hardware (emu-gate's
       budgets assume 240 MHz).
 

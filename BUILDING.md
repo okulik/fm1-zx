@@ -289,7 +289,7 @@ Both need the device build (see Firmware above) and run in fm1-emu:
     cd host
     FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget --test fw_report -- --nocapture
 
-`fw_budget` (about 11 minutes) runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines, the heaviest sound mode (screen and sound work share nothing and add up, so not every pair is run), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+`fw_budget` (about 11 minutes) runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with ZX Sopwith under FM: sound at about 2.37M, or Border scroll at about 2.50M, both well under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
@@ -358,14 +358,20 @@ Fit, Fit smooth and Border compose from flash (`app/pixmodes.c`, XIP); Crop stay
 A Border row costs about 18,000 instructions when its source lines are not flat, against about
 4,500 for a Crop row; a run of 17 columns of one colour in every source line takes a short cut
 (exact: every pixel of it is the column's blend). scroll, every paper line changing every frame,
-is the worst Border frame. A screen of fine detail that changes everywhere every frame would cost
-more in Border at LCD speeds 1 and 0 (about 205 rows a frame); none of the games does.
+is the worst Border frame. A screen of fine detail that changes everywhere every frame, or a border
+that changes on every line every frame (loading stripes), would cost more in Border: at LCD speed 0
+up to all 240 rows can be redrawn each frame (about 205 at speed 1); none of the games does. Going
+over the cap does not slow the game: game frames run first whenever the audio buffer is low
+(`platform/fm1/main.c`) and each LCD band is at most 8 rows, so the picture updates fewer rows a
+second while the game's speed and the sound hold.
 
-(CPU per frame, max and average, from `fw_budget`; the cap is 3,600,000. In Crop and Fit the noise
-program is the worst frame in every sound mode; in Fit smooth it is ZX Sopwith, in Border scroll. Method B remembers the OUT addresses that matched no
+(CPU per frame, max and average, from `fw_budget`; the cap is 3,600,000. In Crop the noise
+program is the worst frame in every sound mode (Fit was measured with FM: engines only, where it is also the worst); in Fit smooth it is ZX Sopwith, in Border scroll. Method B remembers the OUT addresses that matched no
 entry and looks them up again only when the code around them changes; a lookup costs about 152,000
 instructions. The reachable worst case is about 7 lookups of unknown, changing addresses in one
 frame, about 2.9M estimated, under the cap.)
+
+The LCD compose path uses about 3 KB of the 8 KB user stack, measured from the disassembly: `pix_compose_rows` has a frame of 2,524 bytes plus its callees, and is called only from the main loop.
 
 Audio interrupt, max 1,574 instructions per block. RAMTEXT 48,396 of 49,152 bytes (2026-11-15). Image
 + pack 179,904 of 581,564 (0x8DFBC) bytes. POOL 272,076 bytes, 96,564 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
