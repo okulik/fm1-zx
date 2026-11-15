@@ -19,7 +19,35 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_ERR_FORMAT, ZX_OUT_SITES, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_TR_INSN, ZX_TR_INTA, ZX_TR_OUT, ZX_TR_READ, ZX_TR_WRITE, ZX_ERR_FORMAT, ZX_OUT_SITES, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+
+/// One event of the trace hook ([`Machine::set_trace`]).
+#[derive(Clone, Copy, Debug)]
+pub struct TraceEv {
+    /// `ZX_TR_INSN`, `ZX_TR_READ`, `ZX_TR_WRITE`, `ZX_TR_OUT` or `ZX_TR_INTA`.
+    pub kind: u8,
+    /// The byte read or written, or the `OUT`'s value.
+    pub val: u8,
+    /// The current instruction's first byte.
+    pub pc: u16,
+    /// The memory address or the port.
+    pub addr: u16,
+    /// Frame T-state of the event.
+    pub t: u32,
+    /// Contention T-states so far in total.
+    pub cont: u32,
+    /// Filled for INSN, OUT and INTA; zero otherwise.
+    pub regs: zx_regs,
+}
+
+type TraceFn = Box<dyn FnMut(&TraceEv)>;
+
+unsafe extern "C" fn trace_trampoline(ctx: *mut std::ffi::c_void, ev: *const sys::zx_trace_ev) {
+    // SAFETY: `ctx` points at the `TraceFn` box's heap cell (see `set_trace`), alive while the
+    // hook is installed; `ev` is valid for the call.
+    let (f, ev) = unsafe { (&mut *(ctx as *mut TraceFn), &*ev) };
+    f(&TraceEv { kind: ev.kind, val: ev.val, pc: ev.pc, addr: ev.addr, t: ev.t, cont: ev.cont, regs: ev.regs });
+}
 
 /// An `OUT` that changed the speaker level during a frame (see `zx_out_sites`).
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +74,8 @@ pub struct Machine {
     sig: Option<(Box<sys::zx_tapesig>, Box<[u8]>)>,
     /// The port FEh read counter of [`Machine::port_fe_probe`]; the C core keeps a pointer to it.
     probe: Option<Box<UnsafeCell<u32>>>,
+    /// The trace hook's closure (double-boxed: the C side holds a pointer to the inner box).
+    trace: Option<Box<TraceFn>>,
     _not_sync: PhantomData<*const ()>,
 }
 
@@ -58,7 +88,7 @@ impl Machine {
         // SAFETY: the ROM is 'static, so it outlives the machine; `raw` is
         // boxed, so the CPU's context pointer to it stays valid.
         unsafe { sys::zx_init(&mut *raw, ROM_48.as_ptr()) };
-        Machine { raw, tape: None, _rom: None, sig: None, probe: None, _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: None, sig: None, probe: None, trace: None, _not_sync: PhantomData }
     }
 
     /// A powered-on machine with another 16K ROM (host tests: an altered copy of the 48K ROM).
@@ -70,7 +100,7 @@ impl Machine {
         // SAFETY: the ROM is a heap buffer the machine keeps (it does not move) for as long as
         // the C side may read it; `raw` is boxed, as in `new`.
         unsafe { sys::zx_init(&mut *raw, rom.as_ptr()) };
-        Machine { raw, tape: None, _rom: Some(rom), sig: None, probe: None, _not_sync: PhantomData }
+        Machine { raw, tape: None, _rom: Some(rom), sig: None, probe: None, trace: None, _not_sync: PhantomData }
     }
 
     /// Runs one frame; an inserted tape signal is then advanced to the frame end.
@@ -122,6 +152,21 @@ impl Machine {
     pub fn set_keys(&mut self, rows: [u8; 8]) {
         // SAFETY: `rows` is 8 bytes.
         unsafe { sys::zx_set_keys(&mut *self.raw, rows.as_ptr()) }
+    }
+
+    /// Installs (or with `None` clears) the trace hook for the event kinds in `mask` (bit k: kind
+    /// k). The closure lives until replaced or the machine is dropped.
+    pub fn set_trace(&mut self, f: Option<Box<dyn FnMut(&TraceEv)>>, mask: u8) {
+        // SAFETY: `raw` was initialised by zx_init. The C side is cleared first, so it never
+        // holds a pointer to a closure that is about to be freed.
+        unsafe { sys::zx_trace_set(&mut *self.raw, None, std::ptr::null_mut(), 0) };
+        self.trace = f.map(Box::new);
+        if let Some(b) = self.trace.as_mut() {
+            let ctx = &mut **b as *mut TraceFn as *mut std::ffi::c_void;
+            // SAFETY: `ctx` stays valid while `self.trace` holds the box; replacing or dropping
+            // it happens after this call has cleared the C side again.
+            unsafe { sys::zx_trace_set(&mut *self.raw, Some(trace_trampoline), ctx, mask) };
+        }
     }
 
     /// Bit 0 right, 1 left, 2 down, 3 up, 4 fire.

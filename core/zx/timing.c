@@ -23,6 +23,9 @@
 
 #include "zx.h"
 #include "zx_internal.h"
+#ifdef ZX_TESTING
+#include <string.h>
+#endif
 
 /* Contention over one 8-T-state phase, indexed by (t - 14335) & 7. */
 static const uint8_t pattern[8] = {6, 5, 4, 3, 2, 1, 0, 0};
@@ -49,9 +52,33 @@ static inline uint32_t mcycle_t(const zx_machine *m)
 	return m->insn_t0 + m->clock.cycles + m->wait;
 }
 
+#ifdef ZX_TESTING
+static void trace(zx_machine *m, uint8_t kind, uint16_t addr, uint8_t val, uint32_t t)
+{
+	zx_trace_ev ev;
+
+	if (m->trace_fn == NULL || !(m->trace_mask & (1u << kind))) return;
+	ev.kind = kind;
+	ev.val = val;
+	ev.pc = m->insn_pc;
+	ev.addr = addr;
+	ev.t = t;
+	ev.cont = m->cont_total;
+	memset(&ev.regs, 0, sizeof ev.regs);
+	if (kind == ZX_TR_INSN || kind == ZX_TR_OUT || kind == ZX_TR_INTA) zx_get_regs(m, &ev.regs);
+	m->trace_fn(m->trace_ctx, &ev);
+}
+#define TRACE(...) trace(__VA_ARGS__)
+#else
+#define TRACE(...) ((void)0)
+#endif
+
 static inline void delay(zx_machine *m, uint32_t d)
 {
 	if (d) {
+#ifdef ZX_TESTING
+		m->cont_total += d;
+#endif
 		m->wait += d;
 		z80_wait(&m->cpu, d);
 	}
@@ -110,6 +137,7 @@ static uint8_t cpu_fetch_opcode(void *context, uint16_t address)
 		m->insn_t0 = m->run_base + (uint32_t)m->cpu.cycles;
 		m->wait = 0;
 		m->insn_pc = address;
+		TRACE(m, ZX_TR_INSN, address, opcode, m->insn_t0);
 	}
 	extra = z80_insn_clock_extra_m1(&m->clock, opcode);
 	/* The table sets clock.cycles to 4 only for CB/ED-prefixed opcodes; for DD/FD
@@ -126,8 +154,12 @@ static uint8_t cpu_mem_read(void *context, uint16_t address)
 {
 	zx_machine *m = context;
 
+	uint8_t v;
+
 	mem_mcycle(m, address);
-	return zx_mem_read(m, address);
+	v = zx_mem_read(m, address);
+	TRACE(m, ZX_TR_READ, address, v, mcycle_t(m));
+	return v;
 }
 
 static void cpu_mem_write(void *context, uint16_t address, uint8_t value)
@@ -135,6 +167,7 @@ static void cpu_mem_write(void *context, uint16_t address, uint8_t value)
 	zx_machine *m = context;
 
 	mem_mcycle(m, address);
+	TRACE(m, ZX_TR_WRITE, address, value, mcycle_t(m));
 	zx_mem_write(m, address, value);
 }
 
@@ -149,6 +182,7 @@ static uint8_t cpu_inta(void *context, uint16_t address)
 	z80_insn_clock_start(&m->clock, 0);
 	m->insn_t0 = m->run_base + (uint32_t)m->cpu.cycles;
 	m->wait = 0;
+	TRACE(m, ZX_TR_INTA, address, 0xFF, m->insn_t0);
 	extra = z80_insn_clock_extra_inta(&m->clock, m->cpu.im != 0, 0xFF);
 	z80_insn_clock_extra_add_inta(&m->clock, extra);
 	m->insn_open = 0;
@@ -207,6 +241,7 @@ static void cpu_out(void *context, uint16_t port, uint8_t value)
 	zx_machine *m = context;
 
 	io_mcycle(m, port);
+	TRACE(m, ZX_TR_OUT, port, value, m->io_t);
 	zx_port_out(m, port, value);
 }
 

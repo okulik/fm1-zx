@@ -18,8 +18,19 @@ void zx_poke(zx_machine *m, uint16_t addr, uint8_t value)
 
 void zx_init(zx_machine *m, const uint8_t *rom)
 {
+#ifdef ZX_TESTING
+	zx_trace_fn trace_fn = m->trace_fn;
+	void *trace_ctx = m->trace_ctx;
+	uint8_t trace_mask = m->trace_mask;
+#endif
+
 	memset(m, 0, sizeof *m);   /* also tape_ear and tape_sig: NULL, no tape signal */
 	m->rom = rom;
+#ifdef ZX_TESTING
+	m->trace_fn = trace_fn;
+	m->trace_ctx = trace_ctx;
+	m->trace_mask = trace_mask;
+#endif
 	memset(m->dirty, 0xFF, sizeof m->dirty);
 	m->force_dirty = 1;
 
@@ -27,6 +38,15 @@ void zx_init(zx_machine *m, const uint8_t *rom)
 	zx_ula_init(m);
 	z80_power(&m->cpu, 1);
 }
+
+#ifdef ZX_TESTING
+void zx_trace_set(zx_machine *m, zx_trace_fn fn, void *ctx, uint8_t mask)
+{
+	m->trace_fn = fn;
+	m->trace_ctx = ctx;
+	m->trace_mask = mask;
+}
+#endif
 
 /* INT is asserted at T=0 and released once ZX_INT_TSTATES have run. The frame
  * is run in two slices so the line drops at the first instruction boundary at

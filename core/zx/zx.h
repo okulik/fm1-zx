@@ -28,6 +28,19 @@ typedef struct {
 	uint8_t i, r, iff1, iff2, im;
 } zx_regs;
 
+#ifdef ZX_TESTING
+/* Host tests only: the trace hook. Event kinds; a mask bit k enables kind k. */
+enum { ZX_TR_INSN = 0, ZX_TR_READ = 1, ZX_TR_WRITE = 2, ZX_TR_OUT = 3, ZX_TR_INTA = 5 };
+typedef struct {
+	uint8_t kind, val;   /* val: the byte read or written, or the OUT's value */
+	uint16_t pc, addr;   /* pc: the instruction's first byte; addr: memory address or port */
+	uint32_t t;          /* frame T-state of the event */
+	uint32_t cont;       /* contention T-states so far in total */
+	zx_regs regs;        /* filled for INSN, OUT and INTA */
+} zx_trace_ev;
+typedef void (*zx_trace_fn)(void *ctx, const zx_trace_ev *ev);
+#endif
+
 typedef struct {
 	uint32_t tstate;   /* frame T-state of the OUT's I/O cycle */
 	uint8_t level;     /* (OUT 0xFE value >> 3) & 3: bit0 MIC, bit1 EAR */
@@ -93,6 +106,10 @@ typedef struct zx_machine {
 	zx_edge edges[ZX_MAX_EDGES];
 #ifdef ZX_TESTING
 	uint32_t test_out_7ffd;                   /* host only: OUTs that page a 128K's memory (ula.c) */
+	zx_trace_fn trace_fn;                     /* host only: the trace hook (zx_trace_set) */
+	void *trace_ctx;
+	uint8_t trace_mask;
+	uint32_t cont_total;                      /* contention T-states so far (timing.c's delay) */
 #endif
 } zx_machine;
 
@@ -207,6 +224,8 @@ void zx_test_set_tstate(zx_machine *m, uint32_t t);   /* next instruction starts
 uint32_t zx_test_step(zx_machine *m);                 /* runs one instruction; T-states incl. contention */
 uint8_t zx_test_level(const zx_machine *m);           /* current beeper level */
 void zx_beeper_test_dc_block(zx_beeper *b, int on);   /* DC blocker on (default) or off */
+/* Calls fn(ctx, ev) for each event whose kind's mask bit is set; fn NULL clears the hook. It survives zx_init. */
+void zx_trace_set(zx_machine *m, zx_trace_fn fn, void *ctx, uint8_t mask);
 #endif
 
 #endif
