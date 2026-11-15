@@ -218,6 +218,14 @@ fn decode_accepts_good_lists() {
     assert_eq!((x.channels, x.pass, x.pos.clone(), x.sites.len()), (3, 150, vec![0, 40, 90], 4));
 }
 
+/// The table the firmware composes at game start (platform/fm1/main.c, game_start): the built-in
+/// entries in their order, then the game's learned ones.
+#[test]
+fn builtin_then_learned_table() {
+    let names: Vec<String> = SndEngines::with_learned(&encode_list(&[base()])).expect("decodes").entries().into_iter().map(|e| e.name).collect();
+    assert_eq!(names, ["Castaway", "Colony 8", "ROM BEEP", "Cave Runner title", "Cave Runner in game", "Unison", "learned"]);
+}
+
 #[test]
 fn decode_rejects_bad_lists() {
     let mut bad: Vec<(&str, Vec<u8>)> = vec![

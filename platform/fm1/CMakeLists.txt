@@ -55,12 +55,24 @@ add_custom_command(OUTPUT "${_ram}/pixmodes.obj"
           "${_ram}/pixmodes.obj" zx_screen_line=fmzx_xip_screen_line zx_border_line=fmzx_xip_border_line
           pix_compose_zx=fmzx_xip_compose_zx
   DEPENDS fmzx_app "${_redefine}" VERBATIM)
+# core/sound/learned.c (the learned entries: their decoder and the reader method B calls through
+# an entry's read pointer) is not in zx_sound: it runs from XIP, its device copy calling the
+# core's zx_peek and zx_get_regs, which are in RAMTEXT, through main.c's fmzx_xip_* (fmzx_ram).
+add_library(fmzx_learned STATIC "${PROJECT_SOURCE_DIR}/core/sound/learned.c")
+target_compile_options(fmzx_learned PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(fmzx_learned PRIVATE zx_sound)
+add_custom_command(OUTPUT "${_ram}/learned.obj"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_ram}"
+  COMMAND ${FMZX_PYTHON} "${_redefine}" --ar "${CMAKE_AR}" --member learned.c.obj "$<TARGET_FILE:fmzx_learned>"
+          "${_ram}/learned.obj" zx_peek=fmzx_xip_peek zx_get_regs=fmzx_xip_get_regs
+  DEPENDS fmzx_learned "${_redefine}" VERBATIM)
 add_custom_target(fmzx_ram_objects DEPENDS "${_ram}/libzx_core.a" "${_ram}/libzx_sound.a" "${_ram}/pixels.obj"
-  "${_ram}/pixmodes.obj")
-set_source_files_properties("${_ram}/pixels.obj" "${_ram}/pixmodes.obj" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+  "${_ram}/pixmodes.obj" "${_ram}/learned.obj")
+set_source_files_properties("${_ram}/pixels.obj" "${_ram}/pixmodes.obj" "${_ram}/learned.obj" PROPERTIES
+  EXTERNAL_OBJECT TRUE GENERATED TRUE)
 
 add_executable(fmzx_app_image ${_ours} "${_bsp}/chip/fm1_vec.S" "${_bsp}/chip/fm1_isr.S"
-  "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c" "${_ram}/pixels.obj" "${_ram}/pixmodes.obj")
+  "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c" "${_ram}/pixels.obj" "${_ram}/pixmodes.obj" "${_ram}/learned.obj")
 add_dependencies(fmzx_app_image fmzx_ram_objects)
 set_target_properties(fmzx_app_image PROPERTIES OUTPUT_NAME fmzx_app SUFFIX .elf
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.ld;${_ram}/libzx_core.a;${_ram}/libzx_sound.a")

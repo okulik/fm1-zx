@@ -20,12 +20,15 @@ struct ram_calls {
     void (*tape_autostart)(zx_machine *);
     void (*beeper_init)(zx_beeper *, uint32_t, uint32_t);
     void (*mixer_init)(snd_mixer *, uint32_t, uint32_t);
+    void (*set_engines)(snd_mixer *, const snd_engine *, uint32_t);
     void (*compose_zx)(const zx_machine *, unsigned, unsigned, uint8_t *);
     void (*screen_line)(const zx_machine *, unsigned, uint8_t *);
     uint8_t (*border_line)(const zx_machine *, unsigned);
     void (*game_step)(void);    /* main.c: one Spectrum frame */
     void (*game_release)(void); /* main.c: all Spectrum keys and Kempston up */
     void (*lcd_pump)(void);     /* lcd.c */
+    uint8_t (*peek)(const zx_machine *, uint16_t);
+    void (*get_regs)(const zx_machine *, zx_regs *);
 };
 extern struct ram_calls fmzx_ram;
 
@@ -37,5 +40,11 @@ void lcd_pump_ram(void);
 void fmzx_xip_screen_line(const zx_machine *m, unsigned y, uint8_t *out);
 uint8_t fmzx_xip_border_line(const zx_machine *m, unsigned frame_line);
 void fmzx_xip_compose_zx(const zx_machine *m, unsigned row, unsigned crop_x, uint8_t *idx);
+
+/* What the device copy of core/sound/learned.c (XIP; the learned entries' reader, which method B
+ * calls through the entry's read pointer) calls for zx_peek and zx_get_regs (renamed the same
+ * way): main.c, through the table. */
+uint8_t fmzx_xip_peek(const zx_machine *m, uint16_t addr);
+void fmzx_xip_get_regs(const zx_machine *m, zx_regs *r);
 
 #endif

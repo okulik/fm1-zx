@@ -102,6 +102,10 @@ static uint8_t game_file[PACK_MAX_RAW] POOL("game");
 static int16_t frame_samples[FRAME_SAMPLES] POOL("samples");
 static int16_t mixed_samples[FRAME_SAMPLES] POOL("samples");
 static snd_mixer mixer POOL("mixer");
+/* Method B's table while the game has learned entries (its pack's sound section): the built-in
+ * entries, then the game's, whose arrays and programs point into the pack. */
+static snd_engine learned_table[SND_ENGINE_BUILTIN_MAX + SND_LEARNED_MAX] POOL("mixer");
+static snd_learned_ext learned_ext[SND_LEARNED_MAX] POOL("mixer");
 static zx_beeper beeper;
 /* The Sound item's choice, SND_MODE_* (CMD_SOUND): kept across games until power off. Read by
  * emu-gate. */
@@ -322,8 +326,8 @@ static void RAMTEXT game_release(void)
 /* The RAMTEXT code XIP calls (ramcalls.h). */
 struct ram_calls fmzx_ram = {
     zx_init, zx_load_sna, zx_load_z80, zx_tape_insert, zx_tape_autostart, zx_beeper_init,
-    snd_mixer_init, pix_compose_zx, zx_screen_line, zx_border_line, game_step, game_release,
-    lcd_pump_ram,
+    snd_mixer_init, snd_mixer_set_engines, pix_compose_zx, zx_screen_line, zx_border_line, game_step,
+    game_release, lcd_pump_ram, zx_peek, zx_get_regs,
 };
 
 /* For the device copy of app/pixmodes.c, which runs from XIP (ramcalls.h). */
@@ -342,9 +346,35 @@ void fmzx_xip_compose_zx(const zx_machine *m, unsigned row, unsigned crop_x, uin
     fmzx_ram.compose_zx(m, row, crop_x, idx);
 }
 
+/* For the device copy of core/sound/learned.c, which runs from XIP (ramcalls.h). */
+uint8_t fmzx_xip_peek(const zx_machine *m, uint16_t addr)
+{
+    return fmzx_ram.peek(m, addr);
+}
+
+void fmzx_xip_get_regs(const zx_machine *m, zx_regs *r)
+{
+    fmzx_ram.get_regs(m, r);
+}
+
 static uint16_t gain_q10(uint32_t master)
 {
     return (uint16_t)(master >= 1016u ? 1024u : master * master >> 10);
+}
+
+/* Game `index`'s learned entries, if its pack has any, after the built-in ones in method B's table
+ * (the mixer just initialised). No list, or a bad one, leaves the built-in table. */
+static void learned_start(uint32_t index)
+{
+    const uint8_t *list;
+    uint32_t len, n, i;
+    if (pack_sound_at(pack_base, index, &list, &len) != ZX_OK || len == 0 ||
+        snd_learned_decode(list, len, learned_table + snd_engine_count, learned_ext, SND_LEARNED_MAX, &n) != ZX_OK ||
+        n == 0)
+        return;
+    for (i = 0; i < snd_engine_count; i++)
+        learned_table[i] = snd_engine_table[i];
+    fmzx_ram.set_engines(&mixer, learned_table, snd_engine_count + n);
 }
 
 /* Loads pack entry `index` into fmzx_machine; ZX_OK, or the error (the game does not run). */
@@ -379,6 +409,7 @@ static int game_start(uint32_t index)
     fmzx_ram.beeper_init(&beeper, 750000u, 17u);
     /* the decoder's history and the delay ring start empty: nothing of the last game plays */
     fmzx_ram.mixer_init(&mixer, 750000u, 17u);
+    learned_start(index);
     for (i = 0; i < LCD_ROWS; i++)
         border_sent[i] = line_seen[i] = NO_COLOUR;
     game.crop_x = g.crop_x;

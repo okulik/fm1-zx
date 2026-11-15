@@ -48,6 +48,8 @@
 
 const snd_engine snd_engine_table[] = { SND_ENGINES_BUILTIN };
 const uint32_t snd_engine_count = sizeof snd_engine_table / sizeof snd_engine_table[0];
+_Static_assert(sizeof snd_engine_table / sizeof snd_engine_table[0] == SND_ENGINE_BUILTIN_MAX,
+               "SND_ENGINE_BUILTIN_MAX is the built-in count");
 
 const char *snd_engine_name(const snd_engine *table, uint32_t index)
 {
