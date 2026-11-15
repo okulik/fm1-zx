@@ -161,7 +161,7 @@ fn fw_personal() {
     println!("turbo: border {TAPE_DONE_BORDER} {waited} ms after PLAY");
     assert_eq!(m.resets(), 0);
 
-    fm_engines_plays_learned_tune(&fw, &pkg, &pack);
+    fm_engines_plays_learned_tune(&fw, &pack);
 }
 
 /// Index of `needle` in `hay`.
@@ -169,18 +169,20 @@ fn find(hay: &[i16], needle: &[i16]) -> Option<usize> {
     (0..=hay.len().checked_sub(needle.len())?).find(|&p| hay[p..p + needle.len()] == *needle)
 }
 
-/// The tune (game 1) with its learned entry: started with MASTER at full, FM: engines chosen
-/// from the HOME menu, 3 s recorded. The device plays the host mixer's output in FM: engines
+/// The tune (game 1) with its learned entry: the firmware booted with the personal pack as the
+/// boot loader starts it, the audio clock running (a package booted as fm1-emu's web page boots
+/// it has no audio PLL, so no sound), as `fw_audio`'s games are; started with MASTER at full,
+/// FM: engines chosen from the HOME menu, 3 s recorded. The device plays the host mixer's output in FM: engines
 /// with the pack's learned list for the tune, sample for sample; the mixer plays FM, and the
 /// audio is not the delayed beeper.
-fn fm_engines_plays_learned_tune(fw: &Firmware, pkg: &[u8], pack: &[u8]) {
+fn fm_engines_plays_learned_tune(fw: &Firmware, pack: &[u8]) {
     use zx_sys::{SndMixer, SND_DELAY_FRAMES, SND_MODE_BEEPER, SND_MODE_FM_B};
     const TUNE: u32 = 1;
     const FRAMES: usize = 150; // 3 s
     let list = fmzx_pack::pack::sound_list(pack, TUNE).expect("the tune's learned list").to_vec();
     assert_eq!(list[0], 1, "one learned entry");
 
-    let mut m = Machine::boot_package(fw, pkg, Some(OPT));
+    let mut m = Machine::boot(&fw.with_pack(pack), BootOpt { rgb565: false, divider: 4 });
     m.set_adc(MASTER_ADC, 1023);
     m.run_ms(BOOT_MS);
     assert_eq!(m.resets(), 0);
