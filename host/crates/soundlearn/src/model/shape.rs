@@ -310,6 +310,61 @@ fn run_path(cfg: &Cfg, ctx: &Ctx, p: &SetupPath) -> State {
     st
 }
 
+/// The setup paths of one zero test, checked against the pass.
+struct Setup<'a> {
+    cfg: &'a Cfg,
+    ctx: &'a Ctx<'a>,
+    conv: &'a Conv<'a>,
+    items: &'a [Item],
+    /// The state at the pass's start of a warmed-up traversal.
+    start: &'a State,
+    /// The zero test's item.
+    test: usize,
+    /// The level the Flips channels share.
+    shared: &'a [Loc],
+    out: u16,
+}
+
+impl Setup<'_> {
+    fn run(&self, items: &[Item], st: State) -> Option<Run> {
+        run_pass(self.cfg, self.ctx, self.conv, items, st, self.out, false).ok()
+    }
+
+    /// Whether path `p` has no speaker `OUT` and leaves the level as the pass would: from the
+    /// state at the test, the pass's own way round to where `p` re-enters and `p` itself, each
+    /// followed by the pass from there and one more, give the same speaker bits wherever the
+    /// pass's depend on its state (`p` may set them to a constant); for Flips, `p` does not
+    /// write the shared level. Calls may change anything.
+    fn keeps_level(&self, p: &SetupPath) -> bool {
+        let (cfg, items) = (self.cfg, self.items);
+        let Some(r) = items.iter().position(|it| it.pc() == p.reentry) else { return false };
+        let Some(at_test) = self.run(&items[..=self.test], self.start.clone()) else { return false };
+        // the pass's own way: the test's staying side on to the re-entry
+        let around: Vec<Item> = if r > self.test {
+            items[self.test + 1..r].to_vec()
+        } else {
+            items[self.test + 1..].iter().chain(&items[..r]).cloned().collect()
+        };
+        let Some(normal) = self.run(&around, at_test.end.clone()) else { return false };
+        let mut st = at_test.end;
+        for pc in &p.nodes {
+            let i = &cfg.n[pc];
+            let speaker = matches!(i.port_out, Some(PortRef::Imm(n)) if n & 1 == 0) || i.port_out == Some(PortRef::RegC);
+            if speaker || self.shared.iter().any(|&l| writes_loc(self.ctx.peek, i, l)) {
+                return false;
+            }
+            match i.flow {
+                Flow::Call(_) | Flow::CondCall(_) | Flow::Rst(_) => st.clobber_all(),
+                _ => st.step(i, self.ctx),
+            }
+        }
+        let on: Vec<Item> = items[r..].iter().chain(items).cloned().collect();
+        let (Some(a), Some(b)) = (self.run(&on, normal.end), self.run(&on, st)) else { return false };
+        a.outs.len() == b.outs.len()
+            && a.outs.iter().zip(&b.outs).all(|(x, y)| x.pc == y.pc && (!matches!(x.bit, Bit::E { .. }) || y.bit == x.bit || matches!(y.bit, Bit::Z | Bit::O)))
+    }
+}
+
 /// One traversal of the pass.
 struct Run {
     outs: Vec<Out>,
@@ -558,6 +613,22 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     if channels.len() > SND_TONAL || channels.iter().map(|c| c.sites.len()).sum::<usize>() > SND_LEARNED_SITES_MAX {
         return Err(shape(out));
     }
+    // the setup between notes makes no edges of its own: no speaker OUT, and the level the pass
+    // carries comes back as the pass would leave it, or set (never flipped: a hidden channel)
+    let shared: Vec<Loc> = diamonds
+        .iter()
+        .flat_map(|d| d.zero.outs.iter())
+        .filter_map(|o| match o.1 {
+            Bit::E { loc, .. } => Some(loc),
+            _ => None,
+        })
+        .collect();
+    for (test, ps) in tests.iter().zip(&paths) {
+        let setup = Setup { cfg, ctx: &ctx, conv: &conv, items: &items, start: &r0.end, test: test.0, shared: &shared, out };
+        if ps.iter().any(|p| !setup.keeps_level(p)) {
+            return Err(shape(test.3));
+        }
+    }
 
     // ---- the note's timing ----
     let ends: Vec<Vec<(u16, State)>> = paths.iter().map(|ps| ps.iter().map(|p| (p.reentry, run_path(cfg, &ctx, p))).collect()).collect();
@@ -603,15 +674,15 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     })
 }
 
-/// Whether input `x` was, at the end of a setup path, loaded through a pointer the path
-/// advanced.
+/// Whether input `x` was, at the end of a setup path, read through a pointer the path advanced:
+/// the pointer still holds the value it was loaded through (the same base), moved since.
 fn walked(end: &State, x: Input, anchor: u16) -> bool {
     let adv = |pair: u8| pair_index(pair).is_some_and(|i| end.advanced >> i & 1 != 0);
-    let through = |s: Src| matches!(s, Src::Idx { pair, .. } if adv(pair));
+    let through = |s: Src| matches!(s, Src::Idx { pair, base, .. } if adv(pair) && pair_index(pair).is_some_and(|i| end.base[i] == base));
     match x {
         Input::Indexed(pair, _) => adv(pair),
         Input::Reg(r) if r < 8 || r == 14 => through(end.v[if r == 14 { 8 } else { r as usize }].src),
-        Input::Reg(r) => matches!(end.word(r), W::Idx { pair, .. } if adv(pair)),
+        Input::Reg(r) => matches!(end.word(r), W::Idx { pair, base, d } if through(Src::Idx { pair, base, d })),
         Input::Abs(a) | Input::Abs16(a) => through(end.read_mem(a).src),
         Input::Rel(o) | Input::Rel16(o) => through(end.read_mem(anchor.wrapping_add(o)).src),
     }

@@ -152,6 +152,8 @@ impl Val {
 /// A phase accumulator: a 16-bit value that a step is added to every pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Acc {
+    /// The `ADD` that steps it (once a pass).
+    pub pc: u16,
     /// Where it lives: `Mem(a)` or `Entry(pair)`.
     pub base: W,
     pub step: W,
@@ -167,7 +169,8 @@ pub(super) struct State {
     pub mem: BTreeMap<u16, Val>,
     /// A write through a pointer happened: memory not in `mem` is unknown.
     pub mem_lost: bool,
-    /// Pairs (by index) moved by a constant: `INC`, `DEC`, `ADD` of a known value.
+    /// Pairs (by index) moved by a constant (`INC`, `DEC`, `ADD` of a known value) since their
+    /// base was set.
     pub advanced: u8,
     pub accs: Vec<Acc>,
     next: u32,
@@ -201,6 +204,7 @@ impl State {
         self.base[i] = self.next;
         self.off[i] = 0;
         self.next += 1;
+        self.advanced &= !(1 << i);
     }
 
     /// Every bit becomes its place's own (the reference point of a branch's arm).
@@ -469,7 +473,7 @@ impl State {
                 let k = if op & 8 == 0 { 1 } else { -1 };
                 self.advance(pair_index(pair).unwrap_or(0), k);
             }
-            0x09 | 0x19 | 0x29 => self.add_pair(hl, [8, 9, hl][(op >> 4) as usize], ctx),
+            0x09 | 0x19 | 0x29 => self.add_pair(i.pc, hl, [8, 9, hl][(op >> 4) as usize], ctx),
             0x07 | 0x0F | 0x17 | 0x1F => {
                 let old = self.v[A].bits;
                 let carry = self.v[F].bits[0];
@@ -546,23 +550,24 @@ impl State {
         self.write_mem(a.wrapping_add(1), self.v[h]);
     }
 
-    /// `ADD hl,rr`: a pointer step when rr is a known value; a phase accumulator when hl holds
-    /// a value from memory or its own start value and rr a step that is not unknown.
-    fn add_pair(&mut self, hl: u8, rr: u8, ctx: &Ctx) {
+    /// `ADD hl,rr` (at `pc`): a pointer step when rr is a known value; a phase accumulator when
+    /// hl holds a value from memory or its own start value and rr a step that is not unknown.
+    fn add_pair(&mut self, pc: u16, hl: u8, rr: u8, ctx: &Ctx) {
         let Some(pi) = pair_index(hl) else { return };
         let (h, l) = PAIR_SLOTS[pi];
         let (acc, step) = (self.word(hl), self.word(rr));
         let k = if rr != hl { Self::word_value(step, ctx) } else { None };
         let (base, off) = (self.base[pi], self.off[pi]);
-        // the accumulator again (a later pass): the same one when the step is
+        // the accumulator again in a later pass: the same ADD with the same step (a second ADD
+        // in one pass is not, so it is not an accumulator)
         let again = match acc {
-            W::Acc(j) => self.accs.get(j as usize).filter(|a| a.step == step).map(|_| j),
+            W::Acc(j) => self.accs.get(j as usize).filter(|a| a.step == step && a.pc == pc).map(|_| j),
             _ => None,
         };
         let is_acc = (again.is_some() || matches!(acc, W::Mem(_) | W::Entry(_))) && !matches!(step, W::Unknown | W::Acc(_)) && rr != hl;
         if is_acc {
             let id = again.unwrap_or_else(|| {
-                self.accs.push(Acc { base: acc, step, stored: 0 });
+                self.accs.push(Acc { pc, base: acc, step, stored: 0 });
                 (self.accs.len() - 1) as u16
             });
             let mut hi = [Bit::X; 8];

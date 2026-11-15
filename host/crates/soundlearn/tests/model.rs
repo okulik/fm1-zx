@@ -382,3 +382,60 @@ fn same_byte_in_one_half_period_is_one_channel() {
     assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 29, x: Input::Indexed(11, 0) }, Term::Const(58)]);
     assert!(md.duration.is_none() && !md.table_walk);
 }
+
+// ---- review round 1: three unsound shapes -------------------------------------------------
+
+#[test]
+fn slots_phase_in_a_register() {
+    // one ADD HL,DE a pass, the phase kept in HL: 8000 loop: ADD HL,DE; LD A,H; AND 80h;
+    // RRCA x3; OUT (FEh),A; JR loop. A pass is 11+4+7+12+11+12 = 57 T.
+    let mem = at_8000(&[0x19, 0x7C, 0xE6, 0x80, 0x0F, 0x0F, 0x0F, 0xD3, 0xFE, 0x18, 0xF5]);
+    let md = read_engine(mem, 0x8007).expect("reads");
+    assert_eq!(md.family, Family::Slots);
+    assert_eq!(md.channels[0].half_period, vec![Term::Recip { num_t: 32768 * 57, x: Input::Reg(9) }]);
+}
+
+#[test]
+fn refuses_two_adds_to_one_phase() {
+    // as above with ADD HL,DE twice a pass: the phase moves by 2 x DE, an octave up; the two
+    // ADDs are not one accumulator seen twice
+    let mem = at_8000(&[0x19, 0x19, 0x7C, 0xE6, 0x80, 0x0F, 0x0F, 0x0F, 0xD3, 0xFE, 0x18, 0xF4]);
+    let got = read_engine(mem, 0x8008);
+    assert!(matches!(got, Err(Refusal::UnknownShape(_))), "{got:?}");
+}
+
+#[test]
+fn refuses_setup_flipping_the_level() {
+    // a hidden second channel: every 5 passes the setup path flips the level byte too
+    // 8000 top: LD A,(9000h); XOR 10h; LD (9000h),A; OUT (FEh),A; LD B,C; DJNZ $; DEC E;
+    // JR NZ,top; 8010 LD E,5; LD A,(9000h); XOR 10h; LD (9000h),A; JR top
+    let mem = at_8000(&[
+        0x3A, 0x00, 0x90, 0xEE, 0x10, 0x32, 0x00, 0x90, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1D, 0x20, 0xF0,
+        0x1E, 0x05, 0x3A, 0x00, 0x90, 0xEE, 0x10, 0x32, 0x00, 0x90, 0x18, 0xE4,
+    ]);
+    assert_eq!(read_engine(mem, 0x8008), Err(Refusal::UnknownShape(0x8010)));
+}
+
+#[test]
+fn refuses_setup_with_a_speaker_out() {
+    // the setup path OUTs to the speaker (its conditional keeps it from being a diamond)
+    // 8000 top: XOR 10h; OUT (FEh),A; LD B,C; DJNZ $; DEC E; JR NZ,top;
+    // 800A LD E,5; OUT (FEh),A; OR A; JR Z,top; JR top
+    let mem = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1D, 0x20, 0xF6, 0x1E, 0x05, 0xD3, 0xFE, 0xB7, 0x28, 0xEF, 0x18, 0xED]);
+    assert_eq!(read_engine(mem, 0x8002), Err(Refusal::UnknownShape(0x800A)));
+}
+
+#[test]
+fn table_walk_needs_the_advanced_pointer() {
+    // the pitch C comes from a fixed variable through HL; HL is then reloaded and stepped as a
+    // counter: no table walk
+    // 8000 start: LD HL,9000h; LD C,(HL); LD HL,(9002h); INC HL; LD (9002h),HL; LD D,100;
+    // 800D tog: XOR 10h; OUT (FEh),A; LD B,C; DJNZ $; DEC D; JR NZ,tog; JR start
+    let mem = at_8000(&[
+        0x21, 0x00, 0x90, 0x4E, 0x2A, 0x02, 0x90, 0x23, 0x22, 0x02, 0x90, 0x16, 0x64,
+        0xEE, 0x10, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x15, 0x20, 0xF6, 0x18, 0xE7,
+    ]);
+    let md = read_engine(mem, 0x800F).expect("reads");
+    assert_eq!(md.channels[0].half_period[0], Term::Lin { coef_t: 13, x: Input::Reg(3) });
+    assert!(!md.table_walk);
+}

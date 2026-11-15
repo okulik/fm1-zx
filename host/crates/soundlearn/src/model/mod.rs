@@ -39,7 +39,8 @@
 //! An undecoded instruction, a computed jump in the pass, a self-modification other than of an
 //! immediate operand by the setup, any branch that is not one of the above, a call, return,
 //! `HALT`, stack operation or store through a pointer in the pass, unbalanced diamonds, an
-//! input the formulas cannot name, other code inside the pass's address range, a routine longer
+//! input the formulas cannot name, a setup path with a speaker `OUT` or that flips the level the
+//! pass carries (a hidden channel), other code inside the pass's address range, a routine longer
 //! than `SND_LEARNED_LEN_MAX`, more than three channels or 16 sites, and code or fixed-address
 //! data in the contended range (4000h-7FFFh): its delays are fractions of a T-state per
 //! instruction on average, which whole-T coefficients cannot carry.
