@@ -364,3 +364,16 @@ fn corpus_standard_tape_routes() {
     assert!(m.tape_pos() > 0, "the trap took the first blocks");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The schedule's hard-coded key positions are the manifest's action numbers.
+#[test]
+fn schedule_keys_match_parse_action() {
+    for (name, row, mask) in soundlearn::listen::PRESSES {
+        let a = fmzx_pack::manifest::parse_action(name).expect(name);
+        if a & 0x40 != 0 {
+            assert_eq!((row, mask), (8, 1 << (a & 0x3f)), "{name}");
+        } else {
+            assert_eq!((row, mask), (a as usize / 5, 1 << (a % 5)), "{name}");
+        }
+    }
+}

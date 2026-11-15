@@ -1,0 +1,339 @@
+// SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Listening: runs a game for a fixed time under a generic input schedule and records, for each
+//! `OUT` that flips the speaker, the periods it makes and what the code read for them. The
+//! recording is streamed and bounded: never the whole trace.
+//!
+//! Per site (the first byte of the `OUT` instruction):
+//!
+//! - a *flip* is an `OUT` to an even port that changes the speaker level (bit 4);
+//! - a *period sample* is the time from the site's flip `k-2` to flip `k`, less the contention
+//!   T-states between (the period the routine's code makes, not the ULA's delays); one for every
+//!   other flip, so no two share a half period;
+//! - a *snapshot* is taken at the site's next `OUT` after each flip that precedes a sampled
+//!   one (`k-1`): the registers then, and every value read since the flip before it (`k-2`), by
+//!   (reader pc, read index in that instruction), the last value for each key. A period sample
+//!   points at that snapshot: the reads of its whole period `k-2` to `k`.
+
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::rc::Rc;
+use zx_sys::{zx_regs, Machine, TraceEv, ZX_FRAME_TSTATES, ZX_TR_INSN, ZX_TR_OUT, ZX_TR_READ};
+
+/// Frame to (Spectrum key rows, Kempston bits).
+pub type Inputs = Box<dyn Fn(u32) -> ([u8; 8], u8)>;
+
+/// Frames to listen to a game: 3 minutes of emulated time.
+pub const LISTEN_FRAMES: u32 = 9000;
+/// Frames before the first start key.
+const QUIET_FRAMES: u32 = 2000;
+/// Per site: period samples and snapshots kept (the newest).
+const KEEP: usize = 4096;
+/// Sites kept (the first ones heard).
+const MAX_SITES: usize = 64;
+/// Reads kept for the snapshots (the newest).
+const READ_RING: usize = 2048;
+
+/// The keys and Kempston directions the schedule presses: name as in the manifest, and the
+/// position. Spectrum keys are (half-row, bit): the rows are the keyboard's, from the lowest
+/// address line: CAPS-V, A-G, Q-T, 1-5, 0-6, P-Y, ENTER-H, SPACE-B, with the key nearest the
+/// edge of the half-row on bit 0 (0 9 8 7 6, P O I U Y). Kempston is row 8, the bit mask being
+/// right 1, left 2, down 4, up 8, fire 16.
+pub const PRESSES: [(&str, usize, u8); 17] = [
+    ("key.ENTER", 6, 1),
+    ("key.SPACE", 7, 1),
+    ("key.0", 4, 1),
+    ("key.1", 3, 1),
+    ("key.Q", 2, 1),
+    ("key.A", 1, 1),
+    ("key.O", 5, 2),
+    ("key.P", 5, 1),
+    ("key.5", 3, 16),
+    ("key.6", 4, 16),
+    ("key.7", 4, 8),
+    ("key.8", 4, 4),
+    ("kempston.up", 8, 8),
+    ("kempston.down", 8, 4),
+    ("kempston.left", 8, 2),
+    ("kempston.right", 8, 1),
+    ("kempston.fire", 8, 16),
+];
+/// Indexes into [`PRESSES`]: the start keys (ENTER, SPACE, 0, 1, Kempston fire), and the random
+/// play's choices (Q, A, O, P, 5-8, SPACE, Kempston up, down, left, right, fire).
+const START: [usize; 5] = [0, 1, 2, 3, 16];
+const PLAY: [usize; 14] = [4, 5, 6, 7, 8, 9, 10, 11, 1, 12, 13, 14, 15, 16];
+
+fn press(set: &mut ([u8; 8], u8), i: usize) {
+    if let Some(&(_, row, mask)) = PRESSES.get(i) {
+        match set.0.get_mut(row) {
+            Some(r) => *r |= mask,
+            None => set.1 |= mask,
+        }
+    }
+}
+
+/// The generic run, for frames `0..LISTEN_FRAMES` (nothing is held after them):
+///
+/// - frames 0-1999: nothing pressed;
+/// - then ENTER, SPACE, 0, 1 and Kempston fire in turn, each held 5 frames and followed by 150
+///   frames of nothing;
+/// - then random play: every 5-25 frames (xorshift64 from `seed`) a random non-empty subset of
+///   Q, A, O, P, 5-8, SPACE and the Kempston directions and fire, at most 3 at once.
+///
+/// The same seed gives the same inputs.
+pub fn schedule(seed: u64) -> Inputs {
+    let mut table = vec![([0u8; 8], 0u8); LISTEN_FRAMES as usize];
+    let mut f = QUIET_FRAMES as usize;
+    for &i in &START {
+        let mut set = ([0u8; 8], 0u8);
+        press(&mut set, i);
+        for slot in table.iter_mut().skip(f).take(5) {
+            *slot = set;
+        }
+        f += 155;
+    }
+    let mut x = seed ^ 0x9E37_79B9_7F4A_7C15;
+    if x == 0 {
+        x = 1;
+    }
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    while f < table.len() {
+        let len = 5 + (next() % 21) as usize;
+        let mut set = ([0u8; 8], 0u8);
+        let mut chosen = [usize::MAX; 3];
+        for c in chosen.iter_mut().take(1 + (next() % 3) as usize) {
+            *c = PLAY[(next() % PLAY.len() as u64) as usize];
+        }
+        for &c in chosen.iter().filter(|&&c| c != usize::MAX) {
+            press(&mut set, c);
+        }
+        for slot in table.iter_mut().skip(f).take(len) {
+            *slot = set;
+        }
+        f += len;
+    }
+    Box::new(move |frame| table.get(frame as usize).copied().unwrap_or(([0; 8], 0)))
+}
+
+/// What a run of a game sounds like.
+#[derive(Clone, Debug, Default)]
+pub struct Heard {
+    pub sites: Vec<SiteHeard>,
+    pub frames: u32,
+    /// Frames with a speaker flip from any site.
+    pub sound_frames: u32,
+}
+
+/// One speaker `OUT` site's flips.
+#[derive(Clone, Debug)]
+pub struct SiteHeard {
+    pub pc: u16,
+    /// Flips of the speaker level.
+    pub edges: u32,
+    pub frames_with_edges: u32,
+    /// The newest 4,096.
+    pub periods: Vec<PeriodSample>,
+    /// The newest 4,096.
+    pub snapshots: Vec<Snapshot>,
+}
+
+/// One full period of a site: the time between its flips `k-2` and `k`, less contention.
+#[derive(Clone, Copy, Debug)]
+pub struct PeriodSample {
+    pub period_t: f64,
+    /// The frame of flip `k`.
+    pub at_frame: u32,
+    /// Index into the site's snapshots: the reads and registers for this period.
+    pub snap: u32,
+}
+
+/// The registers at a site's `OUT` and the values read before it.
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+    pub regs: zx_regs,
+    /// (reader pc, read index in that instruction, address, value), by reader and index.
+    pub reads: Vec<(u16, u8, u16, u8)>,
+}
+
+struct Flip {
+    t: u64,
+    cont: u32,
+    seq: u64,
+}
+
+struct Site {
+    pc: u16,
+    edges: u32,
+    frames_with_edges: u32,
+    last_edge_frame: Option<u32>,
+    /// The site's last two flips, oldest first.
+    flips: VecDeque<Flip>,
+    pending: bool,
+    /// Absolute index of the snapshot taken after the site's latest flip but one.
+    last_snap: Option<u64>,
+    snap_count: u64,
+    periods: VecDeque<(f64, u32, u64)>,
+    snaps: VecDeque<Snapshot>,
+}
+
+#[derive(Default)]
+struct Rec {
+    frame: u32,
+    level: bool,
+    last_sound_frame: Option<u32>,
+    sound_frames: u32,
+    insn_reads: u8,
+    seq: u64,
+    reads: VecDeque<(u64, u16, u8, u16, u8)>,
+    sites: Vec<Site>,
+}
+
+impl Rec {
+    fn event(&mut self, ev: &TraceEv) {
+        match u32::from(ev.kind) {
+            ZX_TR_INSN => self.insn_reads = 0,
+            ZX_TR_READ => {
+                if self.reads.len() >= READ_RING {
+                    self.reads.pop_front();
+                }
+                self.reads.push_back((self.seq, ev.pc, self.insn_reads, ev.addr, ev.val));
+                self.seq = self.seq.wrapping_add(1);
+                self.insn_reads = self.insn_reads.saturating_add(1);
+            }
+            ZX_TR_OUT if ev.addr & 1 == 0 => self.out(ev),
+            _ => {}
+        }
+    }
+
+    fn out(&mut self, ev: &TraceEv) {
+        let level = ev.val & 0x10 != 0;
+        let flip = level != self.level;
+        self.level = level;
+        let at = match self.sites.iter().position(|s| s.pc == ev.pc) {
+            Some(i) => i,
+            None if flip && self.sites.len() < MAX_SITES => {
+                self.sites.push(Site {
+                    pc: ev.pc,
+                    edges: 0,
+                    frames_with_edges: 0,
+                    last_edge_frame: None,
+                    flips: VecDeque::new(),
+                    pending: false,
+                    last_snap: None,
+                    snap_count: 0,
+                    periods: VecDeque::new(),
+                    snaps: VecDeque::new(),
+                });
+                self.sites.len() - 1
+            }
+            None => return,
+        };
+        let (frame, seq) = (self.frame, self.seq);
+        let t = u64::from(frame) * u64::from(ZX_FRAME_TSTATES) + u64::from(ev.t);
+        let Some(site) = self.sites.get_mut(at) else { return };
+        if site.pending {
+            site.pending = false;
+            let from = site.flips.front().map_or(seq, |f| f.seq);
+            let mut reads: Vec<(u16, u8, u16, u8)> = Vec::new();
+            for &(_, pc, idx, addr, val) in self.reads.iter().rev().take_while(|r| r.0 >= from) {
+                // newest first: the first of each (pc, index) is its last value
+                if !reads.iter().any(|r| r.0 == pc && r.1 == idx) {
+                    reads.push((pc, idx, addr, val));
+                }
+            }
+            reads.sort_unstable_by_key(|r| (r.0, r.1));
+            if site.snaps.len() >= KEEP {
+                site.snaps.pop_front();
+            }
+            site.snaps.push_back(Snapshot { regs: ev.regs, reads });
+            site.last_snap = Some(site.snap_count);
+            site.snap_count += 1;
+        }
+        if !flip {
+            return;
+        }
+        site.edges = site.edges.saturating_add(1);
+        if site.last_edge_frame != Some(frame) {
+            site.last_edge_frame = Some(frame);
+            site.frames_with_edges += 1;
+        }
+        if self.last_sound_frame != Some(frame) {
+            self.last_sound_frame = Some(frame);
+            self.sound_frames += 1;
+        }
+        // periods are taken from every other flip: the samples are independent (not two to a
+        // period, sharing their halves), and the kept 4,096 reach twice as far back
+        if site.edges % 2 == 1 && site.flips.len() == 2 {
+            if let (Some(old), Some(snap)) = (site.flips.front(), site.last_snap) {
+                let p = t.wrapping_sub(old.t).wrapping_sub(u64::from(ev.cont.wrapping_sub(old.cont)));
+                if site.periods.len() >= KEEP {
+                    site.periods.pop_front();
+                }
+                site.periods.push_back((p as f64, frame, snap));
+            }
+        }
+        if site.flips.len() == 2 {
+            site.flips.pop_front();
+        }
+        site.flips.push_back(Flip { t, cont: ev.cont, seq });
+        site.pending = site.edges % 2 == 0;
+    }
+
+    fn finish(&mut self, frames: u32) -> Heard {
+        let sites = self
+            .sites
+            .drain(..)
+            .map(|s| {
+                let first = s.snap_count - s.snaps.len() as u64;
+                SiteHeard {
+                    pc: s.pc,
+                    edges: s.edges,
+                    frames_with_edges: s.frames_with_edges,
+                    periods: s
+                        .periods
+                        .iter()
+                        .filter(|p| p.2 >= first)
+                        .map(|&(period_t, at_frame, snap)| PeriodSample { period_t, at_frame, snap: (snap - first) as u32 })
+                        .collect(),
+                    snapshots: s.snaps.into(),
+                }
+            })
+            .collect();
+        Heard { sites, frames, sound_frames: self.sound_frames }
+    }
+}
+
+/// Runs `m` for `frames` frames under `inputs` (each frame: its key rows and Kempston bits are
+/// set, then the frame runs) and records the speaker sites. The machine keeps no trace hook
+/// afterwards.
+pub fn listen(m: &mut Machine, inputs: &Inputs, frames: u32) -> Heard {
+    let rec = Rc::new(RefCell::new(Rec::default()));
+    let frame = Rc::new(Cell::new(0u32));
+    let (hook_rec, hook_frame) = (Rc::clone(&rec), Rc::clone(&frame));
+    // the hook must never panic: a panic inside the C callback aborts the process
+    m.set_trace(
+        Some(Box::new(move |ev: &TraceEv| {
+            if let Ok(mut r) = hook_rec.try_borrow_mut() {
+                r.frame = hook_frame.get();
+                r.event(ev);
+            }
+        })),
+        (1 << ZX_TR_INSN) | (1 << ZX_TR_READ) | (1 << ZX_TR_OUT),
+    );
+    for f in 0..frames {
+        let (rows, kemp) = inputs(f);
+        m.set_keys(rows);
+        m.set_kempston(kemp);
+        frame.set(f);
+        m.run_frame();
+    }
+    m.set_trace(None, 0);
+    let heard = rec.borrow_mut().finish(frames);
+    heard
+}

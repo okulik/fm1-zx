@@ -7,6 +7,7 @@
 //! ([`entry`]).
 
 pub mod entry;
+pub mod listen;
 pub mod prog;
 pub mod z80;
 

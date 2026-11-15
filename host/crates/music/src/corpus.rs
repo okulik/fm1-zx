@@ -15,7 +15,7 @@
 use crate::score::{score, Score};
 use crate::truth::Engine;
 use crate::{capture, decode, hz_of_period_q8, played_hz, sample_rate, tzx, wav, Frame, RATE};
-use fmzx_pack::manifest::parse_action;
+pub use fmzx_pack::keys::{inputs, parse_keys, Step};
 use fmzx_pack::tapeload::{is_128k, load_signal, trap_trial, LEFT_OUT_128K};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -74,42 +74,6 @@ impl Row {
     pub fn sound_seconds(&self) -> f64 {
         self.sound_frames as f64 * FRAME_MS as f64 / 1000.0
     }
-}
-
-/// One step of a key script.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Step {
-    pub action: u8,
-    pub at: u64,
-    pub hold: u64,
-}
-
-/// Parses a key script (see the module docs).
-pub fn parse_keys(text: &str) -> Result<Vec<Step>, String> {
-    let mut steps = Vec::new();
-    for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
-        for p in line.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let (key, when) = p.split_once('@').ok_or_else(|| format!("step {p:?}: expected ACTION@ms"))?;
-            let (at, hold) = when.split_once('+').map_or((when, "100"), |(a, h)| (a, h));
-            let action = parse_action(key.trim())?;
-            let num = |s: &str| s.trim().parse::<u64>().map_err(|_| format!("step {p:?}: bad time"));
-            steps.push(Step { action, at: num(at)?, hold: num(hold)? });
-        }
-    }
-    Ok(steps)
-}
-
-/// The Spectrum key rows and Kempston bits held at `ms`.
-fn inputs(steps: &[Step], ms: u64) -> ([u8; 8], u8) {
-    let (mut rows, mut kemp) = ([0u8; 8], 0u8);
-    for s in steps.iter().filter(|s| s.at <= ms && ms < s.at + s.hold) {
-        if s.action & 0x40 != 0 {
-            kemp |= 1 << (s.action & 0x3f);
-        } else if s.action < 40 {
-            rows[s.action as usize / 5] |= 1 << (s.action % 5);
-        }
-    }
-    (rows, kemp)
 }
 
 /// A machine with the game file loaded; `Err` says why it cannot be. Time 0 of the run is the

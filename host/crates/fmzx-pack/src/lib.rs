@@ -10,6 +10,7 @@
 pub mod fwsc;
 pub mod inputs;
 pub mod keymaps;
+pub mod keys;
 pub mod layout;
 pub mod lz4blk;
 pub mod manifest;
