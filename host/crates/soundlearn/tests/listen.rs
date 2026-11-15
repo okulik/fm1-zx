@@ -4,7 +4,7 @@
 //! Listening to `games/test/tune.sna`: the speaker routine's period samples and snapshots, and
 //! the generic input schedule.
 
-use soundlearn::listen::{listen, schedule, Inputs, LISTEN_FRAMES};
+use soundlearn::listen::{listen, listen_with, schedule, Inputs, LISTEN_FRAMES};
 use zx_sys::Machine;
 
 /// Pitches of the tune's eight notes (`fmzx_pack::testprogs::TUNE_HZ`).
@@ -103,4 +103,36 @@ fn long_run_keeps_the_whole_run() {
     modes.sort_unstable();
     modes.dedup();
     assert_eq!(modes.len(), 8, "each note has its own reloads");
+}
+
+/// The kept samples after thinning, with a cap small enough that it happens in several rounds:
+/// they are every 2^r-th sample of the unthinned run, so evenly spread over the whole run, and
+/// each one's snapshot still holds the reload values of its own note.
+#[test]
+fn thinning_keeps_even_samples_with_their_snapshots() {
+    let none = none();
+    let full = listen(&mut tune(), &none, LISTEN_FRAMES);
+    let all = &full.sites[0].periods;
+    let heard = listen_with(&mut tune(), &none, LISTEN_FRAMES, 200);
+    let site = &heard.sites[0];
+    let kept = &site.periods;
+    assert!(all.len() > 2000 && kept.len() < 200 && kept.len() > 50, "{} of {}", kept.len(), all.len());
+    // the stride, a power of two of at least 8 (three rounds of thinning)
+    let stride = (3..=10)
+        .map(|r| 1usize << r)
+        .find(|&st| kept.iter().enumerate().all(|(i, k)| all.get(i * st).is_some_and(|a| a.period_t == k.period_t && a.at_frame == k.at_frame)))
+        .expect("the kept samples are every 2^r-th of the full run");
+    assert!(kept.len() * stride + stride > all.len(), "the kept samples reach the end ({} of {})", kept.len() * stride, all.len());
+    assert!(kept[0].at_frame < 100 && kept[kept.len() - 1].at_frame > LISTEN_FRAMES - 1500);
+    // paired with their own snapshots
+    assert_eq!(site.snapshots.len(), kept.len());
+    for (i, p) in kept.iter().enumerate() {
+        assert_eq!(p.snap as usize, i);
+        let reads = &site.snapshots[i].reads;
+        let value = |pc: u16| reads.iter().find(|r| r.0 == pc && r.1 == 1).map(|r| r.3);
+        // the unthinned run's snapshot of the same sample has the same reloads
+        let full_snap = &full.sites[0].snapshots[all[i * stride].snap as usize].reads;
+        let want = |pc: u16| full_snap.iter().find(|r| r.0 == pc && r.1 == 1).map(|r| r.3);
+        assert!(value(0x801B).is_some() && value(0x801B) == want(0x801B) && value(0x801E) == want(0x801E), "sample {i}");
+    }
 }

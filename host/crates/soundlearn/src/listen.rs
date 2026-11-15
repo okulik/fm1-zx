@@ -188,6 +188,8 @@ struct Site {
 
 #[derive(Default)]
 struct Rec {
+    /// Samples kept per site before thinning.
+    keep: usize,
     frame: u32,
     level: bool,
     last_sound_frame: Option<u32>,
@@ -282,7 +284,7 @@ impl Rec {
             if let (true, Some(old), Some(snap)) = (keep, site.flips.front(), site.held.take()) {
                 let p = t.wrapping_sub(old.t).wrapping_sub(u64::from(ev.cont.wrapping_sub(old.cont)));
                 site.periods.push((p as f64, frame, snap));
-                if site.periods.len() >= KEEP {
+                if site.periods.len() >= self.keep.max(2) {
                     // thin to every other sample, the stride doubling: the kept ones always span the run
                     let mut i = 0;
                     site.periods.retain(|_| {
@@ -322,7 +324,12 @@ impl Rec {
 /// set, then the frame runs) and records the speaker sites. The machine keeps no trace hook
 /// afterwards.
 pub fn listen(m: &mut Machine, inputs: &Inputs, frames: u32) -> Heard {
-    let rec = Rc::new(RefCell::new(Rec::default()));
+    listen_with(m, inputs, frames, KEEP)
+}
+
+/// [`listen`] keeping at most `keep` period samples (and snapshots) per site, 4,096 for `listen`.
+pub fn listen_with(m: &mut Machine, inputs: &Inputs, frames: u32, keep: usize) -> Heard {
+    let rec = Rc::new(RefCell::new(Rec { keep, ..Rec::default() }));
     let frame = Rc::new(Cell::new(0u32));
     let (hook_rec, hook_frame) = (Rc::clone(&rec), Rc::clone(&frame));
     // the hook must never panic: a panic inside the C callback aborts the process
