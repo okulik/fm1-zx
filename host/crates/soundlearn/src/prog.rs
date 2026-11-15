@@ -79,7 +79,7 @@ pub fn encode_prog(ops: &[Op]) -> Vec<u8> {
 }
 
 /// Register r of `ctx`, None past 17.
-fn reg(ctx: &zx_regs, r: u8) -> Option<u32> {
+pub(crate) fn reg(ctx: &zx_regs, r: u8) -> Option<u32> {
     let hi = |w: u16| u32::from(w >> 8);
     let lo = |w: u16| u32::from(w & 0xFF);
     Some(match r {

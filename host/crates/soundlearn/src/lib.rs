@@ -3,11 +3,13 @@
 
 //! Learned sound entries: the personal-pack builder learns each game's music routines and stores
 //! them in the pack as method B entries made of data (`core/sound/learned.c` reads them on the
-//! device). This crate holds their encoder: the programs ([`prog`]) and the entry lists
-//! ([`entry`]).
+//! device). This crate holds the learner's parts: listening to a game ([`listen`]), a Z80
+//! decoder ([`z80`]), the code reader that models a music routine from its code ([`model`]),
+//! and the encoder of the programs ([`prog`]) and the entry lists ([`entry`]).
 
 pub mod entry;
 pub mod listen;
+pub mod model;
 pub mod prog;
 pub mod z80;
 
