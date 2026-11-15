@@ -21,7 +21,10 @@
 //! new loadable files are appended in file name order, and an entry whose file is gone gets a
 //! `# missing: <file>` line just above it (and loses it when the file is back). Entries are never
 //! reordered or removed; a file that does not load gets no entry (it is listed as left out on
-//! every run). To leave a game out, delete its entry and build from the file.
+//! every run). A file counts as listed when an entry has it (its folder compared canonical, its
+//! name as it is, so a symlink stays the link) or when its quoted path is anywhere in the text,
+//! comment lines included: to leave a game out, the owner comments out its lines with `#`, and
+//! later runs leave it out too. Deleting an entry works when building from the file.
 //!
 //! # From a games file
 //!
@@ -37,7 +40,8 @@
 //! table. A pack bigger than the room the app slot leaves it (the limit) is refused, listing
 //! every game by packed size, largest first. Each run first removes the outputs of the last one
 //! (`games.bin`, `keymaps.json`, the two packages and `converted/`), so a failed run leaves no
-//! pack or packages that look valid.
+//! pack or packages that look valid; an output folder that holds any of them without being a
+//! personal pack's (no `personal-games.toml`, no `converted/manifest.toml` of ours) is refused.
 
 use crate::keymaps::keymaps_json;
 use crate::layout::pack_room;
@@ -60,8 +64,9 @@ const HEADER: &str = "\
 # Your games for tools/make-personal-pack (BUILDING.md, \"Your own games\"), in the syntax of
 # games/games.toml (docs/controls.md). Edit a game's name, or give it a [game.keys] table: a
 # re-run on the folder keeps your edits, adds new files at the end and marks a game whose file
-# is gone with a comment line above it. To leave games out, delete their entries and build from
-# this file: tools/make-personal-pack <this file>.
+# is gone with a comment line above it. To leave a game out, comment out its lines with #: a
+# re-run on the folder leaves it out too. (Deleting an entry works when you build from this
+# file, tools/make-personal-pack <this file>; a re-run on the folder adds it back.)
 ";
 
 /// One game of the run.
@@ -109,13 +114,23 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
     if !input.is_dir() && !input.extension().is_some_and(|e| e.eq_ignore_ascii_case("toml")) {
         return Err(format!("{}: give a folder of games or a games file (.toml)", shown(&input)));
     }
+    let conv = out.join(CONVERTED);
+    let present: Vec<&str> =
+        OUTPUTS.iter().copied().filter(|f| out.join(f).exists()).chain(conv.exists().then_some(CONVERTED)).collect();
+    if !present.is_empty() && !is_ours(&out) {
+        return Err(format!(
+            "{}: the output folder holds {} but no {GAMES_FILE} (nor a {CONVERTED}/manifest.toml of ours): it is not a \
+             personal pack's folder, and a run clears those files first. Give another folder with -o.",
+            shown(&out),
+            present.join(", ")
+        ));
+    }
     for f in OUTPUTS {
         let p = out.join(f);
         if p.exists() {
             std::fs::remove_file(&p).map_err(|e| format!("{}: {e}", shown(&p)))?;
         }
     }
-    let conv = out.join(CONVERTED);
     if conv.exists() {
         std::fs::remove_dir_all(&conv).map_err(|e| format!("{}: {e}", shown(&conv)))?;
     }
@@ -145,7 +160,7 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
             rows.push(row);
             continue;
         }
-        let key = path.canonicalize().unwrap_or(path.clone());
+        let key = path.clone();
         let got = prepared.entry(key.clone()).or_insert_with(|| tapeload::prepare(&key));
         match got {
             Err(e) => row.reason = Some(reason(e)),
@@ -187,6 +202,16 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
         std::fs::write(&p, bytes).map_err(|e| format!("{}: {e}", shown(&p)))?;
     }
     Ok(Report { rows, used, free: limit - used })
+}
+
+/// The first line of the converted files' manifest, which marks an output folder as ours.
+const MANIFEST_HEAD: &str = "# Written by tools/make-personal-pack from personal-games.toml; it is rewritten on each run.";
+
+/// Whether `out` is a personal pack's folder: it has the games file, or the converted files'
+/// manifest of an earlier run (from a games file, the games file lives elsewhere).
+fn is_ours(out: &Path) -> bool {
+    out.join(GAMES_FILE).is_file()
+        || std::fs::read_to_string(out.join(CONVERTED).join("manifest.toml")).is_ok_and(|t| t.lines().next() == Some(MANIFEST_HEAD))
 }
 
 /// The table `tools/make-personal-pack` prints: each game, how it went in, its packed size and
@@ -241,9 +266,9 @@ fn too_big(rows: &[Row], used: u32, limit: u32, games_file: &Path, from_folder: 
     }
     let f = games_file.display();
     s += &if from_folder {
-        format!("Leave some out: delete their entries from {f}, then build from that file (tools/make-personal-pack {f}).")
+        format!("Leave some out: in {f}, comment out their lines with #, then run again.")
     } else {
-        format!("Leave some out: delete their entries from {f} and build again.")
+        format!("Leave some out: in {f}, comment out their lines with # (or delete them), then run again.")
     };
     s
 }
@@ -341,6 +366,16 @@ fn unique_id(name: &str, taken: &HashSet<String>) -> String {
     (2..).map(|n| format!("{slug}-{n}")).find(|id| !taken.contains(id)).expect("an unused id")
 }
 
+/// The id of a commented-out `id = "..."` line.
+fn commented_id(line: &str) -> Option<String> {
+    let rest = line.trim_start().strip_prefix('#')?.trim_start_matches(['#', ' ', '\t']);
+    if !rest.starts_with("id") {
+        return None;
+    }
+    let t: toml::Table = toml::from_str(rest).ok()?;
+    t.get("id")?.as_str().map(str::to_string)
+}
+
 fn is_game_header(line: &str) -> bool {
     let t = line.trim();
     t.strip_prefix(GAME_HEADER).is_some_and(|rest| rest.trim_start().is_empty() || rest.trim_start().starts_with('#'))
@@ -372,13 +407,22 @@ fn update_games_file(
     let fix = |e: String| format!("{shown}: {e} (fix it, or delete the file to start again)");
     let games = entries(&text).map_err(fix)?;
     let dir = path.parent().unwrap_or(Path::new("/"));
-    let resolved = |g: &Game| {
-        let p = game_path(dir, g);
-        p.canonicalize().unwrap_or(p)
+    // like with like: the folder's files are its canonical path joined with their names, so an
+    // entry's path is compared with its folder made canonical and its file name as it is (a
+    // symlinked game stays the link, never its target)
+    let as_listed = |p: PathBuf| match (p.parent().and_then(|d| d.canonicalize().ok()), p.file_name()) {
+        (Some(d), Some(n)) => d.join(n),
+        _ => p,
     };
-    let known: HashSet<PathBuf> = games.iter().map(resolved).collect();
+    let known: HashSet<PathBuf> = games.iter().map(|g| as_listed(game_path(dir, g))).collect();
+    // ids in use, those of commented-out entries too (so uncommenting one never clashes)
     let mut ids: HashSet<String> = games.iter().map(|g| g.id.clone()).collect();
-    for f in files.iter().filter(|f| !known.contains(*f)) {
+    ids.extend(text.lines().filter_map(commented_id));
+    // a file is known when an entry has it, or when its quoted path is anywhere in the text,
+    // comment lines included: the owner leaves a game out by commenting out its entry
+    let listed = |f: &PathBuf| known.contains(f) || f.to_str().is_some_and(|s| text.contains(&quoted(s)));
+    let new: Vec<&PathBuf> = files.iter().filter(|f| !listed(f)).collect();
+    for f in new {
         let file = f.display().to_string();
         let name = name_from_file(&f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
         let got = prepared.entry(f.clone()).or_insert_with(|| tapeload::prepare(f));
@@ -436,7 +480,7 @@ fn mark_missing(text: &str, games: &[(String, bool)]) -> Result<String, String> 
 
 /// The converted files' manifest: the games' own names, crops, demos and keys.
 fn manifest_text(games: &[(Game, String, usize)]) -> String {
-    let mut s = String::from("# Written by tools/make-personal-pack from personal-games.toml; it is rewritten on each run.\n");
+    let mut s = format!("{MANIFEST_HEAD}\n");
     for (g, file, _) in games {
         s += &format!("\n{GAME_HEADER}\nid = {}\nname = {}\nfile = {}\ncrop = {}\n", quoted(&g.id), quoted(&g.name), quoted(file), g.crop);
         if let Some(d) = &g.demo {
@@ -482,5 +526,14 @@ mod tests {
         let got = mark_missing(text, &[("a.sna".into(), true), ("b.sna".into(), false)]).unwrap();
         assert_eq!(got, "# top\n# missing: a.sna\n[[game]]\nid = \"a\"\n[[game]] # b\nid = \"b\"\n");
         assert!(mark_missing(text, &[("a.sna".into(), false)]).is_err());
+    }
+
+    #[test]
+    fn commented_ids() {
+        assert_eq!(commented_id("# id = \"tune\""), Some("tune".into()));
+        assert_eq!(commented_id("  ## id = \"t-2\"  # note"), Some("t-2".into()));
+        assert_eq!(commented_id("id = \"live\""), None);
+        assert_eq!(commented_id("# ids are made from names"), None);
+        assert_eq!(commented_id("# identity"), None);
     }
 }

@@ -257,3 +257,71 @@ fn personal_too_big_fails() {
         assert!(sizes[w[0]] >= sizes[w[1]], "largest first: {e}");
     }
 }
+
+#[test]
+fn personal_rerun_symlink() {
+    // a symlinked game file is the same file on every run: one entry, not one more each time
+    let store = Tmp::new("link-store");
+    store.file("tune.sna", &tune_sna());
+    let games = Tmp::new("link");
+    std::os::unix::fs::symlink(store.0.join("tune.sna"), games.0.join("my-tune.sna")).unwrap();
+    let out = Tmp::new("link-out");
+    run(&games.0, &out.0).expect("first run");
+    let path = out.0.join("personal-games.toml");
+    let first = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(first.matches("[[game]]").count(), 1, "{first}");
+    for _ in 0..2 {
+        run(&games.0, &out.0).expect("re-run");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first, "the re-run added the symlink again");
+    }
+    assert_eq!(pack_games(&out.0.join("games.bin")).len(), 1);
+}
+
+#[test]
+fn personal_rerun_keeps_commented_out() {
+    let games = Tmp::new("comment");
+    games.file("turbo.tzx", &turbo_tzx());
+    games.file("tape.tap", &tape_tap());
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("comment-out");
+    run(&games.0, &out.0).expect("first run");
+    let path = out.0.join("personal-games.toml");
+    let first = std::fs::read_to_string(&path).unwrap();
+    let tune_file = games.0.canonicalize().unwrap().join("tune.sna");
+    let entry = format!("[[game]]\nid = \"tune\"\nname = \"tune\"\nfile = \"{}\"\n", tune_file.display());
+    let commented: String = entry.lines().map(|l| format!("# {l}\n")).collect();
+    assert!(first.contains(&entry), "{first}");
+    std::fs::write(&path, first.replace(&entry, &commented)).unwrap();
+
+    games.file("border.sna", &border_sna());
+    let r = run(&games.0, &out.0).expect("second run");
+    let second = std::fs::read_to_string(&path).unwrap();
+    assert!(second.contains(&commented), "the commented-out entry stays as it was:\n{second}");
+    assert!(!second.contains(&entry), "tune was added back:\n{second}");
+    assert_eq!(second.matches(&format!("\"{}\"", tune_file.display())).count(), 1, "{second}");
+    assert!(second.trim_end().ends_with(&format!("file = \"{}\"", games.0.canonicalize().unwrap().join("border.sna").display())));
+    assert!(r.rows.iter().all(|w| !w.file.ends_with("tune.sna")), "tune is not a game of the run: {:?}", r.rows);
+    let names: Vec<String> = pack_games(&out.0.join("games.bin")).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["tape", "turbo", "border"]);
+}
+
+#[test]
+fn personal_refuses_foreign_output() {
+    // an output folder with packages of its own (build/fm1, say) is never cleared
+    let games = Tmp::new("foreign");
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("foreign-out");
+    out.file("games.bin", b"built-in pack");
+    out.file("fmzx.fwsc", b"built-in package");
+    let e = run(&games.0, &out.0).expect_err("refuses a folder of other packages");
+    assert!(e.contains(&out.0.canonicalize().unwrap().display().to_string()) && e.contains("games.bin"), "{e}");
+    assert_eq!(std::fs::read(out.0.join("games.bin")).unwrap(), b"built-in pack");
+    assert_eq!(std::fs::read(out.0.join("fmzx.fwsc")).unwrap(), b"built-in package");
+    assert!(!out.0.join("personal-games.toml").exists());
+
+    // an output folder of an earlier run from a games file is ours: a second run goes ahead
+    games.file("mine.toml", b"[[game]]\nid = \"t\"\nname = \"Tune\"\nfile = \"tune.sna\"\n");
+    let out2 = Tmp::new("foreign-out2");
+    run(&games.0.join("mine.toml"), &out2.0).expect("first run from the games file");
+    run(&games.0.join("mine.toml"), &out2.0).expect("second run into the same folder");
+}

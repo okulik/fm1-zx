@@ -146,9 +146,11 @@ Angel - 48k.tzx` is "Night Raid II"); the id is made from the name; there is no 
 so the game gets the default key map. Edit it: a name (at most 28 characters), a `[game.keys]`
 table (docs/controls.md), a `crop`. On the next run from the folder your edits stay byte for byte,
 new files are added at the end, and a game whose file is gone stays, marked with a `# missing:`
-line above it; nothing is reordered. To leave games out, delete their entries and build from the
-file itself (a run from the folder would add them back): given a games file, the command uses it
-as written (a relative `file` is taken from the file's folder) and changes nothing in it.
+line above it; nothing is reordered. To leave a game out, comment out its lines with `#`: a file
+whose path is anywhere in the games file, comment lines included, is never added again. Deleting
+an entry works too when you build from the file itself (a run from the folder would add it back):
+given a games file, the command uses it as written (a relative `file` is taken from the file's
+folder) and changes nothing in it.
 
 **How each game goes in.** `.sna` and 48K `.z80` files go in as they are ("as is"). A `.tap`, or a
 `.tzx` of standard blocks only, goes in as a tape ("tape") when a trial load through the ROM's
@@ -175,8 +177,10 @@ out, with why:
       big.z80: 128K
 
 A pack that does not fit fails: the command lists every game by packed size, largest first, and
-writes no pack or packages (those of an earlier run are removed). Then delete entries from
-`personal-games.toml` and build from it. The packages are made and verified by
+writes no pack or packages (those of an earlier run are removed). Then comment out some entries in
+`personal-games.toml` and run again. The output folder must be a personal pack's: one that holds
+packages or a `games.bin` but no `personal-games.toml` (such as `build/fm1`) is refused, since a
+run clears those files first. The packages are made and verified by
 `tools/make-packages`' own steps, given the pack and the output folder (`FMZX_PACKAGES_PACK`,
 `FMZX_PACKAGES_OUT`).
 
