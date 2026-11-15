@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use zx_sys::{SND_MODE_BEEPER, SND_MODE_COUNT, SND_MODE_FM_A, SND_MODE_FM_B};
+use zx_sys::{PIX_BORDER, PIX_CROP, PIX_FIT, PIX_FIT_SMOOTH, PIX_MODE_COUNT, SND_MODE_BEEPER, SND_MODE_COUNT, SND_MODE_FM_A, SND_MODE_FM_B};
 use zx_tests::*;
 
 const ROM: &[u8] = include_bytes!("../../../../third_party/zx-rom/48.rom");
@@ -117,7 +117,7 @@ fn menu_items_and_divider_cycle() {
     let mut ui = Ui::new();
     let mut m = open_menu();
     ui.draw(&m, None);
-    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: Beeper", "Back to games"] {
+    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: Beeper", "Screen: Crop", "Back to games"] {
         assert!(find_row(&ui, item).is_some(), "{item}");
     }
     for _ in 0..4 {
@@ -188,6 +188,62 @@ fn menu_sound_cycles_and_survives() {
     assert_eq!(sound_shown(&m), "Sound: FM: sound", "after starting another game");
     // and the next press cycles from the kept choice
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_B as u32));
+}
+
+/// The HOME menu's Screen item: directly after Sound.
+const SCREEN_ITEM: usize = SOUND_ITEM + 1;
+
+/// Opens the HOME menu from the game and moves to the Screen item.
+fn to_screen(m: &mut Menu) {
+    m.set_view(view::GAME);
+    assert_eq!(m.event(ev::HOME).0, cmd::NONE);
+    for _ in 0..SCREEN_ITEM {
+        m.event(ev::DOWN);
+    }
+}
+
+fn screen_shown(m: &Menu) -> String {
+    let mut ui = Ui::new();
+    ui.draw(m, None);
+    let rows = rows_text(&ui);
+    let i = rows.iter().position(|t| t.contains("Screen: ")).expect("no Screen item");
+    let j = rows.iter().position(|t| t.contains("Sound: ")).expect("no Sound item");
+    assert_eq!(i, j + 2, "the Screen item is not the line after Sound");
+    rows[i].trim().to_string()
+}
+
+#[test]
+fn menu_screen_cycles_and_survives() {
+    assert_eq!(PIX_MODE_COUNT, 4, "Crop, Fit, Fit smooth and Border");
+    let mut m = Menu::new(2);
+    to_screen(&mut m);
+    assert_eq!(screen_shown(&m), "Screen: Crop", "Crop by default");
+    for (mode, label) in [(PIX_FIT, "Screen: Fit"), (PIX_FIT_SMOOTH, "Screen: Fit smooth"), (PIX_BORDER, "Screen: Border"), (PIX_CROP, "Screen: Crop")] {
+        assert_eq!(m.event(ev::OK), (cmd::SCREEN, mode));
+        assert_eq!(m.view(), view::MENU, "the item stays in the menu");
+        assert_eq!(screen_shown(&m), label);
+    }
+    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_FIT));
+    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_FIT_SMOOTH));
+    // reset game: back in the game, the choice kept
+    for _ in 0..SCREEN_ITEM - 1 {
+        m.event(ev::UP);
+    }
+    assert_eq!(m.event(ev::OK).0, cmd::RESET);
+    assert_eq!(m.view(), view::GAME);
+    m.event(ev::HOME);
+    assert_eq!(screen_shown(&m), "Screen: Fit smooth", "after a reset");
+    // back to the picker and another game started
+    m.event(ev::UP); // wraps to "Back to games"
+    assert_eq!(m.event(ev::OK).0, cmd::LEAVE);
+    assert_eq!(m.view(), view::PICKER);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::START, 1));
+    to_screen(&mut m);
+    assert_eq!(screen_shown(&m), "Screen: Fit smooth", "after starting another game");
+    // and the next press cycles from the kept choice; Sound is untouched
+    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_BORDER));
+    assert_eq!(sound_shown(&m), "Sound: Beeper");
 }
 
 #[test]

@@ -152,28 +152,63 @@ pub fn sound_mode(m: &Machine) -> u32 {
     m.peek32(m.symbol("fmzx_sound_mode"))
 }
 
-/// From the running game: HOME, down to the Sound item, PLAY until the choice is `mode`, and
-/// HOME back to the game (which resumes in it). Spectrum frames stop while the menu is open:
-/// returns the frames run before it, the index of the first frame in the new choice.
-pub fn choose_sound(m: &mut Machine, mode: u32) -> u32 {
+/// The HOME menu's Screen item: directly after Sound.
+pub const SCREEN_ITEM: u32 = SOUND_ITEM + 1;
+/// `fmzx_screen_mode` values (`PIX_*` in `app/pixels.h`).
+pub const SCREEN_CROP: u32 = 0;
+pub const SCREEN_FIT: u32 = 1;
+pub const SCREEN_FIT_SMOOTH: u32 = 2;
+pub const SCREEN_BORDER: u32 = 3;
+
+/// The firmware's Screen choice now (`fmzx_screen_mode`).
+pub fn screen_mode(m: &Machine) -> u32 {
+    m.peek32(m.symbol("fmzx_screen_mode"))
+}
+
+/// The menu name of Screen choice `screen`.
+pub fn screen_name(screen: u32) -> &'static str {
+    match screen {
+        SCREEN_CROP => "Crop",
+        SCREEN_FIT => "Fit",
+        SCREEN_FIT_SMOOTH => "Fit smooth",
+        _ => "Border",
+    }
+}
+
+/// From the running game: HOME, down to menu item `item`, PLAY until `read` gives `mode` (at most
+/// `choices` presses), and HOME back to the game (which resumes in it). Spectrum frames stop
+/// while the menu is open: returns the frames run before it.
+fn choose_item(m: &mut Machine, item: u32, choices: u32, read: fn(&Machine) -> u32, mode: u32, what: &str) -> u32 {
     press_to(m, HOME, VIEW_MENU);
     let frames = m.stats().frames;
-    for _ in 0..SOUND_ITEM {
+    for _ in 0..item {
         m.press(OCT_UP, 30);
         m.run_ms(30);
     }
-    for _ in 0..4 {
-        if sound_mode(m) == mode {
+    for _ in 0..choices {
+        if read(m) == mode {
             break;
         }
         m.press(PLAY, 30);
         m.run_ms(30);
     }
-    assert_eq!(sound_mode(m), mode, "the Sound item did not reach the choice");
-    assert_eq!(m.stats().view, VIEW_MENU, "the Sound item left the menu");
+    assert_eq!(read(m), mode, "the {what} item did not reach the choice");
+    assert_eq!(m.stats().view, VIEW_MENU, "the {what} item left the menu");
     assert_eq!(m.stats().frames, frames, "frames ran in the menu");
     press_to(m, HOME, VIEW_GAME);
     frames
+}
+
+/// From the running game: HOME, down to the Sound item, PLAY until the choice is `mode`, and
+/// HOME back to the game (which resumes in it). Spectrum frames stop while the menu is open:
+/// returns the frames run before it, the index of the first frame in the new choice.
+pub fn choose_sound(m: &mut Machine, mode: u32) -> u32 {
+    choose_item(m, SOUND_ITEM, 3, sound_mode, mode, "Sound")
+}
+
+/// As [`choose_sound`], for the Screen item.
+pub fn choose_screen(m: &mut Machine, mode: u32) -> u32 {
+    choose_item(m, SCREEN_ITEM, 4, screen_mode, mode, "Screen")
 }
 
 /// Where a measurement starts, in ms after the game was started: the tapes are loaded by about
@@ -196,6 +231,8 @@ pub struct Measure {
     pub snd: Vec<u64>,
     /// The Sound choice at the end (`fmzx_sound_mode`).
     pub sound: u32,
+    /// The Screen choice at the end (`fmzx_screen_mode`).
+    pub screen: u32,
     /// LCD rows sent in each 1-second sub-window of the window (a static screen sends none).
     pub rows_per_second: Vec<u32>,
     /// Chip resets during the run.
@@ -219,15 +256,22 @@ pub fn start_game(fw: &Firmware, opt: BootOpt, index: u32) -> Machine {
     m
 }
 
-/// As [`start_game`], with the Sound choice `sound` made first, in game 0, which is then left
-/// for the picker: game `index` starts in that choice, its frames and the demo's clock exactly as
-/// from [`start_game`] (a visit to the menu after the start would shift the game's frames
-/// against the demo's keys, which some title screens only read at certain frames).
-pub fn start_game_in(fw: &Firmware, opt: BootOpt, index: u32, sound: u32) -> Machine {
+/// As [`start_game`], with the Sound choice `sound` and the Screen choice `screen` made first, in
+/// game 0, which is then left for the picker: game `index` starts in those choices, its frames and
+/// the demo's clock exactly as from [`start_game`] (a visit to the menu after the start would
+/// shift the game's frames against the demo's keys, which some title screens only read at
+/// certain frames).
+pub fn start_game_in(fw: &Firmware, opt: BootOpt, index: u32, sound: u32, screen: u32) -> Machine {
     let mut m = start_game(fw, opt, 0);
     m.run_ms(300);
-    choose_sound(&mut m, sound);
-    m.run_ms(100);
+    if sound != SOUND_BEEPER {
+        choose_sound(&mut m, sound);
+        m.run_ms(100);
+    }
+    if screen != SCREEN_CROP {
+        choose_screen(&mut m, screen);
+        m.run_ms(100);
+    }
     press_to(&mut m, HOME, VIEW_MENU);
     m.turn(ENC_ALGORITHM, -1); // wraps to "Back to games"
     m.run_ms(100);
@@ -236,7 +280,11 @@ pub fn start_game_in(fw: &Firmware, opt: BootOpt, index: u32, sound: u32) -> Mac
     m.run_ms(200);
     m.press(PLAY, 30);
     m.run_ms(20);
-    assert_eq!((m.stats().view, m.stats().game, sound_mode(&m)), (VIEW_GAME, index, sound), "the game did not start");
+    assert_eq!(
+        (m.stats().view, m.stats().game, sound_mode(&m), screen_mode(&m)),
+        (VIEW_GAME, index, sound, screen),
+        "the game did not start"
+    );
     m
 }
 
@@ -284,12 +332,13 @@ pub fn active_share(m: &Measure) -> f64 {
 }
 
 /// Starts game `index` and measures `window_ms` of it from `settle_ms` on, with the demo's keys
-/// pressed throughout, in the default Sound choice (Beeper).
+/// pressed throughout, in the default Sound and Screen choices (Beeper, Crop).
 pub fn measure(fw: &Firmware, opt: BootOpt, index: u32, demo: &[DemoStep], settle_ms: u64, window_ms: u64) -> Measure {
-    measure_in(fw, opt, index, demo, settle_ms, window_ms, SOUND_BEEPER)
+    measure_in(fw, opt, index, demo, settle_ms, window_ms, SOUND_BEEPER, SCREEN_CROP)
 }
 
-/// As [`measure`], in the Sound choice `sound` ([`start_game_in`]).
+/// As [`measure`], in the Sound choice `sound` and the Screen choice `screen` ([`start_game_in`]).
+#[allow(clippy::too_many_arguments)]
 pub fn measure_in(
     fw: &Firmware,
     opt: BootOpt,
@@ -298,8 +347,13 @@ pub fn measure_in(
     settle_ms: u64,
     window_ms: u64,
     sound: u32,
+    screen: u32,
 ) -> Measure {
-    let mut m = if sound == SOUND_BEEPER { start_game(fw, opt, index) } else { start_game_in(fw, opt, index, sound) };
+    let mut m = if sound == SOUND_BEEPER && screen == SCREEN_CROP {
+        start_game(fw, opt, index)
+    } else {
+        start_game_in(fw, opt, index, sound, screen)
+    };
     let t0 = m.ms();
     let mut d = Demo::new(demo);
     d.run_to(&mut m, t0, settle_ms);
@@ -325,6 +379,7 @@ pub fn measure_in(
         isr: m.cost_of("fm1_alnk0_irq"),
         snd: m.cost_of("snd_mixer_frame"),
         sound: sound_mode(&m),
+        screen: screen_mode(&m),
         rows_per_second,
         resets: m.resets() - resets0,
         in_game: s1.view == VIEW_GAME,

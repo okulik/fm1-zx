@@ -197,6 +197,18 @@ impl Machine {
         out
     }
 
+    /// LCD rows `row0 .. row0 + rows` in screen mode `mode` as `pix_compose_rows` composes them:
+    /// the rows' panel bytes back to back.
+    pub fn compose_rows_mode(&self, row0: usize, rows: usize, mode: u32, crop_x: usize, fmt: i32) -> Vec<u8> {
+        assert!(row0 + rows <= sys::LCD_ROWS as usize, "rows past the panel");
+        // SAFETY: pure function.
+        let rb = unsafe { sys::pix_row_bytes(fmt) } as usize;
+        let mut out = vec![0u8; rb * rows];
+        // SAFETY: `raw` was initialised by zx_init; `out` holds `rows` packed rows.
+        unsafe { sys::pix_compose_rows(&*self.raw, row0 as u32, rows as u32, mode, crop_x as u32, fmt, out.as_mut_ptr()) };
+        out
+    }
+
     /// Loads a 48K `.sna` snapshot; `Err` carries the C error code and leaves
     /// the machine unchanged.
     pub fn load_sna(&mut self, data: &[u8]) -> Result<(), i32> {
@@ -971,6 +983,7 @@ pub const PIX_CROP: u32 = sys::PIX_CROP;
 pub const PIX_FIT: u32 = sys::PIX_FIT;
 pub const PIX_FIT_SMOOTH: u32 = sys::PIX_FIT_SMOOTH;
 pub const PIX_BORDER: u32 = sys::PIX_BORDER;
+pub const PIX_MODE_COUNT: u32 = sys::PIX_MODE_COUNT;
 
 /// The LCD rows (bit `r & 7` of byte `r >> 3`) whose bytes in `mode` depend on paper line `y`.
 pub fn pix_mark_paper_line(mode: u32, y: usize) -> [u8; 30] {
@@ -1273,6 +1286,7 @@ pub mod cmd {
     pub const DIVIDER: i32 = sys::CMD_DIVIDER as i32;
     pub const OSK_KEY: i32 = sys::CMD_OSK_KEY as i32;
     pub const SOUND: i32 = sys::CMD_SOUND as i32;
+    pub const SCREEN: i32 = sys::CMD_SCREEN as i32;
 }
 
 pub const UI_COLS: usize = sys::UI_COLS as usize;

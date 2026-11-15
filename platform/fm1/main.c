@@ -106,6 +106,9 @@ static zx_beeper beeper;
 /* The Sound item's choice, SND_MODE_* (CMD_SOUND): kept across games until power off. Read by
  * emu-gate. */
 uint32_t fmzx_sound_mode;
+/* The Screen item's choice, PIX_CROP ... (CMD_SCREEN): kept across games until power off. Read by
+ * emu-gate. */
+uint32_t fmzx_screen_mode;
 static km_state kms;
 static struct {
     uint8_t loaded;      /* fmzx_machine holds a game */
@@ -116,6 +119,10 @@ static struct {
     uint32_t index;      /* pack entry */
     uint32_t frames;
     uint8_t dirty[LCD_ROWS / 8u]; /* LCD rows the last frame changed */
+    /* In Border: what the last frame changed, for game_frame to map to LCD rows (pix_mark_*):
+     * paper lines (bit y), and frame lines 40 + l whose border colour changed (bit l). */
+    uint8_t paper[ZX_SCREEN_LINES / 8u];
+    uint8_t border[LCD_ROWS / 8u];
 } game;
 /* The FM-1 inputs for the next frame's km_apply: the held masks of the last poll and the encoder
  * detents of every poll since the last frame (the ones the keyboard uses left out). */
@@ -133,6 +140,11 @@ uint32_t fmzx_kempston_now;
 
 /* The border colour each LCD row last went out with (NO_COLOUR: not a border picture). */
 static uint8_t border_sent[LCD_ROWS];
+/* In Border, where every frame line 40-279 feeds the picture: the border colour of frame line
+ * 40 + l at the last frame (NO_COLOUR: unknown, so the next frame marks it). A change between two
+ * frames marks the line's rows, which then go out with the newer colour: each row's last send
+ * shows the colour of the last frame, or the row is pending. */
+static uint8_t line_seen[LCD_ROWS];
 /* The LCD rows the current view shows the UI grid on (menu_row_is_ui), set at every view change:
  * a running game's changes there are not sent (the keyboard covers them; the view change back
  * repaints them). */
@@ -239,7 +251,9 @@ void fmzx_cstart(void)
 
 /* One Spectrum frame, in RAMTEXT with the core: input applied, the frame run, its beeper edges
  * rendered, mixed in the Sound choice and queued, and the LCD rows it changed noted in game.dirty
- * (paper lines the core reports, border rows whose colour differs from what the LCD last got). */
+ * (paper lines the core reports, border rows whose colour differs from what the LCD last got).
+ * In Border the frame lines it changed go to game.paper and game.border instead, and game_frame
+ * maps them to rows (the maps are XIP code). */
 static void RAMTEXT game_step(void)
 {
     zx_machine *m = &fmzx_machine;
@@ -258,6 +272,23 @@ static void RAMTEXT game_step(void)
     n = zx_beeper_render(&beeper, e, ne, frame_samples);
     snd_mixer_frame(&mixer, (uint8_t)fmzx_sound_mode, m, e, ne, level, frame_samples, n, mixed_samples);
     audio_push(mixed_samples, n);
+    if (fmzx_screen_mode == PIX_BORDER) {
+        for (r = 0; r < ZX_SCREEN_LINES / 8u; r++)
+            game.paper[r] = 0;
+        for (r = 0; r < LCD_ROWS / 8u; r++)
+            game.border[r] = 0;
+        for (y = 0; y < ZX_SCREEN_LINES; y++)
+            if (zx_line_dirty(m, y))
+                game.paper[y >> 3] |= (uint8_t)(1u << (y & 7u));
+        for (r = 0; r < LCD_ROWS; r++) {
+            uint8_t c = zx_border_line(m, ZX_PAPER_FIRST_LINE - LCD_TOP_BORDER + r);
+            if (c != line_seen[r]) {
+                line_seen[r] = c;
+                game.border[r >> 3] |= (uint8_t)(1u << (r & 7u));
+            }
+        }
+        return;
+    }
     for (r = 0; r < LCD_ROWS / 8u; r++)
         game.dirty[r] = 0;
     for (y = 0; y < ZX_SCREEN_LINES; y++)
@@ -291,8 +322,25 @@ static void RAMTEXT game_release(void)
 /* The RAMTEXT code XIP calls (ramcalls.h). */
 struct ram_calls fmzx_ram = {
     zx_init, zx_load_sna, zx_load_z80, zx_tape_insert, zx_tape_autostart, zx_beeper_init,
-    snd_mixer_init, pix_compose_zx, game_step, game_release, lcd_pump_ram,
+    snd_mixer_init, pix_compose_zx, zx_screen_line, zx_border_line, game_step, game_release,
+    lcd_pump_ram,
 };
+
+/* For the device copy of app/pixmodes.c, which runs from XIP (ramcalls.h). */
+void fmzx_xip_screen_line(const zx_machine *m, unsigned y, uint8_t *out)
+{
+    fmzx_ram.screen_line(m, y, out);
+}
+
+uint8_t fmzx_xip_border_line(const zx_machine *m, unsigned frame_line)
+{
+    return fmzx_ram.border_line(m, frame_line);
+}
+
+void fmzx_xip_compose_zx(const zx_machine *m, unsigned row, unsigned crop_x, uint8_t *idx)
+{
+    fmzx_ram.compose_zx(m, row, crop_x, idx);
+}
 
 static uint16_t gain_q10(uint32_t master)
 {
@@ -332,7 +380,7 @@ static int game_start(uint32_t index)
     /* the decoder's history and the delay ring start empty: nothing of the last game plays */
     fmzx_ram.mixer_init(&mixer, 750000u, 17u);
     for (i = 0; i < LCD_ROWS; i++)
-        border_sent[i] = NO_COLOUR;
+        border_sent[i] = line_seen[i] = NO_COLOUR;
     game.crop_x = g.crop_x;
     game.keys = g.keys;
     km_reset(&kms);
@@ -344,19 +392,37 @@ static int game_start(uint32_t index)
 
 /* ----------------------------------------------------------------- main loop --- */
 
+/* Whether the game's row r in screen mode `mode` comes from pix_compose_rows (pixmodes.c, XIP):
+ * Border's rows, and the paper rows of Fit and Fit smooth. Crop, and the border rows of Fit and
+ * Fit smooth (the same bytes as Crop's), take today's path: pix_compose_zx in RAMTEXT, pix_pack. */
+static int mode_row(unsigned mode, unsigned r)
+{
+    return mode == PIX_BORDER ||
+           ((mode == PIX_FIT || mode == PIX_FIT_SMOOTH) && r >= LCD_TOP_BORDER && r < LCD_TOP_BORDER + ZX_SCREEN_LINES);
+}
+
 void lcd_compose_band(unsigned row0, unsigned rows)
 {
     uint8_t *out = lcd_band_out();
-    unsigned i, rb = lcd_row_bytes();
+    unsigned i, n, rb = lcd_row_bytes();
+    unsigned mode = fmzx_screen_mode;
     int fmt = lcd_format();
-    for (i = 0; i < rows; i++) {
+    for (i = 0; i < rows; i += n) {
         unsigned r = row0 + i;
+        n = 1;
         if (menu_row_is_ui(&mn, r)) {
             ui_compose_row(r, row_idx);
             border_sent[r] = NO_COLOUR;
         } else if (!game.loaded) {
             memset(row_idx, 0, sizeof row_idx);
             border_sent[r] = NO_COLOUR;
+        } else if (mode_row(mode, r)) {
+            /* the run of such rows together: Border's rows share source lines */
+            while (i + n < rows && !menu_row_is_ui(&mn, r + n) && mode_row(mode, r + n))
+                n++;
+            pix_compose_rows(&fmzx_machine, r, n, mode, game.crop_x, fmt, out + i * rb);
+            memset(border_sent + r, NO_COLOUR, n);
+            continue;
         } else {
             fmzx_ram.compose_zx(&fmzx_machine, r, game.crop_x, row_idx);
             border_sent[r] = row_idx[0];
@@ -447,6 +513,14 @@ static void handle_event(int ev)
     case CMD_SOUND: /* the mixer switches (with its crossfades) at the next frame */
         fmzx_sound_mode = arg;
         break;
+    case CMD_SCREEN: { /* the whole panel again, in the new mode */
+        unsigned r;
+        fmzx_screen_mode = arg;
+        for (r = 0; r < LCD_ROWS; r++)
+            line_seen[r] = NO_COLOUR;
+        lcd_mark_all(lcd_frame);
+        break;
+    }
     default: /* CMD_RESUME: the run rule in fmzx_main does the rest */
         break;
     }
@@ -585,6 +659,15 @@ static __attribute__((noinline)) void game_frame(void)
     fmzx_stats.pending = lcd_unsent();
     input_apply();
     fmzx_ram.game_step();
+    if (fmzx_screen_mode == PIX_BORDER) { /* the changed frame lines to LCD rows */
+        memset(game.dirty, 0, sizeof game.dirty);
+        for (r = 0; r < ZX_SCREEN_LINES; r++)
+            if (game.paper[r >> 3] & (1u << (r & 7u)))
+                pix_mark_paper_line(PIX_BORDER, r, game.dirty);
+        for (r = 0; r < LCD_ROWS; r++)
+            if (game.border[r >> 3] & (1u << (r & 7u)))
+                pix_mark_border_line(PIX_BORDER, ZX_PAPER_FIRST_LINE - LCD_TOP_BORDER + r, game.dirty);
+    }
     game.frames++;
     fmzx_stats.frames = game.frames;
     for (r = 0; r < LCD_ROWS; r++)

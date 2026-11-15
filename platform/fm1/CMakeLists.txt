@@ -46,11 +46,21 @@ add_custom_command(OUTPUT "${_ram}/pixels.obj"
   COMMAND ${FMZX_PYTHON} "${_redefine}" --ar "${CMAKE_AR}" --member pixels.c.obj "$<TARGET_FILE:fmzx_app>"
           "${_ram}/pixels.obj" ${_rt_syms}
   DEPENDS fmzx_app "${_redefine}" VERBATIM)
-add_custom_target(fmzx_ram_objects DEPENDS "${_ram}/libzx_core.a" "${_ram}/libzx_sound.a" "${_ram}/pixels.obj")
-set_source_files_properties("${_ram}/pixels.obj" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+# app/pixmodes.c (the screen modes other than Crop) runs from XIP: its device copy calls the
+# core's line accessors and pix_compose_zx, which are in RAMTEXT, through main.c's fmzx_xip_*
+# (fmzx_ram) instead, and the XIP memset and memcpy.
+add_custom_command(OUTPUT "${_ram}/pixmodes.obj"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_ram}"
+  COMMAND ${FMZX_PYTHON} "${_redefine}" --ar "${CMAKE_AR}" --member pixmodes.c.obj "$<TARGET_FILE:fmzx_app>"
+          "${_ram}/pixmodes.obj" zx_screen_line=fmzx_xip_screen_line zx_border_line=fmzx_xip_border_line
+          pix_compose_zx=fmzx_xip_compose_zx
+  DEPENDS fmzx_app "${_redefine}" VERBATIM)
+add_custom_target(fmzx_ram_objects DEPENDS "${_ram}/libzx_core.a" "${_ram}/libzx_sound.a" "${_ram}/pixels.obj"
+  "${_ram}/pixmodes.obj")
+set_source_files_properties("${_ram}/pixels.obj" "${_ram}/pixmodes.obj" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 
 add_executable(fmzx_app_image ${_ours} "${_bsp}/chip/fm1_vec.S" "${_bsp}/chip/fm1_isr.S"
-  "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c" "${_ram}/pixels.obj")
+  "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c" "${_ram}/pixels.obj" "${_ram}/pixmodes.obj")
 add_dependencies(fmzx_app_image fmzx_ram_objects)
 set_target_properties(fmzx_app_image PROPERTIES OUTPUT_NAME fmzx_app SUFFIX .elf
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.ld;${_ram}/libzx_core.a;${_ram}/libzx_sound.a")
@@ -65,8 +75,8 @@ target_compile_definitions(fmzx_app_image PRIVATE FMZX_LCD_DIVIDER=${FMZX_LCD_DI
 set_source_files_properties(${_ours} PROPERTIES
   COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-Wno-unused-function")
 # The renamed sound library and core instead of zx_sound and zx_core themselves, then the
-# rest of app/ (pixels.c comes from the renamed object above, so its archive member is never
-# pulled in).
+# rest of app/ (pixels.c and pixmodes.c come from the renamed objects above, so their archive
+# members are never pulled in).
 target_link_libraries(fmzx_app_image PRIVATE "${_ram}/libzx_sound.a" "${_ram}/libzx_core.a" "$<TARGET_FILE:fmzx_app>")
 add_dependencies(fmzx_app_image fmzx_app zx_core zx_sound)
 target_link_options(fmzx_app_image PRIVATE

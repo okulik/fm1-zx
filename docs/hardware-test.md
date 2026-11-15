@@ -77,6 +77,10 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] In FM: sound, the effects in ZX Dino and ZX Sopwith stay on the beeper (their usual sound, only delayed), with no crackle.
 - [ ] FM: engines: set Sound to "FM: engines" and start Castaway: its title tune plays as FM with two voices, in tune.
 - [ ] The Sound choice survives Reset game and starting another game from the picker (it is back to Beeper after power-off).
+- [ ] Screen modes: in Castaway, set Screen to each choice in turn and resume. Crop looks as before. Fit shows the whole width, sharp, with no colour other than the Spectrum's. Fit smooth shows the whole width with soft column edges. Border shows the whole picture smaller with a thin border at the sides, the border colour above and below, and no stretched or squashed shapes. In every choice the picture is complete at once after leaving the menu, with no leftover rows from the previous choice.
+- [ ] Border with a changing border: set Screen to Border and start the Tape multi-load test; when its border turns from blue to green, the green fills the side columns and the rows above and below the picture at once, with no leftover blue row.
+- [ ] The HOME menu, the on-screen keyboard and PAUSED look the same in Border and Fit smooth as in Crop, and the game rows around the keyboard keep the chosen mode.
+- [ ] The Screen choice survives Reset game and starting another game from the picker (it is back to Crop after power-off).
 - [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the screen shows eight static bars, which do not change with the notes.
 
 ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the host and emulator tests cover it with a generated BASIC BEEP tape (`beep_tap`).

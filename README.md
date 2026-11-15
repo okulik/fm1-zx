@@ -16,7 +16,10 @@ on a unit before the [first device test](docs/hardware-test.md) has passed.
 What works, in fm1-emu:
 
 - a game picker, a HOME menu (resume, reset, on-screen Spectrum keyboard, the key map, LCD speed,
-  sound, back to games) and pause;
+  sound, screen, back to games) and pause;
+- four screen modes in the HOME menu's Screen item: Crop (240 of the 256 columns, the default),
+  Fit and Fit smooth (all 256 columns, sharp or blended) and Border (the whole picture with a thin
+  border, scaled down);
 - built-in games: freely licensed Spectrum games (Castaway, ZX Sopwith, Escape from Colony 8, ZX Dino, A World of One-Way) and test programs,
   each with its own mapping of the FM-1's notes, buttons and encoders to Spectrum keys or a
   Kempston joystick ([controls](docs/controls.md));

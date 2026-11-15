@@ -4,6 +4,7 @@
 #include "menu.h"
 #include "keymap.h"
 #include "pack.h"
+#include "pixels.h"
 #include "sound.h"
 #include <string.h>
 
@@ -24,11 +25,15 @@
 #define OSK_KEYS 10u
 #define OSK_KEY_W 3u
 
-enum { IT_RESUME, IT_RESET, IT_KEYBOARD, IT_KEYMAP, IT_SPEED, IT_SOUND, IT_LEAVE, IT_COUNT };
+enum { IT_RESUME, IT_RESET, IT_KEYBOARD, IT_KEYMAP, IT_SPEED, IT_SOUND, IT_SCREEN, IT_LEAVE, IT_COUNT };
 
 /* The Sound item's choices, by SND_MODE_*. */
 static const char *const sound_names[] = { "Beeper", "FM: sound", "FM: engines" };
 _Static_assert(sizeof sound_names / sizeof sound_names[0] == SND_MODE_COUNT, "a name per SND_MODE_*");
+
+/* The Screen item's choices, by PIX_* screen mode. */
+static const char *const screen_names[] = { "Crop", "Fit", "Fit smooth", "Border" };
+_Static_assert(sizeof screen_names / sizeof screen_names[0] == PIX_MODE_COUNT, "a name per screen mode");
 
 static unsigned slen(const char *s)
 {
@@ -355,6 +360,10 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
                 mn->sound = (uint8_t)(mn->sound + 1u >= SND_MODE_COUNT ? 0u : mn->sound + 1u);
                 *arg = mn->sound;
                 return CMD_SOUND;
+            case IT_SCREEN:
+                mn->screen = (uint8_t)(mn->screen + 1u >= PIX_MODE_COUNT ? 0u : mn->screen + 1u);
+                *arg = mn->screen;
+                return CMD_SCREEN;
             default:
                 mn->view = VIEW_PICKER;
                 return CMD_LEAVE;
@@ -461,7 +470,7 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
 static void draw_menu(const menu *mn)
 {
     static const char *const items[IT_COUNT] = {
-        "Resume", "Reset game", "Keyboard", "Key map", "LCD speed: ", "Sound: ", "Back to games",
+        "Resume", "Reset game", "Keyboard", "Key map", "LCD speed: ", "Sound: ", "Screen: ", "Back to games",
     };
     unsigned i;
     ui_clear(INK, PAPER);
@@ -476,6 +485,8 @@ static void draw_menu(const menu *mn)
             n += put_u32(line + n, mn->divider);
         } else if (i == IT_SOUND) {
             put_str(line, &n, sound_names[mn->sound < SND_MODE_COUNT ? mn->sound : 0u]);
+        } else if (i == IT_SCREEN) {
+            put_str(line, &n, screen_names[mn->screen < PIX_MODE_COUNT ? mn->screen : 0u]);
         }
         line[n] = '\0';
         full_row(4u + 2u * i, line, sel ? BAR_INK : INK, sel ? BAR_PAPER : PAPER);

@@ -299,6 +299,188 @@ fn modes_ignore_crop_x() {
 }
 
 #[test]
+fn unknown_mode_is_crop() {
+    // a mode number past Border composes as Crop, with the game's crop_x
+    for m in [scroll_sna(), border_sna()] {
+        for fmt in FMTS {
+            for crop_x in [0, 8, 16] {
+                assert_eq!(all_rows(&m, PIX_BORDER + 1, crop_x, fmt), all_rows(&m, PIX_CROP, crop_x, fmt), "crop_x {crop_x}");
+                assert_eq!(all_rows(&m, 255, crop_x, fmt), all_rows(&m, PIX_CROP, crop_x, fmt), "crop_x {crop_x}");
+            }
+        }
+    }
+}
+
+#[test]
+fn rows_match_row() {
+    // pix_compose_rows (the firmware's bands, which share source lines in Border) gives every row
+    // exactly as pix_compose_row does, for bands at every offset and of every length up to 9
+    for m in [scroll_sna(), border_sna()] {
+        for fmt in FMTS {
+            for mode in [PIX_CROP, PIX_FIT, PIX_FIT_SMOOTH, PIX_BORDER] {
+                let rows = all_rows(&m, mode, 8, fmt);
+                for len in 1..=9 {
+                    for row0 in 0..=240 - len {
+                        let band = m.compose_rows_mode(row0, len, mode, 8, fmt.raw());
+                        let want: Vec<u8> = rows[row0..row0 + len].concat();
+                        assert!(band == want, "mode {mode}, rows {row0}..{}", row0 + len);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 8-bit R, G, B of palette index `i`.
+fn pal8(i: u8) -> [u32; 3] {
+    let ch = |bit: u8| if i & bit == 0 { 0 } else if i & 8 != 0 { 0xFF } else { 0xD7 };
+    [ch(2), ch(4), ch(1)]
+}
+
+/// Packs 8-bit RGB pixels as the panel takes them (RGB565 5/6/5, RGB444 the top nibbles in pairs).
+fn pack_rgb(fmt: PixFormat, px: &[[u32; 3]]) -> Vec<u8> {
+    match fmt {
+        PixFormat::Rgb565 => px
+            .iter()
+            .flat_map(|&[r, g, b]| (((r >> 3) << 11 | (g >> 2) << 5 | b >> 3) as u16).to_be_bytes())
+            .collect(),
+        PixFormat::Rgb444 => px
+            .chunks(2)
+            .flat_map(|p| {
+                let ([r0, g0, b0], [r1, g1, b1]) = (p[0], p[1]);
+                [(r0 & 0xF0 | g0 >> 4) as u8, (b0 & 0xF0 | r1 >> 4) as u8, (g1 & 0xF0 | b1 >> 4) as u8]
+            })
+            .collect(),
+    }
+}
+
+/// Border's weights, {first, w0, w1, w2} (app/pixmodes.c): across a period of 15 output pixels
+/// (17 columns), and down a period of 53 rows (60 lines).
+const BORDER_H: [[u32; 4]; 15] = [
+    [0, 226, 30, 0], [1, 196, 60, 0], [2, 166, 90, 0], [3, 136, 120, 0], [4, 105, 151, 0],
+    [5, 75, 181, 0], [6, 45, 211, 0], [7, 15, 226, 15], [9, 211, 45, 0], [10, 181, 75, 0],
+    [11, 151, 105, 0], [12, 120, 136, 0], [13, 90, 166, 0], [14, 60, 196, 0], [15, 30, 226, 0],
+];
+const BORDER_V: [[u32; 4]; 53] = [
+    [0, 226, 30, 0], [1, 196, 60, 0], [2, 166, 90, 0], [3, 137, 119, 0], [4, 107, 149, 0],
+    [5, 77, 179, 0], [6, 47, 209, 0], [7, 17, 226, 13], [9, 213, 43, 0], [10, 183, 73, 0],
+    [11, 154, 102, 0], [12, 124, 132, 0], [13, 94, 162, 0], [14, 64, 192, 0], [15, 34, 222, 0],
+    [16, 4, 226, 26], [18, 201, 55, 0], [19, 171, 85, 0], [20, 141, 115, 0], [21, 111, 145, 0],
+    [22, 81, 175, 0], [23, 51, 205, 0], [24, 21, 226, 9], [26, 218, 38, 0], [27, 188, 68, 0],
+    [28, 158, 98, 0], [29, 128, 128, 0], [30, 98, 158, 0], [31, 68, 188, 0], [32, 38, 218, 0],
+    [33, 9, 226, 21], [35, 205, 51, 0], [36, 175, 81, 0], [37, 145, 111, 0], [38, 115, 141, 0],
+    [39, 85, 171, 0], [40, 55, 201, 0], [41, 26, 226, 4], [43, 222, 34, 0], [44, 192, 64, 0],
+    [45, 162, 94, 0], [46, 132, 124, 0], [47, 102, 154, 0], [48, 73, 183, 0], [49, 43, 213, 0],
+    [50, 13, 226, 17], [52, 209, 47, 0], [53, 179, 77, 0], [54, 149, 107, 0], [55, 119, 137, 0],
+    [56, 90, 166, 0], [57, 60, 196, 0], [58, 30, 226, 0],
+];
+
+/// Border's picture row `o` (0-211) by the filter's definition: each column blended down its
+/// lines, then across, one rounding at the end.
+fn border_reference(m: &Machine, o: usize) -> Vec<[u32; 3]> {
+    let wv = BORDER_V[o % 53];
+    let l0 = o / 53 * 60 + wv[0] as usize;
+    let src = |l: usize, c: usize| -> u8 {
+        if (24..216).contains(&l) && (8..264).contains(&c) {
+            m.screen_line(l - 24)[c - 8]
+        } else {
+            m.border_line(40 + l)
+        }
+    };
+    let v: Vec<[u32; 3]> = (0..272)
+        .map(|c| {
+            let mut acc = [0u32; 3];
+            for k in 0..3 {
+                if wv[1 + k] != 0 {
+                    let p = pal8(src(l0 + k, c));
+                    for ch in 0..3 {
+                        acc[ch] += wv[1 + k] * p[ch];
+                    }
+                }
+            }
+            acc
+        })
+        .collect();
+    (0..240)
+        .map(|x| {
+            let wh = BORDER_H[x % 15];
+            let f = x / 15 * 17 + wh[0] as usize;
+            let mut out = [0u32; 3];
+            for (ch, o) in out.iter_mut().enumerate() {
+                let sum: u32 = (0..3).filter(|&j| wh[1 + j] != 0).map(|j| wh[1 + j] * v[f + j][ch]).sum();
+                *o = (sum + 32768) >> 16;
+            }
+            out
+        })
+        .collect()
+}
+
+/// Fit smooth's paper line `y` by its definition.
+fn fit_smooth_reference(m: &Machine, y: usize) -> Vec<[u32; 3]> {
+    let line = m.screen_line(y);
+    (0..240)
+        .map(|x| {
+            let (k, s) = (x / 15 * 16, x % 15);
+            let (a, b) = (pal8(line[k + s]), pal8(line[k + s + 1]));
+            let (wa, wb) = (15 - s as u32, 1 + s as u32);
+            [0, 1, 2].map(|ch| (wa * a[ch] + wb * b[ch] + 8) >> 4)
+        })
+        .collect()
+}
+
+#[test]
+fn blends_match_reference() {
+    // screens of random cells, some flat (one colour across) and some not, under a border that
+    // changes colour on random lines: Fit smooth and Border equal their definitions, every row
+    let mut seed = 0x2545_F491u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    // first a screen of whole lines of one colour: black paper, paper line 6 white, which Border's
+    // row 40 blends half and half with line 5 (weights 128 and 128: a value half way between two
+    // 8-bit steps, where the rounding shows)
+    let mut half = border_machine(0x07, 0, &[(2, 0)]);
+    for cell in 0..32u16 {
+        half.poke(line_addr(6) + cell, 0xFF);
+    }
+    let mut machines = vec![half];
+    for _ in 0..6 {
+        let mut lines: Vec<usize> = (0..12).map(|_| 2 + rnd() as usize % 300).collect();
+        lines.sort_unstable();
+        lines.dedup();
+        let colours: Vec<(usize, u8)> = lines.iter().map(|&l| (l, (rnd() % 8) as u8)).collect();
+        let mut m = border_machine(0x38, 0, &colours);
+        for i in 0..0x300u16 {
+            m.poke(0x5800 + i, (rnd() & 0x7F) as u8); // no FLASH
+        }
+        for y in 0..192 {
+            for cell in 0..32u16 {
+                let bits = match rnd() % 4 {
+                    0 => 0x00,
+                    1 => 0xFF,
+                    _ => rnd() as u8,
+                };
+                m.poke(line_addr(y) + cell, bits);
+            }
+        }
+        machines.push(m);
+    }
+    for m in &machines {
+        for fmt in FMTS {
+            for o in 0..212 {
+                assert_eq!(m.compose_row_mode(14 + o, PIX_BORDER, 0, fmt.raw()), pack_rgb(fmt, &border_reference(m, o)), "Border row {}", 14 + o);
+            }
+            for y in 0..192 {
+                assert_eq!(m.compose_row_mode(24 + y, PIX_FIT_SMOOTH, 0, fmt.raw()), pack_rgb(fmt, &fit_smooth_reference(m, y)), "Fit smooth row {}", 24 + y);
+            }
+        }
+    }
+}
+
+#[test]
 fn border_geometry() {
     let base = border_machine(0x38, 0x0F, &[(2, 5)]);
     // frame lines 2-63 red, from 64 cyan: only the top border lines 40-63 differ

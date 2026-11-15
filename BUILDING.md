@@ -289,7 +289,7 @@ Both need the device build (see Firmware above) and run in fm1-emu:
     cd host
     FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget --test fw_report -- --nocapture
 
-`fw_budget` (about 2.8 minutes) runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in three sound modes (Beeper, FM: sound and FM: engines), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+`fw_budget` (about 11 minutes) runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines, the heaviest sound mode (screen and sound work share nothing and add up, so not every pair is run), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
@@ -324,26 +324,50 @@ emulator counts, one per instruction, interrupts excluded):
 
 | game | Beeper max | Beeper avg | FM: sound max | FM: sound avg | FM: engines max | FM: engines avg |
 | --- | --- | --- | --- | --- | --- | --- |
-| scroll | 1,468,644 | 1,450,662 | 1,580,703 | 1,562,693 | 1,580,702 | 1,562,692 |
-| border | 1,379,638 | 1,373,706 | 1,491,697 | 1,485,737 | 1,491,696 | 1,485,736 |
-| castaway | 1,500,205 | 467,916 | 1,385,924 | 574,665 | 1,612,180 | 579,195 |
-| sopwith | 1,506,426 | 1,232,003 | 1,618,402 | 1,344,034 | 1,569,225 | 1,355,967 |
-| colony8 | 1,494,481 | 394,932 | 1,606,540 | 506,963 | 1,606,539 | 506,953 |
-| dino | 1,550,381 | 889,473 | 1,662,357 | 1,001,504 | 1,662,008 | 1,001,169 |
-| oneway | 693,368 | 616,771 | 805,427 | 728,802 | 805,343 | 728,809 |
-| tape | 807,007 | 801,154 | 919,066 | 913,185 | 919,065 | 913,184 |
-| tune | 1,160,409 | 950,097 | 1,307,033 | 1,096,727 | 1,272,469 | 1,062,130 |
-| noise | 1,739,926 | 1,316,328 | 1,851,873 | 1,428,359 | 1,851,872 | 1,428,358 |
-| sites (4 unknown OUT sites, code unchanged) | 201,717 | 195,893 | 313,776 | 307,924 | 313,775 | 307,923 |
-| sites-var (4 unknown OUT sites, code changing every frame) | 807,561 | 801,763 | 919,620 | 913,795 | 919,619 | 913,794 |
+| scroll | 1,470,140 | 1,452,158 | 1,582,199 | 1,564,189 | 1,582,198 | 1,564,188 |
+| border | 1,379,646 | 1,373,714 | 1,491,705 | 1,485,745 | 1,491,704 | 1,485,744 |
+| castaway | 1,500,531 | 467,992 | 1,386,204 | 574,740 | 1,612,506 | 579,271 |
+| sopwith | 1,507,011 | 1,232,085 | 1,618,987 | 1,344,116 | 1,569,667 | 1,356,075 |
+| colony8 | 1,494,749 | 394,987 | 1,606,808 | 507,018 | 1,606,807 | 507,008 |
+| dino | 1,550,940 | 889,847 | 1,662,916 | 1,001,878 | 1,662,567 | 1,001,542 |
+| oneway | 693,673 | 616,982 | 805,732 | 729,013 | 805,648 | 729,020 |
+| tape | 807,047 | 801,194 | 919,106 | 913,225 | 919,105 | 913,224 |
+| tune | 1,160,417 | 950,105 | 1,307,041 | 1,096,735 | 1,272,477 | 1,062,138 |
+| noise | 1,739,934 | 1,316,336 | 1,851,881 | 1,428,367 | 1,851,880 | 1,428,366 |
+| sites (4 unknown OUT sites, code unchanged) | 201,725 | 195,901 | 313,784 | 307,932 | 313,783 | 307,931 |
+| sites-var (4 unknown OUT sites, code changing every frame) | 807,569 | 801,771 | 919,628 | 913,803 | 919,627 | 913,802 |
 
-(CPU per frame, max and average, in the three sound modes, from `fw_budget`; the cap is 3,600,000. The noise
-program is the worst frame in every mode. Method B remembers the OUT addresses that matched no
+(Crop, 2026-11-15.) The other screen modes, with FM: engines:
+
+| game | Fit max | Fit avg | Fit smooth max | Fit smooth avg | Border max | Border avg |
+| --- | --- | --- | --- | --- | --- | --- |
+| scroll | 1,546,318 | 1,528,308 | 1,830,478 | 1,812,468 | 2,497,596 | 2,478,295 |
+| border | 1,491,704 | 1,485,744 | 1,491,704 | 1,485,744 | 1,498,550 | 1,492,590 |
+| castaway | 1,606,920 | 578,395 | 1,710,938 | 598,425 | 1,892,263 | 631,456 |
+| sopwith | 1,559,202 | 1,353,933 | 1,860,252 | 1,364,422 | 2,324,954 | 1,418,852 |
+| colony8 | 1,602,403 | 506,403 | 1,710,187 | 522,659 | 1,912,307 | 555,895 |
+| dino | 1,650,602 | 993,698 | 1,769,645 | 1,065,477 | 2,143,331 | 1,280,515 |
+| oneway | 799,630 | 725,383 | 963,710 | 825,984 | 1,233,919 | 991,872 |
+| tape | 919,105 | 913,224 | 919,105 | 913,224 | 926,143 | 920,262 |
+| tune | 1,272,477 | 1,062,138 | 1,272,477 | 1,062,138 | 1,279,323 | 1,068,984 |
+| noise | 1,851,880 | 1,428,366 | 1,851,880 | 1,428,366 | 1,858,778 | 1,435,268 |
+| sites | 313,783 | 307,931 | 313,783 | 307,931 | 320,821 | 314,969 |
+| sites-var | 919,627 | 913,802 | 919,627 | 913,802 | 926,665 | 920,840 |
+
+Fit, Fit smooth and Border compose from flash (`app/pixmodes.c`, XIP); Crop stays on its SRAM path.
+A Border row costs about 18,000 instructions when its source lines are not flat, against about
+4,500 for a Crop row; a run of 17 columns of one colour in every source line takes a short cut
+(exact: every pixel of it is the column's blend). scroll, every paper line changing every frame,
+is the worst Border frame. A screen of fine detail that changes everywhere every frame would cost
+more in Border at LCD speeds 1 and 0 (about 205 rows a frame); none of the games does.
+
+(CPU per frame, max and average, from `fw_budget`; the cap is 3,600,000. In Crop and Fit the noise
+program is the worst frame in every sound mode; in Fit smooth it is ZX Sopwith, in Border scroll. Method B remembers the OUT addresses that matched no
 entry and looks them up again only when the code around them changes; a lookup costs about 152,000
 instructions. The reachable worst case is about 7 lookups of unknown, changing addresses in one
 frame, about 2.9M estimated, under the cap.)
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 48,144 of 49,152 bytes. Image
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 48,396 of 49,152 bytes (2026-11-15). Image
 + pack 179,904 of 581,564 (0x8DFBC) bytes. POOL 272,076 bytes, 96,564 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.

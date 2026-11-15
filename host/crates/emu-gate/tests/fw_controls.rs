@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! In-game controls in fm1-emu: the game's key map, the HOME menu, pause, the on-screen
-//! keyboard, the LCD speed item and the Sound item. Needs the device build (`FMZX_FM1_BUILD`).
+//! keyboard, the LCD speed item, the Sound item and the Screen item. Needs the device build (`FMZX_FM1_BUILD`).
 //!
 //! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway; the test programs `tape`/`tune` are
 //! found by id); scroll has the default key map (F3 = Kempston left).
@@ -13,7 +13,10 @@
 //! `zx_machine` starts with the Z80 core's pointers (8 bytes on the host, 4 on the device), so
 //! the zx-sys layout of the fields after them differs from the device's.
 
-use emu_gate::budgets::{choose_sound, sound_mode, SOUND_FM, SOUND_FM_B};
+use emu_gate::budgets::{
+    choose_screen, choose_sound, screen_mode, sound_mode, SCREEN_BORDER, SCREEN_CROP, SCREEN_FIT, SCREEN_FIT_SMOOTH, SCREEN_ITEM,
+    SOUND_FM, SOUND_FM_B, SOUND_ITEM,
+};
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -166,8 +169,8 @@ fn pause_releases_keys() {
 }
 
 /// The host's composition of the HOME menu over the same pack, with the Sound item cycled
-/// `sound` times (0: Beeper) and the first item selected.
-fn host_menu(pack: &[u8], sound: u32) -> Vec<u16> {
+/// `sound` times (0: Beeper), the Screen item `screen` times (0: Crop), and item `item` selected.
+fn host_menu_at(pack: &[u8], sound: u32, screen: u32, item: u32) -> Vec<u16> {
     let count = zx_sys::pack_open(pack).expect("pack opens on the host");
     let mut ui = zx_sys::Ui::new();
     let mut menu = zx_sys::Menu::new(count);
@@ -175,15 +178,20 @@ fn host_menu(pack: &[u8], sound: u32) -> Vec<u16> {
     assert_eq!(menu.event(zx_sys::ev::OK).0, zx_sys::cmd::START);
     menu.set_view(view::GAME);
     menu.event(zx_sys::ev::HOME);
-    if sound > 0 {
-        for _ in 0..5 {
-            menu.event(zx_sys::ev::DOWN);
+    for (cycles, at, cmd) in [(sound, SOUND_ITEM, zx_sys::cmd::SOUND), (screen, SCREEN_ITEM, zx_sys::cmd::SCREEN)] {
+        if cycles > 0 {
+            for _ in 0..at {
+                menu.event(zx_sys::ev::DOWN);
+            }
+            for _ in 0..cycles {
+                assert_eq!(menu.event(zx_sys::ev::OK).0, cmd);
+            }
+            menu.set_view(view::GAME);
+            menu.event(zx_sys::ev::HOME);
         }
-        for _ in 0..sound {
-            assert_eq!(menu.event(zx_sys::ev::OK).0, zx_sys::cmd::SOUND);
-        }
-        menu.set_view(view::GAME);
-        menu.event(zx_sys::ev::HOME);
+    }
+    for _ in 0..item {
+        menu.event(zx_sys::ev::DOWN);
     }
     assert_eq!(menu.view(), view::MENU);
     ui.draw(&menu, Some(pack));
@@ -195,6 +203,11 @@ fn host_menu(pack: &[u8], sound: u32) -> Vec<u16> {
         .collect()
 }
 
+/// As [`host_menu_at`] with the first item selected.
+fn host_menu(pack: &[u8], sound: u32, screen: u32) -> Vec<u16> {
+    host_menu_at(pack, sound, screen, 0)
+}
+
 #[test]
 fn menu_golden() {
     let mut m = start(BootOpt { rgb565: true, divider: 4 }, SCROLL);
@@ -202,7 +215,7 @@ fn menu_golden() {
     m.run_ms(300);
     assert_eq!(m.stats().pending, 0, "LCD rows still pending");
     assert_golden(m.lcd_rgb565(), &golden("menu.png"), &build_dir().join("menu.actual.png"));
-    assert!(m.lcd_rgb565() == &host_menu(pack(), 0)[..], "the LCD differs from the host's HOME menu");
+    assert!(m.lcd_rgb565() == &host_menu(pack(), 0, 0)[..], "the LCD differs from the host's HOME menu");
 }
 
 #[test]
@@ -529,7 +542,7 @@ fn sound_choice_holds(m: &mut Machine, sound: u32, game: u32, other: u32) {
     press_to(m, HOME, view::MENU);
     m.run_ms(300);
     assert_eq!(m.stats().pending, 0, "LCD rows still pending");
-    assert!(m.lcd_rgb565() == &host_menu(pack(), cycles)[..], "the LCD differs from the host's HOME menu with {name}");
+    assert!(m.lcd_rgb565() == &host_menu(pack(), cycles, 0)[..], "the LCD differs from the host's HOME menu with {name}");
 }
 
 #[test]
@@ -557,4 +570,65 @@ fn fm_new_game_starts_silent() {
     press_to(&mut m, PLAY, view::GAME);
     assert_eq!((m.stats().game, sound_mode(&m)), (BORDER, SOUND_FM));
     assert_fresh_fm_start(&mut m, mark, BORDER, zx_sys::SND_MODE_FM_A, "new game");
+}
+
+#[test]
+fn screen_menu_cycles_four() {
+    let mut m = start(BootOpt { rgb565: true, divider: 4 }, SCROLL);
+    assert_eq!(screen_mode(&m), SCREEN_CROP, "Crop by default");
+    menu_item(&mut m, SCREEN_ITEM);
+    m.run_ms(300);
+    assert!(m.lcd_rgb565() == &host_menu_at(pack(), 0, 0, SCREEN_ITEM)[..], "the LCD differs from the host's menu with Screen: Crop");
+    for (cycles, mode) in [(1, SCREEN_FIT), (2, SCREEN_FIT_SMOOTH), (3, SCREEN_BORDER), (4, SCREEN_CROP)] {
+        m.press(PLAY, 30);
+        m.run_ms(300);
+        let s = m.stats();
+        assert_eq!((s.view, screen_mode(&m)), (view::MENU as u32, mode), "after {cycles} presses");
+        assert_eq!(s.pending, 0, "LCD rows still pending");
+        assert!(
+            m.lcd_rgb565() == &host_menu_at(pack(), 0, cycles, SCREEN_ITEM)[..],
+            "the LCD differs from the host's menu after {cycles} presses (Screen: {mode})"
+        );
+    }
+    assert_eq!(sound_mode(&m), 0, "the Screen item changed the Sound choice");
+}
+
+#[test]
+fn screen_choice_holds() {
+    let mut m = start(BootOpt { rgb565: true, divider: 4 }, BORDER);
+    choose_screen(&mut m, SCREEN_FIT_SMOOTH);
+    m.run_ms(300);
+    assert_eq!(screen_mode(&m), SCREEN_FIT_SMOOTH);
+
+    // reset game
+    press_to(&mut m, HOME, view::MENU);
+    m.run_ms(100);
+    m.press(OCT_UP, 30); // "Reset game"
+    m.run_ms(50);
+    press_to(&mut m, PLAY, view::GAME);
+    assert_eq!(screen_mode(&m), SCREEN_FIT_SMOOTH, "after Reset game");
+    assert!(m.stats().frames < 10, "the game did not restart: {:?}", m.stats());
+    m.run_ms(300);
+
+    // back to the picker and another game
+    leave_game(&mut m);
+    assert_eq!(screen_mode(&m), SCREEN_FIT_SMOOTH, "in the picker");
+    m.turn(SELECT, SCROLL as i32 - BORDER as i32);
+    m.run_ms(200);
+    press_to(&mut m, PLAY, view::GAME);
+    assert_eq!((m.stats().game, screen_mode(&m)), (SCROLL, SCREEN_FIT_SMOOTH), "after starting another game");
+    m.run_ms(300);
+
+    // the menu shows it, and the next press cycles on from it
+    press_to(&mut m, HOME, view::MENU);
+    m.run_ms(300);
+    assert_eq!(m.stats().pending, 0, "LCD rows still pending");
+    assert!(m.lcd_rgb565() == &host_menu(pack(), 0, 2)[..], "the LCD differs from the host's HOME menu with Screen: Fit smooth");
+    for _ in 0..SCREEN_ITEM {
+        m.press(OCT_UP, 30);
+        m.run_ms(50);
+    }
+    m.press(PLAY, 30);
+    m.run_ms(100);
+    assert_eq!(screen_mode(&m), SCREEN_BORDER);
 }
