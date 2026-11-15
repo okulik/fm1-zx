@@ -345,6 +345,16 @@ impl Machine {
         self.probe.as_ref().map_or(0, |c| unsafe { std::mem::replace(&mut *c.get(), 0) })
     }
 
+    /// The `OUT`s since the last call (or the last reset) that page a 128K's memory: to a port
+    /// a 128K takes as its paging port 7FFDh (A15 and A1 both 0, which `OUT (FEh)` never is),
+    /// with a value that pages RAM bank 1-7 in or shows the second screen (bits 0-3 not all 0).
+    /// A 48K ignores them; a program that writes one expects a 128K. Bank 0 with only the ROM or
+    /// lock bits (10h, 30h) is what 48K games write to run as 48K on a 128K, and is not counted.
+    /// (A host-only counter: the firmware core has none.)
+    pub fn take_out_7ffd(&mut self) -> u32 {
+        std::mem::take(&mut self.raw.test_out_7ffd)
+    }
+
     /// True while the CPU is halted (in a `HALT`, waiting for an interrupt).
     pub fn halted(&self) -> bool {
         self.raw.cpu.halt_line != 0

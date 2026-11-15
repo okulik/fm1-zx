@@ -5,7 +5,7 @@
 //! files and the game pack out. Every folder holds only our generated test programs.
 
 use fmzx_pack::personal::{run, run_with_limit, Report, Row};
-use fmzx_pack::testprogs::{border_sna, hang_tzx, tape_tap, tune_sna, turbo_tzx, TAPE_DONE_BORDER};
+use fmzx_pack::testprogs::{border_sna, hang_tzx, multiload_tap, tape_tap, tune_sna, turbo_tzx, TAPE_DONE_BORDER};
 use std::path::{Path, PathBuf};
 use zx_sys::{pack_game_at, pack_open, Machine, PACK_MAX_RAW, PACK_SNA, PACK_TAP, PACK_Z80};
 
@@ -202,8 +202,72 @@ fn personal_skips_failures() {
     none.file("hang.tzx", &hang_tzx());
     let out2 = Tmp::new("skips-none-out");
     let e = run(&none.0, &out2.0).expect_err("no game loads");
-    assert!(e.contains("hang.tzx"), "{e}");
+    assert!(e.contains("no game could be loaded") && e.contains("hang.tzx"), "{e}");
     assert!(!out2.0.join("games.bin").exists());
+}
+
+#[test]
+fn personal_multiload_label() {
+    // a multi-load tape goes in as the snapshot of its first part, and the table says why
+    let games = Tmp::new("multi");
+    games.file("multi.tap", &multiload_tap());
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("multi-out");
+    let r = run(&games.0, &out.0).expect("builds");
+    let how = "loaded (the ROM trap took 4 of 5 blocks)";
+    assert_eq!(row(&r, "multi.tap").how, how);
+    let table = fmzx_pack::personal::table(&r);
+    // the "how" column is as wide as its longest entry
+    let col = |l: &str| l.find(" KB").unwrap_or_else(|| panic!("{table}"));
+    let lines: Vec<&str> = table.lines().filter(|l| l.contains(" KB  ")).collect();
+    assert_eq!(lines.len(), 2, "{table}");
+    assert!(lines.iter().any(|l| l.contains(how)) && col(lines[0]) == col(lines[1]), "{table}");
+}
+
+#[test]
+fn personal_all_commented_out() {
+    // every entry commented out: the error says so and names the games file, not "no game
+    // could be loaded"
+    let games = Tmp::new("allcomment");
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("allcomment-out");
+    run(&games.0, &out.0).expect("first run");
+    let path = out.0.join("personal-games.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let commented: String =
+        text.lines().map(|l| if l.starts_with('#') || l.is_empty() { format!("{l}\n") } else { format!("# {l}\n") }).collect();
+    std::fs::write(&path, &commented).unwrap();
+    let e = run(&games.0, &out.0).expect_err("nothing to build");
+    let file = path.canonicalize().unwrap();
+    assert!(e.contains("every game in") && e.contains("commented out or missing") && e.contains(&file.display().to_string()), "{e}");
+    assert!(!e.contains("no game could be loaded"), "{e}");
+    assert!(!out.0.join("games.bin").exists());
+    // from a games file whose only game is missing: the same, with the game listed
+    let mine = games.0.join("mine.toml");
+    std::fs::write(&mine, "[[game]]\nid = \"g\"\nname = \"Gone\"\nfile = \"gone.sna\"\n").unwrap();
+    let e = run(&mine, &out.0).expect_err("nothing to build");
+    assert!(e.contains("commented out or missing") && e.contains("mine.toml") && e.contains("gone.sna"), "{e}");
+    // an empty folder has no games file to name
+    let empty = Tmp::new("allcomment-empty");
+    let out2 = Tmp::new("allcomment-empty-out");
+    let e = run(&empty.0, &out2.0).expect_err("no games");
+    assert!(e.contains("no game files"), "{e}");
+}
+
+#[test]
+fn personal_cli_needs_app() {
+    // fmzx-pack personal without --app: a usage error, nothing built
+    let games = Tmp::new("cli");
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("cli-out");
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_fmzx-pack"))
+        .args(["personal", games.0.to_str().unwrap(), "-o", out.0.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success());
+    assert!(err.contains("--app") && err.contains("usage:"), "{err}");
+    assert!(!out.0.join("games.bin").exists() && !out.0.join("personal-games.toml").exists());
 }
 
 #[test]

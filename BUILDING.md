@@ -153,16 +153,19 @@ given a games file, the command uses it as written (a relative `file` is taken f
 folder) and changes nothing in it.
 
 **How each game goes in.** `.sna` and 48K `.z80` files go in as they are ("as is"). A `.tap`, or a
-`.tzx` of standard blocks only, goes in as a tape ("tape") when a trial load through the ROM's
-tape trap on the host succeeds: on the FM-1 it then loads instantly and can load more from the
-tape while it runs. Any other `.tzx` (a turbo loader, say) is loaded on the host by playing its
-tape signal into the emulated Spectrum until the tape ends, and goes in as a snapshot of the
-loaded machine ("loaded"); so does a standard tape whose trial fails because it reads part of the
-tape with a loader of its own ("loaded (own loader)"). A game loaded as a snapshot has only what
-it had loaded when the tape ended: a multi-load game (later levels from the tape) gets its first
-part only. 128K files, and files that fail to load (the tape never finishes, or the program
-ends at the BASIC editor, an error report or a reset: `host/crates/fmzx-pack/src/tapeload.rs`),
-are left out with the reason.
+`.tzx` of standard blocks only, stays a tape ("tape") only when a trial load through the ROM's
+tape trap on the host loads the whole tape with no one at the keys: on the FM-1 it then loads
+instantly. Any other `.tzx` (a turbo loader, say) is loaded on the host by playing its tape signal
+into the emulated Spectrum until the tape ends, and goes in as a snapshot of the loaded machine
+("loaded"). So does a standard tape whose trial fails, and the table says why: "loaded (own
+loader)" when the trap took none of its blocks, "loaded (the ROM trap took 4 of 5 blocks)" when it
+took some, the rest being read by a loader of the game's own or wanted only later. A game that
+loads later parts after you start playing (a multi-load game) is such a tape: it goes in as a
+snapshot of its first part, and its later levels are not available on the FM-1. A standard tape
+too big for the pack ("loaded (tape too big)") goes in as its snapshot as well. 128K files, a
+tape whose program pages a 128K's memory (RAM banks 1-7 or the second screen), and files that
+fail to load (the tape never finishes, or the program ends at the BASIC editor, an error report
+or a reset: `host/crates/fmzx-pack/src/tapeload.rs`), are left out with the reason.
 
 **The table.** The command prints each game, how it went in, its packed size and its file; the
 space used and left in the app slot (about 472 KB beside the current image); and the games left
@@ -189,9 +192,10 @@ key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware)
 `build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`, with the same
 warnings: FM-1 ZX has not run on a real FM-1 yet.
 
-The pieces: `fmzx-pack personal <folder | games.toml> -o DIR [--app <app.bin>]...` (the games
-file, the converted games in `DIR/converted/` with a manifest of their own, `DIR/games.bin`,
-`DIR/keymaps.json` and the table; `--app` gives the images, whose size sets the room), then
+The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
+(the games file, the converted games in `DIR/converted/` with a manifest of their own,
+`DIR/games.bin`, `DIR/keymaps.json` and the table; `--app`, required, gives the images, whose size
+sets the room), then
 those steps. `emu-gate`'s `tests/fw_personal.rs` runs the script on a folder of our own generated
 test programs and boots the result in fm1-emu.
 

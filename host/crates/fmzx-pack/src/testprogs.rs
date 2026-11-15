@@ -491,11 +491,89 @@
 //!
 //! # `split_end_tap()` (not in the pack)
 //!
-//! `10 PAUSE 28: POKE 23610,8: PAUSE 10: RANDOMIZE USR 0`: an end whose settle-time samples no
-//! single "ended" rule of the success test takes on its own. Loaded through the trap, the settle
-//! time sees about 30 frames of `PAUSE` (running), then about 36 in the ROM with ERR_NR 8 (the
-//! second `PAUSE`, and the reset's RAM fill until it reaches the system variables), then about 35
-//! of the reset (the RAM check zeroes the system variables, then the copyright screen).
+//! An end whose settle-time samples no single "ended" rule of the success test takes on its own:
+//! the BASIC loader of `tape.tap` and this code. Loaded through the trap, the settle time sees
+//! 25 frames of `HALT` in RAM (running), then 40 in the ROM's `PAUSE` loop with the BASIC program
+//! hidden (VARS set to PROG, as the copyright screen's empty program has it: the reset rule),
+//! then, back in BASIC, the program's end, "0 OK", and the editor for the rest (about 33 frames:
+//! the editor rule).
+//!
+//! ```text
+//!        EI
+//!        LD B,25
+//! run:   HALT
+//!        DJNZ run
+//!        LD HL,(VARS)        5C4Bh
+//!        PUSH HL
+//!        LD HL,(PROG)        5C53h
+//!        LD (VARS),HL
+//!        LD BC,40
+//!        CALL 1F3Dh          the ROM's PAUSE loop: 40 frames
+//!        POP HL
+//!        LD (VARS),HL
+//!        RET                 to BASIC: the program ends
+//! ```
+//!
+//! # `multiload_tap()` (not in the pack)
+//!
+//! A multi-load game in small: the BASIC loader of `tape.tap`, then code that waits for a key
+//! (`HALT`, then a read of every key row, once a frame) before it loads its second part, a
+//! headerless block of 256 bytes, to [`MULTILOAD_PART2_AT`] through LD-BYTES. It first waits for
+//! every key to be up: through the trap the code runs while the autostart still holds ENTER.
+//! With no one at the keys the trap takes the first four blocks and never the fifth.
+//!
+//! ```text
+//!        EI
+//! up:    HALT
+//!        XOR A
+//!        IN A,(FEh)          every key row
+//!        CPL
+//!        AND 1Fh
+//!        JR NZ,up            a key still down
+//! wait:  HALT
+//!        XOR A
+//!        IN A,(FEh)          every key row
+//!        CPL
+//!        AND 1Fh
+//!        JR Z,wait           no key
+//!        LD IX,MULTILOAD_PART2_AT
+//!        LD DE,256
+//!        LD A,FFh
+//!        SCF
+//!        CALL 0556h          LD-BYTES
+//!        LD A,TAPE_DONE_BORDER
+//!        JR C,done
+//!        LD A,TAPE_FAIL_BORDER
+//! done:  OUT (FEh),A
+//!        EI
+//! spin:  JR spin
+//! ```
+//!
+//! # `port_out_tap(port, value)` (not in the pack)
+//!
+//! The BASIC loader of `tape.tap`, then code that writes `value` to `port` and runs on:
+//! `LD BC,port; LD A,value; OUT (C),A; EI; spin: JR spin`. With port 7FFDh and value 11h it is
+//! a 128K program paging RAM bank 1 in; with 10h, a 48K program selecting the 48K ROM, as 48K
+//! games do to run on a 128K.
+//!
+//! # `ear_echo_code(nops)` (not in the pack)
+//!
+//! The tape signal timing test's sampler (`zx-tests`' `tape_signal.rs`), code for 8000h, run
+//! with interrupts off: it copies port FEh's EAR bit (bit 6) to the speaker (bit 4) in a loop
+//! of [`EAR_ECHO_PERIOD`] T, so each change of the tape level becomes a speaker edge, whose
+//! T-state the core records. The `OUT`'s I/O cycle is [`EAR_ECHO_DELAY`] T after the `IN`'s
+//! (4 + 4 + 4 + 7 + 7). `nops` `NOP`s first shift the loop's phase by 4 T each.
+//!
+//! ```text
+//!        NOP                 nops times
+//!        LD BC,00FEh
+//! loop:  IN A,(C)            12   I/O cycle at +8
+//!        RRCA                4
+//!        RRCA                4    EAR to bit 4
+//!        AND 10h             7
+//!        OUT (FEh),A         11   I/O cycle at +7
+//!        JP loop             10
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -1374,22 +1452,101 @@ pub fn reset_tap() -> Vec<u8> {
     basic_tap("reset", body)
 }
 
-/// An autostarting BASIC tape whose program is
-/// `10 PAUSE 28: POKE 23610,8: PAUSE 10: RANDOMIZE USR 0`: it runs, then sits in the ROM with a
-/// report code (ERR_NR 8), then resets, so the settle time's samples split between running, the
-/// error report and the reset (see the module docs). Not one of [`PROGRAMS`].
+/// The BASIC loader of `tape.tap` (`LOAD ""CODE: RANDOMIZE USR 32768`) and `code` for 8000h.
+fn usr_tap(name: &str, code: &[u8]) -> Vec<u8> {
+    let prog = usr_prog();
+    let mut tap = tap_header(0, name, prog.len() as u16, 10, prog.len() as u16);
+    tap.extend(tap_block(0xFF, &prog));
+    tap.extend(tap_header(3, name, code.len() as u16, CODE, 0));
+    tap.extend(tap_block(0xFF, code));
+    tap
+}
+
+/// A tape whose program runs, then sits in the ROM with the BASIC program hidden (the reset
+/// rule), then ends at the BASIC editor, so the settle time's samples split between running, the
+/// reset rule and the editor (see the module docs). Not one of [`PROGRAMS`].
 pub fn split_end_tap() -> Vec<u8> {
-    let mut body = vec![0xF2]; // PAUSE
-    basic_number(&mut body, 28.0);
-    body.extend_from_slice(&[b':', 0xF4]); // POKE
-    basic_number(&mut body, 23610.0);
-    body.push(b',');
-    basic_number(&mut body, 8.0);
-    body.extend_from_slice(&[b':', 0xF2]);
-    basic_number(&mut body, 10.0);
-    body.extend_from_slice(&[b':', 0xF9, 0xC0]); // RANDOMIZE USR
-    basic_number(&mut body, 0.0);
-    basic_tap("split", body)
+    let code = [
+        0xFB, // EI
+        0x06, 25, // LD B,25
+        0x76, // run: HALT
+        0x10, 0xFD, // DJNZ run
+        0x2A, 0x4B, 0x5C, // LD HL,(VARS)
+        0xE5, // PUSH HL
+        0x2A, 0x53, 0x5C, // LD HL,(PROG)
+        0x22, 0x4B, 0x5C, // LD (VARS),HL
+        0x01, 40, 0, // LD BC,40
+        0xCD, 0x3D, 0x1F, // CALL 1F3Dh
+        0xE1, // POP HL
+        0x22, 0x4B, 0x5C, // LD (VARS),HL
+        0xC9, // RET
+    ];
+    usr_tap("split", &code)
+}
+
+/// Where `multiload_tap()`'s code would load its second part.
+pub const MULTILOAD_PART2_AT: u16 = 0xC000;
+
+/// A multi-load tape whose code loads its second part only after a key (see the module docs).
+/// Not one of [`PROGRAMS`].
+pub fn multiload_tap() -> Vec<u8> {
+    let at = MULTILOAD_PART2_AT.to_le_bytes();
+    let mut a = Asm::new(CODE);
+    a.op(&[0xFB]) // EI
+        .label("up")
+        .op(&[0x76, 0xAF, 0xDB, 0xFE, 0x2F, 0xE6, 0x1F]) // HALT; XOR A; IN A,(FEh); CPL; AND 1Fh
+        .rel(0x20, "up") // JR NZ
+        .label("wait")
+        .op(&[0x76, 0xAF, 0xDB, 0xFE, 0x2F, 0xE6, 0x1F]) // HALT; XOR A; IN A,(FEh); CPL; AND 1Fh
+        .rel(0x28, "wait") // JR Z
+        .op(&[0xDD, 0x21, at[0], at[1]]) // LD IX,part 2
+        .op(&[0x11, 0x00, 0x01, 0x3E, 0xFF, 0x37]) // LD DE,256; LD A,FFh; SCF
+        .op(&[0xCD, 0x56, 0x05]) // CALL 0556h
+        .op(&[0x3E, TAPE_DONE_BORDER])
+        .rel(0x38, "done") // JR C
+        .op(&[0x3E, TAPE_FAIL_BORDER])
+        .label("done")
+        .op(&[0xD3, 0xFE, 0xFB]) // OUT (FEh),A; EI
+        .label("spin")
+        .rel(0x18, "spin");
+    let mut tap = usr_tap("multi", &a.finish());
+    let part2: Vec<u8> = (0..256u32).map(|i| (i * 37 + 11) as u8).collect();
+    tap.extend(tap_block(0xFF, &part2));
+    tap
+}
+
+/// A tape whose code writes `value` to `port` with `OUT (C),A`, then runs on (see the module
+/// docs). Not one of [`PROGRAMS`].
+pub fn port_out_tap(port: u16, value: u8) -> Vec<u8> {
+    let p = port.to_le_bytes();
+    usr_tap("port", &[0x01, p[0], p[1], 0x3E, value, 0xED, 0x79, 0xFB, 0x18, 0xFE])
+}
+
+/// A `.tap` of `tap`'s blocks, then headerless blocks (flag FFh) of zeros, as long as they may
+/// be, until the file is `len` bytes or more. Not one of [`PROGRAMS`].
+pub fn padded_tap(tap: &[u8], len: usize) -> Vec<u8> {
+    let mut t = tap.to_vec();
+    while t.len() < len {
+        let n = (len - t.len()).clamp(1, 0xFFFF - 2);
+        t.extend(tap_block(0xFF, &vec![0u8; n]));
+    }
+    t
+}
+
+/// The loop period of [`ear_echo_code`], in T-states.
+pub const EAR_ECHO_PERIOD: u32 = 48;
+/// From the I/O cycle of [`ear_echo_code`]'s `IN` to that of its `OUT`, in T-states.
+pub const EAR_ECHO_DELAY: u32 = 26;
+
+/// The tape signal timing test's sampler for 8000h (see the module docs). Not one of
+/// [`PROGRAMS`].
+pub fn ear_echo_code(nops: usize) -> Vec<u8> {
+    let mut a = Asm::new(CODE);
+    a.op(&vec![0x00; nops]).op(&[0x01, 0xFE, 0x00]); // NOPs; LD BC,00FEh
+    a.label("loop")
+        .op(&[0xED, 0x78, 0x0F, 0x0F, 0xE6, 0x10, 0xD3, 0xFE]) // IN A,(C); RRCA; RRCA; AND 10h; OUT (FEh),A
+        .abs(&[0xC3], "loop"); // JP loop
+    a.finish()
 }
 
 /// An autostarting BASIC tape whose program is

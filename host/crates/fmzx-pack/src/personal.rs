@@ -34,7 +34,9 @@
 //!
 //! Every game goes through [`tapeload::prepare`]: snapshots as they are, standard tapes as tapes
 //! (after the trap trial), other tapes as the `.z80` of their signal load. 128K files and files
-//! that fail to load are left out with the reason. The results go to `<out>/converted/` as
+//! that fail to load are left out with the reason. A run with no game in the pack is an error:
+//! that every game in the games file is commented out or missing, naming the file, or else the
+//! games left out and why. The results go to `<out>/converted/` as
 //! `<id>.<sna|z80|tap>`, with a manifest of their own, `<out>/converted/manifest.toml`, from
 //! which [`build_pack`] makes `<out>/games.bin`; `<out>/keymaps.json` is the browser page's key
 //! table. A pack bigger than the room the app slot leaves it (the limit) is refused, listing
@@ -75,8 +77,8 @@ pub struct Row {
     pub name: String,
     /// The game file's path.
     pub file: String,
-    /// How it went in ([`Loaded::how`]: "as is", "tape", "loaded (own loader)", "loaded"), or
-    /// "left out".
+    /// How it went in ([`Loaded::how`]: "as is", "tape", "loaded", "loaded (own loader)" and
+    /// the like), or "left out".
     pub how: String,
     /// Its bytes in the pack (LZ4 or stored); `None` when left out.
     pub packed: Option<u32>,
@@ -138,9 +140,12 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
     let mut prepared: HashMap<PathBuf, Result<Loaded, String>> = HashMap::new();
     let mut rows = Vec::new();
     let mut left_new = Vec::new();
+    let mut no_files = false;
     let (games, games_dir, games_file) = if input.is_dir() {
         let path = out.join(GAMES_FILE);
-        let text = update_games_file(&path, &game_files(&input)?, &mut prepared, &mut left_new)?;
+        let files = game_files(&input)?;
+        no_files = files.is_empty();
+        let text = update_games_file(&path, &files, &mut prepared, &mut left_new)?;
         (entries(&text).map_err(|e| format!("{}: {e}", shown(&path)))?, out.clone(), path)
     } else {
         let text = std::fs::read_to_string(&input).map_err(|e| format!("{}: {e}", shown(&input)))?;
@@ -156,7 +161,7 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
         let mut row =
             Row { name: g.name.clone(), file: shown(&path), how: "left out".into(), packed: None, reason: None };
         if !path.is_file() {
-            row.reason = Some("missing: the file is not there".into());
+            row.reason = Some(MISSING_REASON.into());
             rows.push(row);
             continue;
         }
@@ -171,14 +176,27 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
                 let file = format!("{}.{}", g.id, converted_ext(l, &key));
                 let at = conv.join(&file);
                 std::fs::write(&at, &l.data).map_err(|e| format!("{}: {e}", shown(&at)))?;
-                row.how = l.how.to_string();
+                row.how = l.how.clone();
                 packed.push((g.clone(), file, rows.len()));
             }
         }
         rows.push(row);
     }
+    // tried and failed: not missing, not a commented-out entry (which is no game of the run)
+    let failed = rows.iter().any(|w| w.reason.is_some() && !is_missing(w)) || !left_new.is_empty();
     rows.extend(left_new);
     if packed.is_empty() {
+        if !failed {
+            return Err(if no_files && rows.is_empty() {
+                format!("no game files (.sna, .z80, .tap or .tzx) in {}", shown(&input))
+            } else {
+                format!(
+                    "every game in {} is commented out or missing: nothing to build\n{}",
+                    games_file.display(),
+                    left_out_list(&rows)
+                )
+            });
+        }
         return Err(format!("no game could be loaded:\n{}", left_out_list(&rows)));
     }
 
@@ -214,12 +232,19 @@ fn is_ours(out: &Path) -> bool {
         || std::fs::read_to_string(out.join(CONVERTED).join("manifest.toml")).is_ok_and(|t| t.lines().next() == Some(MANIFEST_HEAD))
 }
 
+const MISSING_REASON: &str = "missing: the file is not there";
+
+fn is_missing(w: &Row) -> bool {
+    w.reason.as_deref() == Some(MISSING_REASON)
+}
+
 /// The table `tools/make-personal-pack` prints: each game, how it went in, its packed size and
 /// its file; the space used and left; the games left out and why.
 pub fn table(r: &Report) -> String {
-    let mut s = format!("  {:<28} {:<20} {:>9}  file\n", "name", "how", "packed");
+    let how = how_width(&r.rows);
+    let mut s = format!("  {:<28} {:<how$} {:>9}  file\n", "name", "how", "packed");
     for w in r.rows.iter().filter(|w| w.packed.is_some()) {
-        s += &game_line(w);
+        s += &game_line(w, how);
     }
     s += &format!("used {} of {} KB, {} KB free\n", kb(r.used), kb(r.used + r.free), kb(r.free));
     if r.rows.iter().any(|w| w.packed.is_none()) {
@@ -237,8 +262,13 @@ fn file_name(w: &Row) -> String {
     Path::new(&w.file).file_name().map_or(w.file.clone(), |f| f.to_string_lossy().into_owned())
 }
 
-fn game_line(w: &Row) -> String {
-    format!("  {:<28} {:<20} {:>6} KB  {}\n", w.name, w.how, kb(w.packed.unwrap_or(0)), file_name(w))
+/// The width of the "how" column: its longest entry, at least 20.
+fn how_width(rows: &[Row]) -> usize {
+    rows.iter().filter(|w| w.packed.is_some()).map(|w| w.how.len()).max().unwrap_or(0).max(20)
+}
+
+fn game_line(w: &Row, how: usize) -> String {
+    format!("  {:<28} {:<how$} {:>6} KB  {}\n", w.name, w.how, kb(w.packed.unwrap_or(0)), file_name(w))
 }
 
 fn left_out_list(rows: &[Row]) -> String {
@@ -258,8 +288,9 @@ fn too_big(rows: &[Row], used: u32, limit: u32, games_file: &Path, from_folder: 
         kb(limit),
         kb(used - limit)
     );
+    let how = how_width(rows);
     for w in by_size {
-        s += &game_line(w);
+        s += &game_line(w, how);
     }
     if rows.iter().any(|w| w.packed.is_none()) {
         s += &format!("Left out:\n{}", left_out_list(rows));
@@ -275,7 +306,7 @@ fn too_big(rows: &[Row], used: u32, limit: u32, games_file: &Path, from_folder: 
 
 /// `prepare`'s refusal of a 128K file is just "128K" in the table.
 fn reason(e: &str) -> String {
-    if e == "128K, left out" {
+    if e == tapeload::LEFT_OUT_128K {
         "128K".into()
     } else {
         e.to_string()

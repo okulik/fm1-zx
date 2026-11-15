@@ -7,8 +7,9 @@
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
 //!     [--product FM-1_948] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_948]`
-//! `fmzx-pack personal <folder | games.toml> -o <dir> [--app <app.bin>]...` (the personal pack,
-//!     `tools/make-personal-pack`; `--app`: the images it goes with, which set the room for it)
+//! `fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...` (the
+//!     personal pack, `tools/make-personal-pack`; `--app`: the images it goes with, at least one,
+//!     which set the room for it)
 
 use fmzx_pack::inputs::{check_loader, default_cache, load_sdk, sha256_hex, Pins};
 use fmzx_pack::keymaps::keymaps_json;
@@ -26,7 +27,7 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
                       [--product FM-1_948] [--cache DIR] [--offline]
        fmzx-pack verify <pkg.fwsc> [--product FM-1_948]
-       fmzx-pack personal <folder | games.toml> -o <dir> [--app <app.bin>]...";
+       fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...";
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -119,6 +120,11 @@ fn personal(args: &[String]) -> Result<(), String> {
     let o = opts(args, &["-o", "--app"], &[])?;
     let [input] = &o.free[..] else { return Err(USAGE.to_string()) };
     let out = o.need("-o")?;
+    if !o.values.iter().any(|(k, _)| k == "--app") {
+        return Err(format!(
+            "personal needs --app <app.bin>: the app images the pack goes with set the room for it\n{USAGE}"
+        ));
+    }
     // the room beside the largest image the pack goes with
     let mut limit = None;
     for (_, app) in o.values.iter().filter(|(k, _)| k == "--app") {

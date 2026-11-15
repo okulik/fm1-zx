@@ -5,6 +5,12 @@
 //! load through the ROM trap succeeds, and every other tape loaded on the host through the tape
 //! signal and stored as a 48K `.z80`.
 //!
+//! A load (the trial or the signal's, settle time included) that pages a 128K's memory is refused
+//! as a 128K game ([`LEFT_OUT_128K`]): a write to a port a 128K takes as its paging port 7FFDh
+//! (A15 and A1 both 0) that pages RAM bank 1-7 in or shows the second screen. A 48K ignores the
+//! write, and the program would run on with the wrong memory. A write of bank 0 with only the ROM
+//! or lock bits (10h, 30h, 00h) is not one: 48K games write it to run as 48K on a 128K.
+//!
 //! # Load to snapshot ([`load_signal`])
 //!
 //! The tape is inserted as a signal, and the machine autostarts (`LOAD ""`) with the trap off
@@ -18,9 +24,11 @@
 //!
 //! A standard tape is inserted as a `.tap` and autostarted with the LD-BYTES trap on. It
 //! succeeds when every block has been taken by LD-BYTES and the settle time passes the success
-//! test. It fails early when, for [`TRAP_IDLE_FRAMES`] frames running, no block is taken and
-//! the program polls port FEh as a loader does (at least [`POLL_READS`] reads a frame): the
-//! program reads the tape without LD-BYTES, which the trap cannot serve.
+//! test, with no one at the keys: so a multi-load game, which asks for its later parts only once
+//! it is played, fails it (after [`LIMIT_FRAMES`]) and goes in as the snapshot of its first part.
+//! It fails early when, for [`TRAP_IDLE_FRAMES`] frames running, no block is taken and the
+//! program polls port FEh as a loader does (at least [`POLL_READS`] reads a frame): the program
+//! reads the tape without LD-BYTES, which the trap cannot serve.
 //!
 //! # The success test
 //!
@@ -35,9 +43,10 @@
 //! - at the copyright screen (a reset), when in at least half of the samples PC is in the ROM,
 //!   the BASIC program is empty (PROG, 5C53h, equals VARS, 5C4Bh) and the system variable ERR_NR
 //!   (5C3Ah) is 0 or FFh (the copyright screen leaves 0);
-//! - at the ROM's error report, when in at least half of the samples PC is in the ROM and ERR_NR
-//!   is not FFh otherwise (the ROM's error restart sets it to the report code less one; FFh is
-//!   "OK"), named by that report;
+//! - at the ROM's error report, when in at least half of the samples PC is in the ROM's key wait
+//!   (below), where every report ends, and ERR_NR is not FFh otherwise (the ROM's error restart
+//!   sets it to the report code less one; FFh is "OK"), named by that report. (A game that loads
+//!   over the system variables and runs ROM routines, a beep or a print, is not taken for one);
 //! - at the BASIC editor (the program ended with "0 OK"), when in at least half of the samples
 //!   PC is in the ROM's key wait (WAIT-KEY's loop through INPUT-AD, CALL-SUB and CALL-JUMP into
 //!   KEY-INPUT: 10A8h-10B4h, 15DEh-15FFh, 162Ch) and the system variable FLAGX (5C71h) has bit 5
@@ -64,7 +73,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 use crate::tzx;
-use zx_sys::Machine;
+use zx_sys::{Machine, PACK_MAX_RAW};
 
 /// Frames of the settle time after the tape: 2 s.
 pub const SETTLE_FRAMES: u32 = 100;
@@ -79,6 +88,8 @@ pub const POLL_READS: u32 = 200;
 pub const TRAP_IDLE_FRAMES: u32 = 250;
 /// The largest file taken in.
 pub const MAX_FILE: usize = 4 << 20;
+/// The refusal of a 128K game: the file says so, or its load pages memory as a 128K does.
+pub const LEFT_OUT_128K: &str = "128K, left out";
 
 /// The frame ends of the loader's last frames that the "still loading" test compares with.
 const LOADER_PCS: usize = 50;
@@ -110,8 +121,18 @@ pub struct Loaded {
     /// Emulated frames the trial or the load ran, settle time included (0 for a snapshot taken
     /// as it is).
     pub frames: u32,
-    /// How it went in: "as is", "tape", "loaded (own loader)" or "loaded".
-    pub how: &'static str,
+    /// How it went in (a column of the personal pack's table): "as is", "tape", "loaded", or
+    /// for a standard tape loaded through the signal why it was: "loaded (own loader)" (the trap
+    /// took none of its blocks), "loaded (the ROM trap took 3 of 8 blocks)", "loaded (trap load
+    /// failed)" (it took them all, then failed the success test) or "loaded (tape too big)".
+    pub how: String,
+}
+
+/// Why the trap trial failed: the blocks LD-BYTES took, of how many, and the message.
+struct TrapFail {
+    taken: usize,
+    blocks: usize,
+    why: String,
 }
 
 fn le16(d: &[u8], at: usize) -> u16 {
@@ -204,21 +225,26 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
     let mut err_nr = 0xFF;
     for _ in 0..SETTLE_FRAMES {
         m.run_frame();
+        if pages_128k(m) {
+            m.port_fe_probe(false);
+            return Err(LEFT_OUT_128K.into());
+        }
         let reads = m.take_port_fe_reads();
         let r = m.regs();
         halted_di |= m.halted() && r.iff1 == 0;
         if reads >= POLL_READS && near_loader(r.pc) {
             polling += 1;
         }
-        let at_editor = ROM_KEY_WAIT.iter().any(|k| k.contains(&r.pc)) && m.peek(FLAGX) & 0x20 == 0;
+        let at_key_wait = ROM_KEY_WAIT.iter().any(|k| k.contains(&r.pc));
+        let at_editor = at_key_wait && m.peek(FLAGX) & 0x20 == 0;
         let (mut at_reset, mut at_report) = (false, false);
         if r.pc < 0x4000 {
             // the copyright screen leaves ERR_NR 0 (or FFh); a report with no program (a failed
-            // LOAD "") has another code
+            // LOAD "") has another code; every report ends in the key wait
             let e = m.peek(ERR_NR);
             at_reset = peek16(m, PROG) == peek16(m, VARS) && (e == 0 || e == 0xFF);
-            at_report = !at_reset && e != 0xFF;
-            // the first code: a reset's RAM fill writes a byte of its own into ERR_NR
+            at_report = !at_reset && e != 0xFF && at_key_wait;
+            // the first code seen names the report
             if at_report && report == 0 {
                 err_nr = e;
             }
@@ -259,38 +285,46 @@ fn settle(m: &mut Machine, loader: &[u16]) -> Result<(), String> {
     }
 }
 
+/// Whether the machine wrote to a 128K's paging port since the last look (see the module docs).
+fn pages_128k(m: &mut Machine) -> bool {
+    m.take_out_7ffd() > 0
+}
+
 /// The trap trial; the frames it ran.
-fn trap_run(tap: &[u8]) -> Result<u32, String> {
+fn trap_run(tap: &[u8]) -> Result<u32, TrapFail> {
+    let bad = |why: &str| TrapFail { taken: 0, blocks: 0, why: why.into() };
     let mut starts = Vec::new();
     let mut i = 0usize;
     while i < tap.len() {
         if tap.len() - i < 2 {
-            return Err("bad .tap: a block runs past the end of the file".into());
+            return Err(bad("bad .tap: a block runs past the end of the file"));
         }
         starts.push(i);
         i += 2 + le16(tap, i) as usize;
     }
     if starts.is_empty() || i != tap.len() {
-        return Err(if starts.is_empty() { "empty tape" } else { "bad .tap: a block runs past the end of the file" }.into());
+        return Err(bad(if starts.is_empty() { "empty tape" } else { "bad .tap: a block runs past the end of the file" }));
     }
+    let blocks = starts.len();
     let mut m = Machine::new();
-    m.tape_insert(tap).map_err(|_| "bad .tap: a block runs past the end of the file".to_string())?;
+    m.tape_insert(tap).map_err(|_| bad("bad .tap: a block runs past the end of the file"))?;
     m.tape_autostart();
     m.port_fe_probe(true);
     let (mut frames, mut idle, mut pos) = (0u32, 0u32, 0u32);
     while m.tape_pos() as usize != tap.len() {
         let taken = starts.iter().filter(|&&s| s < m.tape_pos() as usize).count();
         if frames == LIMIT_FRAMES {
-            return Err(format!("LD-BYTES took {taken} of the {} blocks in 15 minutes", starts.len()));
+            return Err(TrapFail { taken, blocks, why: format!("LD-BYTES took {taken} of the {blocks} blocks in 15 minutes") });
         }
         if idle == TRAP_IDLE_FRAMES {
-            return Err(format!(
-                "LD-BYTES took {taken} of the {} blocks; the program reads the rest itself",
-                starts.len()
-            ));
+            let why = format!("LD-BYTES took {taken} of the {blocks} blocks; the program reads the rest itself");
+            return Err(TrapFail { taken, blocks, why });
         }
         m.run_frame();
         frames += 1;
+        if pages_128k(&mut m) {
+            return Err(TrapFail { taken, blocks, why: LEFT_OUT_128K.into() });
+        }
         let reads = m.take_port_fe_reads();
         if m.tape_pos() != pos {
             pos = m.tape_pos();
@@ -301,14 +335,14 @@ fn trap_run(tap: &[u8]) -> Result<u32, String> {
             idle = 0;
         }
     }
-    settle(&mut m, &[])?;
+    settle(&mut m, &[]).map_err(|why| TrapFail { taken: blocks, blocks, why })?;
     Ok(frames + SETTLE_FRAMES)
 }
 
 /// Loads a standard tape (`.tap`) through the ROM trap, as the device will, and applies the
 /// success test (see the module docs).
 pub fn trap_trial(tap: &[u8]) -> Result<(), String> {
-    trap_run(tap).map(|_| ())
+    trap_run(tap).map(|_| ()).map_err(|f| f.why)
 }
 
 /// Loads a `.tzx` or `.tap` through the tape signal to the point after the tape and the settle
@@ -328,6 +362,9 @@ pub fn load_signal(data: &[u8]) -> Result<Machine, String> {
         }
         m.run_frame();
         frames += 1;
+        if pages_128k(&mut m) {
+            return Err(LEFT_OUT_128K.into());
+        }
         if m.tape_signal_in_pulse() {
             if loader.len() == LOADER_PCS {
                 loader.pop_front();
@@ -424,9 +461,11 @@ pub fn save_z80(m: &Machine) -> Vec<u8> {
 ///
 /// - `.sna` and 48K `.z80`: as they are ("as is");
 /// - `.tap`, and `.tzx` with only standard blocks: as a tape ("tape") when the trap trial
-///   succeeds, else loaded through the signal and stored as its `.z80` ("loaded (own loader)");
+///   succeeds, else loaded through the signal and stored as its `.z80`, `how` naming why (see
+///   [`Loaded::how`]); a tape over the pack's limit for a game ([`PACK_MAX_RAW`]) is loaded
+///   through the signal without a trial ("loaded (tape too big)");
 /// - any other `.tzx`: loaded through the signal ("loaded");
-/// - 128K files: `Err("128K, left out")`.
+/// - 128K files: `Err(LEFT_OUT_128K)`.
 pub fn prepare(path: &Path) -> Result<Loaded, String> {
     let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
     if !["sna", "z80", "tap", "tzx"].contains(&ext.as_str()) {
@@ -438,29 +477,49 @@ pub fn prepare(path: &Path) -> Result<Loaded, String> {
     }
     let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if is_128k(&data, &ext) {
-        return Err("128K, left out".into());
+        return Err(LEFT_OUT_128K.into());
     }
-    let loaded = |m: Machine, how| Loaded { kind: Kind::Snapshot, data: save_z80(&m), frames: m.frame_count(), how };
+    let loaded = |m: Machine, how: String| Loaded { kind: Kind::Snapshot, data: save_z80(&m), frames: m.frame_count(), how };
     match ext.as_str() {
         "sna" | "z80" => {
             let mut m = Machine::new();
             let r = if ext == "sna" { m.load_sna(&data) } else { m.load_z80(&data) };
             r.map_err(|_| format!("not a 48K .{ext} snapshot (malformed or cut short)"))?;
-            Ok(Loaded { kind: Kind::Snapshot, data, frames: 0, how: "as is" })
+            Ok(Loaded { kind: Kind::Snapshot, data, frames: 0, how: "as is".into() })
         }
         _ => {
             let tap = if ext == "tap" { Some(data.clone()) } else { tzx::to_tap(&data).ok() };
             let Some(tap) = tap else {
-                return Ok(loaded(load_signal(&data)?, "loaded"));
+                return Ok(loaded(load_signal(&data)?, "loaded".into()));
             };
+            if tap.len() > PACK_MAX_RAW as usize {
+                let m = load_signal(&data).map_err(|e| {
+                    if e == LEFT_OUT_128K {
+                        e
+                    } else {
+                        format!("{e} (a tape over the pack's {PACK_MAX_RAW}-byte limit, loaded through the signal)")
+                    }
+                })?;
+                return Ok(loaded(m, "loaded (tape too big)".into()));
+            }
             match trap_run(&tap) {
-                Ok(frames) => Ok(Loaded { kind: Kind::Tape, data: tap, frames, how: "tape" }),
+                Ok(frames) => Ok(Loaded { kind: Kind::Tape, data: tap, frames, how: "tape".into() }),
+                Err(trap) if trap.why == LEFT_OUT_128K => Err(trap.why),
                 Err(trap) => match load_signal(&data) {
-                    Ok(m) => Ok(loaded(m, "loaded (own loader)")),
-                    Err(e) if e == trap => Err(e),
-                    Err(e) => Err(format!("{e} (through the ROM trap: {trap})")),
+                    Ok(m) => Ok(loaded(m, signal_how(&trap))),
+                    Err(e) if e == trap.why || e == LEFT_OUT_128K => Err(e),
+                    Err(e) => Err(format!("{e} (through the ROM trap: {})", trap.why)),
                 },
             }
         }
+    }
+}
+
+/// `how` for a standard tape that failed the trap trial and loaded through the signal.
+fn signal_how(trap: &TrapFail) -> String {
+    match trap.taken {
+        0 => "loaded (own loader)".into(),
+        n if n < trap.blocks => format!("loaded (the ROM trap took {n} of {} blocks)", trap.blocks),
+        _ => "loaded (trap load failed)".into(),
     }
 }

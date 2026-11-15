@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The tape signal player (core/zx/tapesig.c): the pulses each TZX block plays, the files it
-//! refuses, port FEh with and without a signal, and a standard tape loaded by the ROM from the
-//! signal against the same tape through the LD-BYTES trap.
+//! refuses, the level changes a program reading port FEh sees and when, port FEh with and
+//! without a signal, and a standard tape loaded by the ROM from the signal against the same tape
+//! through the LD-BYTES trap.
 
 use fmzx_pack::testprogs::{
-    tape_tap, tzx_header, tzx_loop, tzx_pause, tzx_pulses, tzx_pure_data, tzx_standard, tzx_tone, tzx_turbo,
-    wrap_tap_as_tzx, TzxTurbo, TAPE_DONE_BORDER,
+    ear_echo_code, tape_tap, tzx_header, tzx_loop, tzx_pause, tzx_pulses, tzx_pure_data, tzx_standard, tzx_tone, tzx_turbo,
+    wrap_tap_as_tzx, TzxTurbo, EAR_ECHO_DELAY, EAR_ECHO_PERIOD, TAPE_DONE_BORDER,
 };
-use zx_sys::test_tape_pulses;
+use zx_sys::{test_tape_pulses, ZX_FRAME_TSTATES};
 use zx_tests::*;
 
 const PILOT: u32 = 2168;
@@ -346,3 +347,140 @@ fn standard_tape_via_signal_matches_trap() {
     assert_eq!(sig.border(), TAPE_DONE_BORDER);
 }
 
+
+// Signal timing (the design's test 1). `ear_echo_code` copies the EAR bit to the speaker in a
+// loop of EAR_ECHO_PERIOD T, so each level change the program reads becomes a speaker edge, whose
+// T-state the core records. A change at absolute T `e` is first read by the `IN` whose I/O
+// cycle is at or after it, so the edge it makes is at `e + EAR_ECHO_DELAY + lag`, the lag in
+// [0, EAR_ECHO_PERIOD); the check allows 1 T more each way. Every change is placed in the frame's
+// uncontended part (from the last paper line's pixels to the first one's), where the loop keeps
+// exact time, and each case runs at every 4-T phase of the loop against the frame, so in some the
+// read that sees a change near the frame end is the instruction that overshoots it.
+
+const F: u64 = ZX_FRAME_TSTATES as u64;
+
+/// The level change times of pulses of `lens` T played from `start`.
+fn ends(start: u64, lens: &[u32]) -> Vec<u64> {
+    lens.iter()
+        .scan(start, |t, &l| {
+            *t += u64::from(l);
+            Some(*t)
+        })
+        .collect()
+}
+
+/// Runs `ear_echo_code(nops)` with interrupts off, and the tape inserted, from T 0 of frame 0 for
+/// `frames` frames; before frame `play_at`, if given, presses play. Returns the speaker edges'
+/// absolute T-states, and the absolute T-state of the play.
+fn echo(tape: &[u8], nops: usize, frames: u32, play_at: Option<u32>) -> (Vec<u64>, u64) {
+    let mut m = Machine::new();
+    load(&mut m, 0x8000, &ear_echo_code(nops));
+    let mut r = m.regs();
+    r.pc = 0x8000;
+    r.sp = 0xFF00;
+    r.iff1 = 0;
+    r.iff2 = 0;
+    m.set_regs(&r);
+    assert_eq!((m.frame_count(), m.frame_tstate()), (0, 0));
+    m.tape_signal_insert(tape).unwrap();
+    let (mut got, mut played) = (Vec::new(), 0);
+    for f in 0..frames {
+        if play_at == Some(f) {
+            assert!(m.tape_signal_stopped(), "held by the stop until play");
+            played = u64::from(m.frame_count()) * F + u64::from(m.frame_tstate());
+            m.tape_signal_play();
+        } else if play_at.is_some_and(|p| f > 0 && f < p) {
+            assert!(m.tape_signal_stopped(), "held by the stop at frame {f}");
+        }
+        m.run_frame();
+        assert_eq!(m.frame_count(), f + 1);
+        got.extend(m.edges().iter().map(|e| u64::from(f) * F + u64::from(e.tstate)));
+    }
+    assert!(m.tape_signal_done(), "the tape played to its end");
+    (got, played)
+}
+
+fn check_echo(what: &str, nops: usize, got: &[u64], want: &[u64]) {
+    for &e in want {
+        let t = e % F;
+        assert!(!(14_000..57_500).contains(&t), "{what}: the change at {e} (frame T {t}) is not in the uncontended part");
+    }
+    assert_eq!(got.len(), want.len(), "{what}, {nops} NOPs: speaker edges {got:?}, level changes {want:?}");
+    for (&o, &e) in got.iter().zip(want) {
+        let lag = o as i64 - i64::from(EAR_ECHO_DELAY) - e as i64;
+        assert!(
+            (-1..=i64::from(EAR_ECHO_PERIOD)).contains(&lag),
+            "{what}, {nops} NOPs: the change at {e} read at {} ({lag} T late)",
+            o as i64 - i64::from(EAR_ECHO_DELAY)
+        );
+    }
+}
+
+#[test]
+fn signal_timing_tone() {
+    // a 0x13 pulse of 58000 T to reach the uncontended part, then a 0x12 tone of 20 pulses of
+    // 1000 T, across the frame end
+    let tape = tzx(&[tzx_pulses(&[58_000]), tzx_tone(1000, 20)]);
+    let mut lens = vec![58_000];
+    lens.extend([1000; 20]);
+    let want = ends(0, &lens);
+    assert!(want[11] < F && want[12] > F);
+    for nops in 0..12 {
+        check_echo("tone", nops, &echo(&tape, nops, 3, None).0, &want);
+    }
+}
+
+#[test]
+fn signal_timing_sequence_across_frame_end() {
+    // a 0x13 sequence whose changes fall just before the frame end (69870) and after it
+    let lens = [60_000, 3000, 2500, 4000, 370, 200, 1234, 777, 4321, 333];
+    let tape = tzx(&[tzx_pulses(&lens.map(|l| l as u16))]);
+    let want = ends(0, &lens);
+    assert_eq!(&want[3..6], &[69_500, 69_870, 70_070]);
+    for nops in 0..12 {
+        check_echo("sequence", nops, &echo(&tape, nops, 3, None).0, &want);
+    }
+}
+
+#[test]
+fn signal_timing_pause_hold() {
+    // a pause after a high level holds it 1 ms (3500 T), then goes low; a 1 ms pause holds it
+    // to its end; a pause after a low level changes nothing
+    let tape = tzx(&[
+        tzx_pulses(&[57_600]),
+        tzx_pause(2),
+        tzx_pulses(&[1000, 1000, 1000]),
+        tzx_pause(1),
+        tzx_pulses(&[1000, 1000]),
+        tzx_pause(1),
+        tzx_pulses(&[1000]),
+    ]);
+    let want = [
+        57_600, // high
+        61_100, // the 2 ms pause: low 1 ms in, until 64600
+        65_600,
+        66_600,
+        67_600, // high
+        71_100, // the 1 ms pause: low at its end
+        72_100,
+        73_100, // low
+        77_600, // after the 1 ms pause at the low level, which changed nothing
+    ];
+    for nops in 0..12 {
+        check_echo("pause", nops, &echo(&tape, nops, 3, None).0, &want);
+    }
+}
+
+#[test]
+fn signal_timing_stop_and_play() {
+    // a 0x20 pause 0 after a high level: low 1 ms in, then the tape stops; nothing changes for
+    // two frames; after play, the rest plays from that instant
+    let tape = tzx(&[tzx_pulses(&[58_000]), tzx_pause(0), tzx_pulses(&[1500, 1500, 1500])]);
+    for nops in 0..12 {
+        let (got, played) = echo(&tape, nops, 5, Some(3));
+        assert!((3 * F..3 * F + 24).contains(&played), "play at the end of frame 2: {played}");
+        let mut want = vec![58_000, 61_500];
+        want.extend(ends(played, &[1500, 1500, 1500]));
+        check_echo("stop", nops, &got, &want);
+    }
+}

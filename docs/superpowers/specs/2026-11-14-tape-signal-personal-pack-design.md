@@ -59,8 +59,10 @@ USB upload stays out of this stage (owner, 2026-11-14: "let's wait with USB for 
    `fmzx-preview.fwsc` with those games.
    - `.sna` and 48K `.z80` go in as they are.
    - `.tap`, and `.tzx` with only standard blocks, go in as tapes, so they keep the instant ROM
-     trap and multi-load, but only if a trial load through the trap on the host succeeds
-     (section 6, "Successful load").
+     trap, but only if a trial load through the trap on the host loads the whole tape with no
+     one at the keys (section 6, "Successful load"). A game that loads later parts after you
+     start playing (multi-load) fails the trial: it goes in as a snapshot of its first part, and
+     its later levels are not available on the FM-1.
    - If the trial fails (for example a headerless standard-speed loader of the game's own, which
      the trap cannot serve), the tape is loaded through the signal instead and goes in as its
      snapshot.
@@ -192,7 +194,8 @@ Timeouts and failures:
 
 ## 8. Calls the designer made (the owner may overrule)
 
-- **Standard-only tapes keep the trap path,** so multi-load and instant loading still work.
+- **Standard-only tapes keep the trap path** when the whole tape loads with no one at the keys,
+  so instant loading still works (a multi-load game does not pass; see the fallback).
   Signal loading is used only where the trap cannot load the tape.
 - **Settle time 2 s** after the tape ends.
 - **Fallback.** A standard tape that the trap cannot load falls back to signal loading. It goes in

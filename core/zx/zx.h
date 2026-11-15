@@ -91,6 +91,9 @@ typedef struct zx_machine {
 	zx_out_site sites[ZX_OUT_SITES];
 	zx_edge pend_borders[4];                  /* .level holds the colour */
 	zx_edge edges[ZX_MAX_EDGES];
+#ifdef ZX_TESTING
+	uint32_t test_out_7ffd;                   /* host only: OUTs that page a 128K's memory (ula.c) */
+#endif
 } zx_machine;
 
 /* rom: ZX_ROM_SIZE bytes that outlive m. Leaves m in the power-on state. */

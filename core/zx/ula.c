@@ -83,6 +83,12 @@ void zx_port_out(zx_machine *m, uint16_t port, uint8_t value)
 	uint8_t colour = value & 7u;
 	int late = t >= ZX_FRAME_TSTATES;
 
+#ifdef ZX_TESTING
+	/* host only: an OUT a 128K takes as its paging port 7FFDh (A15 = 0, A1 = 0; never OUT (FEh))
+	 * that pages RAM bank 1-7 in or shows the second screen (bits 0-3). Bank 0 with the ROM or
+	 * lock bits alone (10h, 30h, 00h) is what 48K games write to run as 48K on a 128K. */
+	if (!(port & 0x8002u) && (value & 0x0Fu)) m->test_out_7ffd++;
+#endif
 	if (port & 1u) return;
 	m->ear_in = (uint8_t)((value >> 4) & 1u);
 

@@ -2,18 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Load to snapshot (`tapeload`): a turbo tape loaded through the tape signal, a loader that
-//! never finishes, the `.z80` round trip, the trap trial and the routing, the success test, and
-//! 128K detection. Every tape is generated.
+//! never finishes, the `.z80` round trip, the trap trial and the routing (a multi-load tape, a
+//! tape over the pack's limit), the success test, and 128K detection (from the file, and from a
+//! write to the paging port). Every tape is generated.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fmzx_pack::tapeload::{is_128k, load_signal, prepare, save_z80, trap_trial, Kind};
+use fmzx_pack::tapeload::{is_128k, load_signal, prepare, save_z80, trap_trial, Kind, LEFT_OUT_128K, LIMIT_FRAMES};
 use fmzx_pack::testprogs::{
-    halt_tap, hang_tzx, input_tap, ok_tap, pause_tap, reset_tap, rom_copy_payload, rom_copy_tap, split_end_tap, stop_tap, tape_tap, tune_sna,
-    turbo_tzx, tzx_header, wrap_tap_as_tzx, ROM_COPY_PAYLOAD_AT, TAPE_DONE_BORDER, TURBO_PAYLOAD, TURBO_PAYLOAD_AT,
+    halt_tap, hang_tzx, input_tap, multiload_tap, ok_tap, padded_tap, pause_tap, port_out_tap, reset_tap, rom_copy_payload, rom_copy_tap,
+    split_end_tap, stop_tap, tape_tap, tune_sna, turbo_tzx, tzx_header, wrap_tap_as_tzx, MULTILOAD_PART2_AT, ROM_COPY_PAYLOAD_AT,
+    TAPE_DONE_BORDER, TURBO_PAYLOAD, TURBO_PAYLOAD_AT,
 };
-use zx_sys::{zx_regs, Machine};
+use zx_sys::{zx_regs, Machine, PACK_MAX_RAW};
 
 fn ram(m: &Machine, at: u16, len: usize) -> Vec<u8> {
     (0..len).map(|i| m.peek(at.wrapping_add(i as u16))).collect()
@@ -122,7 +124,8 @@ fn trap_trial_ok_and_not() {
     let path = dir.join("copy.tap");
     std::fs::write(&path, &tap).unwrap();
     let got = prepare(&path).expect("loads through the signal");
-    assert_eq!(got.how, "loaded (own loader)");
+    // the trap took the loader's four blocks, not the fifth: the label says so
+    assert_eq!(got.how, "loaded (the ROM trap took 4 of 5 blocks)");
     assert_eq!(got.kind, Kind::Snapshot);
     let mut m = Machine::new();
     m.load_z80(&got.data).expect("a .z80");
@@ -134,22 +137,22 @@ fn trap_trial_ok_and_not() {
     let p = dir.join("tape.tap");
     std::fs::write(&p, tape_tap()).unwrap();
     let got = prepare(&p).unwrap();
-    assert_eq!((got.kind, got.how), (Kind::Tape, "tape"));
+    assert_eq!((got.kind, got.how.as_str()), (Kind::Tape, "tape"));
     assert!(got.data == tape_tap());
     let p = dir.join("tape.TZX");
     std::fs::write(&p, wrap_tap_as_tzx(&tape_tap())).unwrap();
     let got = prepare(&p).unwrap();
-    assert_eq!((got.kind, got.how), (Kind::Tape, "tape"));
+    assert_eq!((got.kind, got.how.as_str()), (Kind::Tape, "tape"));
     assert!(got.data == tape_tap());
     let p = dir.join("tune.sna");
     std::fs::write(&p, tune_sna()).unwrap();
     let got = prepare(&p).unwrap();
-    assert_eq!((got.kind, got.how, got.frames), (Kind::Snapshot, "as is", 0));
+    assert_eq!((got.kind, got.how.as_str(), got.frames), (Kind::Snapshot, "as is", 0));
     assert!(got.data == tune_sna());
     let p = dir.join("turbo.tzx");
     std::fs::write(&p, turbo_tzx()).unwrap();
     let got = prepare(&p).unwrap();
-    assert_eq!((got.kind, got.how), (Kind::Snapshot, "loaded"));
+    assert_eq!((got.kind, got.how.as_str()), (Kind::Snapshot, "loaded"));
     let p = dir.join("hang.tzx");
     std::fs::write(&p, hang_tzx()).unwrap();
     assert!(prepare(&p).unwrap_err().contains("still loading"));
@@ -173,14 +176,77 @@ fn success_rules() {
     assert!(e.contains("BASIC editor"), "{e}");
     let e = load_signal(&ok_tap()).err().expect("so it does through the signal");
     assert!(e.contains("BASIC editor"), "{e}");
-    // an end that splits the samples between the error report and the reset (neither in half
-    // of them, ended in most): the backstop fails it and names the larger part
-    let e = trap_trial(&split_end_tap()).expect_err("an end split between report and reset fails");
-    assert!(e.contains("the program ended") && e.contains("mostly at the ROM's error report \"9 STOP statement\""), "{e}");
+    // an end that splits the samples between the reset rule and the editor (neither in half of
+    // them, ended in most): the backstop fails it and names the larger part
+    let e = trap_trial(&split_end_tap()).expect_err("an end split between the reset rule and the editor fails");
+    assert!(e.contains("the program ended: in ") && e.contains("mostly back at the copyright screen"), "{e}");
+    let ended: u32 = e["the program ended: in ".len()..].split_whitespace().next().unwrap().parse().unwrap();
+    assert!((60..=85).contains(&ended), "{e}");
     // a BASIC program still running in the ROM has started: PAUSE 0, INPUT
     trap_trial(&pause_tap()).expect("PAUSE 0 runs");
     trap_trial(&input_tap()).expect("INPUT runs");
     load_signal(&pause_tap()).expect("PAUSE 0 runs through the signal");
+}
+
+#[test]
+fn multiload_label() {
+    // a multi-load tape asks for its second part only after a key: the trap takes the loader's
+    // four blocks and waits the 15 minutes out, the signal plays the whole tape, and the game
+    // goes in as the snapshot of its first part, the label naming the blocks the trap took
+    let tap = multiload_tap();
+    let e = trap_trial(&tap).expect_err("no one presses the key");
+    assert_eq!(e, "LD-BYTES took 4 of the 5 blocks in 15 minutes");
+    let dir = tmp("multi");
+    let p = dir.join("multi.tap");
+    std::fs::write(&p, &tap).unwrap();
+    let got = prepare(&p).expect("loads through the signal");
+    assert_eq!((got.kind, got.how.as_str()), (Kind::Snapshot, "loaded (the ROM trap took 4 of 5 blocks)"));
+    assert!(got.frames < LIMIT_FRAMES, "the frames of the signal load: {}", got.frames);
+    let mut m = Machine::new();
+    m.load_z80(&got.data).expect("a .z80");
+    assert!(m.regs().pc >= 0x8000, "the code waits for its key: PC {:04X}", m.regs().pc);
+    assert!(ram(&m, MULTILOAD_PART2_AT, 256).iter().all(|&b| b == 0), "the second part is not loaded");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn oversized_tape_loads_as_snapshot() {
+    // a standard tape over the pack's limit for a game goes in as its signal load's snapshot
+    let tap = padded_tap(&pause_tap(), PACK_MAX_RAW as usize + 1);
+    assert!(tap.len() > PACK_MAX_RAW as usize);
+    let dir = tmp("oversized");
+    let p = dir.join("big.tap");
+    std::fs::write(&p, &tap).unwrap();
+    let got = prepare(&p).expect("loads through the signal");
+    assert_eq!((got.kind, got.how.as_str()), (Kind::Snapshot, "loaded (tape too big)"));
+    assert!(got.data.len() <= PACK_MAX_RAW as usize);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn paging_port_is_128k() {
+    // OUT (C),A of 11h with BC = 7FFDh: a 128K's paging port (A15 = 0, A1 = 0), RAM bank 1 in;
+    // refused on both paths
+    let tap = port_out_tap(0x7FFD, 0x11);
+    assert_eq!(trap_trial(&tap).unwrap_err(), LEFT_OUT_128K);
+    assert_eq!(load_signal(&wrap_tap_as_tzx(&tap)).err().unwrap(), LEFT_OUT_128K);
+    let dir = tmp("paging");
+    for name in ["paging.tap", "paging.tzx"] {
+        let p = dir.join(name);
+        let data = if name.ends_with("tap") { tap.clone() } else { wrap_tap_as_tzx(&tap) };
+        std::fs::write(&p, data).unwrap();
+        assert_eq!(prepare(&p).unwrap_err(), LEFT_OUT_128K, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // the second screen (bit 3) pages too
+    assert_eq!(trap_trial(&port_out_tap(0x7FFD, 0x08)).unwrap_err(), LEFT_OUT_128K);
+    // bank 0 with the 48K ROM (10h), or the lock (30h): what a 48K game writes to run on a 128K
+    trap_trial(&port_out_tap(0x7FFD, 0x10)).expect("a 48K game's 48K ROM select");
+    load_signal(&port_out_tap(0x7FFD, 0x30)).expect("a 48K game's paging lock");
+    trap_trial(&port_out_tap(0x00FD, 0x00)).expect("bank 0, normal screen");
+    // the same program writing to FFFDh (A15 = 1: a 128K's sound chip, no paging) loads
+    trap_trial(&port_out_tap(0xFFFD, 0x11)).expect("not the paging port");
+    load_signal(&port_out_tap(0xBFFD, 0x11)).expect("not the paging port");
 }
 
 #[test]
