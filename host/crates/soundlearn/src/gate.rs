@@ -9,7 +9,8 @@
 //!   or the replay's built-in claims). [`builtin_at`] also serves a site the code reader refuses.
 //! - **Heard:** the fit shows at least 85% inliers, 3 distinct notes, a span of half a
 //!   semitone and nothing above 5 kHz; the replay claims at least 90% of the frames the
-//!   routine's sites sound in; and the music gate passes over the claimed frames: at least 60% of
+//!   routine's sites sound in (80% when the fit has at least 95% inliers: the formula is whole,
+//!   and the frames left are those B's check cannot judge, such as a burst too short); and the music gate passes over the claimed frames: at least 60% of
 //!   the note time in runs of 4 frames or more of one note, some note in two separate runs, and
 //!   never 6 changes in a row (one every frame) all one way.
 //! - **Code-only** (never heard): the notes come from a table walked by a pointer, the note's
@@ -37,6 +38,11 @@ const SPAN: f64 = 0.5;
 const MAX_HZ: f64 = 5000.0;
 /// Replay: the share of the routine's sounding frames method B must claim, in tenths.
 const CLAIM_TENTHS: u32 = 9;
+/// The claim share for a routine whose fit is this strong (inliers): its formula is not
+/// partial, and the frames B leaves out are those its runtime check cannot judge (a short burst
+/// of a note each frame, too few flips to check).
+const STRONG_FIT: f64 = 0.95;
+const STRONG_CLAIM_TENTHS: u32 = 8;
 /// Music gate: a held note's frames, the share of note time held (tenths), the changes in a row
 /// all one way that make a sweep.
 const RUN: usize = 4;
@@ -282,8 +288,9 @@ pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, 
         return no(format!("fit: a note at {:.0} Hz (at most {MAX_HZ:.0})", f.max_hz));
     }
     let Some(r) = replay else { return no(NOT_REPLAYED.into()) };
-    if r.routine_frames == 0 || r.claimed * 10 < r.routine_frames * CLAIM_TENTHS {
-        return no(format!("replay: method B claims {} of the {} frames it sounds in (at least 90%)", r.claimed, r.routine_frames));
+    let tenths = if f.inliers >= STRONG_FIT { STRONG_CLAIM_TENTHS } else { CLAIM_TENTHS };
+    if r.routine_frames == 0 || r.claimed * 10 < r.routine_frames * tenths {
+        return no(format!("replay: method B claims {} of the {} frames it sounds in (at least {}0%)", r.claimed, r.routine_frames, tenths));
     }
     if !r.music_gate {
         return no("replay: not music (held notes, recurring pitches, no sweeps)".into());

@@ -400,3 +400,24 @@ fn stack_contention_must_not_move_the_pitch() {
     // and code only, a routine using the stack is never learned
     assert!(matches!(judge(&model, &m, None, None, None), Verdict::Refused(why) if why.contains("stack")));
 }
+
+#[test]
+fn claim_gate_follows_the_fit() {
+    // a routine B claims in 85% of the frames it sounds in: learned when its fit is strong (at
+    // least 95% inliers), refused when the fit is only passable; under 80%, refused either way
+    let fx = fixtures::square_one_counter();
+    let mut m = fixtures::machine(&fx.sna);
+    let heard = listen(&mut m, &none(), 300);
+    let site = &heard.sites[0];
+    let model = model_at(&m, site.pc);
+    let strong = check_fit(&model, site).expect("fits");
+    assert!(strong.inliers >= 0.95, "{strong:?}");
+    let weaker = soundlearn::fit::FitResult { inliers: 0.90, ..strong.clone() };
+    let claims = |claimed: u32| ReplayStats { routine_frames: 100, claimed, music_gate: true, builtin_claimed: 0 };
+    assert_eq!(judge(&model, &m, Some(site), Some(&claims(85)), Some(&strong)), Verdict::Learned { heard: true });
+    let v = judge(&model, &m, Some(site), Some(&claims(85)), Some(&weaker));
+    assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("replay") && why.ends_with("(at least 90%)")), "{v:?}");
+    assert_eq!(judge(&model, &m, Some(site), Some(&claims(90)), Some(&weaker)), Verdict::Learned { heard: true });
+    let v = judge(&model, &m, Some(site), Some(&claims(79)), Some(&strong));
+    assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("replay") && why.ends_with("(at least 80%)")), "{v:?}");
+}
