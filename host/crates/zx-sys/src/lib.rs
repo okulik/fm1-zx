@@ -938,7 +938,7 @@ impl SndEngines {
                     let en = &*self.raw.table.add(i);
                     let sites = (0..en.n_sites as usize).map(|s| *en.sites.add(s)).map(|s| SndEngineSite { off: s.off, role: s.role, chan: s.chan }).collect();
                     let pos = if en.pass != 0 { (0..en.channels as usize).map(|c| *en.pos.add(c)).collect() } else { Vec::new() };
-                    SndEngineEntry { name: self.name(i as u8 + 1), len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, sites, pos }
+                    SndEngineEntry { name: self.name(i as u8 + 1), digest: en.digest, len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, sites, pos }
                 }
             })
             .collect()
@@ -996,6 +996,8 @@ pub struct SndEngineSite {
 #[derive(Clone, Debug)]
 pub struct SndEngineEntry {
     pub name: String,
+    /// FNV-1a 64 of the signature (see [`SndEngines::digest`]).
+    pub digest: u64,
     /// Signature bytes from the anchor.
     pub len: u16,
     pub channels: u8,

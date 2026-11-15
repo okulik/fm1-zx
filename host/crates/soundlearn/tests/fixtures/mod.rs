@@ -495,6 +495,68 @@ pub fn siren() -> Fixture {
     }
 }
 
+/// A tune with a drum between its notes: a driver walks the table and calls the tone routine
+/// (`square_one_counter`'s loop, returning at the note's end: half period `13n + 58` T) and then
+/// a drum routine of its own, 200 `OUT`s of ROM bytes' bit 4 (noise, 44 T apart).
+///
+/// ```text
+/// 8000 21 00 83     start: LD HL,8300h    the first record: n, K (edges, 16 bits)
+/// 8003 7E           next:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A         the delay
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      DE = K
+/// 800C 23                  INC HL
+/// 800D E5                  PUSH HL
+/// 800E CD 00 81            CALL tone
+/// 8011 CD 00 82            CALL drum
+/// 8014 E1                  POP HL
+/// 8015 18 EC               JR next
+///
+/// 8100 08           tone:  EX AF,AF'      4    A' = the level
+/// 8101 EE 10               XOR 10h        7
+/// 8103 D3 FE               OUT (FEh),A    11   the edge
+/// 8105 08                  EX AF,AF'      4
+/// 8106 1B                  DEC DE         6
+/// 8107 7A                  LD A,D         4
+/// 8108 B3                  OR E           4
+/// 8109 28 05               JR Z,done      7
+/// 810B 41                  LD B,C         4
+/// 810C 10 FE        d:     DJNZ d         13n - 5
+/// 810E 18 F0               JR tone        12
+/// 8110 C9           done:  RET
+///
+/// 8200 21 00 00     drum:  LD HL,0
+/// 8203 06 C8               LD B,200
+/// 8205 7E           noise: LD A,(HL)
+/// 8206 23                  INC HL
+/// 8207 E6 10               AND 10h
+/// 8209 D3 FE               OUT (FEh),A    the drum's OUT
+/// 820B 10 F8               DJNZ noise
+/// 820D C9                  RET
+/// 8300                     records (n, K) and a 0
+/// ```
+pub fn tune_with_drum() -> Fixture {
+    let driver = [0x21, 0x00, 0x83, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23, 0xE5, 0xCD, 0x00, 0x81, 0xCD, 0x00, 0x82, 0xE1, 0x18, 0xEC];
+    let tone = [0x08, 0xEE, 0x10, 0xD3, 0xFE, 0x08, 0x1B, 0x7A, 0xB3, 0x28, 0x05, 0x41, 0x10, 0xFE, 0x18, 0xF0, 0xC9];
+    let drum = [0x21, 0x00, 0x00, 0x06, 0xC8, 0x7E, 0x23, 0xE6, 0x10, 0xD3, 0xFE, 0x10, 0xF8, 0xC9];
+    let mut table = Vec::new();
+    for n in [250u8, 222, 198, 187, 166, 148, 131, 124] {
+        table.extend_from_slice(&[n, 0x58, 0x02]); // K = 600 edges
+    }
+    table.push(0);
+    Fixture {
+        name: "tune_with_drum",
+        sna: sna(&driver, &[(0x8100, &tone), (0x8200, &drum), (0x8300, &table)]),
+        sites: vec![0x8103, 0x8209],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 58.0],
+    }
+}
+
 /// A fixed tone whose delay is reached through `JP (HL)`: half period 1,346 T (`XOR` 7, `OUT`
 /// 11, `LD HL` 10, `JP (HL)` 4, `LD B` 7, the `DJNZ` loop 1,295, `JR` 12).
 ///
