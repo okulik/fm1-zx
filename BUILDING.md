@@ -277,9 +277,10 @@ What the report says, one row per game:
   sounded in each frame it is confident about). After `learned:`, the frames with sound a learned
   entry claims and the same numbers with the learned entries. The CSV has the same columns.
 
-The run is fast: the games run in parallel, and the owner's folder of 29 games takes about 10 s on an
-Apple Silicon Mac when it learns, under 2 s from the cache. The Cave Runner and Unison entries of method B were made from the owner's local copies of those
-games, which are not in the repository; they are tested only locally, with this tool.
+The run is fast: the games run in parallel, and the owner's folder of 29 games takes about 8 s on an
+Apple Silicon Mac when it learns, under 3 s from the cache. The Cave Runner and Unison entries of
+method B were made from the owner's local copies of those games, which are not in the repository;
+they are tested only locally, with this tool.
 
 ## Toolchain pin
 

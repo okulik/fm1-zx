@@ -165,7 +165,7 @@ pub struct DurationModel {
 
 /// A carry counter's passes to go at the pair value `w` (see [`DurationModel`]).
 pub fn carry_to_go(w: u32) -> u32 {
-    (((w >> 8).wrapping_sub(1) & 0xFF) << 8) | ((w.wrapping_sub(1) & 0xFF) + 1)
+    (((w >> 8).wrapping_sub(1) & 0xFF) << 8) + (w.wrapping_sub(1) & 0xFF) + 1
 }
 
 impl DurationModel {

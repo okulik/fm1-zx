@@ -559,3 +559,69 @@ fn registers_not_given_back_are_not_inputs() {
     let mem = |a: u16| if a == 0x801D || a == 0x801E { 0x00 } else { m.peek(a) };
     assert!(read_engine(mem, 0x8016).is_err(), "{:?}", read_engine(mem, 0x8016));
 }
+
+/// A routine called once a burst (Bee Line' shape, written fresh): the call's target sets the
+/// burst's passes (HL, a pair counted with a carry), IX and the level, then the loop flips the
+/// speaker every (IX+0) passes, its reload arm 28 T longer than the other:
+/// 8000 main: CALL burst; JR main; 8010 burst: LD HL,0300h; LD IX,9000h; LD A,10h; LD B,1;
+/// 801B loop: DJNZ skip; LD B,(IX+0); XOR 10h; OUT (FEh),A; JR next; 8026 skip: NOP x 4;
+/// 802A next: DEC L; JR NZ,loop; DEC H; JR NZ,loop; RET
+fn burst_routine() -> Vec<u8> {
+    let mut m = vec![0u8; 0x31];
+    m[..5].copy_from_slice(&[0xCD, 0x10, 0x80, 0x18, 0xFB]);
+    m[0x10..].copy_from_slice(&[
+        0x21, 0x00, 0x03, 0xDD, 0x21, 0x00, 0x90, 0x3E, 0x10, 0x06, 0x01, 0x10, 0x09, 0xDD, 0x46, 0x00, 0xEE, 0x10, 0xD3, 0xFE,
+        0x18, 0x04, 0x00, 0x00, 0x00, 0x00, 0x2D, 0x20, 0xEE, 0x25, 0x20, 0xEB, 0xC9,
+    ]);
+    m
+}
+
+#[test]
+fn reads_the_code_a_call_runs_into_the_loop() {
+    let code = burst_routine();
+    let mem = |code: Vec<u8>| move |a: u16| code.get(usize::from(a.wrapping_sub(0x8000))).copied().filter(|_| a >= 0x8000).unwrap_or(0);
+    let md = read_engine(mem(code.clone()), 0x8022).expect("reads");
+    assert_eq!(md.family, Family::Flips);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 45, x: Input::Indexed(11, 0) }, Term::Const(28)]);
+    // the routine starts where the call goes; the burst's passes come from its operand
+    assert_eq!(md.anchor, 0x8010);
+    assert_eq!(md.duration, Some(DurationModel { counter: Input::Reg(10), per_unit_t: vec![Term::Const(45)], counts_down_from: Some(Input::Rel16(1)), carry: true }));
+    // no call to it: the loop alone, its timing not known
+    let mut alone = code.clone();
+    alone[0] = 0;
+    let md = read_engine(mem(alone), 0x8022).expect("reads");
+    assert_eq!((md.anchor, md.duration), (0x801B, None));
+    // the code before the loop makes an edge of its own (OUT for LD A,10h): refused
+    let mut edge = code;
+    edge[0x17..0x19].copy_from_slice(&[0xD3, 0xFE]);
+    let got = read_engine(mem(edge), 0x8022);
+    assert!(matches!(got, Err(Refusal::Unmodelled(Why::SetupOut, _))), "{got:?}");
+}
+
+#[test]
+fn carry_counter_holds_the_passes() {
+    // DurationModel's carry: from HL = 0300h (768 passes to go: L's 0 counts 256) the note has
+    // held 1 pass at 03FFh, 255 at 0301h, 256 at 0200h (L reached 0 and H took one), 257 at
+    // 02FFh, 511 at 0201h, 512 at 0100h
+    use soundlearn::model::carry_to_go;
+    let start = carry_to_go(0x0300);
+    // the burst routine's duration: held() and its entry's timing program (45 T a pass) agree
+    let code = burst_routine();
+    let peek = |a: u16| code.get(usize::from(a.wrapping_sub(0x8000))).copied().filter(|_| a >= 0x8000).unwrap_or(0);
+    let md = read_engine(peek, 0x8022).expect("reads");
+    let timing = soundlearn::fit::to_entry(&md, peek).timing.expect("a timing program");
+    let d = md.duration.clone().expect("a duration");
+    for (hl, held) in [(0x03FFu32, 1u32), (0x0301, 255), (0x0200, 256), (0x02FF, 257), (0x0201, 511), (0x0100, 512)] {
+        assert_eq!(start - carry_to_go(hl), held, "{hl:04X}");
+        let mut regs = Machine::new().regs();
+        regs.hl = hl as u16;
+        assert_eq!(d.held(&peek, md.anchor, &regs), Some(f64::from(45 * held)), "{hl:04X}");
+        assert_eq!(soundlearn::eval_prog(&timing, peek, md.anchor, &regs), Some(Some(45 * held)), "{hl:04X}");
+        // and the device's interpreter, on a machine holding the routine
+        let mut m = Machine::new();
+        for (i, &b) in code.iter().enumerate() {
+            m.poke(0x8000 + i as u16, b);
+        }
+        assert_eq!(zx_sys::snd_prog_eval(&soundlearn::encode_prog(&timing), &m, md.anchor, &regs), (0, 45 * held), "{hl:04X}");
+    }
+}
