@@ -214,6 +214,9 @@ pub struct EngineModel {
     /// The pass pushes and pops: its times hold only while the stack lies in uncontended RAM
     /// (the code reader cannot know where; the gates check what was heard).
     pub stack: bool,
+    /// The pass reads memory through a pointer (`(HL)`, `(IX+d)`, ...): its times hold only
+    /// while the pointer points into uncontended RAM (as for `stack`).
+    pub pointer_reads: bool,
 }
 
 /// Why a routine gets no model; the address is where the reader stopped.

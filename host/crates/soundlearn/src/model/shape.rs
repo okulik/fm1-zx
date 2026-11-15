@@ -566,6 +566,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     if leading.iter().rev().ne(open.iter()) {
         return Err(un(Why::StackOp, out));
     }
+    let pointer_reads = all.iter().any(|pc| matches!(cfg.n[pc].mem_read, Some(MemRef::Reg16(_) | MemRef::Indexed(..))));
     let uses_stack = !open.is_empty() || all.iter().any(|pc| push_pop(peek, &cfg.n[pc]).is_some());
     let seed: Vec<Pushed> = {
         let entry = State::entry();
@@ -710,6 +711,13 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     if [&r0, &r1, &r2, &r3].iter().any(|r| r.end.stack_lost) || r0.end.stack.iter().map(|p| (p.hi.src, p.lo.src, p.base, p.off)).ne(seed.iter().map(|p| (p.hi.src, p.lo.src, p.base, p.off))) {
         return Err(un(Why::StackOp, out));
     }
+    // and the pairs its leading POPs take are those the pass starts with: each pushed pair holds,
+    // at the pass's end, the value it had at the start (else the POP gives the pair from before,
+    // which the model would take for the pair as the pass found it)
+    let key = |p: &Pushed| (p.hi.src, p.lo.src, p.base, p.off);
+    if open.iter().zip(&seed).any(|(&p, s)| key(&r0.end.pushed(p)) != key(s)) {
+        return Err(un(Why::StackOp, out));
+    }
     let pcs = |r: &Run| r.outs.iter().map(|o| o.pc).collect::<Vec<_>>();
     if pcs(&r0) != pcs(&r1) || pcs(&r1) != pcs(&r2) || pcs(&r2) != pcs(&r3) {
         return Err(un(Why::OutsVary, out));
@@ -816,6 +824,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         wild: ctx.wild.iter().map(|a| a - anchor).collect(),
         reloc,
         stack: uses_stack,
+        pointer_reads,
     })
 }
 

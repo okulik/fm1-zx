@@ -625,3 +625,19 @@ fn carry_counter_holds_the_passes() {
         assert_eq!(zx_sys::snd_prog_eval(&soundlearn::encode_prog(&timing), &m, md.anchor, &regs), (0, 45 * held), "{hl:04X}");
     }
 }
+
+#[test]
+fn leading_pop_takes_the_pair_the_pass_gives_back() {
+    // 8000 tog: XOR 10h; OUT (FEh),A; POP BC; PUSH BC; d: DJNZ d; POP BC; PUSH BC; JR tog: the
+    // pass pops what it pushed the time before, BC as the pass found it (B at the OUT is the count)
+    let kept = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0xC1, 0xC5, 0x10, 0xFE, 0xC1, 0xC5, 0x18, 0xF4]);
+    let md = read_engine(kept, 0x8002).expect("reads");
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(2) }, Term::Const(72 - 5)]);
+    // without the second POP BC; PUSH BC the DJNZ leaves B at 0 for the next pass's OUT, and with
+    // LD B,7 before the jump back at 7: the POP's value is the pair from before, not BC as the
+    // pass starts with it, so the count is not B at the OUT
+    let zeroed = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0xC1, 0xC5, 0x10, 0xFE, 0x18, 0xF6]);
+    assert_eq!(read_engine(zeroed, 0x8002), Err(Refusal::Unmodelled(Why::StackOp, 0x8002)));
+    let changed = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0xC1, 0xC5, 0x10, 0xFE, 0x06, 0x07, 0x18, 0xF4]);
+    assert_eq!(read_engine(changed, 0x8002), Err(Refusal::Unmodelled(Why::StackOp, 0x8002)));
+}

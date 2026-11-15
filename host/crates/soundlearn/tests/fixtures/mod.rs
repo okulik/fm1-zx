@@ -706,6 +706,68 @@ pub fn toggler_saved_nested() -> Fixture {
     }
 }
 
+/// As [`square_one_counter`], but the pass reloads the delay through the table pointer: B from
+/// (HL), HL at the note's record. Half period `61 + 13n` T. The table lies after the code
+/// (8022h) or, `contended`, at 6000h: there the pass's read of (HL) waits for the screen.
+///
+/// ```text
+/// 8000 21 22 80     start: LD HL,8022h    (6000h contended) the first record: n, K (16 bits)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 23                  INC HL
+/// 8008 5E                  LD E,(HL)
+/// 8009 23                  INC HL
+/// 800A 56                  LD D,(HL)      DE = K
+/// 800B 2B                  DEC HL
+/// 800C 2B                  DEC HL         HL at n
+/// 800D 08           tog:   EX AF,AF'      4    A' = the level
+/// 800E EE 10               XOR 10h        7
+/// 8010 D3 FE               OUT (FEh),A    11   the edge
+/// 8012 08                  EX AF,AF'      4
+/// 8013 1B                  DEC DE         6
+/// 8014 7A                  LD A,D         4
+/// 8015 B3                  OR E           4
+/// 8016 28 05               JR Z,next      7    the note's last edge
+/// 8018 46                  LD B,(HL)      7    the pointer read
+/// 8019 10 FE        d:     DJNZ d         13n - 5
+/// 801B 18 F0               JR tog         12
+/// 801D 23           next:  INC HL
+/// 801E 23                  INC HL
+/// 801F 23                  INC HL
+/// 8020 18 E1               JR note
+/// 8022                     records (n, K) and a 0 (or at 6000h)
+/// ```
+pub fn square_pointer_pass(contended: bool) -> Fixture {
+    let table_at: u16 = if contended { 0x6000 } else { 0x8022 };
+    let [lo, hi] = table_at.to_le_bytes();
+    #[rustfmt::skip]
+    let mut code = vec![
+        0x21, lo, hi, 0x7E, 0xB7, 0x28, 0xF9, 0x23, 0x5E, 0x23, 0x56, 0x2B, 0x2B,
+        0x08, 0xEE, 0x10, 0xD3, 0xFE, 0x08, 0x1B, 0x7A, 0xB3, 0x28, 0x05, 0x46, 0x10, 0xFE,
+        0x18, 0xF0, 0x23, 0x23, 0x23, 0x18, 0xE1,
+    ];
+    assert_eq!(code.len(), 0x22);
+    let mut table = Vec::new();
+    for n in [250u8, 222, 198, 187, 166, 148, 131, 124] {
+        table.extend_from_slice(&[n, 0x2C, 0x01]); // K = 300 edges
+    }
+    table.push(0);
+    let sna = if contended {
+        sna(&code, &[(table_at, &table)])
+    } else {
+        code.extend_from_slice(&table);
+        sna(&code, &[])
+    };
+    Fixture {
+        name: if contended { "square_pointer_pass_contended" } else { "square_pointer_pass" },
+        sna,
+        sites: vec![0x8010],
+        kind: Kind::Square,
+        truth: |peek, r| vec![13.0 * f64::from(peek(r.hl)) + 61.0],
+    }
+}
+
 /// Every fixture.
 pub fn all() -> Vec<Fixture> {
     vec![
@@ -720,6 +782,8 @@ pub fn all() -> Vec<Fixture> {
         computed_jump(),
         flips_uneven(),
         toggler_saved_nested(),
+        square_pointer_pass(false),
+        square_pointer_pass(true),
     ]
 }
 

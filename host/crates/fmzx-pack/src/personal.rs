@@ -56,8 +56,8 @@
 //! game's learned entries ([`attach_sound`]); [`table`] ends with one line per game
 //! (`<name>: music learned (...)` or `<name>: no music learned (<reason>)`), and
 //! `<out>/sound-report.txt` holds them with each routine's details. The results are cached in
-//! `<out>/sound-cache/<crc>-<version>.bin` (the CRC-32 of the converted file and of the key
-//! script, the learner's version), which runs keep: an unchanged game is not learned again. A
+//! `<out>/sound-cache/<crc>-<version>.bin` (one CRC-32 over the converted file's data followed
+//! by the key script's text, if there is one; the learner's version), which runs keep: an unchanged game is not learned again. A
 //! cache file is used only if its CRC matches and method B's decoder takes its list; otherwise
 //! the game is learned again. A panic while learning a game gives that game a learner error,
 //! and the pack is still built.

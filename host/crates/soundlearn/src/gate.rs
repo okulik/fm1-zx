@@ -7,25 +7,29 @@
 //! - **Built-in entries win:** a routine the built-in table matches gets no entry
 //!   (an anchor or site of the routine inside a built-in's matching signature, [`builtin_at`];
 //!   or the replay's built-in claims). [`builtin_at`] also serves a site the code reader refuses.
-//! - **Heard:** the fit shows at least 85% inliers, 3 distinct notes, a span of half a
+//! - **Heard:** the fit shows no wrong note, at least 85% inliers, 3 distinct notes, a span of half a
 //!   semitone and nothing above 5 kHz; the replay claims at least 90% of the frames the
 //!   routine's sites sound in (80% when the fit has at least 95% inliers: the formula is whole,
 //!   and the frames left are those B's check cannot judge, such as a burst too short); and the music gate passes over the claimed frames: at least 60% of
 //!   the note time in runs of 4 frames or more of one note, some note in two separate runs, and
-//!   never 6 changes in a row (one every frame) all one way.
-//! - **Code-only** (never heard): the notes come from a table walked by a pointer, the note's
-//!   timing is known, and every formula fits a program.
+//!   never 6 changes in a row (one every frame) all one way. A routine whose sound loop uses the
+//!   stack or reads through a pointer (either may lie in contended RAM, which the fit takes out)
+//!   must fit its periods as played, contention left in, too.
+//! - **Code-only** (never heard): the sound loop neither uses the stack nor reads through a
+//!   pointer, the notes come from a table walked by a pointer, the note's timing is known, and
+//!   every formula fits a program.
+//! - **Every formula** fits a program whose value is a period of at least 1 T that never wraps.
 //! - **Drums:** a heard site of another routine whose output does not fit (noise) and that sounds
 //!   only between the claimed notes of an entry (outside its routine) becomes that entry's drum site ([`drum_ok`],
 //!   [`add_drum`]).
 
 use crate::entry::{encode_list, LearnedEntry};
-use crate::fit::{check_fit_played, digest, period_ok, timing_prog, FitResult};
+use crate::fit::{check_fit_played, digest, period_ok, timing_prog, FitResult, WrongNote};
 use crate::listen::{Inputs, SiteHeard};
 use crate::model::EngineModel;
 use crate::prog::Op;
 use std::collections::HashMap;
-use zx_sys::{Machine, SndEngines, SndFrame, SND_DELAY_FRAMES, SND_LEARNED_LEN_MAX, SND_LEARNED_SITES_MAX, SND_SITE_DRUM, SND_TONAL};
+use zx_sys::{Machine, SndEngines, SndFrame, SND_DELAY_FRAMES, SND_LEARNED_LEN_MAX, SND_LEARNED_SITES_MAX, SND_LEARNED_WORK_MAX, SND_SITE_DRUM, SND_TONAL};
 
 /// The refusal of a routine a built-in entry matches.
 pub const BUILTIN: &str = "built-in entry";
@@ -251,11 +255,14 @@ pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, 
         return no(BUILTIN.into());
     }
     if let Some(c) = model.channels.iter().position(|ch| !period_ok(ch)) {
-        return no(format!("channel {c}'s formula does not fit a program"));
+        return no(format!("channel {c}'s formula does not fit a program, or can go below 1 T or wrap"));
     }
     if heard.is_none() {
         if model.stack {
             return no("code only: the sound loop uses the stack, which may lie in contended RAM".into());
+        }
+        if model.pointer_reads {
+            return no("code only: the sound loop reads through a pointer, which may point into contended RAM".into());
         }
         if !model.table_walk {
             return no("code only: the notes are not read from a table".into());
@@ -266,15 +273,20 @@ pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, 
             Some(_) => Verdict::Learned { heard: false },
         };
     }
-    // a stack in contended RAM slows the pushes and pops: the periods as played must fit too
-    if let Some(h) = heard.filter(|_| model.stack) {
+    // a stack or a pointer into contended RAM slows the pushes, pops and reads: the periods as
+    // played must fit too
+    if let Some(h) = heard.filter(|_| model.stack || model.pointer_reads) {
         match check_fit_played(model, h) {
-            Ok(p) if p.inliers >= INLIERS => {}
-            Ok(p) => return no(format!("fit as played (the stack's contention): {:.0}% inliers (at least {:.0}%)", 100.0 * p.inliers, 100.0 * INLIERS)),
+            Ok(p) if p.inliers >= INLIERS && p.wrong.is_none() => {}
+            Ok(p) if p.inliers >= INLIERS => return no(format!("fit as played (the contention): {}", wrong_note(p.wrong.as_ref()))),
+            Ok(p) => return no(format!("fit as played (the contention): {:.0}% inliers (at least {:.0}%)", 100.0 * p.inliers, 100.0 * INLIERS)),
             Err(e) => return no(format!("fit as played: {e}")),
         }
     }
     let Some(f) = fit else { return no("heard, but its periods do not fit the formula".into()) };
+    if f.wrong.is_some() {
+        return no(format!("fit: {}", wrong_note(f.wrong.as_ref())));
+    }
     if f.inliers < INLIERS {
         return no(format!("fit: {:.0}% inliers (at least {:.0}%)", 100.0 * f.inliers, 100.0 * INLIERS));
     }
@@ -298,18 +310,34 @@ pub fn judge_table(model: &EngineModel, m: &Machine, heard: Option<&SiteHeard>, 
     Verdict::Learned { heard: true }
 }
 
+/// The refusal's words for a wrong note (the fit's frequencies: a sample spans `2 x sites` half
+/// periods, so they are the site's flip rate, not always the note's).
+fn wrong_note(w: Option<&WrongNote>) -> String {
+    match w {
+        Some(w) => format!(
+            "a note predicted at {:.0} T is heard at {:.0} T ({:+.1}%, {} samples)",
+            w.predicted_t,
+            w.heard_t,
+            100.0 * (w.heard_t / w.predicted_t - 1.0),
+            w.samples
+        ),
+        None => "a note heard wrong".into(),
+    }
+}
+
 /// Whether the other routine's site `other` (its fit `fit`: none, or failing the fit gates, is
 /// noise) is a drum of the entry the replay played: it sounds only between the entry's claimed
 /// notes.
 pub fn drum_ok(other: &OtherSite, fit: Option<&FitResult>) -> bool {
-    let noise = fit.is_none_or(|f| f.inliers < INLIERS || f.distinct_notes < NOTES);
+    let noise = fit.is_none_or(|f| f.inliers < INLIERS || f.distinct_notes < NOTES || f.wrong.is_some());
     noise && other.frames > 0 && other.between == other.frames
 }
 
 /// `entry` with a drum site at `pc` (another routine's speaker `OUT`), its strength 200: the
 /// signature grows to cover it (from an anchor moved back to it, if it lies before), so the
 /// whole span between must stay as it is now in `peek`. None if the span would exceed
-/// `SND_LEARNED_LEN_MAX` or the sites `SND_LEARNED_SITES_MAX`, or if the drum's `OUT` lies in
+/// `SND_LEARNED_LEN_MAX`, the sites `SND_LEARNED_SITES_MAX`, the sites x span
+/// `SND_LEARNED_WORK_MAX` (a game's whole list's bound), or if the drum's `OUT` lies in
 /// the entry's own routine (a drum is another routine's). A grown signature holds code the
 /// reader never read: the caller replays the entry with the drum before keeping it.
 pub fn add_drum(entry: &LearnedEntry, anchor: u16, pc: u16, peek: impl Fn(u16) -> u8) -> Option<LearnedEntry> {
@@ -320,7 +348,7 @@ pub fn add_drum(entry: &LearnedEntry, anchor: u16, pc: u16, peek: impl Fn(u16) -
     // the new anchor and how far the old offsets move
     let (new_anchor, shift) = if pc.wrapping_sub(anchor) < 0x8000 { (anchor, 0) } else { (pc, anchor.wrapping_sub(pc)) };
     let end = (pc.wrapping_sub(new_anchor) + 2).max(entry.len + shift); // an OUT is 2 bytes
-    if end > SND_LEARNED_LEN_MAX {
+    if end > SND_LEARNED_LEN_MAX || (entry.sites.len() + 1) * usize::from(end) > SND_LEARNED_WORK_MAX {
         return None;
     }
     let mut e = entry.clone();

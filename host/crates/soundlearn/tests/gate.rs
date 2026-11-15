@@ -175,9 +175,12 @@ fn builtin_wins() {
     assert_eq!(builtin_at(&m, 0x8000), None);
 
     // a code-only candidate inside Castaway's tune routine (tune.sna's model, moved there: a table
-    // walk and a duration, so the code-only gates pass) is refused for the built-in
+    // walk and a duration; its pass's reads through IX taken as fixed reads, so the code-only
+    // gates pass) is refused for the built-in
     let tune = fixtures::machine(&fixtures::square_tune().sna);
     let mut model = model_at(&tune, 0x8014);
+    assert!(model.pointer_reads);
+    model.pointer_reads = false;
     assert_eq!(judge(&model, &tune, None, None, None), Verdict::Learned { heard: false });
     let shift = 0xC864u16.wrapping_sub(model.anchor);
     model.anchor = 0xC864;
@@ -289,7 +292,7 @@ fn drum_between_notes() {
     assert!(drum_ok(drum, None));
     // not a drum: a site heard away from the notes, or one that fits as a tone
     assert!(!drum_ok(&OtherSite { between: drum.frames - 1, ..drum.clone() }, None));
-    let tone_fit = soundlearn::fit::FitResult { inliers: 0.99, distinct_notes: 8, span_semitones: 12.0, max_hz: 1000.0 };
+    let tone_fit = soundlearn::fit::FitResult { inliers: 0.99, distinct_notes: 8, span_semitones: 12.0, max_hz: 1000.0, wrong: None };
     assert!(!drum_ok(drum, Some(&tone_fit)));
 
     // the entry with the drum site: its signature grows to cover the drum routine
@@ -420,4 +423,118 @@ fn claim_gate_follows_the_fit() {
     assert_eq!(judge(&model, &m, Some(site), Some(&claims(90)), Some(&weaker)), Verdict::Learned { heard: true });
     let v = judge(&model, &m, Some(site), Some(&claims(79)), Some(&strong));
     assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("replay") && why.ends_with("(at least 80%)")), "{v:?}");
+}
+
+#[test]
+fn fit_refuses_a_wrong_note_group() {
+    // three notes the formula predicts, 40 samples each, and a fourth it predicts 10% off, 10
+    // samples: 92% inliers, enough for the share, but that note would play wrong: refused
+    let exact = |bc: u16, n: usize| std::iter::repeat_n((bc, 2.0 * f64::from(bc)), n);
+    let off = std::iter::repeat_n((700u16, 1.1 * 1400.0), 10);
+    let f = fit_samples(&exact(600, 40).chain(exact(800, 40)).chain(exact(1000, 40)).chain(off).collect::<Vec<_>>());
+    assert!(f.inliers >= 0.85 && f.distinct_notes == 3, "{f:?}");
+    let w = f.wrong.clone().expect("a group that disagrees");
+    assert_eq!((w.predicted_t, w.samples), (1400.0, 10), "{w:?}");
+    assert!((w.heard_t - 1540.0).abs() < 1e-6, "{w:?}");
+    let fx = fixtures::square_one_counter();
+    let mut m = fixtures::machine(&fx.sna);
+    let heard = listen(&mut m, &none(), 300);
+    let model = model_at(&m, heard.sites[0].pc);
+    let stats = ReplayStats { routine_frames: 100, claimed: 100, music_gate: true, builtin_claimed: 0 };
+    let v = judge(&model, &m, Some(&heard.sites[0]), Some(&stats), Some(&f));
+    assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("fit: a note")), "{v:?}");
+    // a group under 8 samples is too few to say: not a wrong note
+    let few = std::iter::repeat_n((700u16, 1.1 * 1400.0), 7);
+    let f = fit_samples(&exact(600, 40).chain(exact(800, 40)).chain(exact(1000, 40)).chain(few).collect::<Vec<_>>());
+    assert_eq!(f.wrong, None, "{f:?}");
+    assert_eq!(judge(&model, &m, Some(&heard.sites[0]), Some(&stats), Some(&f)), Verdict::Learned { heard: true });
+}
+
+#[test]
+fn pointer_reads_in_the_pass_need_the_played_fit() {
+    // the pass reads its delay through the table pointer: in contended RAM that read waits for
+    // the screen, which the fit (contention taken out) does not see
+    let mut waited = Vec::new();
+    for contended in [false, true] {
+        let fx = fixtures::square_pointer_pass(contended);
+        let (model, _, stats, verdict) = learn_fixture(&fx.sna, 300);
+        let m = fixtures::machine(&fx.sna);
+        assert!(model.pointer_reads && !model.stack, "{model:?}");
+        // code only: refused, wherever the table lies (the reader cannot know)
+        let v = judge(&model, &m, None, None, None);
+        assert!(matches!(&v, Verdict::Refused(why) if why.contains("pointer")), "{}: {v:?}", fx.name);
+        // heard: learned, its periods as played fitting too (in contended RAM one read a pass
+        // waits a T-state or so on average, well inside the fit's 0.6%)
+        assert_eq!(verdict, Verdict::Learned { heard: true }, "{}: {stats:?}", fx.name);
+        let mut site = listen(&mut fixtures::machine(&fx.sna), &none(), 300).sites[0].clone();
+        let waits: f64 = site.periods.iter().map(|p| p.contention_t).sum::<f64>() / site.periods.len() as f64;
+        waited.push(waits);
+        // heard, its played periods 2% longer than the code's: refused by the fit as played
+        let fit = check_fit(&model, &site).expect("fits");
+        let ok = ReplayStats { routine_frames: 290, claimed: 290, music_gate: true, builtin_claimed: 0 };
+        for p in &mut site.periods {
+            p.contention_t += 0.02 * p.period_t;
+        }
+        let v = judge(&model, &m, Some(&site), Some(&ok), Some(&fit));
+        assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("fit as played")), "{}: {v:?}", fx.name);
+    }
+    // the contended table's reads do wait (the OUT's I/O waits are the same in both)
+    assert!(waited[1] > waited[0] + 0.5, "{waited:?}");
+    // the routine without a pointer read in its pass: no pointer refusal code only
+    let fx = fixtures::square_one_counter();
+    let m = fixtures::machine(&fx.sna);
+    let model = model_at(&m, 0x8010);
+    assert!(!model.pointer_reads);
+    let v = judge(&model, &m, None, None, None);
+    assert!(!matches!(&v, Verdict::Refused(why) if why.contains("pointer")), "{v:?}");
+}
+
+#[test]
+fn formula_that_can_go_negative_refused() {
+    // 13 x count + c T: a count of 1 gives 13 + c, which must stay a period (at least 1 T)
+    let fx = fixtures::square_one_counter();
+    let m = fixtures::machine(&fx.sna);
+    let mut model = model_at(&m, 0x8010);
+    let x = soundlearn::model::Input::Reg(3);
+    let formula = |why: &Verdict| matches!(why, Verdict::Refused(w) if w.starts_with("channel 0's formula"));
+    for (c, refused) in [(-100, true), (-13, true), (-12, false), (58, false)] {
+        model.channels[0].half_period = vec![Term::Lin { coef_t: 13, x }, Term::Const(c)];
+        let v = judge(&model, &m, None, None, None);
+        assert_eq!(formula(&v), refused, "13 x C + {c}: {v:?}");
+    }
+    // a term that falls as its count grows: at a count of 256 it is -256 T
+    model.channels[0].half_period = vec![Term::Const(200), Term::Lin { coef_t: -1, x }];
+    assert!(formula(&judge(&model, &m, None, None, None)));
+    // a reciprocal with a negative numerator
+    model.channels[0].half_period = vec![Term::Const(5000), Term::Recip { num_t: -1000, x }];
+    assert!(formula(&judge(&model, &m, None, None, None)));
+}
+
+#[test]
+fn drum_keeps_the_matching_work_bounded() {
+    // a 300-byte entry with 13 sites: a drum 10 bytes past it makes 14 sites x 312 bytes = 4368,
+    // over the 4096 a game's list may match; with 12 sites, 13 x 312 = 4056 is within it
+    let with_sites = |n: u16| LearnedEntry {
+        kind: 0,
+        digest: 0,
+        len: 300,
+        wild: vec![],
+        reloc: vec![],
+        sites: (0..n).map(|k| (k, SND_SITE_TONAL, 0)).collect(),
+        pass: 0,
+        pos: vec![0],
+        flips: false,
+        drum: 0,
+        stale: None,
+        level: vec![200],
+        progs: vec![vec![Op::K(300)]],
+        timing: None,
+    };
+    let peek = |_: u16| 0u8;
+    assert_eq!(add_drum(&with_sites(13), 0x9000, 0x9000 + 310, peek), None);
+    let grown = add_drum(&with_sites(12), 0x9000, 0x9000 + 310, peek).expect("within the bound");
+    assert_eq!((grown.len, grown.sites.len()), (312, 13));
+    assert!(SndEngines::with_learned(&encode_list(&[grown])).is_ok());
+    // and a signature past 512 bytes, one site or many
+    assert_eq!(add_drum(&with_sites(1), 0x9000, 0x9000 + 520, peek), None);
 }

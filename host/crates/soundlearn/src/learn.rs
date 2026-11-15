@@ -17,7 +17,8 @@
 //!    its entry. A learned heard routine then gets the drums the replay shows
 //!    ([`drum_ok`], [`add_drum`]), each kept only if the routine, replayed with it, still passes.
 //!    A routine never heard goes through the code-only gates.
-//! 5. **Keep** at most [`SND_LEARNED_MAX`] learned entries: heard ones first, then by the frames
+//! 5. **Keep** at most [`SND_LEARNED_MAX`] learned entries, matching at most
+//!    [`SND_LEARNED_WORK_MAX`] site-signature bytes in all: heard ones first, then by the frames
 //!    their sites sound in.
 //!
 //! What it says is in [`crate::report`].
@@ -30,11 +31,13 @@ use crate::model::{read_engine, scan_out_sites, EngineModel, Refusal};
 use crate::report::{self, Routine};
 use std::collections::{BTreeSet, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX};
+use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_WORK_MAX};
 
 /// The learner's version: part of the personal pack's cache key, so bump it when learning
-/// changes.
-pub const LEARNER_VERSION: u32 = 2;
+/// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
+/// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
+/// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
+pub const LEARNER_VERSION: u32 = 3;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
@@ -178,17 +181,12 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
     // a list the decoder takes
     let mut order: Vec<usize> = (0..done.len()).filter(|&i| done[i].entry.is_some()).collect();
     order.sort_by_key(|&i| (done[i].routine.heard.is_none(), std::cmp::Reverse(done[i].sounding)));
+    let cands: Vec<LearnedEntry> = order.iter().filter_map(|&i| done[i].entry.clone()).collect();
     let mut kept: Vec<usize> = Vec::new();
-    for i in order {
-        if kept.len() >= SND_LEARNED_MAX {
-            done[i].routine.outcome = Err(format!("only {SND_LEARNED_MAX} learned routines a game: heard ones first, then those sounding longest"));
-            continue;
-        }
-        let list: Vec<LearnedEntry> = kept.iter().chain([&i]).filter_map(|&k| done[k].entry.clone()).collect();
-        if SndEngines::with_learned(&encode_list(&list)).is_ok() {
-            kept.push(i);
-        } else {
-            done[i].routine.outcome = Err("method B's decoder refuses its entry".into());
+    for (&i, outcome) in order.iter().zip(keep(&cands)) {
+        match outcome {
+            Ok(()) => kept.push(i),
+            Err(why) => done[i].routine.outcome = Err(why),
         }
     }
     let entries: Vec<LearnedEntry> = kept.iter().filter_map(|&k| done[k].entry.clone()).collect();
@@ -200,6 +198,33 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
         .find_map(|j| report::reason(&j.routine));
     let details = done.iter().map(|j| report::block(&j.routine)).collect();
     GameSound { entries, line: report::line(&learned, refused.as_deref()), details }
+}
+
+/// Which of the learned entries `cands` (in order of preference) a game's list keeps: each in
+/// turn while the list holds fewer than [`SND_LEARNED_MAX`], their matching's work
+/// ([`LearnedEntry::work`]) stays within [`SND_LEARNED_WORK_MAX`] and method B's decoder takes
+/// the list; else the reason it is left out.
+fn keep(cands: &[LearnedEntry]) -> Vec<Result<(), String>> {
+    let mut list: Vec<LearnedEntry> = Vec::new();
+    cands
+        .iter()
+        .map(|e| {
+            if list.len() >= SND_LEARNED_MAX {
+                return Err(format!("only {SND_LEARNED_MAX} learned routines a game: heard ones first, then those sounding longest"));
+            }
+            if list.iter().chain([e]).map(LearnedEntry::work).sum::<usize>() > SND_LEARNED_WORK_MAX {
+                return Err(format!(
+                    "the game's learned routines would match over {SND_LEARNED_WORK_MAX} signature bytes (sites x length): heard ones first, then those sounding longest"
+                ));
+            }
+            list.push(e.clone());
+            if SndEngines::with_learned(&encode_list(&list)).is_err() {
+                list.pop();
+                return Err("method B's decoder refuses its entry".into());
+            }
+            Ok(())
+        })
+        .collect()
 }
 
 /// The verdict on a routine read from `mem` at `pc`, with its entry if learned.
@@ -279,4 +304,42 @@ fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard
     routine.model = Some(model);
     let entry = routine.outcome.is_ok().then_some(entry);
     Judged { routine, entry, sounding }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep;
+    use crate::{LearnedEntry, Op};
+    use zx_sys::SND_SITE_TONAL;
+
+    fn sized(len: u16, n: u16) -> LearnedEntry {
+        LearnedEntry {
+            kind: 0,
+            digest: u64::from(len) << 8 | u64::from(n),
+            len,
+            wild: vec![],
+            reloc: vec![],
+            sites: (0..n).map(|k| (k, SND_SITE_TONAL, 0)).collect(),
+            pass: 0,
+            pos: vec![0],
+            flips: false,
+            drum: 0,
+            stale: None,
+            level: vec![200],
+            progs: vec![vec![Op::K(300)]],
+            timing: None,
+        }
+    }
+
+    #[test]
+    fn keeps_the_matching_work_bounded() {
+        // 2048 + 1536 kept; 1024 more would be 4608: left out; a smaller one after it still fits
+        let got = keep(&[sized(512, 4), sized(512, 3), sized(512, 2), sized(256, 2)]);
+        assert_eq!(got[..2], [Ok(()), Ok(())]);
+        assert!(matches!(&got[2], Err(why) if why.contains("4096 signature bytes")), "{got:?}");
+        assert_eq!(got[3], Ok(()));
+        // the entry count's bound still holds
+        let got = keep(&vec![sized(16, 1); 9]);
+        assert!(got[..8].iter().all(Result::is_ok) && got[8].is_err(), "{got:?}");
+    }
 }

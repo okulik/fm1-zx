@@ -55,6 +55,14 @@ pub struct LearnedEntry {
     pub timing: Option<Vec<Op>>,
 }
 
+impl LearnedEntry {
+    /// The matching's work for this entry: each site's signature hashed (sites x len bytes;
+    /// `SND_LEARNED_WORK_MAX` over a game's list).
+    pub fn work(&self) -> usize {
+        self.sites.len() * usize::from(self.len)
+    }
+}
+
 /// Fixed part of an entry.
 const HEAD: usize = 36;
 

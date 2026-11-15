@@ -12,7 +12,10 @@
 //! it was read with last). A sample spans two of the site's flips, and a channel with `s` sites
 //! flips at each of them in turn, so a sample is `2 s` half periods. The samples are grouped by
 //! their predicted period; a sample is an inlier within 0.6% + 160/n T of its prediction, n its
-//! group's size (the spike's tolerance). A group with two inliers or more is a note.
+//! group's size (the spike's tolerance). A group of at least `MIN_GROUP` samples whose trimmed
+//! mean is within that of its prediction is a note; one whose trimmed mean is not is a wrong
+//! note ([`FitResult::wrong`]), which the gates refuse however few samples it holds against the
+//! rest: the entry would play that note wrong.
 //!
 //! A Slots routine with more than one channel cannot be fitted this way: its sites set the
 //! speaker to each channel's level in turn, so a site's flips follow the other channels too.
@@ -55,6 +58,19 @@ pub struct FitResult {
     pub span_semitones: f64,
     /// The highest note's frequency.
     pub max_hz: f64,
+    /// The largest group of samples (at least `MIN_GROUP`) whose prediction they disagree with:
+    /// a note the model gets wrong.
+    pub wrong: Option<WrongNote>,
+}
+
+/// A predicted period its samples disagree with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WrongNote {
+    /// The predicted period (T-states, the sample's span: `2 x sites` half periods).
+    pub predicted_t: f64,
+    /// The samples' trimmed mean.
+    pub heard_t: f64,
+    pub samples: u32,
 }
 
 /// Fits the model's channel holding the site `heard.pc` to the site's period samples (see the
@@ -111,13 +127,22 @@ fn fit_periods(model: &EngineModel, heard: &SiteHeard, played: bool) -> Result<F
         groups.entry(key(pr)).or_insert((pr, Vec::new())).1.push(got);
     }
     // a group agrees (the spike's check): at least MIN_GROUP samples, their trimmed mean within
-    // 0.6% + 160/n T of the prediction; its inliers are its samples within that too
+    // 0.6% + 160/n T of the prediction; its inliers are its samples within that too. A group of
+    // MIN_GROUP samples or more whose trimmed mean is not within it is a wrong note.
     let mut inliers = 0usize;
     let mut notes: Vec<f64> = Vec::new();
+    let mut wrong: Option<WrongNote> = None;
     for (pr, got) in groups.values() {
         let n = got.len();
         let tol = 0.006 * pr + 160.0 / n as f64;
-        if n < MIN_GROUP || (trimmed_mean(got) - pr).abs() > tol {
+        if n < MIN_GROUP {
+            continue;
+        }
+        let mean = trimmed_mean(got);
+        if (mean - pr).abs() > tol {
+            if wrong.as_ref().is_none_or(|w| (n as u32, -*pr) > (w.samples, -w.predicted_t)) {
+                wrong = Some(WrongNote { predicted_t: *pr, heard_t: mean, samples: n as u32 });
+            }
             continue;
         }
         inliers += got.iter().filter(|&&g| (g - pr).abs() <= tol).count();
@@ -137,6 +162,7 @@ fn fit_periods(model: &EngineModel, heard: &SiteHeard, played: bool) -> Result<F
         distinct_notes: distinct.len() as u32,
         span_semitones: if distinct.is_empty() { 0.0 } else { 12.0 * (hi / lo).log2() },
         max_hz: if distinct.is_empty() { 0.0 } else { CLOCK / lo },
+        wrong,
     })
 }
 
@@ -303,13 +329,41 @@ fn sum_max(terms: &[Term], scale: i64) -> f64 {
         .sum()
 }
 
-/// The channel's period program fits a program and its value never wraps.
+/// The smallest value the sum of `terms` x `scale` can take: a count at 1 for a term that grows
+/// with it, at its largest for one that falls; a `Recip` at its largest step (0 is silence), as
+/// its program divides (a negative numerator: no bound).
+fn sum_min(terms: &[Term], scale: i64) -> f64 {
+    let count = |x: &Input| if x.wide() { 65536.0 } else { 256.0 };
+    terms
+        .iter()
+        .map(|t| match t {
+            Term::Const(c) => (c * scale) as f64,
+            Term::Lin { coef_t, x } => (coef_t * scale) as f64 * if *coef_t >= 0 { 1.0 } else { count(x) },
+            Term::Prod { coef_t, x, y } => (coef_t * scale) as f64 * if *coef_t >= 0 { 1.0 } else { count(x) * count(y) },
+            Term::Recip { num_t, x } if *num_t >= 0 => {
+                let mut num = num_t * scale;
+                let mut shift = 0u8;
+                while num > i64::from(u32::MAX) && shift < 31 {
+                    num >>= 1;
+                    shift += 1;
+                }
+                ((num / (count(x) as i64 - 1)) << shift) as f64
+            }
+            Term::Recip { .. } => f64::NEG_INFINITY,
+        })
+        .sum()
+}
+
+/// The channel's period program fits a program, and its value is a period (at least 1) that
+/// never wraps, whatever its inputs.
 pub(crate) fn period_ok(ch: &ChannelModel) -> bool {
-    encode_prog(&period_prog(ch)).len() <= SND_PROG_MAX && sum_max(&ch.half_period, PERIOD_SCALE) <= f64::from(u32::MAX)
+    encode_prog(&period_prog(ch)).len() <= SND_PROG_MAX
+        && sum_max(&ch.half_period, PERIOD_SCALE) <= f64::from(u32::MAX)
+        && sum_min(&ch.half_period, PERIOD_SCALE) >= 1.0
 }
 
 /// The timing program, `((start - counter) & mask) x per_unit_t`: None without a start, or if
-/// it would not fit a program or could overflow.
+/// it would not fit a program, could overflow, or a pass could take less than 1 T.
 pub(crate) fn timing_prog(d: &DurationModel) -> Option<Vec<Op>> {
     let wide = d.counter.wide();
     let mask: u32 = if wide { 0xFFFF } else { 0xFF };
@@ -332,7 +386,8 @@ pub(crate) fn timing_prog(d: &DurationModel) -> Option<Vec<Op>> {
     }
     push_sum(&mut ops, &d.per_unit_t, 1);
     ops.push(Op::Mul);
-    (encode_prog(&ops).len() <= SND_PROG_MAX && f64::from(mask) * sum_max(&d.per_unit_t, 1) <= f64::from(u32::MAX)).then_some(ops)
+    let fits = encode_prog(&ops).len() <= SND_PROG_MAX && f64::from(mask) * sum_max(&d.per_unit_t, 1) <= f64::from(u32::MAX);
+    (fits && sum_min(&d.per_unit_t, 1) >= 1.0).then_some(ops)
 }
 
 /// The ops that push a 16-bit input's high and low bytes.
