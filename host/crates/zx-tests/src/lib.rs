@@ -328,7 +328,7 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
 pub fn build_pack(names: &[&str]) -> Vec<u8> {
     let mut p = vec![0u8; 32 + 160 * names.len()];
     p[..8].copy_from_slice(b"FMZXPACK");
-    p[8..10].copy_from_slice(&1u16.to_le_bytes());
+    p[8..10].copy_from_slice(&2u16.to_le_bytes());
     p[10..12].copy_from_slice(&(names.len() as u16).to_le_bytes());
     let keys = km_default();
     for (i, name) in names.iter().enumerate() {

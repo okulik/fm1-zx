@@ -106,6 +106,50 @@ int pack_game_at(const uint8_t *base, uint32_t index, pack_game *g)
     return ZX_OK;
 }
 
+/* Header: sound_offset at 20, sound_len at 24. Section: u8 version, u8 0, u16 count, u32 list_offset[count]. */
+#define H_SOUND_OFFSET 20u
+#define H_SOUND_LEN 24u
+#define SOUND_VERSION 1u
+
+int pack_sound_at(const uint8_t *base, uint32_t index, const uint8_t **list, uint32_t *len)
+{
+    uint32_t n = rd16(base + 10), total = rd32(base + 12);
+    uint32_t so = rd32(base + H_SOUND_OFFSET), sl = rd32(base + H_SOUND_LEN);
+    uint32_t i, off, end, o, table;
+    const uint8_t *s;
+
+    *list = NULL;
+    *len = 0;
+    if (so == 0u && sl == 0u) {
+        return ZX_OK;   /* no section */
+    }
+    table = 4u + 4u * n;   /* n <= 65535: no overflow */
+    if (index >= n || (so & 3u) != 0u || so < PACK_HEADER_SIZE + n * PACK_ENTRY_SIZE || so > total || sl > total - so || sl < table) {
+        return ZX_ERR_FORMAT;
+    }
+    s = base + so;
+    if (s[0] != SOUND_VERSION || rd16(s + 2) != n) {
+        return ZX_ERR_FORMAT;
+    }
+    off = rd32(s + 4u + 4u * index);
+    if (off == 0u) {
+        return ZX_OK;   /* none for this game */
+    }
+    if ((off & 3u) != 0u || off < table || off >= sl) {
+        return ZX_ERR_FORMAT;
+    }
+    end = sl;   /* the next list's start, or the section's end */
+    for (i = 0; i < n; i++) {
+        o = rd32(s + 4u + 4u * i);
+        if (o > off && o < end) {
+            end = o;
+        }
+    }
+    *list = s + off;
+    *len = end - off;
+    return ZX_OK;
+}
+
 int pack_extract(const pack_game *g, uint8_t *out, uint32_t cap, uint32_t *len)
 {
     uint32_t got;

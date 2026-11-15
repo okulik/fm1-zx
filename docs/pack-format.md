@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Game pack format
 
-The game pack holds the built-in games. `fmzx-pack games <manifest.toml> -o <pack.bin>` writes it; the firmware reads it in place from flash with `app/pack.c` (it never reads outside the bytes it is given).
+The game pack holds the built-in games, and optionally, for each game, the sound entries learned from its music (version 2). `fmzx-pack games <manifest.toml> -o <pack.bin>` writes it; the firmware reads it in place from flash with `app/pack.c` (it never reads outside the bytes it is given).
 
 All fields are little-endian, offsets count from the start of the pack, and every multi-byte field is naturally aligned.
 
@@ -14,11 +14,13 @@ All fields are little-endian, offsets count from the start of the pack, and ever
 | Offset | Size | Field | Value |
 |---|---|---|---|
 | 0 | 8 | `magic` | `FMZXPACK` |
-| 8 | 2 | `version` | 1 |
+| 8 | 2 | `version` | 2 |
 | 10 | 2 | `count` | number of games |
 | 12 | 4 | `total_len` | bytes in the pack, a multiple of 4 |
 | 16 | 4 | `crc32` | CRC-32 over bytes `[32, total_len)` |
-| 20 | 12 | `reserved` | 0 |
+| 20 | 4 | `sound_offset` | of the sound section, 4-byte aligned; 0 with `sound_len` 0: no section |
+| 24 | 4 | `sound_len` | bytes of the sound section |
+| 28 | 4 | `reserved` | 0 |
 
 ## Entries (`count` of 160 bytes, from offset 32)
 
@@ -39,8 +41,82 @@ All fields are little-endian, offsets count from the start of the pack, and ever
 
 Each game's data follows the entry table, padded so the next starts on a 4-byte boundary. Codec 1 is one raw LZ4 block (the `lz4_flex::block::compress` output: no frame, no size prefix). The packer stores a game uncompressed (codec 0) when LZ4 does not make it smaller.
 
+## Sound section (version 2)
+
+The section follows the last game's data, starts on a 4-byte boundary, lies inside `total_len` and is covered by the CRC. `fmzx-pack` writes none (`sound_offset` and `sound_len` 0) unless the personal pack builder attaches one (`attach_sound`). A pack with no section is a valid version 2 pack.
+
+| Offset | Size | Field | Notes |
+|---|---|---|---|
+| 0 | 1 | `version` | 1 |
+| 1 | 1 | | 0 |
+| 2 | 2 | `count` | the pack's game count |
+| 4 | 4 x `count` | `list_offset[]` | per game, relative to the section start; 0: no learned entries for that game |
+| | | lists | each starts on a 4-byte boundary |
+
+A list's length is the distance from its offset to the nearest greater list offset, or to the section's end. `sound_list` and `pack_sound_at` return that span, so a list written with a length that is not a multiple of 4 comes back padded with zeros.
+
+### Entry list
+
+A list holds up to 8 learned entries for one game (`SND_LEARNED_MAX`). Each describes one music routine the game's own code contains: a signature to find it by, the `OUT` sites where its notes start, and small programs that compute each note's period from the machine state. All fields are little-endian.
+
+```
+u8 count (<= 8), u8 0, u16 0, then `count` entries, each:
+  u16 size (a multiple of 4: the whole entry, from its first byte to the next entry), u8 kind (0: music), u8 channels (1-3)
+  u64 digest
+  u16 len, u8 n_wild, u8 n_reloc
+  u8 n_sites, u8 flips, u8 drum, u8 timing (1: a timing program follows)
+  u16 pass, u16 stale_from, u16 stale_len   (stale: an anchor-relative pc range; stale_len 0: none)
+  u8 level[3], u8 instrument[3] (reserved, 0)
+  u8 prog_len[3], u8 timing_len
+  u16 wild[n_wild], u16 reloc[n_reloc], {u16 off, u8 role, u8 chan} sites[n_sites], u16 pos[channels]
+  channel programs (prog_len[c] bytes each, for c < channels), the timing program, zero padding up to `size`
+```
+
+The fixed part of an entry is 36 bytes. `digest`, `len`, `wild`, `reloc`, `sites`, `pass`, `pos`, `flips` and `drum` are the matcher's signature fields (`core/sound/sound.h`, `snd_engine`); `role` is 0 tonal, 1 drum, 2 stop; `chan` is the channel of a tonal site, or `0xFF` (any) on a `flips` entry. `level[c]` is channel `c`'s loudness; entries are named `learned`.
+
+The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole list (`ZX_ERR_FORMAT`, no entries) unless all of this holds, for every entry:
+
+- the list is at least 4 bytes and 4-byte aligned in memory, and `count` is at most 8;
+- the entry's 36 fixed bytes lie in the list; `size` is at least 36, a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
+- `kind` is 0 and `channels` is 1-3; `flips` and `timing` are 0 or 1;
+- `len` is 1 to 1024 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
+- `prog_len[c]` is 1-64 for each channel and 0 for the unused ones; `timing_len` is 1-64 with a timing program, else 0;
+- the arrays and programs together fit in `size` after the 36 fixed bytes;
+- `wild` offsets strictly ascend and are below `len`; `reloc` offsets ascend at least 2 apart and are below `len`;
+- every site offset is below `len`, `role` is at most 2, and a tonal site's `chan` is below `channels` (or `0xFF` on a `flips` entry);
+- every program is valid (below).
+
+The `instrument` bytes and any other reserved bytes (the 2 after the list's `count`, the padding) are ignored. A game whose list is rejected plays as if it had no learned entries. A bad sound section never affects the games; a bad section (or list) is the same as none.
+
+### Program
+
+A program is bytecode for a stack machine of `uint32_t` values, at most 8 deep and at most 64 bytes long (`SND_PROG_MAX`). Operands are little-endian. It runs against the machine (memory at the frame's end), the entry's *anchor* (where the signature matched) and a register set `ctx` (the registers at the site, or at the frame's end for the timing program's second run).
+
+| Op | Operand | Pushes or does |
+|---|---|---|
+| `01` | u8 k | k |
+| `02` | u16 k | k |
+| `03` | u32 k | k |
+| `10` | u16 o | the byte at `anchor + o` |
+| `11` | u16 o | the word at `anchor + o` |
+| `12` | u16 a | the byte at `a` |
+| `13` | u16 a | the word at `a` |
+| `14` | u8 r, i8 d | the byte at `reg16(r) + d`; r is 8-12 (BC, DE, HL, IX, IY) |
+| `20` | u8 r | register r of `ctx` |
+| `30` `31` `32` | | add, sub, mul of the top two (wrapping) |
+| `33` | | div, unsigned; a zero divisor ends the program as silent |
+| `34` | | and |
+| `35` `36` | u8 s | shift the top right, left by s (0-31) |
+| `40` | | pop x; x = 0 ends the program as silent |
+
+Registers: 0 A, 1 F, 2 B, 3 C, 4 D, 5 E, 6 H, 7 L, 8 BC, 9 DE, 10 HL, 11 IX, 12 IY, 13 SP, 14 A', 15 BC', 16 DE', 17 HL'. Addresses wrap at 16 bits, and any address is safe to read.
+
+A program ends at its length with exactly one value on the stack: the result. Anything else makes it invalid: an unknown op, an operand past the end, a stack underflow or overflow (a ninth push), an op with a bad register or shift, a length over 64, or another depth at the end. The decoder dry-runs every program (every read gives 0, nothing is silent) so that no invalid program is ever run. A channel program that is silent or gives 0 leaves that channel without a note. A timing program that is invalid is rejected with the list; one that is silent in a frame leaves the timing unknown (`SND_B_SINCE_ALL`) for it.
+
 ## Checks
 
 The firmware rejects a pack unless: the magic and version match; `count` is at least 1; `total_len` is a multiple of 4 and fits the bytes available; the entry table fits in `total_len`; and the CRC-32 matches. An entry is rejected unless: the name ends in a NUL within 29 bytes and is printable ASCII; `kind` is 1-3, `codec` 0-1, `crop_x` at most 16; `offset` is 4-aligned and after the entry table; `offset + stored_len` fits in `total_len` (without overflow); `raw_len` is at most 131,072; and a stored game has `stored_len == raw_len`. Extracting checks the output size and the game's CRC-32. CRC-32 is IEEE: reflected, polynomial `0xEDB88320`, initial value and final XOR `0xFFFFFFFF`.
 
-`pack_game_at` re-reads `count` and `total_len` from the header, so call `pack_open` on the same bytes first.
+The sound section is not checked by `pack_open`. `pack_sound_at(base, index, &list, &len)` checks it for one game, and returns `ZX_ERR_FORMAT` unless: `sound_offset` and `sound_len` are both 0 (no section: `len` 0), or `sound_offset` is 4-aligned and after the entry table, `sound_offset + sound_len` fits in `total_len` (without overflow), and `sound_len` holds the offset table; the section `version` is 1 and its `count` equals the game's count; and the game's list offset is 0 (none), or 4-aligned, past the offset table and inside the section. The entry list is then checked by `snd_learned_decode` (above), and the pack version is 2: a pack of any other version is rejected by `pack_open`.
+
+`pack_game_at` and `pack_sound_at` re-read `count` and `total_len` from the header, so call `pack_open` on the same bytes first.

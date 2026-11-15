@@ -133,7 +133,7 @@ fn fix_crc(p: &mut [u8]) {
 fn build(specs: &[Spec]) -> Vec<u8> {
     let mut p = vec![0u8; 32 + 160 * specs.len()];
     p[..8].copy_from_slice(b"FMZXPACK");
-    p[8..10].copy_from_slice(&1u16.to_le_bytes());
+    p[8..10].copy_from_slice(&2u16.to_le_bytes());
     p[10..12].copy_from_slice(&(specs.len() as u16).to_le_bytes());
     for (i, s) in specs.iter().enumerate() {
         let e = 32 + 160 * i;
@@ -203,9 +203,11 @@ fn pack_bad_magic() {
 #[test]
 fn pack_bad_version() {
     let (_, mut p) = two();
-    p[8] = 2;
-    fix_crc(&mut p);
-    assert_eq!(pack_open(&p), Err(ZX_ERR_FORMAT));
+    for v in [1u8, 3] {
+        p[8] = v;
+        fix_crc(&mut p);
+        assert_eq!(pack_open(&p), Err(ZX_ERR_FORMAT), "version {v}");
+    }
 }
 
 #[test]

@@ -166,7 +166,7 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
 fn one_game_pack(name: &str, data: &[u8]) -> Vec<u8> {
     let mut p = vec![0u8; zx_sys::PACK_HEADER_SIZE + zx_sys::PACK_ENTRY_SIZE];
     p[..8].copy_from_slice(b"FMZXPACK");
-    p[8..10].copy_from_slice(&1u16.to_le_bytes());
+    p[8..10].copy_from_slice(&2u16.to_le_bytes());
     p[10..12].copy_from_slice(&1u16.to_le_bytes());
     let e = zx_sys::PACK_HEADER_SIZE;
     p[e..e + name.len()].copy_from_slice(name.as_bytes());

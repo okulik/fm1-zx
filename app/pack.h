@@ -10,7 +10,7 @@
 #include "lz4.h"
 
 #define PACK_MAGIC "FMZXPACK"
-#define PACK_VERSION 1u
+#define PACK_VERSION 2u
 #define PACK_NAME_LEN 28u
 #define PACK_MAX_RAW 131072u
 #define PACK_HEADER_SIZE 32u
@@ -32,6 +32,11 @@ int pack_open(const uint8_t *base, uint32_t avail, uint32_t *count);
 /* Validates entry `index` and fills *g. pack_open(base, ...) must have succeeded first (this
  * re-reads count and total_len from the header). ZX_ERR_FORMAT if the entry is bad. */
 int pack_game_at(const uint8_t *base, uint32_t index, pack_game *g);
+/* The learned sound entries of game `index` (docs/pack-format.md, the sound section): ZX_OK with
+ * *list pointing into the pack and *len its bytes, or *len 0 (and *list NULL) if the game has
+ * none; ZX_ERR_FORMAT if the section (or the game's list in it) is bad. Never reads outside the
+ * pack; pack_open(base, ...) must have succeeded first. A bad section never affects the games. */
+int pack_sound_at(const uint8_t *base, uint32_t index, const uint8_t **list, uint32_t *len);
 /* Decompresses (or copies) the game into out[0..cap); checks length and CRC. */
 int pack_extract(const pack_game *g, uint8_t *out, uint32_t cap, uint32_t *len);
 /* IEEE CRC-32, reflected, init and xorout 0xFFFFFFFF. */

@@ -8,12 +8,15 @@ use std::path::Path;
 use zx_sys::{Machine, PACK_ENTRY_SIZE, PACK_HEADER_SIZE, PACK_LZ4, PACK_MAX_RAW, PACK_SNA, PACK_STORED, PACK_TAP, PACK_Z80};
 
 const MAGIC: &[u8; 8] = b"FMZXPACK";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 // header field offsets
 const H_VERSION: usize = 8;
 const H_COUNT: usize = 10;
 const H_TOTAL: usize = 12;
 const H_CRC: usize = 16;
+const H_SOUND_OFFSET: usize = 20;
+const H_SOUND_LEN: usize = 24;
+const SOUND_VERSION: u8 = 1;
 // entry field offsets
 const E_KIND: usize = 29;
 const E_CODEC: usize = 30;
@@ -121,4 +124,80 @@ pub fn build_pack(manifest_path: &Path) -> Result<Vec<u8>, String> {
     let crc = crc32fast::hash(&pack[PACK_HEADER_SIZE..]);
     put32(&mut pack, H_CRC, crc);
     Ok(pack)
+}
+
+fn get32(v: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(v[at..at + 4].try_into().unwrap())
+}
+
+fn pad4(pack: &mut Vec<u8>) {
+    while pack.len() % 4 != 0 {
+        pack.push(0);
+    }
+}
+
+/// Appends the sound section (learned entry lists, one slot per game) to a pack from
+/// [`build_pack`] and rewrites the header and the CRC. `lists.len()` must equal the game count;
+/// all `None` adds no section. Each list is padded to a multiple of 4 bytes.
+pub fn attach_sound(pack: &mut Vec<u8>, lists: &[Option<Vec<u8>>]) -> Result<(), String> {
+    if pack.len() < PACK_HEADER_SIZE || &pack[..8] != MAGIC || get32(pack, H_TOTAL) as usize != pack.len() {
+        return Err("not a pack from build_pack".to_string());
+    }
+    let count = u16::from_le_bytes([pack[H_COUNT], pack[H_COUNT + 1]]) as usize;
+    if lists.len() != count {
+        return Err(format!("{} sound lists for {count} games", lists.len()));
+    }
+    if get32(pack, H_SOUND_OFFSET) != 0 || get32(pack, H_SOUND_LEN) != 0 {
+        return Err("the pack already has a sound section".to_string());
+    }
+    if lists.iter().any(|l| l.as_ref().is_some_and(Vec::is_empty)) {
+        return Err("an empty sound list (use None)".to_string());
+    }
+    if lists.iter().all(Option::is_none) {
+        return Ok(());
+    }
+    let start = pack.len();
+    let too_big = || "pack grows past 4 GiB".to_string();
+    let mut section = vec![SOUND_VERSION, 0];
+    section.extend_from_slice(&(count as u16).to_le_bytes());
+    section.resize(4 + 4 * count, 0);
+    for (i, l) in lists.iter().enumerate() {
+        if let Some(l) = l {
+            pad4(&mut section);
+            let at = u32::try_from(section.len()).map_err(|_| too_big())?;
+            put32(&mut section, 4 + 4 * i, at);
+            section.extend_from_slice(l);
+        }
+    }
+    pad4(&mut section);
+    pack.extend_from_slice(&section);
+    let total = u32::try_from(pack.len()).map_err(|_| too_big())?;
+    put32(pack, H_TOTAL, total);
+    put32(pack, H_SOUND_OFFSET, start as u32);
+    put32(pack, H_SOUND_LEN, section.len() as u32);
+    let crc = crc32fast::hash(&pack[PACK_HEADER_SIZE..]);
+    put32(pack, H_CRC, crc);
+    Ok(())
+}
+
+/// Game `index`'s learned entry list, or `None` if it has none or the sound section is bad (the
+/// same checks as the firmware's `pack_sound_at`; the slice includes any padding to 4 bytes).
+pub fn sound_list(pack: &[u8], index: u32) -> Option<&[u8]> {
+    let total = (pack.len() >= PACK_HEADER_SIZE).then(|| get32(pack, H_TOTAL) as usize)?.min(pack.len());
+    let count = u16::from_le_bytes([pack[H_COUNT], pack[H_COUNT + 1]]) as usize;
+    let (so, sl) = (get32(pack, H_SOUND_OFFSET) as usize, get32(pack, H_SOUND_LEN) as usize);
+    let table = 4 + 4 * count;
+    if so % 4 != 0 || so < PACK_HEADER_SIZE + count * PACK_ENTRY_SIZE || so > total || sl > total - so || sl < table {
+        return None;
+    }
+    let s = &pack[so..so + sl];
+    if s[0] != SOUND_VERSION || u16::from_le_bytes([s[2], s[3]]) as usize != count || index as usize >= count {
+        return None;
+    }
+    let off = get32(s, 4 + 4 * index as usize) as usize;
+    if off % 4 != 0 || off < table || off >= sl {
+        return None;
+    }
+    let end = (0..count).map(|i| get32(s, 4 + 4 * i) as usize).filter(|&o| o > off && o < sl).min().unwrap_or(sl);
+    Some(&s[off..end])
 }

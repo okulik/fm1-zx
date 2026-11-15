@@ -1403,6 +1403,21 @@ pub fn pack_game_at(pack: &[u8], index: u32) -> Result<PackGame<'_>, i32> {
     }
 }
 
+/// The learned sound entries of game `index`, copied out: `Ok(None)` if it has none, `Err` with
+/// the C error code if the sound section (or the game's list) is bad. Validates the header first.
+pub fn pack_sound_at(pack: &[u8], index: u32) -> Result<Option<Vec<u8>>, i32> {
+    pack_open(pack)?;
+    let mut list: *const u8 = std::ptr::null();
+    let mut len = 0u32;
+    // SAFETY: the header was validated against `pack.len()` just above; on success `list` points
+    // into `pack` for `len` bytes (checked inside the section by pack_sound_at).
+    match unsafe { sys::pack_sound_at(pack.as_ptr(), index, &mut list, &mut len) } {
+        0 if len == 0 => Ok(None),
+        0 => Ok(Some(unsafe { std::slice::from_raw_parts(list, len as usize) }.to_vec())),
+        e => Err(e),
+    }
+}
+
 // ---- text UI and menus ---------------------------------------------------
 
 /// Events the device layer feeds the menus.

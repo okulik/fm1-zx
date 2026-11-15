@@ -251,6 +251,40 @@ fn decode_rejects_bad_lists() {
     }
 }
 
+/// Raw bytes of a valid list, patched where the encoder would never put them: each is a boundary
+/// the firmware's decoder alone defends. The offsets follow `base()`: wild at +36, reloc at +38,
+/// one site at +40 (off, role, chan), pos at +44, the program at +46.
+#[test]
+fn decode_rejects_raw_bytes() {
+    const KIND: usize = ENTRY + 2;
+    const FLIPS: usize = ENTRY + 17;
+    const SITE_OFF: usize = ENTRY + 40;
+    const SITE_CHAN: usize = ENTRY + 43;
+    const PROG: usize = ENTRY + 46;
+    assert_eq!(patched(PROG, &[0x02]), encode_list(&[base()]), "the program offset");
+    let mut push9 = vec![Op::K(1); 9];
+    push9.extend([Op::Add; 8]);
+    let two_relocs = |reloc: Vec<u16>| encode_list(&[LearnedEntry { reloc, ..base() }]);
+    let bad: Vec<(&str, Vec<u8>)> = vec![
+        ("a program that pushes 9 values", with_prog(push9)),
+        ("an unknown opcode 0xFF", patched(PROG, &[0xFF])),
+        ("kind 1", patched(KIND, &[1])),
+        ("flips 2", patched(FLIPS, &[2])),
+        ("a tonal site channel past the channels", patched(SITE_CHAN, &[1])),
+        ("reloc offsets descending", two_relocs(vec![0x0C, 0x08])),
+        ("reloc offsets equal", two_relocs(vec![0x08, 0x08])),
+        ("reloc offsets closer than 2", two_relocs(vec![0x08, 0x09])),
+        ("a reloc offset past len", two_relocs(vec![0x08, 0x20])),
+        ("a site offset equal to len", patched(SITE_OFF, &0x20u16.to_le_bytes())),
+        ("a site offset past len", patched(SITE_OFF, &0xFFFFu16.to_le_bytes())),
+        ("a wild offset past len", patched(ENTRY + 36, &0x20u16.to_le_bytes())),
+        ("a site role past STOP", patched(ENTRY + 42, &[0x7F])),
+    ];
+    for (what, l) in &bad {
+        assert!(SndEngines::with_learned(l).is_err(), "{what}: accepted {l:02X?}");
+    }
+}
+
 #[test]
 fn generic_reader() {
     // one channel, its period HL at the site; timing IX; stale while the frame ends at +40h-4Fh
