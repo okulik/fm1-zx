@@ -23,20 +23,32 @@ footer a[href="fm1-sid/"],
   display: none !important;
 }
 
-/* The controls panel */
-.fmzx h3 { margin: 0 0 8px; font-size: 15px; }
+/* Our panel, under the synth at the deck's width: the computer keys (narrower) and the key map
+   (wider), side by side; one column on a phone */
+.fmzx { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+@media (min-width: 900px) {
+  .fmzx { grid-template-columns: minmax(250px, 1fr) minmax(0, 2.2fr); align-items: start; }
+}
+.fmzx h3 { margin: 0 0 10px; font-size: 15px; }
 .fmzx dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 14px; }
 .fmzx dt { color: var(--ink); font-weight: 600; }
 .fmzx dd { margin: 0; color: var(--dim); }
-.fmzx select { width: 100%; margin-bottom: 10px; }
-.fmzx p { color: var(--dim); font-size: 14px; margin: 0 0 8px; }
-.fmzx table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.fmzx th { text-align: left; color: var(--dim); font-weight: 500; }
-.fmzx th, .fmzx td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--rule); }
-.fmzx h3 + select { margin-top: 2px; }
-.fmzx dl + p { margin-top: -4px; }
-.fmzx h3:not(:first-child) { margin-top: 14px; }
-.fmzx table { table-layout: auto; overflow-wrap: anywhere; }
+.fmzx p { color: var(--dim); font-size: 13.5px; margin: 0; }
+.fmzx-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
+             margin-bottom: 10px; }
+.fmzx-head h3 { margin: 0; }
+.fmzx-head select { flex: 0 1 260px; min-width: 0; }
+/* the rows flow into columns of at least 15rem; a group's heading stays with its first rows */
+.fmzx-rows { columns: 15rem auto; column-gap: 28px; font-size: 13px; }
+.fmzx-group { display: contents; }
+.fmzx h4 { margin: 10px 0 2px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+           color: var(--faint); break-after: avoid; }
+.fmzx-rows > .fmzx-group:first-child h4 { margin-top: 0; }
+.fmzx-row { display: grid; grid-template-columns: minmax(5.5em, 1fr) 4em minmax(0, 1.6fr); gap: 8px;
+            padding: 3px 0; border-bottom: 1px solid var(--rule); break-inside: avoid; color: var(--ink); }
+.fmzx-row span { overflow-wrap: anywhere; }
+.fmzx-row span:nth-child(2) { color: var(--dim); }
+.fmzx-th { color: var(--dim); font-weight: 500; break-after: avoid; }
 
 /* The guide without its contents column: one column, its sections as cards (two side by side
    where two of at least 420 px fit), each line about 72 characters at most */

@@ -9,7 +9,7 @@
 // Spectrum key (docs/controls.md, "Computer keyboard"). Esc is HOME and Tab is PLAY in every view;
 // in the picker and the menus Enter is PLAY and the arrows turn SELECT and ALGORITHM. Without the
 // running game (a package without the address, or before the first frame) the keys are the
-// fixed table below (LEGACY) and the labels follow the side list's game.
+// fixed table below (LEGACY) and the labels follow the key map's game.
 
 export const VIEW = { PICKER: 0, GAME: 1, MENU: 2, KEYS: 3, OSK: 4, PAUSED: 5, MESSAGE: 6 };
 export const HOME = 8;
@@ -284,7 +284,7 @@ function legacyKeys(t) {
   return [...ours, ...theirs];
 }
 
-// The side panel's rows for a game: the computer key(s) that press the input, the FM-1 input, the
+// The key map's rows for a game: the computer key(s) that press the input, the FM-1 input, the
 // Spectrum action. `following`: the page sees the running game (Spectrum keys), else the legacy map.
 export function panelRows(game, following = true) {
   const table = buildTable(game);
@@ -310,7 +310,7 @@ export function panelRows(game, following = true) {
 // ---------------------------------------------------------------- labels on the drawing
 
 // What to write on the FM-1 drawing: [{ target, text }]. HOME and PLAY always; in a game view
-// (or game given with view null: the side list's game) each mapped key, button and encoder turn;
+// (or game given with view null: the key map's game) each mapped key, button and encoder turn;
 // in the picker and the menus the knobs the arrows turn.
 export function labels(game, view) {
   const out = [{ target: { key: HOME }, text: "HOME (Esc)" }, { target: { key: PLAY }, text: "PLAY (Tab)" }];
@@ -422,7 +422,7 @@ export function install(win, doc) {
     if (state.running && state.running.view === view && state.running.game === game) return;
     state.running = { view, game };
     keys()?.setRunning(view, games[game]);
-    // the side list snaps to a game when it starts (not in the picker: none runs there)
+    // the key map snaps to a game when it starts (not in the picker: none runs there)
     if (gameView(view) && state.snapped !== game) {
       state.snapped = game;
       state.onRun?.();
@@ -443,16 +443,22 @@ export function install(win, doc) {
     drawLabels(ctx, state.boxes, list);
   };
 
-  const side = doc.querySelector(".side");
-  if (!side) return;
-  const box = doc.createElement("aside");
-  box.className = "box fmzx";
+  // under the synth, the deck's width: the computer keys and the key map, two cards
+  const deck = doc.querySelector(".deck");
+  if (!deck) return;
+  const wrap = doc.createElement("section");
+  wrap.className = "fmzx";
+  wrap.setAttribute("aria-label", "Computer keys and key map");
   const el = (tag, text, parent = box) => {
     const n = doc.createElement(tag);
     if (text !== undefined) n.textContent = text;
     parent.appendChild(n);
     return n;
   };
+  const box = el("div", undefined, wrap);
+  box.className = "box fmzx-keys";
+  const mapBox = el("div", undefined, wrap);
+  mapBox.className = "box fmzx-map";
   el("h3", "Computer keys");
   const dl = el("dl");
   const FIXED = [
@@ -467,7 +473,7 @@ export function install(win, doc) {
   ];
   for (const [k, v] of FIXED) { el("dt", k, dl); el("dd", v, dl); }
   const msg = el("p");
-  side.insertBefore(box, side.firstChild);
+  deck.insertBefore(wrap, deck.querySelector(".hint"));
 
   fetch("keymaps.json")
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -480,8 +486,10 @@ export function install(win, doc) {
         : "This package does not tell the page which game runs: the keys are fm1-emu's piano map plus the arrows, Space, Enter, Esc and Tab, and the labels show the game picked here.";
       let saved = null;
       try { saved = win.localStorage.getItem("fmzx.game"); } catch { /* storage blocked */ }
-      el("h3", "Key map");
-      const select = el("select");
+      const head = el("div", undefined, mapBox);
+      head.className = "fmzx-head";
+      el("h3", "Key map", head);
+      const select = el("select", undefined, head);
       select.setAttribute("aria-label", "Game");
       for (const g of games) {
         const o = doc.createElement("option");
@@ -490,16 +498,28 @@ export function install(win, doc) {
         select.appendChild(o);
       }
       if (games.some((g) => g.id === saved)) select.value = saved;
-      const table = el("table");
+      // the rows in groups (buttons, notes, knobs), flowing into as many columns as fit
+      const list = el("div", undefined, mapBox);
+      list.className = "fmzx-rows";
+      const GROUPS = { button: "Buttons", note: "Note keys", enc: "Knobs" };
       const fill = () => {
         const game = games.find((g) => g.id === select.value);
         state.shown = game;
-        table.replaceChildren();
-        const head = el("tr", undefined, table);
-        for (const h of ["Computer", "FM-1", "Spectrum"]) el("th", h, head);
-        for (const r of panelRows(game, !!win.fmzxStats)) {
-          const tr = el("tr", undefined, table);
-          el("td", r.computer, tr); el("td", r.fm1, tr); el("td", r.spectrum, tr);
+        list.replaceChildren();
+        const rows = panelRows(game, !!win.fmzxStats);
+        for (const [kind, title] of Object.entries(GROUPS)) {
+          const mine = rows.filter((_, i) => game.keys[i].input.startsWith(`${kind}.`));
+          if (!mine.length) continue;
+          const group = el("div", undefined, list);
+          group.className = "fmzx-group";
+          el("h4", title, group);
+          const line = (cells, cls) => {
+            const r = el("div", undefined, group);
+            r.className = cls;
+            for (const c of cells) el("span", c, r);
+          };
+          line(["Computer", "FM-1", "Spectrum"], "fmzx-row fmzx-th");
+          for (const r of mine) line([r.computer, r.fm1, r.spectrum], "fmzx-row");
         }
       };
       select.addEventListener("change", () => {

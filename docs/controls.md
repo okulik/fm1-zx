@@ -161,11 +161,11 @@ place (`event.code`), so a non-US layout types the key printed in that place on 
 
 The FM-1 drawing shows each mapped key's Spectrum key (`ENT`, `SPC`, `CS`, `SS`, `←` `↑` `→` `↓`
 for Kempston, `FIRE`; encoder turns under the knob, counter-clockwise first), HOME and PLAY as `HOME
-(Esc)` and `PLAY (Tab)`, and in the picker and the menus only the menu controls. The side panel lists
+(Esc)` and `PLAY (Tab)`, and in the picker and the menus only the menu controls. The key map under the synth lists
 a game's key map with the computer key that reaches each input; it follows the running game (another
 game can be picked to look at; it snaps back when a game starts).
 
 A package whose `fmzx_stats` address the page does not have (`tools/web-demo` warns) keeps the fixed
 keys: Esc HOME, Tab and Enter PLAY, the arrows F3 / A3 / F#3 / G3 (Kempston by default) and turning
 SELECT and ALGORITHM, Space C5, C V B G#3 A#3 B3, [ ] F#5 G5, and fm1-emu's piano keys for the rest;
-the labels then show the game picked in the side panel.
+the labels then show the game picked in the key map under the synth.
