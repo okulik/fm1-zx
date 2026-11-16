@@ -16,7 +16,7 @@ fi
 
 # main.js: the input hooks for our panel (web/fmzx.js), the fresh package, the one clock
 f="$1/main.js"
-edit 'function setPot(v) {' 'window.fmzxInput = { setKey, turn };
+edit 'function setPot(v) {' 'window.fmzxInput = { setKey, turn, hit: (x, y) => ui.panel_hit(x, y), board: () => board };
 function setPot(v) {'
 edit '  if (e.metaKey || e.ctrlKey || e.target instanceof HTMLSelectElement) return;
 ' '  if (e.metaKey || e.ctrlKey || e.target instanceof HTMLSelectElement) return;
@@ -43,6 +43,18 @@ edit 'persistedSectors: record?.sectors || [], entry: DEV.key + f.id,' 'fresh: !
 edit 'function saveSnapshot(session, flash, flashRevision) {
 ' 'function saveSnapshot(session, flash, flashRevision) {
   if (session.fresh) return Promise.resolve();
+'
+# the running game (web/fmzx.js): the address of the firmware's fmzx_stats goes to the worklet at
+# boot, each frame (with [view, game] read from it) goes to our layer, and our labels are drawn
+# over the synth each time it is drawn
+edit 'mhz: clock, jit: params.get("jit") !== "0",' 'fmzxStats: window.fmzxStats || 0, mhz: clock, jit: params.get("jit") !== "0",'
+edit '  frame = m;
+' '  frame = m;
+  window.fmzxFrame?.(m);
+'
+edit '  ctx.putImageData(img, 0, 0);
+' '  ctx.putImageData(img, 0, 0);
+  window.fmzxDraw?.(ctx, W, H);
 '
 edit 'let mhz = Number(params.get("mhz") || stored("fm1.mhz") || 100);' 'let mhz = 240;'
 

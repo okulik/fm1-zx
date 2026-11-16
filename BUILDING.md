@@ -107,16 +107,27 @@ fm1-emu from `https://github.com/joakimeriksson/fm1-emu`, at the revision
 that revision changes), patches the fetched copy and builds it with upstream's `web/build.sh` into
 `build/web`. Nothing from fm1-emu is committed. Every patch is exact text that must occur once, so a
 changed upstream fails the build loudly (`web/patch-edit.sh`). In the emulator (`web/patch-emu.sh`): the
-stock audio PLL, so the firmware plays sound, and an LCD that honours COLMOD, so RGB444 shows. In the
+stock audio PLL, so the firmware plays sound, an LCD that honours COLMOD, so RGB444 shows, and the
+running game: an export reads a word of RAM (`fm1_peek32`) and the worklet adds the firmware's view
+and game index (`fmzx_stats`, words 3 and 4) to each frame message. The address of `fmzx_stats` comes
+from the ELF the packages were made from (`build/fm1/platform/fm1/fmzx_app.elf`, read by
+`web/elf-symbol.py`) and is written into the served `keymaps.json`; it is left out, with a warning,
+when that ELF is missing or newer than the package, and the page then keeps the fixed keys. In the
 page (`web/patch-page.sh`): the fresh package is never read from or saved to the browser's IndexedDB,
-the clock is pinned at 240 MHz, input hooks let our keyboard layer (`web/fmzx.js`, with the controls
-panel that lists a game's key map from `keymaps.json`) claim keys, the draw loop takes the panel
-pointer before the memory buffer, and the SMK-37 catalog is not fetched; `web/fmzx.css` hides the
-upstream extras (other devices, firmware list, MIDI, plugin and the like). The server (`web/serve.py`)
+the clock is pinned at 240 MHz, input hooks let our keyboard layer (`web/fmzx.js`: Spectrum keys by
+the running game's key map, docs/controls.md, "Computer keyboard"; under the synth, the computer
+keys and a game's key map from `keymaps.json`, which follows the running game) claim keys, the boot message passes
+the `fmzx_stats` address to the worklet, each frame goes to our layer, our labels (each key's
+Spectrum key, placed by the drawing's own hit test) are drawn over the synth after each frame, the
+draw loop takes the panel pointer before the memory buffer, and the SMK-37 catalog is not fetched;
+`web/fmzx.css` hides the upstream extras (other devices, firmware list, MIDI, plugin and the like)
+and lays the guide out as cards, two side by side on a wide screen. The server (`web/serve.py`)
 listens on 127.0.0.1 only and sends every file with `Cache-Control: no-store`. `--check` runs the node
 unit tests (`web/fmzx.test.mjs`) and the smoke test (`web/check.mjs`), which boots the built wasm at
 240 MHz and checks that the package boots, the picker draws, the border-and-tone test sounds, the
-colours match the preview package, and every page patch is in place; it needs node.
+running game is reported (view and game after PLAY), computer keys through `web/fmzx.js` reach the
+firmware (Esc opens the menu, Enter resumes, Tab pauses and resumes), the colours match the preview
+package, and every page patch is in place; it needs node.
 
 The wasm build uses the active Rust toolchain (`rustc --print sysroot` in `host/`), which needs
 the `wasm32-unknown-unknown` target. The script stops if it is missing and never installs

@@ -22,10 +22,10 @@ Every game starts from this table. A game's manifest can replace any entry (see 
 
 | FM-1 input | Action |
 |------------|--------|
-| F3 | Kempston left |
-| F#3, G#3 | Kempston up |
-| G3 | Kempston down |
-| A3 | Kempston right |
+| F3, G3, A3, B3 (the first four white keys) | Kempston down |
+| F#3, G#3, A#3 (the first three black keys) | Kempston up |
+| C#4, C#5 | Kempston left |
+| D#4, D#5 | Kempston right |
 | C5, D5, E5, F5, G5 | Kempston fire |
 | C4 | ENTER |
 | D4 | SPACE |
@@ -132,29 +132,40 @@ and ALGORITHM encoders belong to the keyboard while it is open.
 
 ## Computer keyboard (browser page)
 
-The browser test bench (`tools/web-demo`) maps the computer keyboard onto the FM-1 keys. The keys
-below are claimed by this project and win over fm1-emu's page; the arrows also turn SELECT and
-ALGORITHM, and Space is a note key (C5), not PLAY, so it can be the fire button. The page's side
-panel lists the key map of the game picked in it (it cannot see the running game), with the computer key for each FM-1 input.
+The browser test bench (`tools/web-demo`) knows which game runs (the firmware's view and game index,
+read from `fmzx_stats` by the emulator). While a game runs, the computer keys type Spectrum keys:
+a key presses the FM-1 input the running game maps to that Spectrum key. Keys are matched by their
+place (`event.code`), so a non-US layout types the key printed in that place on a US keyboard.
 
-| Key | FM-1 input | Also |
-|-----|------------|------|
-| ← | F3 | SELECT counter-clockwise |
-| → | A3 | SELECT clockwise |
-| ↑ | F#3 | ALGORITHM counter-clockwise |
-| ↓ | G3 | ALGORITHM clockwise |
-| Space | C5 | |
-| Enter | PLAY | |
-| Esc | HOME | |
-| C V B | G#3 A#3 B3 | |
-| [ ] | F#5 G5 | |
+| Computer key | Spectrum key |
+|--------------|--------------|
+| A to Z, 0 to 9 | the same letter or digit |
+| Space | SPACE |
+| Enter | ENTER (PLAY in the picker and the menus) |
+| Left Shift | CAPS SHIFT |
+| Alt (Option) | SYMBOL SHIFT |
+| ← → ↑ ↓ | Kempston left, right, up, down |
+| Right Shift | Kempston fire |
 
-fm1-emu's own keys stay as they are:
+- When several FM-1 inputs give the same Spectrum key, the first in the key map is used (a key or
+  note before an encoder; an encoder turns one detent per key press and repeat).
+- An input mapped to two actions (`key.CAPS+key.5`) is pressed by holding both computer keys (Left
+  Shift and 5).
+- A Spectrum key the game does not map does nothing, as on the FM-1.
+- In every view **Esc is HOME** and **Tab is PLAY** (pause in a game, OK in the menus).
+- In the picker, the HOME menu, the key map page and messages the arrows turn SELECT (← →) and
+  ALGORITHM (↑ ↓) and Enter is PLAY; the letters do nothing there. On the on-screen keyboard the arrows
+  move its cursor and the other keys still reach the game; SAVE and REC (its CAPS and SYMBOL toggles)
+  are clicked on the drawing.
+- fm1-emu's own piano keys (A to ' as notes, Z / X octave, R REC, 1 to 0 the top buttons) are off.
 
-| Keys | FM-1 input |
-|------|------------|
-| A W S E D F T G Y H U J K O L P ; ' | notes C4 to F5, in order (C4 C#4 D4 ... F5) |
-| Z / X | OCT- / OCT+ |
-| R | REC |
-| 1 2 3 4 5 6 7 8 9 0 | FX SCL ENV LFO EDIT GLO HOME SAVE ARP SEQ |
-| , / . | ALGORITHM counter-clockwise / clockwise |
+The FM-1 drawing shows each mapped key's Spectrum key (`ENT`, `SPC`, `CS`, `SS`, `←` `↑` `→` `↓`
+for Kempston, `FIRE`; encoder turns under the knob, counter-clockwise first), HOME and PLAY as `HOME
+(Esc)` and `PLAY (Tab)`, and in the picker and the menus only the menu controls. The key map under the synth lists
+a game's key map with the computer key that reaches each input; it follows the running game (another
+game can be picked to look at; it snaps back when a game starts).
+
+A package whose `fmzx_stats` address the page does not have (`tools/web-demo` warns) keeps the fixed
+keys: Esc HOME, Tab and Enter PLAY, the arrows C#4 / D#4 / F#3 / F3 (Kempston by default) and turning
+SELECT and ALGORITHM, Space C5, C V B G#3 A#3 B3, [ ] F#5 G5, and fm1-emu's piano keys for the rest;
+the labels then show the game picked in the key map under the synth.

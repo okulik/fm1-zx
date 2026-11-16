@@ -387,15 +387,15 @@ fn keys_page_lists_default() {
     ui.draw(&m, Some(&pack));
     let rows = rows_text(&ui);
     let first: Vec<&String> = rows.iter().take(6).collect();
-    assert!(first.iter().any(|r| r.contains("F3   KEMPSTON LEFT")), "{first:?}");
+    assert!(first.iter().any(|r| r.contains("F3   KEMPSTON DOWN")), "{first:?}");
     assert!(rows[0].contains("Alpha"));
     // a second page, then back to the first
     m.event(ev::DOWN);
     ui.draw(&m, Some(&pack));
-    assert!(find_row(&ui, "F3   KEMPSTON LEFT").is_none());
+    assert!(find_row(&ui, "F3   KEMPSTON DOWN").is_none());
     m.event(ev::UP);
     ui.draw(&m, Some(&pack));
-    assert!(find_row(&ui, "F3   KEMPSTON LEFT").is_some());
+    assert!(find_row(&ui, "F3   KEMPSTON DOWN").is_some());
     assert_eq!(m.event(ev::BACK).0, cmd::NONE);
     assert_eq!(m.view(), view::MENU);
     m.set_view(view::KEYS);

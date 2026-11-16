@@ -40,18 +40,26 @@ void km_default(keymap *k)
     set1(k, BTN_ARP, K_(4, 0));   /* 0 */
     set1(k, BTN_SEQ, K_(0, 0));   /* CAPS SHIFT */
     set1(k, BTN_REC, K_(7, 1));   /* SYMBOL SHIFT */
-    /* notes: F3 = 0 ... G5 = 26 */
-    set1(k, KM_BUTTONS + 0, KEMP(KEMP_LEFT));
+    /* notes: F3 = 0 ... G5 = 26. The joystick: down on the first four white keys (F3 G3 A3 B3),
+     * up on the first three black ones (F#3 G#3 A#3), left / right on the two-key groups of black
+     * keys (C#4 / D#4 and C#5 / D#5), fire on C5 D5 E5 F5 G5 */
+    set1(k, KM_BUTTONS + 0, KEMP(KEMP_DOWN));    /* F3 */
     set1(k, KM_BUTTONS + 1, KEMP(KEMP_UP));      /* F#3 */
     set1(k, KM_BUTTONS + 2, KEMP(KEMP_DOWN));    /* G3 */
     set1(k, KM_BUTTONS + 3, KEMP(KEMP_UP));      /* G#3 */
-    set1(k, KM_BUTTONS + 4, KEMP(KEMP_RIGHT));   /* A3 */
+    set1(k, KM_BUTTONS + 4, KEMP(KEMP_DOWN));    /* A3 */
+    set1(k, KM_BUTTONS + 5, KEMP(KEMP_UP));      /* A#3 */
+    set1(k, KM_BUTTONS + 6, KEMP(KEMP_DOWN));    /* B3 */
     set1(k, KM_BUTTONS + 7, K_(6, 0));           /* C4 ENTER */
+    set1(k, KM_BUTTONS + 8, KEMP(KEMP_LEFT));    /* C#4 */
     set1(k, KM_BUTTONS + 9, K_(7, 0));           /* D4 SPACE */
+    set1(k, KM_BUTTONS + 10, KEMP(KEMP_RIGHT));  /* D#4 */
     set1(k, KM_BUTTONS + 11, K_(5, 4));          /* E4 Y */
     set1(k, KM_BUTTONS + 12, K_(7, 3));          /* F4 N */
     set1(k, KM_BUTTONS + 19, KEMP(KEMP_FIRE));   /* C5 */
+    set1(k, KM_BUTTONS + 20, KEMP(KEMP_LEFT));   /* C#5 */
     set1(k, KM_BUTTONS + 21, KEMP(KEMP_FIRE));   /* D5 */
+    set1(k, KM_BUTTONS + 22, KEMP(KEMP_RIGHT));  /* D#5 */
     set1(k, KM_BUTTONS + 23, KEMP(KEMP_FIRE));   /* E5 */
     set1(k, KM_BUTTONS + 24, KEMP(KEMP_FIRE));   /* F5 */
     set1(k, KM_BUTTONS + 26, KEMP(KEMP_FIRE));   /* G5 */

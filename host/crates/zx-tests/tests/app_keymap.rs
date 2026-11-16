@@ -12,8 +12,9 @@ fn note(n: u32) -> u32 {
 #[test]
 fn default_kempston() {
     let mut km = KeyMapper::new();
-    let (rows, k) = km.apply(&KmInput { notes: note(0) | note(3), ..Default::default() });
-    assert_eq!(k, 0b1010);
+    // F3 down, G#3 up, C#4 left, D#5 right
+    let (rows, k) = km.apply(&KmInput { notes: note(0) | note(3) | note(8) | note(22), ..Default::default() });
+    assert_eq!(k, 0b1111);
     assert_eq!(rows, [0; 8]);
 }
 

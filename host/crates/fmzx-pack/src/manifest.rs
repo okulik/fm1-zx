@@ -271,18 +271,24 @@ fn apply_keys(map: &mut [[u8; 2]; INPUTS], keys: &BTreeMap<String, String>) -> R
     Ok(())
 }
 
-pub const DEFAULTS: [(&str, &str); 26] = [
-    ("note.F3", "kempston.left"),
+pub const DEFAULTS: [(&str, &str); 32] = [
+    ("note.F3", "kempston.down"),
     ("note.F#3", "kempston.up"),
     ("note.G3", "kempston.down"),
     ("note.G#3", "kempston.up"),
-    ("note.A3", "kempston.right"),
+    ("note.A3", "kempston.down"),
+    ("note.A#3", "kempston.up"),
+    ("note.B3", "kempston.down"),
     ("note.C4", "key.ENTER"),
+    ("note.C#4", "kempston.left"),
     ("note.D4", "key.SPACE"),
+    ("note.D#4", "kempston.right"),
     ("note.E4", "key.Y"),
     ("note.F4", "key.N"),
     ("note.C5", "kempston.fire"),
+    ("note.C#5", "kempston.left"),
     ("note.D5", "kempston.fire"),
+    ("note.D#5", "kempston.right"),
     ("note.E5", "kempston.fire"),
     ("note.F5", "kempston.fire"),
     ("note.G5", "kempston.fire"),

@@ -5,7 +5,7 @@
 //! keyboard, the LCD speed item, the Sound item and the Screen item. Needs the device build (`FMZX_FM1_BUILD`).
 //!
 //! Pack: `games/games.toml` (0 scroll, 1 border, 2 Castaway; the test programs `tape`/`tune` are
-//! found by id); scroll has the default key map (F3 = Kempston left).
+//! found by id); scroll has the default key map (C#4 = Kempston left).
 //!
 //! The Spectrum's key rows and Kempston byte are read from the firmware's `fmzx_keys_now` and
 //! `fmzx_kempston_now`: copies of `fmzx_machine.keys` and `.kempston` made right after
@@ -26,7 +26,7 @@ const OCT_UP: u8 = 1;
 const HOME: u8 = 8;
 const SAVE: u8 = 9;
 const PLAY: u8 = 12;
-const NOTE_F3: u8 = 14;
+const NOTE_CS4: u8 = 22;
 const SELECT: u8 = 0;
 const ALGORITHM: u8 = 1;
 const SCROLL: u32 = 0;
@@ -119,18 +119,18 @@ fn menu_item(m: &mut Machine, downs: u32) {
 fn note_key_reaches_kempston() {
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
     assert_eq!(kempston(&m), 0);
-    m.hold(NOTE_F3, true);
+    m.hold(NOTE_CS4, true);
     m.run_ms(100);
-    assert_eq!(kempston(&m), KEMPSTON_LEFT, "F3 held: Kempston left");
-    m.hold(NOTE_F3, false);
+    assert_eq!(kempston(&m), KEMPSTON_LEFT, "C#4 held: Kempston left");
+    m.hold(NOTE_CS4, false);
     m.run_ms(100);
-    assert_eq!(kempston(&m), 0, "F3 released");
+    assert_eq!(kempston(&m), 0, "C#4 released");
 }
 
 #[test]
 fn home_menu_pauses_and_releases() {
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
-    m.hold(NOTE_F3, true);
+    m.hold(NOTE_CS4, true);
     m.run_ms(100);
     assert_eq!(kempston(&m), KEMPSTON_LEFT);
 
@@ -138,25 +138,25 @@ fn home_menu_pauses_and_releases() {
     m.run_ms(50);
     assert_eq!(kempston(&m), 0, "Kempston released in the menu");
     assert_frames_stopped(&mut m, "in the HOME menu");
-    m.hold(NOTE_F3, false);
+    m.hold(NOTE_CS4, false);
     m.run_ms(100);
     assert_eq!(kempston(&m), 0);
 
     press_to(&mut m, HOME, view::GAME); // BACK resumes
     assert_frames_run(&mut m, "after HOME -> HOME");
-    assert_eq!(kempston(&m), 0, "F3 released in the menu: still 0 after the resume");
+    assert_eq!(kempston(&m), 0, "C#4 released in the menu: still 0 after the resume");
 
     // the key map works again after the resume
-    m.hold(NOTE_F3, true);
+    m.hold(NOTE_CS4, true);
     m.run_ms(100);
     assert_eq!(kempston(&m), KEMPSTON_LEFT);
-    m.hold(NOTE_F3, false);
+    m.hold(NOTE_CS4, false);
 }
 
 #[test]
 fn pause_releases_keys() {
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
-    m.hold(NOTE_F3, true);
+    m.hold(NOTE_CS4, true);
     m.run_ms(100);
     assert_eq!(kempston(&m), KEMPSTON_LEFT);
     press_to(&mut m, PLAY, view::PAUSED);
@@ -165,7 +165,7 @@ fn pause_releases_keys() {
     assert_frames_stopped(&mut m, "paused");
     press_to(&mut m, PLAY, view::GAME);
     m.run_ms(100);
-    assert_eq!(kempston(&m), KEMPSTON_LEFT, "F3 still held after the pause");
+    assert_eq!(kempston(&m), KEMPSTON_LEFT, "C#4 still held after the pause");
 }
 
 /// The host's composition of the HOME menu over the same pack, with the Sound item cycled
@@ -254,10 +254,10 @@ fn osk_types_key() {
     assert_eq!(keys(&m), [0; 8]);
 
     // mapped note keys keep working under the keyboard
-    m.hold(NOTE_F3, true);
+    m.hold(NOTE_CS4, true);
     m.run_ms(100);
     assert_eq!(kempston(&m), KEMPSTON_LEFT);
-    m.hold(NOTE_F3, false);
+    m.hold(NOTE_CS4, false);
 
     press_to(&mut m, HOME, view::GAME); // HOME closes the keyboard
     assert_frames_run(&mut m, "after the keyboard");
@@ -385,7 +385,7 @@ fn divider_menu() {
 #[test]
 fn note_key_held_through_the_picker() {
     let mut m = start(BootOpt { rgb565: false, divider: 4 }, SCROLL);
-    m.hold(NOTE_F3, true);
+    m.hold(NOTE_CS4, true);
     m.run_ms(100);
     assert_eq!(kempston(&m), KEMPSTON_LEFT);
     press_to(&mut m, HOME, view::MENU);
@@ -394,19 +394,19 @@ fn note_key_held_through_the_picker() {
     press_to(&mut m, PLAY, view::PICKER);
     for _ in 0..10 {
         m.run_ms(30);
-        assert_eq!(kempston(&m), 0, "Kempston in the picker with F3 held");
-        assert_eq!(keys(&m), [0; 8], "Spectrum keys in the picker with F3 held");
+        assert_eq!(kempston(&m), 0, "Kempston in the picker with C#4 held");
+        assert_eq!(keys(&m), [0; 8], "Spectrum keys in the picker with C#4 held");
     }
 
-    // a new game with F3 still held: left only while F3 is down, released with it
+    // a new game with C#4 still held: left only while C#4 is down, released with it
     press_to(&mut m, PLAY, view::GAME);
     for _ in 0..5 {
         m.run_ms(20);
-        assert!(matches!(kempston(&m), 0 | KEMPSTON_LEFT), "Kempston {:#x} with F3 held", kempston(&m));
+        assert!(matches!(kempston(&m), 0 | KEMPSTON_LEFT), "Kempston {:#x} with C#4 held", kempston(&m));
     }
-    m.hold(NOTE_F3, false);
+    m.hold(NOTE_CS4, false);
     m.run_ms(100);
-    assert_eq!(kempston(&m), 0, "F3 released in the new game");
+    assert_eq!(kempston(&m), 0, "C#4 released in the new game");
     assert_frames_run(&mut m, "the new game");
     assert_eq!(kempston(&m), 0);
 }
