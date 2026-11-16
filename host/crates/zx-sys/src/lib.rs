@@ -797,6 +797,34 @@ impl SndFm {
     }
 }
 
+/// The live rule (`snd_roles`): each tonal voice's role by its pitch, ranked against the others.
+pub struct SndRoles {
+    raw: Box<sys::snd_roles>,
+}
+
+impl SndRoles {
+    /// Afresh: no voice heard yet.
+    pub fn new() -> Self {
+        let mut raw: Box<sys::snd_roles> = boxed_zeroed();
+        // SAFETY: `raw` is a valid, exclusively owned snd_roles.
+        unsafe { sys::snd_roles_init(&mut *raw) };
+        SndRoles { raw }
+    }
+
+    /// Tracks the frame's voices and fills each of its `SND_ROLE_AUTO` roles.
+    pub fn frame(&mut self, fr: &mut SndFrame) {
+        // SAFETY: `raw` was initialised by snd_roles_init; SndFrame has snd_frame's layout (checked
+        // above).
+        unsafe { sys::snd_roles_frame(&mut *self.raw, (fr as *mut SndFrame).cast()) };
+    }
+}
+
+impl Default for SndRoles {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An engine table of method B: (entries, count).
 /// Method B's engine tables.
 #[derive(Clone, Copy)]
@@ -1135,6 +1163,16 @@ impl SndMixer {
     /// (the one `SND_DELAY_FRAMES` before it), in an FM mode.
     pub fn fm_on(&self) -> bool {
         self.raw.fm_on != 0
+    }
+
+    /// The mixer's live rule: each slot's role (`SND_ROLE_*`) and average pitch ([`SndRoles`]).
+    pub fn roles(&self) -> ([u8; SND_TONAL], [i32; SND_TONAL]) {
+        (self.raw.roles.role, self.raw.roles.avg)
+    }
+
+    /// The role (`SND_ROLE_*`) the mixer's synth's tonal voice `k` took at its note's start.
+    pub fn voice_role(&self, k: usize) -> u8 {
+        self.raw.fm.v[k].role
     }
 }
 

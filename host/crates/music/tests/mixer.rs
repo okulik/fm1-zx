@@ -7,7 +7,7 @@
 use music::synthetic::{frame_loop, xor_loop, xor_tune, Drum, FrameNote, Stream, FRAME_T};
 use music::{capture, castaway, render_stream, sample_rate, test_sna, Frame, RATE};
 use zx_sys::{
-    zx_edge, Beeper, Machine, SndDecoder, SndFm, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_ENTER_FRAMES, SND_LEAVE_FRAMES,
+    zx_edge, Beeper, Machine, SndDecoder, SndFm, SndFrame, SndMixer, SndRoles, SND_DELAY_FRAMES, SND_ENTER_FRAMES, SND_LEAVE_FRAMES,
     SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SndEngines,
 };
 
@@ -142,12 +142,12 @@ fn mode_switch_no_click() {
 
 /// In an FM mode from the start: the output, the FM signal the mixer mixes in (rebuilt with a
 /// decoder and synth of our own: the decisions' voices when confident; in FM, through a lone
-/// unconfident decision, the last confident one's voices; silence otherwise), the delayed beeper,
-/// and the decisions (frame t's decision is about frame t - 3).
+/// unconfident decision, the last confident one's voices; silence otherwise; the roles the live
+/// rule's), the delayed beeper, and the decisions (frame t's decision is about frame t - 3).
 fn fm_signals(frames: &[Frame]) -> (Vec<i16>, Vec<i16>, Vec<i16>, Vec<SndFrame>) {
     let d = SND_DELAY_FRAMES as usize;
     let out = mix(frames, |_| SND_MODE_FM_A).concat();
-    let (mut dec, mut fm) = (SndDecoder::new(), SndFm::new(RATE.0, RATE.1));
+    let (mut dec, mut fm, mut roles) = (SndDecoder::new(), SndFm::new(RATE.0, RATE.1), SndRoles::new());
     let mut fm_out = Vec::new();
     let mut decisions = Vec::new();
     // the mixer's hysteresis: FM after SND_ENTER_FRAMES confident decisions, the beeper after
@@ -168,7 +168,7 @@ fn fm_signals(frames: &[Frame]) -> (Vec<i16>, Vec<i16>, Vec<i16>, Vec<SndFrame>)
                     run = 0;
                 }
             }
-            let src = if fr.confident != 0 {
+            let mut src = if fr.confident != 0 {
                 held = SndFrame { tone: fr.tone, ..SndFrame::default() };
                 fr
             } else if on {
@@ -176,6 +176,7 @@ fn fm_signals(frames: &[Frame]) -> (Vec<i16>, Vec<i16>, Vec<i16>, Vec<SndFrame>)
             } else {
                 SndFrame::default()
             };
+            roles.frame(&mut src);
             fm_out.extend(fm.render(&src, f.beeper.len()));
         }
     }
@@ -389,11 +390,12 @@ fn mix_live(m: &mut Machine, frames: usize, mode_of: impl Fn(usize) -> u8) -> (V
 
 #[test]
 fn fm_a_unchanged() {
-    // FM: sound (method A) plays sample for sample as it did when the synth got its instruments
-    // (every voice a lead while no role is decided); its decisions are pinned apart, unchanged
-    // since before (tests/instruments.rs, decisions_unchanged)
+    // FM: sound (method A) plays sample for sample as it did when the live rule gave its voices
+    // their roles (tests/roles.rs; Colony 8's first 12 s are a lone voice, a lead, as before); its
+    // decisions are pinned apart, unchanged since before (tests/instruments.rs,
+    // decisions_unchanged)
     for (name, m, want) in [
-        ("castaway", castaway(), 0x6dab25ba3fbdf52eu64),
+        ("castaway", castaway(), 0xc579d5b7c8aad978u64),
         ("colony8", music::colony8(), 0xd69dd22c970004b0),
     ] {
         let frames = capture(&mut { m }, &mut Beeper::new(RATE.0, RATE.1), 600);
@@ -401,6 +403,7 @@ fn fm_a_unchanged() {
         let conf = dec.iter().filter(|f| f.confident != 0).count();
         assert!(conf > 300, "{name}: music decoded ({conf} confident frames)");
         let out = mix(&frames, |_| SND_MODE_FM_A).concat();
+        println!("(\"{name}\", {:#018x}),", fnv(&out));
         assert_eq!(fnv(&out), want, "{name}");
     }
 }
@@ -468,8 +471,9 @@ fn switch_between_fm_choices() {
     let d = SND_DELAY_FRAMES as usize;
 
     // the FM the mixer plays: the chosen method's voices where it is confident (A's in FM:
-    // sound, B's in FM: engines), silence elsewhere, through one synth that never restarts
-    let (mut dec, mut eng, mut fm) = (SndDecoder::new(), SndEngines::new(), SndFm::new(RATE.0, RATE.1));
+    // sound, B's in FM: engines), silence elsewhere, with the live rule's roles, through one synth
+    // that never restarts
+    let (mut dec, mut eng, mut fm, mut roles) = (SndDecoder::new(), SndEngines::new(), SndFm::new(RATE.0, RATE.1), SndRoles::new());
     let mut m = castaway();
     let mut fm_out = Vec::new();
     for (t, f) in frames.iter().enumerate() {
@@ -480,7 +484,8 @@ fn switch_between_fm_choices() {
             fm_out.extend(std::iter::repeat_n(0, f.beeper.len()));
         } else {
             let fr = if mode(t) == SND_MODE_FM_A { fa } else { fb };
-            let src = if fr.confident != 0 { fr } else { SndFrame::default() };
+            let mut src = if fr.confident != 0 { fr } else { SndFrame::default() };
+            roles.frame(&mut src);
             fm_out.extend(fm.render(&src, f.beeper.len()));
         }
     }

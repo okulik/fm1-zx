@@ -301,6 +301,32 @@ void snd_fm_reset(snd_fm *f);
  * it; a drum event starts the drum, level 0 releases it). */
 void snd_fm_render(snd_fm *f, const snd_frame *fr, int16_t *out, uint32_t n);
 
+/* ---- the live rule: each voice's role by its pitch (roles.c) ------------
+ *
+ * Per tonal voice slot, a slow average of the pitch it plays while it sounds; the slots that
+ * sounded recently, ranked by it with hysteresis (a margin to swap two), give the roles: the
+ * lowest bass, the highest lead, a third the pad; two voices bass and lead; a voice alone lead.
+ * A slot silent for longer than the window leaves the ranking and keeps its history. */
+
+#define SND_ROLES_NONE (-(1 << 30))
+
+typedef struct snd_roles {
+	int32_t avg[SND_TONAL];     /* the slot's average pitch as log2 of its period (Q16 octaves:
+	                             * higher is lower); SND_ROLES_NONE before it sounds, so it ranks
+	                             * above any pitch */
+	uint8_t n[SND_TONAL];       /* frames heard (the average's weight), up to 255; 0 = no history */
+	uint8_t left[SND_TONAL];    /* frames left of the window since the slot last sounded; 0 =
+	                             * not heard recently (out of the ranking) */
+	uint8_t order[SND_TONAL];   /* the slots by average, lowest pitch first (with the hysteresis);
+	                             * slots without history last */
+	uint8_t role[SND_TONAL];    /* each slot's live role (enum snd_role) */
+} snd_roles;
+
+void snd_roles_init(snd_roles *r);
+/* Tracks every sounding tonal voice of *fr (its frame-start voices and its events) and fills each
+ * fr->role[k] that is SND_ROLE_AUTO with the live rule's role; a role already set is kept. */
+void snd_roles_frame(snd_roles *r, snd_frame *fr);
+
 /* ---- method B: known music engines (engines.c) -------------------------
  *
  * B recognises the music routines of a table of engines by the code around the OUTs that drive
@@ -520,6 +546,7 @@ typedef struct snd_mixer {   /* delay rings, hysteresis, crossfade; owns both me
 	snd_decoder dec;
 	snd_b b;
 	snd_fm fm;
+	snd_roles roles;                  /* the live rule for the frames the synth renders */
 	int16_t ring[SND_RING_SAMPLES];   /* beeper samples, SND_DELAY_FRAMES frames late */
 	uint32_t rd, wr, fill;            /* ring read and write index, samples held */
 	uint32_t mute;                    /* samples to pop before the delayed path may fade in */
@@ -559,7 +586,10 @@ void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n);
  * frames of delayed material are dropped); FM_A <-> FM_B keeps the delayed path
  * and the synth running, only FM and the delayed beeper crossfade if the decision
  * changes. n above SND_MAX_FRAME_SAMPLES: the beeper is copied and the mixer is
- * left as it was. */
+ * left as it was.
+ *
+ * Every frame the synth renders first goes through the live rule (snd_roles_frame), which gives
+ * its voices without a role theirs; an FM turn-on starts the rule afresh, with the synth. */
 void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_edge *e, uint32_t n_edges,
                      uint8_t start_level, const int16_t *beeper, uint32_t n, int16_t *out);
 

@@ -75,6 +75,20 @@ static inline void fm_rest(snd_fm *f)
 	f->drum_held = 0;
 }
 
+/* The live rule afresh: no slot with history (its average SND_ROLES_NONE until its first pitch
+ * sets it), none heard recently, ranked 0, 1, 2, every role lead (snd_roles_init, snd_mixer_init
+ * and the mixer's FM turn-on). A copy of a constant: data costs no fast memory, code would. */
+static inline void roles_rest(snd_roles *r)
+{
+	static const snd_roles rest = {
+		.avg = { SND_ROLES_NONE, SND_ROLES_NONE, SND_ROLES_NONE },
+		.order = { 0, 1, 2 },
+		.role = { SND_ROLE_LEAD, SND_ROLE_LEAD, SND_ROLE_LEAD },
+	};
+
+	*r = rest;
+}
+
 /* Method B's voices off and nothing carried (engines.c, snd_b_init). */
 static inline void silence(snd_b *b)
 {

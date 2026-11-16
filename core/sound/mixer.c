@@ -30,7 +30,11 @@
  * (the FM synth keeps rendering while del_g fades). FM_A <-> FM_B: nothing but
  * the method changes; the ring, the gains and the synth carry on, so only fm_g
  * moves if the new method decides otherwise. In steady Beeper mode the output
- * is a plain copy and the ring and both methods are still fed. */
+ * is a plain copy and the ring and both methods are still fed.
+ *
+ * The live rule (roles.c) sees every frame the synth renders, just before it, and gives each
+ * voice the method left without a role its role by pitch; it restarts with the synth at a
+ * Beeper -> FM switch, so the roles there come from the music after the switch. */
 
 #include "sound_internal.h"
 
@@ -97,6 +101,7 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 	} else if (fm_mode && m->mode == SND_MODE_BEEPER) {
 		m->mute = m->fill;   /* the samples before this frame's */
 		snd_fm_reset(&m->fm);
+		roles_rest(&m->roles);
 		m->fm_g = m->fm_on ? ONE : 0;
 	} else if (!fm_mode && m->mode != SND_MODE_BEEPER) {
 		m->mute = 0;
@@ -124,6 +129,7 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 				fr->drum = 0;
 				fr->n_ev = 0;
 			}
+			snd_roles_frame(&m->roles, fr);   /* the live rule's roles for the voices with none */
 			snd_fm_render(&m->fm, fr, out, n);
 		} else {
 			for (i = 0; i < n; i++)

@@ -154,6 +154,7 @@ void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)
 	snd_decoder_init(&m->dec);
 	snd_b_init(&m->b, snd_engine_table, snd_engine_count);
 	snd_fm_init(&m->fm, rate_num, rate_den);
+	roles_rest(&m->roles);
 	for (i = 0; i < SND_RING_SAMPLES; i++)
 		m->ring[i] = 0;
 	m->rd = 0;
