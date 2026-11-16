@@ -164,7 +164,6 @@ void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n)
 	const uint32_t *tt;
 	uint32_t fr, base, i, gaps = 0, narrow = 0;
 
-	(void)b;
 	if (f->idle) {   /* the mixer skipped the voice last frame: it starts afresh (here, not in SRAM) */
 		f->idle = 0;
 		f->env_tone = f->env_noise = f->env_tick = 0;
@@ -199,8 +198,11 @@ void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n)
 		emit(f, f->stop - base, 0, n);
 	}
 	if (f->have_last && base + ZX_FRAME_TSTATES - f->last >= GAP) f->have_last = 0;
+	if (s->busy) f->have_last = f->n_half = 0;   /* the decoder kept 256 edges: `last` is mid-frame, the next gap would be bogus */
 
-	if (s->busy)
+	if (b->rec[fr % SND_HIST].kind == SND_B_MINE && b->rec[fr % SND_HIST].ok == 0)
+		f->gate = SND_FX_B_REJECTED;   /* method B's own frame that its check refused: music, not an effect */
+	else if (s->busy)
 		f->gate = SND_FX_BUSY;
 	else if (narrow * 5u > gaps * 2u)
 		f->gate = SND_FX_TWO_VOICE;

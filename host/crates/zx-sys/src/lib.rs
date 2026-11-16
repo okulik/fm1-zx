@@ -1154,6 +1154,23 @@ impl SndMixer {
         self._learned = None;
     }
 
+    /// Method B with entry `what` of the misread table alone ([`SndEngines::new_misread`]).
+    pub fn set_misread_engines(&mut self, what: usize) {
+        let (table, n) = engine_table(Table::Misread(what));
+        // SAFETY: `raw` was initialised by snd_mixer_init; the table is a 'static C array of n
+        // entries.
+        unsafe { sys::snd_mixer_set_engines(&mut *self.raw, table, n) };
+        self._learned = None;
+    }
+
+    /// What method B recorded of frame `frame` (still among the last `SND_DELAY_FRAMES` + 1 fed):
+    /// (whether an engine's edges are in it: 0 none, 1 all its, 2 some other code's, `ok`: the
+    /// check's verdict for an engine's frame, 0 refused, 1 passed, 2 nothing to check by).
+    pub fn b_record(&self, frame: usize) -> (u8, u8) {
+        let r = &self.raw.b.rec[frame % (SND_DELAY_FRAMES as usize + 1)];
+        (r.kind, r.ok)
+    }
+
     /// Method B with the built-in engines followed by the learned entries of `list`
     /// ([`SndEngines::with_learned`]); Err(`ZX_ERR_FORMAT`), and the engines unchanged, if the
     /// decoder refuses it.

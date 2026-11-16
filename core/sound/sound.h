@@ -579,9 +579,10 @@ void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
  * 4th transition, a history of its own) read noise, and one in a run of 3 or more irregular frames
  * stays on the beeper. */
 
-/* Why the frame played last did or did not go to the follower: SND_FX_OFF is effects off, a mode
- * other than FM: engines, or FM music playing; SND_FX_B_REJECTED method B's own frame that its
- * check refused. */
+/* Why the frame played last did or did not go to the follower, as the field snd_fx.gate holds it:
+ * SND_FX_OFF is effects off or a mode other than FM: engines (the mixer sets it); SND_FX_B_REJECTED
+ * is method B's own frame that its check refused (its music stays on the beeper). While the mixer
+ * plays FM music the field keeps the reader's gate: SndMixer::fx_gate (host) reports OFF for it. */
 enum snd_fx_gate { SND_FX_PLAY, SND_FX_OFF, SND_FX_TWO_VOICE, SND_FX_BUSY, SND_FX_IRREGULAR, SND_FX_B_REJECTED };
 /* What the follower sounds. */
 enum snd_fx_sound { SND_FX_SILENT, SND_FX_TONE, SND_FX_NOISE };

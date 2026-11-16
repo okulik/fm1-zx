@@ -9,10 +9,12 @@
 //! Synthetic frames from transition lists, no machine (method B never claims anything, so the
 //! mixer plays the delayed path's beeper side throughout).
 
-use music::{sample_rate, Frame, CPU_HZ, RATE};
+use fmzx_pack::testprogs::beep_tap;
+use music::{capture, castaway, sample_rate, Frame, CPU_HZ, RATE};
 use zx_sys::{
-    zx_edge, Beeper, SndMixer, SND_DELAY_FRAMES, SND_FX_BUSY, SND_FX_IRREGULAR, SND_FX_OFF, SND_FX_PLAY,
-    SND_FX_TWO_VOICE, SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, ZX_FRAME_TSTATES,
+    zx_edge, Beeper, Machine, SndMixer, MISREAD_BEEP, SND_DELAY_FRAMES, SND_FX_B_REJECTED, SND_FX_BUSY,
+    SND_FX_IRREGULAR, SND_FX_OFF, SND_FX_PLAY, SND_FX_TWO_VOICE, SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B,
+    ZX_FRAME_TSTATES,
 };
 
 const FT: u64 = ZX_FRAME_TSTATES as u64;
@@ -178,6 +180,15 @@ fn pitch(s: &[i16]) -> f64 {
     sr / ((lo - 1 + b) as f64 + delta)
 }
 
+/// How periodic `s` is: its autocorrelation at the pitch's lag over its energy (1 = a pure
+/// periodic signal, noise far less).
+fn periodicity(s: &[i16]) -> f64 {
+    let x: Vec<f64> = s.iter().map(|&v| v as f64).collect();
+    let lag = (sample_rate() / pitch(s)).round() as usize;
+    let r1: f64 = (0..x.len() - lag).map(|i| x[i] * x[i + lag]).sum();
+    r1 / x.iter().map(|v| v * v).sum::<f64>()
+}
+
 fn median(mut v: Vec<i32>) -> i32 {
     v.sort();
     v[v.len() / 2]
@@ -191,6 +202,8 @@ fn no_jumps(r: &Run, follower: &[usize]) {
     assert!(typ > 100, "the follower frames sound (median second difference {typ})");
     let mut worst = (0.0, 0);
     for k in 1..r.out.len() {
+        // `own` makes the bound loose at beeper frames on purpose (a beeper's own steps may be
+        // large); the fades_to / fades_from checks are what pin the crossfades, so they must stay.
         let own = d2max(&r.delayed[k - 1], &r.delayed[k]);
         let got = d2max(&r.out[k - 1], &r.out[k]);
         assert!(got <= 3 * typ.max(own), "frame {k}: second difference {got}, follower's typical {typ}, beeper's own {own}");
@@ -435,4 +448,106 @@ fn fx_only_in_fm_engines() {
         assert_eq!(on.out[k], off.out[k], "frame {k}: FM: sound after the switch");
     }
     assert!(differs(&on.out[21], &off.out[21]), "back in FM: engines, the follower again");
+}
+
+/// Per call t of a machine run: the mixer's output (frame t - SND_DELAY_FRAMES), the delayed
+/// beeper it would play without the follower, the gate, whether the mixer plays FM, and method
+/// B's record of that frame.
+struct MRun {
+    out: Vec<Vec<i16>>,
+    delayed: Vec<Vec<i16>>,
+    gate: Vec<u8>,
+    fm_on: Vec<bool>,
+    rec: Vec<(u8, u8)>,
+}
+
+/// Runs `m` for `frames` frames through `mix` in FM: engines.
+fn run_machine(mix: &mut SndMixer, mut m: Machine, frames: usize) -> MRun {
+    let mut beeper = Beeper::new(RATE.0, RATE.1);
+    let mut all: Vec<i16> = Vec::new();
+    let mut start = vec![0usize];
+    let mut r = MRun { out: vec![], delayed: vec![], gate: vec![], fm_on: vec![], rec: vec![] };
+    for t in 0..frames {
+        let f = capture(&mut m, &mut beeper, 1).pop().unwrap();
+        all.extend_from_slice(&f.beeper);
+        start.push(all.len());
+        let o = mix.frame(SND_MODE_FM_B, Some(&m), &f.edges, f.start_level, &f.beeper);
+        if t >= DELAY {
+            let from = start[t] - start[DELAY];   // the mixer delays by a fixed number of samples
+            r.delayed.push(all[from..from + o.len()].to_vec());
+            r.out.push(o);
+            r.gate.push(mix.fx_gate());
+            r.fm_on.push(mix.fm_on());
+            r.rec.push(mix.b_record(t - DELAY));
+        }
+    }
+    r
+}
+
+#[test]
+fn fx_b_rejected_stays_beeper() {
+    // the ROM BEEP entry misread (its period a semitone too long): B's check refuses the melody's
+    // frames, and the follower leaves them on the beeper
+    let tap = beep_tap();
+    let mut m = Machine::new();
+    m.tape_insert(&tap).expect("inserts");
+    m.tape_autostart();
+    let mut mix = mixer();
+    mix.set_misread_engines(MISREAD_BEEP);
+    let r = run_machine(&mut mix, m, 300);
+    let (mut rejected, mut exact) = (0, 0);
+    for k in 0..r.out.len() {
+        if r.rec[k] != (1, 0) || r.fm_on[k] {
+            continue;   // not B's refused frame (or FM is still held through it: the gate reads OFF)
+        }
+        rejected += 1;
+        assert_eq!(r.gate[k], SND_FX_B_REJECTED, "frame {k}");
+        // the first frame of a run may still fade from the follower; from the second the beeper
+        // alone (the frame before it was not the follower's either)
+        if k > 0 && r.gate[k - 1] != SND_FX_PLAY {
+            exact += 1;
+            assert_eq!(r.out[k], r.delayed[k], "frame {k} is the delayed beeper");
+        }
+    }
+    println!("{rejected} of B's refused frames stay beeper, {exact} of them exactly");
+    assert!(rejected > 20 && exact > 10, "B refuses the melody ({rejected} frames, {exact} exact)");
+}
+
+#[test]
+fn fx_busy_then_tone_starts_clean() {
+    // a busy frame keeps only its first 256 edges, so the follower's last transition is mid-frame;
+    // the tone after it starts as a new sound (its first gap is not a 10,000 T half period of
+    // noise): the first frame after the busy ones already sounds the tone's pitch
+    let (s0, nb) = (5usize, 6usize);
+    let mut ts = busy(s0 as u64 * FT, nb);
+    ts.extend(tone((s0 + nb) as u64 * FT + 1000, 12, 600.0));
+    let fr = frames(&ts, s0 + nb + 12 + 3);
+    let r = run(&mut mixer(), &fr);
+    let k = s0 + nb;
+    assert_eq!(r.gate[k - 1], SND_FX_BUSY);
+    assert_eq!(r.gate[k], SND_FX_PLAY, "the tone's first frame");
+    let (first, steady) = (periodicity(&r.out[k]), periodicity(&r.out[k + 6]));
+    println!("periodicity of the first tone frame {first:.2}, of a steady one {steady:.2}");
+    assert!(first > 0.8, "the first tone frame is a clean tone (periodicity {first:.2}; steady {steady:.2})");
+    let got = pitch(&r.out[k]);
+    assert!((got / 600.0 - 1.0).abs() < 0.03, "the first frame after the busy ones sounds {got:.1} Hz, the tone's 600 Hz");
+}
+
+#[test]
+fn fx_fm_music_unchanged_with_effects_on() {
+    // a known engine's tune in FM: engines: where the mixer plays FM (and did the frame before,
+    // past the crossfade) the output is the same with the follower on and off
+    let mut off = mixer();
+    off.set_effects(false);
+    let on = run_machine(&mut mixer(), castaway(), 700);
+    let off = run_machine(&mut off, castaway(), 700);
+    let mut same = 0;
+    for k in 1..on.out.len() {
+        if on.fm_on[k] && off.fm_on[k] && on.fm_on[k - 1] && off.fm_on[k - 1] {
+            assert_eq!(on.out[k], off.out[k], "frame {k}");
+            same += 1;
+        }
+    }
+    println!("{same} FM frames identical with effects on and off");
+    assert!(same > 100, "the tune plays in FM ({same} frames)");
 }
