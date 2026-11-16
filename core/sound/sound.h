@@ -557,6 +557,94 @@ void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n);
  * entry's stored roles (snd_engine.role), any other frame SND_ROLE_AUTO for every voice. */
 void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
 
+/* ---- effects follower (fx_read.c, fx.c) --------------------------------
+ *
+ * In FM: engines, the frames the mixer gives to the delayed beeper are re-voiced as FM: a tone
+ * that follows the beeper's pitch (the lead's sin(p + 1.3 sin 2p)), a tick at an edge after
+ * silence, brief noise for irregular edges. The reader (fx_read.c, once a frame, flash on the
+ * device, reached through `read`) follows the decoder's stored speaker transitions of the frame
+ * the mixer is about to play (t - 3) and turns them into a short event list at sample positions;
+ * it classifies frame t on its own as it arrives, so the frames after the one played are known.
+ * The voice (fx.c, per sample, SRAM) renders the events. The mixer puts the result in place of
+ * the delayed beeper under a crossfade gain, where the gate says PLAY.
+ *
+ * The rules, in T-states: a gap of 30,000 or more starts a new sound (a tick, the history
+ * cleared). The last 10 half periods (gaps) are kept; over the last up to 6 full periods
+ * (adjacent pairs) the median and the spread (max - min) / median: under 4 half periods, or a
+ * spread under 0.3, is a tone of the median's pitch (at most 12 kHz), else noise at the rate of
+ * the last up to 8 gaps' mean. It sounds while there are 2 half periods or more and the last
+ * transition is under min(2.5 x the largest of the last 4 half periods, 30,000) ago.
+ * Gates: a frame with more edges than the decoder keeps is busy; one whose gaps are under 200 T
+ * for more than 40% is two-voice music; a frame is irregular when most of its windows (from its
+ * 4th transition, a history of its own) read noise, and one in a run of 3 or more irregular frames
+ * stays on the beeper. */
+
+/* Why the frame played last did or did not go to the follower: SND_FX_OFF is effects off, a mode
+ * other than FM: engines, or FM music playing; SND_FX_B_REJECTED method B's own frame that its
+ * check refused. */
+enum snd_fx_gate { SND_FX_PLAY, SND_FX_OFF, SND_FX_TWO_VOICE, SND_FX_BUSY, SND_FX_IRREGULAR, SND_FX_B_REJECTED };
+/* What the follower sounds. */
+enum snd_fx_sound { SND_FX_SILENT, SND_FX_TONE, SND_FX_NOISE };
+
+/* Events per frame: on overflow intermediate pitch updates are dropped, the last kept. */
+#define SND_FX_EVENTS 32u
+#define SND_FX_HALVES 10u   /* half periods kept */
+
+typedef struct {          /* the follower from a sample of the frame on */
+	uint32_t step;        /* TONE: the tone's phase step per sample (2^32 = a cycle); NOISE: the
+	                       * sample-and-hold's (2^32 = a new value) */
+	uint16_t at;          /* the sample it starts on */
+	uint16_t k;           /* NOISE: the low-pass coefficient, Q15 */
+	uint8_t sound;        /* enum snd_fx_sound */
+	uint8_t tick;         /* a tick starts here */
+} snd_fx_event;
+
+typedef struct snd_fx {
+	/* the reader, set by snd_fx_init: snd_fx_read */
+	void (*read)(struct snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n);
+	/* constants (snd_fx_init) */
+	uint32_t rate_num, rate_den;
+	uint32_t kstep;       /* 3.5 MHz x 2^20 / rate: a period of P T-states steps kstep x 2^12 / P */
+	uint32_t kx;          /* the noise's low-pass: 2 pi fc / rate (Q16) = kx / mean gap ... */
+	uint32_t x_lo, x_hi;  /* ... within these (fc 150 Hz - 8 kHz) */
+	uint32_t tick_inc;    /* the tick's phase step (1.5 kHz) */
+	/* the reader's state */
+	uint32_t last;        /* the last transition: absolute T-state (frame x ZX_FRAME_TSTATES + T, wrapping) */
+	uint32_t stop;        /* while sounding: when it stops if no transition comes first (absolute) */
+	uint32_t step;        /* the sound's step and low-pass, as in snd_fx_event */
+	uint32_t irr;         /* bit k: frame t - k is irregular (t: the frame fed last) */
+	uint16_t half[SND_FX_HALVES];   /* the last half periods, oldest first */
+	uint16_t k;
+	uint8_t n_half;
+	uint8_t have_last;    /* `last` is under 30,000 T before the frame's end: the next transition continues its sound */
+	uint8_t sound;        /* enum snd_fx_sound from `last` (until `stop`) */
+	uint8_t gate;         /* enum snd_fx_gate of the frame the events are for */
+	uint8_t n_ev;
+	snd_fx_event ev[SND_FX_EVENTS];   /* the frame the mixer plays next: ev[0] at sample 0 */
+	/* the voice (fx.c); envelopes Q16, amplitudes: out = x (Q15) * amp >> 15 */
+	uint32_t tick_acc;    /* 8 kHz tick, as fm.c's */
+	uint32_t phase, cur, target;    /* the tone: phase, step played, step it glides to */
+	uint32_t tick_ph;
+	uint32_t hold_ph, nstep, seed;  /* the noise: sample-and-hold phase and step, xorshift32 */
+	int32_t hold, lp;     /* the value held, low-passed (Q15) */
+	int32_t env_tone, env_noise, env_tick;
+	int32_t amp_tone, amp_noise, amp_tick;
+	uint16_t lp_k;
+	uint8_t on;           /* enum snd_fx_sound playing */
+	uint8_t idle;         /* the mixer skipped the voice this frame: the reader restarts its envelopes */
+	int16_t buf[SND_MAX_FRAME_SAMPLES];   /* the frame rendered, for the mixer */
+} snd_fx;
+
+/* Constants for the rate, the reader set, the follower silent (sound_init.c, flash). */
+void snd_fx_init(snd_fx *f, uint32_t rate_num, uint32_t rate_den);
+/* Called once a frame after the decoder and method B have taken frame t (n: the samples the mixer
+ * plays for it): classifies frame t, then reads frame t - 3 into the event list and sets the gate
+ * (SND_FX_OFF before frame t - 3 exists). Flash on the device: it calls nothing in the other sound
+ * files. b: method B, for its records (unused yet). */
+void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n);
+/* Renders the event list into n samples (SRAM). */
+void snd_fx_render(snd_fx *f, int16_t *out, uint32_t n);
+
 /* ---- mixer (mixer.c) --------------------------------------------------- */
 
 #define SND_RING_SAMPLES (SND_DELAY_FRAMES * SND_MAX_FRAME_SAMPLES)
@@ -566,11 +654,14 @@ typedef struct snd_mixer {   /* delay rings, hysteresis, crossfade; owns both me
 	snd_b b;
 	snd_fm fm;
 	snd_roles roles;                  /* the live rule for the frames the synth renders */
+	snd_fx fx;                        /* the effects follower */
 	int16_t ring[SND_RING_SAMPLES];   /* beeper samples, SND_DELAY_FRAMES frames late */
 	uint32_t rd, wr, fill;            /* ring read and write index, samples held */
 	uint32_t mute;                    /* samples to pop before the delayed path may fade in */
 	int32_t live_g, del_g, fm_g;      /* Q15 gains (32768 = 1): live beeper, delayed path, FM in it */
 	int32_t step;                     /* gain change per sample of a crossfade */
+	int32_t fx_g;                     /* Q15: the follower in place of the delayed beeper */
+	uint8_t effects;                  /* 1: FM: engines re-voices the beeper (1 after init; the device sets it) */
 	uint8_t primed;                   /* frames pushed, up to SND_DELAY_FRAMES */
 	uint8_t mode;                     /* mode of the previous frame */
 	uint8_t fm_choice;                /* the FM mode in use or last used (FM_A after init) */
@@ -609,7 +700,11 @@ void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n);
  *
  * Every frame the synth renders first goes through the live rule (snd_roles_frame), which gives
  * its voices without a role theirs; an FM turn-on starts the rule afresh, with the synth, and an
- * FM_A <-> FM_B switch starts it afresh alone (method A's slots are not method B's channels). */
+ * FM_A <-> FM_B switch starts it afresh alone (method A's slots are not method B's channels).
+ *
+ * The effects follower reads every frame in every mode; in FM_B with `effects` on it replaces the
+ * delayed beeper where its gate says SND_FX_PLAY, under a gain ramping like the others (fx_g), so
+ * with effects off, and in the other modes once that ramp is down, the output is as without it. */
 void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_edge *e, uint32_t n_edges,
                      uint8_t start_level, const int16_t *beeper, uint32_t n, int16_t *out);
 

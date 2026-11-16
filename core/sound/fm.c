@@ -96,7 +96,8 @@ static const fm_patch patches[4] = {
  * 24, 32, 80 ticks; decay tau 200, 150, 200 ms; index tau 100, 200, 200 ms; release 400, 400,
  * 800 ticks (rel_mul 65536 / ticks) */
 
-static const int16_t sine_q15[256] = {
+/* A cycle of sine, Q15: sine() (sound_internal.h) reads it for this file and fx.c. */
+const int16_t snd_sine_q15[256] = {
 	     0,    804,   1608,   2410,   3212,   4011,   4808,   5602,   6393,   7179,   7962,   8739,
 	  9512,  10278,  11039,  11793,  12539,  13279,  14010,  14732,  15446,  16151,  16846,  17530,
 	 18204,  18868,  19519,  20159,  20787,  21403,  22005,  22594,  23170,  23731,  24279,  24811,
@@ -120,14 +121,6 @@ static const int16_t sine_q15[256] = {
 	-12539, -11793, -11039, -10278,  -9512,  -8739,  -7962,  -7179,  -6393,  -5602,  -4808,  -4011,
 	 -3212,  -2410,  -1608,   -804,
 };
-
-static int32_t sine(uint32_t ph)
-{
-	uint32_t i = ph >> 24;
-	int32_t a = sine_q15[i], b = sine_q15[(i + 1u) & 255u];
-
-	return a + (((b - a) * (int32_t)((ph >> 16) & 255u)) >> 8);
-}
 
 void snd_fm_reset(snd_fm *f)
 {

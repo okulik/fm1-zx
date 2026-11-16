@@ -57,6 +57,10 @@ list(FILTER ZX_SOUND_SOURCES EXCLUDE REGEX "/engines_builtin\\.c$")
 # sound_init.c (the start-up functions, once per game start) runs from flash too: its own library,
 # zx_sound_init, whose archive name the firmware's linker script does not put in SRAM.
 list(FILTER ZX_SOUND_SOURCES EXCLUDE REGEX "/sound_init\\.c$")
+# fx_read.c (the effects follower's reader, once a frame through its read pointer) runs from flash
+# too: its own library, zx_sound_fx, whose archive name the firmware's linker script does not put in
+# SRAM.
+list(FILTER ZX_SOUND_SOURCES EXCLUDE REGEX "/fx_read\\.c$")
 add_library(zx_sound STATIC ${ZX_SOUND_SOURCES})
 target_compile_options(zx_sound PRIVATE -Wall -Wextra -Werror)
 # Method B (engines.c) runs a few reads and one pass over the frame's edges: built for size, as
@@ -70,3 +74,7 @@ target_link_libraries(zx_sound PUBLIC zx_core)
 add_library(zx_sound_init STATIC "${CMAKE_CURRENT_SOURCE_DIR}/sound/sound_init.c")
 target_compile_options(zx_sound_init PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(zx_sound_init PUBLIC zx_sound)
+
+add_library(zx_sound_fx STATIC "${CMAKE_CURRENT_SOURCE_DIR}/sound/fx_read.c")
+target_compile_options(zx_sound_fx PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(zx_sound_fx PUBLIC zx_sound)

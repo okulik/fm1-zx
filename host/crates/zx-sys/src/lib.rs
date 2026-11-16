@@ -590,6 +590,15 @@ pub const SND_MODE_BEEPER: u8 = sys::snd_mode_SND_MODE_BEEPER as u8;
 pub const SND_MODE_FM_A: u8 = sys::snd_mode_SND_MODE_FM_A as u8;
 pub const SND_MODE_FM_B: u8 = sys::snd_mode_SND_MODE_FM_B as u8;
 pub const SND_MODE_COUNT: u8 = sys::snd_mode_SND_MODE_COUNT as u8;
+/// Why the frame the mixer played last did or did not go to the effects follower
+/// ([`SndMixer::fx_gate`]): it did; effects off, a mode other than FM: engines, or FM music; two-voice
+/// music; a busy frame; a sustained irregular run; method B's own frame its check refused.
+pub const SND_FX_PLAY: u8 = sys::snd_fx_gate_SND_FX_PLAY as u8;
+pub const SND_FX_OFF: u8 = sys::snd_fx_gate_SND_FX_OFF as u8;
+pub const SND_FX_TWO_VOICE: u8 = sys::snd_fx_gate_SND_FX_TWO_VOICE as u8;
+pub const SND_FX_BUSY: u8 = sys::snd_fx_gate_SND_FX_BUSY as u8;
+pub const SND_FX_IRREGULAR: u8 = sys::snd_fx_gate_SND_FX_IRREGULAR as u8;
+pub const SND_FX_B_REJECTED: u8 = sys::snd_fx_gate_SND_FX_B_REJECTED as u8;
 pub const SND_STYLE_NONE: u8 = sys::snd_style_SND_STYLE_NONE as u8;
 pub const SND_STYLE_SLOTS: u8 = sys::snd_style_SND_STYLE_SLOTS as u8;
 pub const SND_STYLE_FLIPS: u8 = sys::snd_style_SND_STYLE_FLIPS as u8;
@@ -1184,6 +1193,23 @@ impl SndMixer {
     /// (the one `SND_DELAY_FRAMES` before it), in an FM mode.
     pub fn fm_on(&self) -> bool {
         self.raw.fm_on != 0
+    }
+
+    /// FM: engines re-voices the frames it plays as beeper with the effects follower (on after
+    /// `new`, as on the device).
+    pub fn set_effects(&mut self, on: bool) {
+        self.raw.effects = on as u8;
+    }
+
+    /// The effects follower's gate (`SND_FX_*`) for the frame the last [`SndMixer::frame`]
+    /// played: `SND_FX_OFF` with effects off, in a mode other than FM: engines, or while the
+    /// mixer plays FM music for it.
+    pub fn fx_gate(&self) -> u8 {
+        if self.raw.fm_on != 0 {
+            SND_FX_OFF
+        } else {
+            self.raw.fx.gate
+        }
     }
 
     /// The mixer's live rule: each slot's role (`SND_ROLE_*`) and average pitch ([`SndRoles`]).

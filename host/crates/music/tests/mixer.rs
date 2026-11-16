@@ -375,6 +375,9 @@ fn fnv(s: &[i16]) -> u64 {
 fn mix_live(m: &mut Machine, frames: usize, mode_of: impl Fn(usize) -> u8) -> (Vec<Frame>, Vec<Vec<i16>>) {
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
+    // effects off: these tests pin FM against the delayed beeper (the follower, tests/fx.rs, would
+    // re-voice FM: engines' beeper frames)
+    mixer.set_effects(false);
     let (mut fr, mut out) = (Vec::new(), Vec::new());
     for i in 0..frames {
         m.run_frame();
@@ -453,6 +456,7 @@ fn engines_claim_only_known_engines() {
     let frames = castaway_frames(600);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
     mixer.set_test_engines();
+    mixer.set_effects(false);   // B's claims alone (the follower would re-voice the beeper: tests/fx.rs)
     let out: Vec<i16> =
         frames.iter().flat_map(|f| mixer.frame(SND_MODE_FM_B, None, &f.edges, f.start_level, &f.beeper)).collect();
     assert!(out == delayed_beeper(&frames), "the delayed beeper");

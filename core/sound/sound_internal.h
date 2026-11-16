@@ -18,6 +18,17 @@
 /* An FM voice's stage, and the drum's (fm.c). */
 enum { OFF, ATTACK, DECAY, RELEASE };
 
+/* sin(2 pi ph / 2^32), Q15: the table (fm.c) linearly interpolated with 8 more phase bits (fm.c,
+ * fx.c). */
+extern const int16_t snd_sine_q15[256];
+static inline int32_t sine(uint32_t ph)
+{
+	uint32_t i = ph >> 24;
+	int32_t a = snd_sine_q15[i], b = snd_sine_q15[(i + 1u) & 255u];
+
+	return a + (((b - a) * (int32_t)((ph >> 16) & 255u)) >> 8);
+}
+
 /* n / d by restoring division: no 64-bit divide helper on the device. */
 static inline uint64_t udiv64(uint64_t n, uint32_t d, uint32_t *rem)
 {

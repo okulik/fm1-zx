@@ -33,6 +33,12 @@
  * steady Beeper mode the output is a plain copy and the ring and both methods
  * are still fed.
  *
+ * The effects follower (fx_read.c, fx.c) reads every frame in every mode, so its history is
+ * current at a switch; in FM: engines with effects on, where its gate says PLAY, it replaces the
+ * delayed beeper under a fourth gain, fx_g (the same 4 ms ramps): the delayed path's beeper side
+ * is bd + (fx - bd) * fx_g. It renders only while fx_g is or is heading above 0, so with effects
+ * off (or another mode) the output is exactly what it was without it.
+ *
  * The live rule (roles.c) sees every frame the synth renders, just before it, and gives each
  * voice the method left without a role its role by pitch; it restarts with the synth at a
  * Beeper -> FM switch, so the roles there come from the music after the switch, and on its own at
@@ -74,6 +80,7 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 {
 	snd_frame fa, fb, *fr;
 	int fm_mode, primed;
+	int32_t fx_t;
 	uint32_t i;
 
 	if (n > SND_MAX_FRAME_SAMPLES) {
@@ -87,6 +94,10 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 
 	snd_decoder_frame(&m->dec, e, n_edges, start_level, &fa);
 	snd_b_frame(&m->b, zm, e, n_edges, start_level, &fb);
+	m->fx.read(&m->fx, &m->dec, &m->b, n);
+	if (!m->effects || mode != SND_MODE_FM_B) m->fx.gate = SND_FX_OFF;
+	fx_t = m->fx.gate == SND_FX_PLAY ? ONE : 0;
+	if (!fx_t && !m->fx_g) m->fx.idle = 1;   /* not rendered this frame: its voice restarts afresh */
 	/* the FM mode's method decides (Beeper mode: the last FM mode's, so its fade-out and a
 	 * switch back carry on with it); B's claims are exact, so one is enough to enter FM */
 	if (fm_mode) m->fm_choice = mode;
@@ -141,6 +152,7 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 			for (i = 0; i < n; i++)
 				out[i] = 0;
 		}
+		if (fx_t || m->fx_g) snd_fx_render(&m->fx, m->fx.buf, n);
 		for (i = 0; i < n; i++) {
 			int32_t live = beeper[i], bd = 0, del, o;
 			int popped = 0;
@@ -151,6 +163,8 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 				m->fill--;
 				popped = 1;
 			}
+			m->fx_g = toward(m->fx_g, fx_t, m->step);
+			bd += ((m->fx.buf[i] - bd) * m->fx_g) >> 15;
 			m->fm_g = toward(m->fm_g, m->fm_on ? ONE : 0, m->step);
 			del = bd + (((out[i] - bd) * m->fm_g) >> 15);
 			m->live_g = toward(m->live_g, fm_mode ? 0 : ONE, m->step);

@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 FM-1 ZX contributors */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* The sound library's start-up functions: the mixer's, the decoder's (method A), method B's and
- * the FM synth's. They run once per game start, so on the device they run from flash (XIP): the
- * firmware builds this file as its own library (zx_sound_init), apart from the rest of
- * core/sound in SRAM (RAMTEXT). Code in flash cannot call RAMTEXT directly, so nothing here
+/* The sound library's start-up functions: the mixer's, the decoder's (method A), method B's, the
+ * FM synth's and the effects follower's. They run once per game start, so on the device they run
+ * from flash (XIP): the firmware builds this file as its own library (zx_sound_init), apart from
+ * the rest of core/sound in SRAM (RAMTEXT). Code in flash cannot call RAMTEXT directly, so nothing here
  * calls the other sound files: the helpers it shares with them are static inline, in
  * sound_internal.h. */
 
@@ -87,6 +87,44 @@ void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den)
 	fm_rest(f);
 }
 
+void snd_fx_init(snd_fx *f, uint32_t rate_num, uint32_t rate_den)
+{
+	uint64_t q;
+	uint32_t i;
+
+	if (!rate_num) rate_num = 1;
+	if (!rate_den) rate_den = 1;
+	f->read = snd_fx_read;
+	f->rate_num = rate_num;
+	f->rate_den = rate_den;
+	q = udiv64((uint64_t)3500000u * rate_den << 20, rate_num, 0);
+	f->kstep = q >> 32 ? 0xffffffffu : (uint32_t)q;
+	/* 2 pi x 0.35 x 3.5 MHz / rate, Q16 (144121 = 2 pi x 0.35 x 2^16): x for a mean gap of 1 T */
+	q = udiv64((uint64_t)144121u * 3500000u * rate_den, rate_num, 0);
+	f->kx = q >> 32 ? 0xffffffffu : (uint32_t)q;
+	f->x_lo = (uint32_t)udiv64((uint64_t)411775u * 150u * rate_den, rate_num, 0);    /* 2 pi x 2^16 */
+	f->x_hi = (uint32_t)udiv64((uint64_t)411775u * 8000u * rate_den, rate_num, 0);
+	f->tick_inc = (uint32_t)udiv64((uint64_t)1500u * rate_den << 32, rate_num, 0);
+	f->last = f->stop = f->step = f->irr = 0;
+	for (i = 0; i < SND_FX_HALVES; i++)
+		f->half[i] = 0;
+	f->k = 0;
+	f->n_half = f->have_last = 0;
+	f->sound = SND_FX_SILENT;
+	f->gate = SND_FX_OFF;
+	f->n_ev = 0;
+	f->tick_acc = f->phase = f->cur = f->target = f->tick_ph = f->hold_ph = f->nstep = 0;
+	f->seed = 0x12345678u;
+	f->hold = f->lp = 0;
+	f->env_tone = f->env_noise = f->env_tick = 0;
+	f->amp_tone = f->amp_noise = f->amp_tick = 0;
+	f->lp_k = 0;
+	f->on = SND_FX_SILENT;
+	f->idle = 0;
+	for (i = 0; i < SND_MAX_FRAME_SAMPLES; i++)
+		f->buf[i] = 0;
+}
+
 void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n)
 {
 	uint32_t k;
@@ -155,6 +193,7 @@ void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)
 	snd_b_init(&m->b, snd_engine_table, snd_engine_count);
 	snd_fm_init(&m->fm, rate_num, rate_den);
 	roles_rest(&m->roles);
+	snd_fx_init(&m->fx, rate_num, rate_den);
 	for (i = 0; i < SND_RING_SAMPLES; i++)
 		m->ring[i] = 0;
 	m->rd = 0;
@@ -164,6 +203,8 @@ void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)
 	m->live_g = ONE;
 	m->del_g = 0;
 	m->fm_g = 0;
+	m->fx_g = 0;
+	m->effects = 1;
 	xf = rate_num / rate_den / SND_XFADE_DIV;
 	if (!xf) xf = 1;
 	m->step = (int32_t)((ONE + xf - 1u) / xf);
