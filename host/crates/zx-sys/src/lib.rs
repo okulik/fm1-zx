@@ -582,6 +582,8 @@ pub const SND_WORK_MAX: u32 = sys::SND_WORK_MAX;
 pub const SND_ENTER_FRAMES: u32 = sys::SND_ENTER_FRAMES;
 /// ...and the beeper after this many unconfident ones.
 pub const SND_LEAVE_FRAMES: u32 = sys::SND_LEAVE_FRAMES;
+/// Method B holds an engine through this many silent frames after its last edge (a tune's rests).
+pub const SND_B_HOLD: u32 = sys::SND_B_HOLD;
 /// Crossfades last 1/`SND_XFADE_DIV` s (4 ms).
 pub const SND_XFADE_DIV: u32 = sys::SND_XFADE_DIV;
 pub const SND_MODE_BEEPER: u8 = sys::snd_mode_SND_MODE_BEEPER as u8;

@@ -14,7 +14,7 @@ use music::score::midi_of;
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, hz_of_period_q8, repo, test_sna, Frame, RATE};
 use zx_sys::{
-    zx_edge, Beeper, KeyMapper, MISREAD_BEEP, KmInput, Machine, SndEngines, SndFrame, SndMixer, SndVoice, SND_CHAN_ANY, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_SITE_DRUM,
+    zx_edge, Beeper, KeyMapper, MISREAD_BEEP, KmInput, Machine, SndEngines, SndFrame, SndMixer, SndVoice, SND_B_HOLD, SND_CHAN_ANY, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_SITE_DRUM,
     SND_SITE_STOP, SND_SITE_TONAL,
 };
 
@@ -588,7 +588,7 @@ fn parse_demo(s: &str) -> Vec<Step> {
 /// Game `id` of `games/games.toml` under its demo (keys `delay_ms` later, the steps `extra`
 /// added) for `frames` frames, with B (the firmware's table) fed: B's decisions, whether the
 /// game's music engine runs at each frame's end (`truth.rs`) and the frames with speaker edges.
-fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>, Vec<bool>, usize) {
+fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>, Vec<bool>, Vec<bool>) {
     let dir = repo().join("games");
     let manifest = parse_manifest(&std::fs::read_to_string(dir.join("games.toml")).expect("games.toml")).expect("parses");
     let game = manifest.game.iter().find(|g| g.id == id).unwrap_or_else(|| panic!("no game {id}"));
@@ -607,7 +607,7 @@ fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>
     let engine = Engine::of_file(&game.file);
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let mut b = SndEngines::new();
-    let (mut dec, mut eng, mut sound) = (Vec::new(), Vec::new(), 0);
+    let (mut dec, mut eng, mut sound) = (Vec::new(), Vec::new(), Vec::new());
     let mut level = 0;
     for k in 0..frames {
         let ms = (k as u64 * 20).wrapping_sub(delay_ms);
@@ -622,7 +622,7 @@ fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>
         let f = capture(&mut m, &mut beeper, 1).pop().unwrap();
         dec.push(b.frame(&m, &f.edges, f.start_level));
         eng.push(engine.is_some_and(|e| e.read(&m).is_some()));
-        sound += usize::from(!f.edges.is_empty());
+        sound.push(!f.edges.is_empty());
         level = f.edges.last().map_or(f.start_level, |e| e.level);
     }
     for _ in 0..SND_DELAY_FRAMES {
@@ -632,11 +632,14 @@ fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>
     (dec, eng, sound)
 }
 
-/// Confident decisions of `dec` outside the music `eng` marks (its frames, the hold after them
-/// and the frame before).
-fn outside_music(dec: &[SndFrame], eng: &[bool]) -> Vec<usize> {
-    let music = |i: usize| (i.saturating_sub(7)..=(i + 1).min(eng.len() - 1)).any(|j| eng[j]);
-    (0..dec.len()).filter(|&i| dec[i].confident != 0 && !music(i)).collect()
+/// Confident decisions of `dec` outside the music `eng` marks: a frame with edges (`sound`) away
+/// from the music's frames (more than 7 after, or before the frame before), or a silent one past
+/// the hold after them (SND_B_HOLD frames: a tune's rests are the tune's).
+fn outside_music(dec: &[SndFrame], eng: &[bool], sound: &[bool]) -> Vec<usize> {
+    let near = |i: usize, after: usize| (i.saturating_sub(after)..=(i + 1).min(eng.len() - 1)).any(|j| eng[j]);
+    (0..dec.len())
+        .filter(|&i| dec[i].confident != 0 && !near(i, if sound[i] { 7 } else { SND_B_HOLD as usize + 1 }))
+        .collect()
 }
 
 #[test]
@@ -654,7 +657,8 @@ fn effects_not_b() {
     for (id, frames, delay, extra) in runs {
         let (dec, eng, sound) = demo_b(id, frames, delay, extra);
         let claimed = dec.iter().filter(|d| d.confident != 0).count();
-        let out = outside_music(&dec, &eng);
+        let out = outside_music(&dec, &eng, &sound);
+        let sound = sound.iter().filter(|&&s| s).count();
         println!("{id}: {sound} frames with edges, {} with the engine running, B claims {claimed}, outside the music {out:?}", eng.iter().filter(|&&e| e).count());
         if !out.is_empty() {
             bad.push(format!("{id}: {out:?}"));

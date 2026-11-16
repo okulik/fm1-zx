@@ -183,6 +183,56 @@ fn learned_entry_moves_with_code() {
     assert_eq!(n, 0, "a signature byte changed: {n} frames claimed");
 }
 
+/// `burst_sna` at 8000h with its melody replaced: each of `notes` one burst of 6 edges, then a
+/// rest, a note every `frames` frames (at most 24: the gap loop's count is 16 bits).
+fn burst_spaced(notes: &[u8], frames: u32) -> Machine {
+    let mut sna = burst_sna(0x8000);
+    let table = 27 + (0x8000 + 0x2C - 0x4000);
+    let mut t = Vec::new();
+    for &n in notes {
+        let half = 13 * u32::from(n) + 54;
+        t.push(n);
+        t.extend_from_slice(&6u16.to_le_bytes());
+        t.extend_from_slice(&(((frames * 69_888 - 98 - 6 * half) / 26) as u16).to_le_bytes());
+    }
+    t.push(0);
+    sna[table..table + t.len()].copy_from_slice(&t);
+    let mut m = Machine::new();
+    m.load_sna(&sna).expect("loads");
+    m
+}
+
+#[test]
+fn rests_stay_fm() {
+    // a tune whose notes are short bursts with rests of 20 frames (400 ms) between them, and a
+    // stray speaker edge from other code (a ROM address) in the middle of some rests: FM: engines
+    // plays FM throughout. The engine holds through its rests, and a lone frame of other code's
+    // does not end the hold (the mixer passes over one unconfident frame), so the beeper never
+    // takes the rests and the stray edge is not played
+    let mut m = burst_spaced(&[200, 168, 124, 168], 20);
+    let mut mixer = SndMixer::new(RATE.0, RATE.1);
+    mixer.set_learned(&encode_list(&[burst_entry()])).expect("decodes");
+    let mut beeper = Beeper::new(RATE.0, RATE.1);
+    let (mut beeper_frames, mut strays) = (Vec::new(), 0);
+    for k in 0..400usize {
+        m.run_frame();
+        let mut edges = m.edges().to_vec();
+        if edges.is_empty() && k % 40 == 30 {
+            let level = m.edges_start_level() ^ 2;
+            edges.push(zx_sys::zx_edge { tstate: 30_000, level, pc: 0x0D6B });
+            strays += 1;
+        }
+        beeper.set_level(m.edges_start_level());
+        let samples = beeper.render(&edges);
+        mixer.frame(SND_MODE_FM_B, Some(&m), &edges, m.edges_start_level(), &samples);
+        if k >= 30 && !mixer.fm_on() {
+            beeper_frames.push(k);
+        }
+    }
+    assert!(strays >= 5, "{strays} stray edges");
+    assert!(beeper_frames.is_empty(), "{} beeper frames, first at {:?}", beeper_frames.len(), &beeper_frames[..beeper_frames.len().min(8)]);
+}
+
 #[test]
 fn mixer_plays_learned_entries() {
     // frames the mixer plays FM for in FM: engines, on burst_sna, with the built-in table and then

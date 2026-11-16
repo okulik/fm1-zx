@@ -23,7 +23,8 @@
  * next frame is the engine's and passes), the drum on at its first edge and off after its last, an
  * engine that stops (no edge of its own for longer than twice its longest period) releasing its
  * voices half a period after its last edge, and up to SND_B_HOLD silent frames after an engine's
- * last edge claimed as its silence (the voices ring out on their envelopes).
+ * last edge claimed as its silence (the voices ring out on their envelopes; a tune's rests stay
+ * the tune's, and other code's edges within them do not end the hold).
  *
  * An entry whose notes are calls of a routine (min_len: ROM BEEP) is checked its own way
  * (observe_calls); one whose channels each flip the speaker (flips: Cave Runner, Unison) has its
@@ -1002,9 +1003,18 @@ static void decide(snd_b *b, snd_frame *out)
 	out->n_ev = 0;
 	if (!conf) {
 		silence(b);
-		/* a hold may follow the engine's own edges after the other code's */
-		b->engine = r->kind == SND_B_FOREIGN && r->last_mine ? r->entry : 0;
-		b->held = 0;
+		/* a hold may follow the engine's own edges after the other code's; other code's edges
+		 * within the engine's hold (a stray edge in a rest) leave the hold running: the mixer
+		 * passes over a lone unconfident frame, so the rest stays FM */
+		if (r->kind == SND_B_FOREIGN && r->last_mine) {
+			b->engine = r->entry;
+			b->held = 0;
+		} else if (r->kind == SND_B_FOREIGN && b->engine && b->held < SND_B_HOLD) {
+			b->held++;
+		} else {
+			b->engine = 0;
+			b->held = 0;
+		}
 		for (k = 0; k < SND_TONAL; k++)
 			out->tone[k] = r->v[k];
 		out->drum = 0;

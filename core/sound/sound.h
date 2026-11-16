@@ -467,7 +467,7 @@ void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, u
 
 #define SND_B_MATCHES 8u      /* anchors remembered */
 #define SND_B_UNKNOWN 8u      /* OUT addresses remembered as matching no entry */
-#define SND_B_HOLD 6u         /* frames an engine holds after its last edge (120 ms) */
+#define SND_B_HOLD 50u        /* frames an engine holds after its last edge (1 s: a tune's rests) */
 
 typedef struct {          /* a remembered match */
 	uint16_t anchor;

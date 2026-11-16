@@ -54,11 +54,12 @@ fn decisions(mut m: Machine) -> (u64, u64) {
 }
 
 /// Method A's and B's decisions on the corpus fixtures, as they were before the instruments
-/// (measured at 98dbd51, whose sound is main's, by printing `decisions` for each fixture).
+/// (measured at 98dbd51, whose sound is main's, by printing `decisions` for each fixture); B's
+/// re-measured when its hold took in a tune's rests (SND_B_HOLD 50: it claims more silent frames).
 const DECISIONS_BEFORE: [(&str, u64, u64); 3] = [
     ("tune.sna", 0x537823d177f40da8, 0xb7c0ca46af747ae5),
-    ("castaway", 0x462b732f90e30155, 0xf55a0e69fd609f6c),
-    ("colony8", 0x18ef71ee8b3c8163, 0x479ed130dcdc9c3b),
+    ("castaway", 0x462b732f90e30155, 0x33a0f4f49c6d1206),
+    ("colony8", 0x18ef71ee8b3c8163, 0xf12658e790d0d393),
 ];
 
 #[test]
@@ -103,14 +104,15 @@ fn loudness(s: &[i16]) -> (usize, i32, f64, usize) {
 
 /// The FM output's loudness per fixture and mode before the instruments: (fixture, mode,
 /// samples played as FM, peak, RMS, samples at full scale), measured at 98dbd51 (main's sound)
-/// with `fm_output` and `loudness` as they are here.
+/// with `fm_output` and `loudness` as they are here; FM: engines' sample counts re-measured when
+/// B's hold took in a tune's rests (more silent frames play as FM; peak and RMS as measured then).
 const LOUDNESS_BEFORE: [(&str, u8, usize, i32, f64, usize); 6] = [
     ("tune.sna", SND_MODE_FM_A, 1294983, 6056, 2441.7, 0),
     ("tune.sna", SND_MODE_FM_B, 0, 0, 0.0, 0), // no engine entry knows tune.sna's loop
     ("castaway", SND_MODE_FM_A, 1166366, 10671, 2784.4, 0),
-    ("castaway", SND_MODE_FM_B, 1147865, 12500, 3568.8, 0),
+    ("castaway", SND_MODE_FM_B, 1175175, 12500, 3568.8, 0),
     ("colony8", SND_MODE_FM_A, 1183103, 13362, 2209.9, 0),
-    ("colony8", SND_MODE_FM_B, 1139055, 16979, 2950.9, 0),
+    ("colony8", SND_MODE_FM_B, 1195437, 16979, 2950.9, 0),
 ];
 
 fn db(a: f64, b: f64) -> f64 {
@@ -127,7 +129,7 @@ fn loudness_matches_today() {
             let (want_name, want_mode, want_n, want_peak, want_rms, want_full) = LOUDNESS_BEFORE[i];
             i += 1;
             assert_eq!((name, mode), (want_name, want_mode));
-            // the same frames play as FM (the decisions and the hysteresis are unchanged)
+            // the same frames play as FM
             assert_eq!(n, want_n, "{name} mode {mode}: samples played as FM");
             if n == 0 {
                 continue;
