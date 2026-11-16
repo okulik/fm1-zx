@@ -978,6 +978,10 @@ static void decide(snd_b *b, snd_frame *out)
 	out->style = SND_STYLE_ENGINE;
 	out->confident = 1;
 	out->engine = b->engine;
+	/* the claiming entry's stored roles (SND_ROLE_AUTO past its channels): the live rule fills
+	 * the voices left AUTO */
+	for (k = 0; k < SND_TONAL; k++)
+		out->role[k] = b->table[b->engine - 1u].role[k];
 }
 
 void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out)

@@ -28,6 +28,9 @@
  * (the interpreter with no machine: every op and operand checked, every read 0, nothing silent)
  * before an entry is used.
  *
+ * Besides learned entries (kind 0), a list may hold kind-1 records: stored roles for a built-in
+ * entry, by its digest, which snd_learned_roles copies into the firmware's assembled table.
+ *
  * Built into flash, not SRAM, on the device (the reader runs only for frames a learned entry
  * claims). uint32_t arithmetic only (no 64-bit division). */
 
@@ -36,6 +39,7 @@
 #define PROG_DEPTH 8u
 #define HEAD 4u       /* the list's header: count, 0, 0 (u16) */
 #define ENTRY 36u     /* an entry's fixed part */
+#define ROLES 16u     /* a kind-1 record (roles for a built-in entry), padded */
 #define REGS 18u      /* register numbers 0-17 */
 
 static uint32_t rd16(const uint8_t *p)
@@ -244,6 +248,7 @@ static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ex
 		x->prog[c] = c < channels ? e + at : 0;
 		x->prog_len[c] = e[32 + c];
 		x->level[c] = c < channels ? e[26 + c] : 0;
+		en->role[c] = c < channels && e[29 + c] <= SND_ROLE_PAD ? e[29 + c] : SND_ROLE_AUTO;
 		if (c < channels && !valid(e + at, e[32 + c])) return 0;
 		at += e[32 + c];
 	}
@@ -271,24 +276,65 @@ static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ex
 	return 1;
 }
 
+/* The size of the list's entry at list + off, checked (within the list, a multiple of 4, at least
+ * its kind's fixed part: ENTRY for kind 0, ROLES for kind 1), its kind in *kind; 0 if not valid. */
+static uint32_t entry_size(const uint8_t *list, uint32_t avail, uint32_t off, uint32_t *kind)
+{
+	uint32_t size;
+
+	if (avail - off < 4u) return 0;
+	size = rd16(list + off);
+	*kind = list[off + 2];
+	if (*kind > 1u || size < (*kind ? ROLES : ENTRY) || size % 4u || size > avail - off) return 0;
+	return size;
+}
+
 int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_learned_ext *ext, uint32_t max, uint32_t *n)
 {
-	uint32_t count, k, off = HEAD, work = 0;
+	uint32_t count, k, off = HEAD, work = 0, kind, size, m = 0;
 
 	*n = 0;
 	if (avail < HEAD || ((uintptr_t)list & 3u)) return ZX_ERR_FORMAT;
 	count = list[0];
 	if (count > SND_LEARNED_MAX || count > max) return ZX_ERR_FORMAT;
 	for (k = 0; k < count; k++) {
-		uint32_t size;
-		if (avail - off < ENTRY) return ZX_ERR_FORMAT;
-		size = rd16(list + off);
-		if (size < ENTRY || size % 4u || size > avail - off) return ZX_ERR_FORMAT;
-		if (!entry(list + off, size, &en[k], &ext[k])) return ZX_ERR_FORMAT;
-		work += (uint32_t)en[k].n_sites * en[k].len;   /* at most 16 x 512 an entry */
-		if (work > SND_LEARNED_WORK_MAX) return ZX_ERR_FORMAT;
+		size = entry_size(list, avail, off, &kind);
+		if (!size) return ZX_ERR_FORMAT;
+		if (kind) {   /* roles for a built-in entry: no engine, no work */
+			if (list[off + 3] < 1u || list[off + 3] > SND_TONAL) return ZX_ERR_FORMAT;
+		} else {
+			if (!entry(list + off, size, &en[m], &ext[m])) return ZX_ERR_FORMAT;
+			work += (uint32_t)en[m].n_sites * en[m].len;   /* at most 16 x 512 an entry */
+			if (work > SND_LEARNED_WORK_MAX) return ZX_ERR_FORMAT;
+			m++;
+		}
 		off += size;
 	}
-	*n = count;
+	*n = m;
 	return ZX_OK;
+}
+
+void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, uint32_t n)
+{
+	uint32_t count, k, j, c, off = HEAD, kind, size;
+
+	if (avail < HEAD) return;
+	count = list[0];
+	for (k = 0; k < count; k++) {
+		size = entry_size(list, avail, off, &kind);
+		if (!size) return;
+		if (kind) {
+			const uint8_t *e = list + off;
+			uint64_t digest = 0;
+			for (c = 8; c-- > 0;)
+				digest = digest << 8 | e[4 + c];
+			for (j = 0; j < n; j++) {
+				snd_engine *en = &table[j];
+				if (en->read == snd_learned_read || en->digest != digest) continue;
+				for (c = 0; c < SND_TONAL; c++)
+					en->role[c] = c < e[3] && c < en->channels && e[12 + c] <= SND_ROLE_PAD ? e[12 + c] : SND_ROLE_AUTO;
+			}
+		}
+		off += size;
+	}
 }

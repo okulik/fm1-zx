@@ -4,12 +4,17 @@
 //! Learned entries (`core/sound/learned.c`) in method B: the "Test burst" entry of
 //! `core/sound/engines_test.c` re-expressed as data decides every frame of `burst_sna` as the
 //! built-in reader does, the learned entry follows its code to another address but not into
-//! changed code, and the mixer plays FM: engines from learned entries.
+//! changed code, and the mixer plays FM: engines from learned entries. Stored roles: a learned
+//! entry's `instrument` bytes and a kind-1 record (roles for a built-in entry) give B's claimed
+//! frames their channels' roles; the live rule fills the rest.
 
-use fmzx_pack::testprogs::burst_sna;
+use fmzx_pack::testprogs::{beep_tap, burst_sna};
 use soundlearn::{encode_list, LearnedEntry, Op};
-use music::RATE;
-use zx_sys::{Beeper, Machine, SndEngines, SndFrame, SndMixer, SND_MODE_FM_B, SND_SITE_TONAL};
+use music::{colony8, RATE};
+use zx_sys::{
+    Beeper, Machine, SndEngines, SndFrame, SndMixer, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD,
+    SND_SITE_TONAL,
+};
 
 /// The "Test burst" entry as data: period 2 (13n + 54) x 256 from the operand n at +13h, silent
 /// for n = 0, as `read_burst`.
@@ -154,4 +159,247 @@ fn mixer_plays_learned_entries() {
     let n = fm_frames(&mut mixer);
     println!("FM for {n} of 200 frames");
     assert!(n >= 150, "FM for {n} of 200 frames");
+}
+
+// ---- stored roles ---------------------------------------------------------------------------
+
+const A: u8 = SND_ROLE_AUTO;
+const B: u8 = SND_ROLE_BASS;
+const L: u8 = SND_ROLE_LEAD;
+const P: u8 = SND_ROLE_PAD;
+
+/// The burst entry with `channels` channels, the others' programs and levels copies of channel
+/// 0's (decodes; only the decoder sees it).
+fn burst_channels(channels: usize) -> LearnedEntry {
+    let mut e = burst_entry();
+    e.level = vec![200; channels];
+    e.pos = vec![0; channels];
+    e.progs = vec![e.progs[0].clone(); channels];
+    e
+}
+
+/// The stored roles of the last entry of the table `list` makes.
+fn decoded_roles(list: &[u8]) -> [u8; 3] {
+    SndEngines::with_learned(list).expect("decodes").entries().last().unwrap().role
+}
+
+/// `list` (an entry list) with entry `index`'s `instrument` bytes set.
+fn with_instruments(mut list: Vec<u8>, index: usize, instrument: [u8; 3]) -> Vec<u8> {
+    let mut off = 4;
+    for _ in 0..index {
+        off += usize::from(u16::from_le_bytes([list[off], list[off + 1]]));
+    }
+    list[off + 29..off + 32].copy_from_slice(&instrument);
+    list
+}
+
+/// A kind-1 record: roles for the built-in entry `digest` (16 bytes).
+fn kind1(digest: u64, channels: u8, role: [u8; 3]) -> Vec<u8> {
+    let mut b = vec![16, 0, 1, channels];
+    b.extend(digest.to_le_bytes());
+    b.extend(role);
+    b.push(0);
+    b
+}
+
+/// An entry list of already encoded entries and records.
+fn list_of(parts: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = vec![parts.len() as u8, 0, 0, 0];
+    for p in parts {
+        b.extend(p);
+    }
+    b
+}
+
+/// The encoded entries of `list` (without its 4-byte head).
+fn body(list: &[u8]) -> Vec<u8> {
+    list[4..].to_vec()
+}
+
+/// The roles of B's claimed (confident) frames, each different set once, in order; and checks
+/// that every unclaimed frame carries none (all AUTO).
+fn claimed_roles(d: &[SndFrame]) -> Vec<[u8; 3]> {
+    let mut seen: Vec<[u8; 3]> = Vec::new();
+    for (i, f) in d.iter().enumerate() {
+        if f.confident == 0 {
+            assert_eq!(f.role, [A; 3], "unclaimed frame {i} carries roles");
+        } else if seen.last() != Some(&f.role) {
+            seen.push(f.role);
+        }
+    }
+    seen
+}
+
+#[test]
+fn instrument_bytes_become_roles() {
+    // the decoder: instrument[c] is channel c's role, and a channel the entry lacks has none
+    assert_eq!(decoded_roles(&with_instruments(encode_list(&[burst_channels(3)]), 0, [1, 2, 0])), [B, L, A]);
+    assert_eq!(decoded_roles(&with_instruments(encode_list(&[burst_channels(3)]), 0, [3, 3, 2])), [P, P, L]);
+    assert_eq!(decoded_roles(&with_instruments(encode_list(&[burst_channels(2)]), 0, [3, 1, 2])), [P, B, A]);
+    assert_eq!(decoded_roles(&encode_list(&[burst_channels(3)])), [A; 3]);
+    let two = encode_list(&[burst_entry(), burst_channels(2)]);
+    assert_eq!(decoded_roles(&with_instruments(two, 1, [2, 1, 1])), [L, B, A], "the second entry's bytes");
+    for e in SndEngines::new().entries() {
+        assert_eq!(e.role, [A; 3], "{}: a built-in entry has no stored role", e.name);
+    }
+
+    // B: the frames the entry claims carry its roles, its unclaimed ones none (one channel:
+    // instrument [1, 2, 0] gives channel 0 the bass)
+    let list = with_instruments(encode_list(&[burst_entry()]), 0, [1, 2, 0]);
+    let roled = decisions(burst(0x8000), SndEngines::with_learned(&list).expect("decodes"), 300);
+    assert!(claimed(&roled) >= 50, "{} frames claimed", claimed(&roled));
+    assert_eq!(claimed_roles(&roled), [[B, A, A]], "instrument [1, 2, 0]");
+    let list = with_instruments(encode_list(&[burst_entry()]), 0, [2, 0, 0]);
+    assert_eq!(claimed_roles(&decisions(burst(0x8000), SndEngines::with_learned(&list).unwrap(), 300)), [[L, A, A]]);
+
+    // the roles change no decision: the frames are those of the entry without them
+    let plain = decisions(burst(0x8000), SndEngines::with_learned(&encode_list(&[burst_entry()])).unwrap(), 300);
+    assert_eq!(claimed_roles(&plain), [[A; 3]]);
+    for (i, (a, b)) in plain.iter().zip(&roled).enumerate() {
+        assert_eq!((a.confident, a.tone, a.drum, a.engine, a.events()), (b.confident, b.tone, b.drum, b.engine, b.events()), "decision {i}");
+    }
+}
+
+#[test]
+fn instrument_above_3_is_auto() {
+    for bad in [4, 5, 0x80, 0xFF] {
+        assert_eq!(decoded_roles(&with_instruments(encode_list(&[burst_channels(3)]), 0, [bad, 1, bad])), [A, B, A], "instrument [{bad}, 1, {bad}]");
+        let list = with_instruments(encode_list(&[burst_entry()]), 0, [bad, 0, 0]);
+        let d = decisions(burst(0x8000), SndEngines::with_learned(&list).expect("decodes"), 300);
+        assert!(claimed(&d) >= 50);
+        assert_eq!(claimed_roles(&d), [[A; 3]], "instrument [{bad}, 0, 0]");
+    }
+}
+
+/// The ROM BEEP entry's digest (the built-in table's).
+fn rom_beep_digest() -> u64 {
+    SndEngines::new().entries().into_iter().find(|e| e.name == "ROM BEEP").expect("ROM BEEP").digest
+}
+
+/// B's decisions about 300 frames of `beep_tap()` (its melody is played by the ROM's BEEP).
+fn beep_decisions(b: SndEngines) -> Vec<SndFrame> {
+    let mut m = Machine::new();
+    m.tape_insert(&beep_tap()).expect("inserts");
+    m.tape_autostart();
+    decisions(m, b, 300)
+}
+
+#[test]
+fn kind1_sets_builtin_roles() {
+    // a list of one kind-1 record and no learned entry: the built-in ROM BEEP plays bass
+    let list = list_of(&[kind1(rom_beep_digest(), 1, [1, 0, 0])]);
+    let d = beep_decisions(SndEngines::with_learned(&list).expect("decodes"));
+    let n = claimed(&d);
+    println!("{n} frames claimed by ROM BEEP");
+    assert!(n >= 20, "{n} frames claimed");
+    assert_eq!(claimed_roles(&d), [[B, A, A]]);
+    // the same frames as without it
+    let plain = beep_decisions(SndEngines::new());
+    assert_eq!(claimed_roles(&plain), [[A; 3]]);
+    for (i, (a, b)) in plain.iter().zip(&d).enumerate() {
+        assert_eq!((a.confident, a.tone, a.engine, a.events()), (b.confident, b.tone, b.engine, b.events()), "decision {i}");
+    }
+
+    // beside a learned entry, a role above 3 or for a channel ROM BEEP lacks is none, and the
+    // last record for a digest wins
+    let list = list_of(&[kind1(rom_beep_digest(), 1, [2, 0, 0]), body(&encode_list(&[burst_entry()])), kind1(rom_beep_digest(), 3, [3, 1, 1])]);
+    assert_eq!(claimed_roles(&beep_decisions(SndEngines::with_learned(&list).unwrap())), [[P, A, A]]);
+    let list = list_of(&[kind1(rom_beep_digest(), 1, [9, 0, 0])]);
+    assert_eq!(claimed_roles(&beep_decisions(SndEngines::with_learned(&list).unwrap())), [[A; 3]]);
+}
+
+#[test]
+fn kind1_unknown_digest_ignored() {
+    // a digest no entry has; the learned burst entry's own digest (a kind-1 record is for
+    // built-in entries only): both decode and change nothing
+    let entry = encode_list(&[burst_entry()]);
+    for digest in [0x0123_4567_89ab_cdef, burst_entry().digest] {
+        let list = list_of(&[body(&entry), kind1(digest, 1, [1, 1, 1])]);
+        let d = decisions(burst(0x8000), SndEngines::with_learned(&list).expect("decodes"), 300);
+        assert!(claimed(&d) >= 50);
+        assert_eq!(claimed_roles(&d), [[A; 3]], "digest {digest:016x}");
+    }
+    let list = list_of(&[kind1(0x0123_4567_89ab_cdef, 1, [1, 0, 0])]);
+    assert_eq!(claimed_roles(&beep_decisions(SndEngines::with_learned(&list).expect("decodes"))), [[A; 3]]);
+}
+
+#[test]
+fn kind1_counts_towards_bounds() {
+    let entry = body(&encode_list(&[burst_entry()]));
+    let rec = kind1(rom_beep_digest(), 1, [1, 0, 0]);
+    // 8 entries, 7 of them kind-1: accepted; 9: refused, as a list of 9 entries is
+    let mut parts = vec![entry.clone()];
+    parts.extend(std::iter::repeat_n(rec.clone(), 7));
+    assert!(SndEngines::with_learned(&list_of(&parts)).is_ok(), "8 entries");
+    parts.push(rec.clone());
+    assert!(SndEngines::with_learned(&list_of(&parts)).is_err(), "9 entries");
+    assert!(SndEngines::with_learned(&list_of(&vec![rec.clone(); 9])).is_err(), "9 kind-1 records");
+    let mut m = SndMixer::new(RATE.0, RATE.1);
+    assert!(m.set_learned(&list_of(&vec![rec.clone(); 9])).is_err(), "the mixer: 9 kind-1 records");
+
+    // a kind-1 record is size-checked like an entry
+    let bad = |f: &dyn Fn(&mut Vec<u8>)| {
+        let mut r = rec.clone();
+        f(&mut r);
+        list_of(&[entry.clone(), r])
+    };
+    assert!(SndEngines::with_learned(&bad(&|_| {})).is_ok(), "the record as it is");
+    assert!(SndEngines::with_learned(&bad(&|r| r.extend([0; 4]))).is_ok(), "bytes after the last entry are ignored");
+    assert!(SndEngines::with_learned(&bad(&|r| {
+        r[0] = 20;
+        r.extend([0; 4]);
+    }))
+    .is_ok(), "size 20");
+    assert!(SndEngines::with_learned(&bad(&|r| r[0] = 12)).is_err(), "size 12");
+    assert!(SndEngines::with_learned(&bad(&|r| r[0] = 18)).is_err(), "size 18 (not a multiple of 4)");
+    assert!(SndEngines::with_learned(&bad(&|r| r[0] = 20)).is_err(), "size 20 past the list");
+    assert!(SndEngines::with_learned(&bad(&|r| r.truncate(12))).is_err(), "the record cut short");
+    assert!(SndEngines::with_learned(&bad(&|r| r[3] = 0)).is_err(), "0 channels");
+    assert!(SndEngines::with_learned(&bad(&|r| r[3] = 4)).is_err(), "4 channels");
+    assert!(SndEngines::with_learned(&bad(&|r| r[2] = 2)).is_err(), "kind 2");
+}
+
+/// Colony 8's built-in entry's digest.
+fn colony8_digest() -> u64 {
+    SndEngines::new().entries().into_iter().find(|e| e.name == "Colony 8").expect("Colony 8").digest
+}
+
+#[test]
+fn partial_stored_roles_fall_back() {
+    // Colony 8 (the built-in entry, three channels) with a kind-1 record giving channel 1 the pad
+    // and channels 0 and 2 none
+    let frames = 30 * 50;
+    let list = list_of(&[kind1(colony8_digest(), 3, [0, 3, 0])]);
+
+    // B: its claimed frames carry the stored roles, its unclaimed ones none
+    let d = decisions(colony8(), SndEngines::with_learned(&list).expect("decodes"), frames);
+    println!("{} of {frames} frames claimed", claimed(&d));
+    assert_eq!(claimed_roles(&d), [[A, P, A]]);
+
+    // the mixer: the synth's voice 1 plays the pad whenever it sounds; voices 0 and 2 take the
+    // live rule's roles among the voices without one (voice 0 alone: the lead; from channel 2's
+    // entry at about 11 s, the lower of the two, voice 0, the bass and voice 2 the lead), and
+    // the live rule tracks every voice, voice 1 included
+    let mut m = colony8();
+    let mut beeper = Beeper::new(RATE.0, RATE.1);
+    let mut mixer = SndMixer::new(RATE.0, RATE.1);
+    mixer.set_learned(&list).expect("decodes");
+    let mut seen: Vec<[u8; 3]> = Vec::new();
+    for _ in 0..frames {
+        m.run_frame();
+        beeper.set_level(m.edges_start_level());
+        let samples = beeper.render(m.edges());
+        mixer.frame(SND_MODE_FM_B, Some(&m), m.edges(), m.edges_start_level(), &samples);
+        let v: [u8; 3] = std::array::from_fn(|k| mixer.voice_role(k));
+        if mixer.fm_on() && seen.last() != Some(&v) {
+            seen.push(v);
+        }
+    }
+    println!("the synth's roles: {seen:?}");
+    // (a voice that has not played yet shows the synth's start-up role, the lead)
+    let first = seen.iter().position(|v| v[1] == P).expect("voice 1 plays the pad");
+    assert!(seen[first..].iter().all(|v| v[1] == P), "voice 1 the pad from its first note on");
+    assert!(seen.iter().any(|v| v[0] == L && v[1] == P), "voice 0 alone without a role: the lead");
+    assert_eq!(seen.last(), Some(&[B, P, L]), "at the end");
+    assert!(mixer.roles().1.iter().all(|&a| a != -(1 << 30)), "every voice tracked (SND_ROLES_NONE: never heard)");
 }

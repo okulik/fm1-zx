@@ -888,6 +888,10 @@ impl Learned {
         // SAFETY: the built-in table is a 'static C array of at least `count` entries.
         let mut table: Vec<sys::snd_engine> = unsafe { std::slice::from_raw_parts(builtin, count) }.to_vec();
         table.extend_from_slice(&en[..n as usize]);
+        // the list's kind-1 records: stored roles for the built-in entries (as the firmware's
+        // learned_start does, whether or not the list holds learned entries)
+        // SAFETY: `words` holds the list the decoder accepted; `table` holds table.len() entries.
+        unsafe { sys::snd_learned_roles(words.as_ptr().cast(), list.len() as u32, table.as_mut_ptr(), table.len() as u32) };
         Ok(Learned { table: table.into_boxed_slice(), _ext: ext, _list: words })
     }
 }
@@ -996,7 +1000,7 @@ impl SndEngines {
                     let en = &*self.raw.table.add(i);
                     let sites = (0..en.n_sites as usize).map(|s| *en.sites.add(s)).map(|s| SndEngineSite { off: s.off, role: s.role, chan: s.chan }).collect();
                     let pos = if en.pass != 0 { (0..en.channels as usize).map(|c| *en.pos.add(c)).collect() } else { Vec::new() };
-                    SndEngineEntry { name: self.name(i as u8 + 1), digest: en.digest, len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, sites, pos }
+                    SndEngineEntry { name: self.name(i as u8 + 1), digest: en.digest, len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, sites, pos, role: en.role }
                 }
             })
             .collect()
@@ -1065,6 +1069,9 @@ pub struct SndEngineEntry {
     pub sites: Vec<SndEngineSite>,
     /// Per channel, its OUT's T-state in a pass (only for an entry with a pass).
     pub pos: Vec<u16>,
+    /// Each channel's stored role (`SND_ROLE_*`; `SND_ROLE_AUTO`: none, and for every channel
+    /// past `channels`), which method B gives the frames this entry claims.
+    pub role: [u8; SND_TONAL],
 }
 
 pub const SND_SITE_TONAL: u8 = sys::snd_site_role_SND_SITE_TONAL as u8;

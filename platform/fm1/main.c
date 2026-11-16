@@ -326,7 +326,7 @@ static void RAMTEXT game_release(void)
 
 /* The RAMTEXT code XIP calls (ramcalls.h). */
 struct ram_calls fmzx_ram = {
-    zx_init, zx_load_sna, zx_load_z80, zx_tape_insert, zx_tape_autostart, zx_beeper_init,
+    zx_init, zx_load_sna, zx_load_z80, zx_tape_insert, zx_tape_autostart,
     pix_compose_zx, zx_screen_line, zx_border_line, game_step, game_release, lcd_pump_ram,
     zx_peek, zx_get_regs,
 };
@@ -364,17 +364,19 @@ static uint16_t gain_q10(uint32_t master)
 }
 
 /* Game `index`'s learned entries, if its pack has any, after the built-in ones in method B's table
- * (the mixer just initialised). No list, or a bad one, leaves the built-in table. */
+ * (the mixer just initialised), and the stored roles of its kind-1 records on the built-in ones:
+ * the table is assembled whenever the list decodes, even with no learned entry. No list, or a bad
+ * one, leaves the built-in table. */
 static void learned_start(uint32_t index)
 {
     const uint8_t *list;
     uint32_t len, n, i;
     if (pack_sound_at(pack_base, index, &list, &len) != ZX_OK || len == 0 ||
-        snd_learned_decode(list, len, learned_table + snd_engine_count, learned_ext, SND_LEARNED_MAX, &n) != ZX_OK ||
-        n == 0)
+        snd_learned_decode(list, len, learned_table + snd_engine_count, learned_ext, SND_LEARNED_MAX, &n) != ZX_OK)
         return;
     for (i = 0; i < snd_engine_count; i++)
         learned_table[i] = snd_engine_table[i];
+    snd_learned_roles(list, len, learned_table, snd_engine_count + n);
     snd_mixer_set_engines(&mixer, learned_table, snd_engine_count + n);
 }
 
@@ -407,7 +409,7 @@ static int game_start(uint32_t index)
     }
     if (e != ZX_OK)
         return e;
-    fmzx_ram.beeper_init(&beeper, 750000u, 17u);
+    zx_beeper_init(&beeper, 750000u, 17u);   /* XIP: core/zx/beeper_init.c */
     /* the decoder's history and the delay ring start empty: nothing of the last game plays */
     snd_mixer_init(&mixer, 750000u, 17u);
     learned_start(index);

@@ -7,6 +7,10 @@
 # tapesig.c (the tape signal player) is for the host build only: the firmware's tape_ear stays NULL.
 file(GLOB ZX_CORE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/zx/*.c")
 list(FILTER ZX_CORE_SOURCES EXCLUDE REGEX "/tapesig\\.c$")
+# beeper_init.c (the beeper's start-up function, once per game start) runs from flash on the
+# device: its own library, zx_core_init, whose archive name the firmware's linker script does not
+# put in SRAM.
+list(FILTER ZX_CORE_SOURCES EXCLUDE REGEX "/beeper_init\\.c$")
 set(ZX_VENDOR_SOURCES
   "${PROJECT_SOURCE_DIR}/third_party/Z80/sources/Z80.c"
   "${PROJECT_SOURCE_DIR}/third_party/Z80InsnClock/sources/Z80InsnClock.c")
@@ -34,6 +38,10 @@ target_compile_definitions(zx_core PUBLIC
   Z80_INSN_CLOCK_STATIC
   Z80_INSN_CLOCK_WITH_LOCAL_HEADER
   Z80_INSN_CLOCK=2)
+
+add_library(zx_core_init STATIC "${CMAKE_CURRENT_SOURCE_DIR}/zx/beeper_init.c")
+target_compile_options(zx_core_init PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(zx_core_init PUBLIC zx_core)
 
 # FM music from the beeper (core/sound): portable fixed-point C beside the core, held to the same
 # warnings. The firmware links it when it plays FM.

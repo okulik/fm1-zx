@@ -18,7 +18,6 @@ struct ram_calls {
     int (*load_z80)(zx_machine *, const uint8_t *, uint32_t);
     int (*tape_insert)(zx_machine *, const uint8_t *, uint32_t);
     void (*tape_autostart)(zx_machine *);
-    void (*beeper_init)(zx_beeper *, uint32_t, uint32_t);
     void (*compose_zx)(const zx_machine *, unsigned, unsigned, uint8_t *);
     void (*screen_line)(const zx_machine *, unsigned, uint8_t *);
     uint8_t (*border_line)(const zx_machine *, unsigned);

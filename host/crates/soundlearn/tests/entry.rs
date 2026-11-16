@@ -276,7 +276,7 @@ fn decode_rejects_raw_bytes() {
     let bad: Vec<(&str, Vec<u8>)> = vec![
         ("a program that pushes 9 values", with_prog(push9)),
         ("an unknown opcode 0xFF", patched(PROG, &[0xFF])),
-        ("kind 1", patched(KIND, &[1])),
+        ("kind 2 (0: a learned entry, 1: roles for a built-in entry)", patched(KIND, &[2])),
         ("flips 2", patched(FLIPS, &[2])),
         ("a tonal site channel past the channels", patched(SITE_CHAN, &[1])),
         ("reloc offsets descending", two_relocs(vec![0x0C, 0x08])),

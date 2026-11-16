@@ -57,16 +57,16 @@ A list's length is the distance from its offset to the nearest greater list offs
 
 ### Entry list
 
-A list holds up to 8 learned entries for one game (`SND_LEARNED_MAX`). Each describes one music routine the game's own code contains: a signature to find it by, the `OUT` sites where its notes start, and small programs that compute each note's period from the machine state. All fields are little-endian.
+A list holds up to 8 entries for one game (`SND_LEARNED_MAX`), of two kinds. A learned entry (kind 0) describes one music routine the game's own code contains: a signature to find it by, the `OUT` sites where its notes start, small programs that compute each note's period from the machine state, and each channel's instrument. A kind-1 record gives stored instruments to a built-in entry the game uses. All fields are little-endian.
 
 ```
-u8 count (<= 8), u8 0, u16 0, then `count` entries, each:
+u8 count (<= 8), u8 0, u16 0, then `count` entries, each a learned entry or a kind-1 record (below); a learned entry:
   u16 size (a multiple of 4: the whole entry, from its first byte to the next entry), u8 kind (0: music), u8 channels (1-3)
   u64 digest
   u16 len, u8 n_wild, u8 n_reloc
   u8 n_sites, u8 flips, u8 drum, u8 timing (1: a timing program follows)
   u16 pass, u16 stale_from, u16 stale_len   (stale: an anchor-relative pc range; stale_len 0: none)
-  u8 level[3], u8 instrument[3] (reserved, 0)
+  u8 level[3], u8 instrument[3]
   u8 prog_len[3], u8 timing_len
   u16 wild[n_wild], u16 reloc[n_reloc], {u16 off, u8 role, u8 chan} sites[n_sites], u16 pos[channels]
   channel programs (prog_len[c] bytes each, for c < channels), the timing program, zero padding up to `size`
@@ -74,11 +74,25 @@ u8 count (<= 8), u8 0, u16 0, then `count` entries, each:
 
 The fixed part of an entry is 36 bytes. `digest`, `len`, `wild`, `reloc`, `sites`, `pass`, `pos`, `flips` and `drum` are the matcher's signature fields (`core/sound/sound.h`, `snd_engine`); `role` is 0 tonal, 1 drum, 2 stop; `chan` is the channel of a tonal site, or `0xFF` (any) on a `flips` entry. `level[c]` is channel `c`'s loudness; entries are named `learned`.
 
+`instrument[c]` is channel `c`'s stored role in the FM synth: 0 none (the live rule decides by pitch), 1 bass, 2 lead, 3 pad. A value above 3 counts as 0, and so does the byte of a channel past `channels`. While the entry claims a frame, method B gives each of its channels that role; a channel with none, and any frame no entry with stored roles claims, gets the live rule's role (`core/sound/roles.c`).
+
+A kind-1 record, "roles for a built-in entry", is 15 bytes padded to 16 (or more: `size` covers it):
+
+```
+u16 size (a multiple of 4, at least 16), u8 kind = 1, u8 channels (1-3)
+u64 digest     the built-in entry's (core/sound/engines_builtin.h): which entry it is for
+u8 role[3]     as instrument[] above
+zero padding up to `size`
+```
+
+It produces no engine: once the list is decoded, `snd_learned_roles` gives the built-in entry with that `digest` these roles for this game (roles above 3, and those of channels past the record's `channels` or the entry's, count as 0). A record whose `digest` names no built-in entry (or names a learned entry) changes nothing; of two records for the same entry, the later wins. The firmware assembles its table (the built-in entries, then the learned ones) whenever the list decodes, so a game whose list holds kind-1 records and no learned entry still gets its built-in entries' roles.
+
 The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole list (`ZX_ERR_FORMAT`, no entries) unless all of this holds, for every entry:
 
 - the list is at least 4 bytes and 4-byte aligned in memory, and `count` is at most 8;
-- the entry's 36 fixed bytes lie in the list; `size` is at least 36, a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
-- `kind` is 0 and `channels` is 1-3; `flips` and `timing` are 0 or 1;
+- the entry's `size` and `kind` lie in the list; `kind` is 0 or 1; `size` is at least 36 (a kind-1 record: 16), a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
+- a kind-1 record's `channels` is 1-3; it counts towards `count`'s 8, has no sites and adds no work; nothing else in it is checked (its roles are read as above);
+- for a learned entry: `channels` is 1-3; `flips` and `timing` are 0 or 1;
 - `len` is 1 to 512 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
 - over the whole list, the sum of `n_sites x len` is at most 4096 (`SND_LEARNED_WORK_MAX`): method B hashes each site's signature for an `OUT` no entry is known at yet, so this bounds that work per frame;
 - `prog_len[c]` is 1-64 for each channel and 0 for the unused ones; `timing_len` is 1-64 with a timing program, else 0;
@@ -87,7 +101,11 @@ The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole lis
 - every site offset is below `len`, `role` is at most 2, and a tonal site's `chan` is below `channels` (or `0xFF` on a `flips` entry);
 - every program is valid (below).
 
-The `instrument` bytes and any other reserved bytes (the 2 after the list's `count`, the padding) are ignored. A game whose list is rejected plays as if it had no learned entries. A bad sound section never affects the games; a bad section (or list) is the same as none.
+The reserved bytes (the 2 after the list's `count`, the padding) are ignored.
+
+A game whose list is rejected plays as if it had no learned entries. A bad sound section never affects the games; a bad section (or list) is the same as none.
+
+The `instrument` bytes (reserved and 0 before) and kind-1 records came without a pack version change: the pack is always installed together with the firmware that reads it (both are in one `.fwsc` package), so no firmware ever meets a pack newer than itself.
 
 ### Program
 

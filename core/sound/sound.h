@@ -402,6 +402,11 @@ typedef struct snd_engine {   /* one table entry */
 	                           * snd_learned_ext (learned.c) */
 	uint8_t strict;           /* 1: consecutive rises must lie one period apart, not a whole number
 	                           * of periods (engines.c, known; learned entries); 0: the built-ins */
+	uint8_t role[SND_TONAL];  /* each channel's stored role (enum snd_role), which B gives the
+	                           * frames this entry claims; SND_ROLE_AUTO: none (the live rule's),
+	                           * and always for c >= channels. A learned entry's from its
+	                           * instrument bytes; a built-in's 0, or a kind-1 record's
+	                           * (snd_learned_roles) in a table the firmware assembles */
 } snd_engine;
 
 extern const snd_engine snd_engine_table[];   /* the built-in engines */
@@ -447,8 +452,16 @@ typedef struct {          /* a learned entry's programs and rules (snd_engine.da
 int snd_prog_eval(const uint8_t *p, uint32_t len, const zx_machine *m, uint16_t anchor, const zx_regs *ctx, uint32_t *out);
 /* Decodes a game's entry list (list[0..avail), 4-byte aligned) into en[0..*n) and ext[0..*n),
  * their arrays and programs pointing into list: ZX_OK, or ZX_ERR_FORMAT (then *n = 0) for any
- * bound or program that is not valid, or more than max entries. */
+ * bound or program that is not valid, or more than max entries. A learned entry's role[c] is its
+ * instrument[c] (above SND_ROLE_PAD: SND_ROLE_AUTO). The list may also hold kind-1 records (roles
+ * for a built-in entry), checked and counted like entries but decoded into no engine, so *n
+ * counts the learned entries alone. */
 int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_learned_ext *ext, uint32_t max, uint32_t *n);
+/* For each kind-1 record of a list snd_learned_decode accepted: sets role[] of the entries of
+ * table[0..n) that are not learned and whose digest is the record's (roles above SND_ROLE_PAD, or
+ * for channels past the record's or the entry's: SND_ROLE_AUTO). A record matching no such entry
+ * changes nothing; a later record for the same digest wins. */
+void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, uint32_t n);
 
 #define SND_B_MATCHES 8u      /* anchors remembered */
 #define SND_B_UNKNOWN 8u      /* OUT addresses remembered as matching no entry */
@@ -535,7 +548,8 @@ typedef struct snd_b {        /* method B's state */
 
 void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n);
 /* Feeds frame t (zm right after zx_run_frame; zm may be NULL: nothing is B's); fills *out with
- * the decision for frame t - SND_DELAY_FRAMES. */
+ * the decision for frame t - SND_DELAY_FRAMES. A frame an engine claims carries that table
+ * entry's stored roles (snd_engine.role), any other frame SND_ROLE_AUTO for every voice. */
 void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
 
 /* ---- mixer (mixer.c) --------------------------------------------------- */
