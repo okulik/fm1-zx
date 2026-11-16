@@ -3,3 +3,4 @@
 
 build/
 host/target/
+.worktrees

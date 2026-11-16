@@ -11,7 +11,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - Commit: `a53ecf428c29c780108fd70a31b71a32a6b5c313` (tag `v1.6.1`, "Felucca 1.6.1")
 - Licence: GPL-3.0-only (`LICENSE`, Felucca's own copy of the licence text; SPDX header and
   copyright line in each file: "Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton
-  Instruments"; `LICENSES/GPL-3.0-only.txt`).
+  Instruments").
 - How it is combined: the loader is a separate program. The update package carries it as
   `ota.bin` (LZ4-wrapped by `fmzx-pack fwsc`); the FM-1's boot loader runs it from RAM to write
   an update. It is never linked into the FM-1 ZX image, and nothing of ours is linked into it.

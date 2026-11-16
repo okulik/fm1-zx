@@ -10,7 +10,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - Upstream: https://github.com/hugelton/felucca-bsp
 - Commit: `7e09895c3d48988b8e2b0ee1461eb2376224d93f`
 - Licence: MPL-2.0 (`bsp/LICENSE`, `bsp/NOTICE`; SPDX header and copyright lines in each file;
-  `LICENSES/MPL-2.0.txt`). The files carry no "Incompatible With Secondary Licenses" notice, so
+  `bsp/NOTICE`'s "LICENSES/Apache-2.0.txt" is upstream's path: here the Apache text is
+  `docs/third-party/AC79-SDK-Apache-2.0.txt`). The files carry no "Incompatible With Secondary Licenses" notice, so
   they combine with our GPL-3.0-or-later code under MPL-2.0 section 3.3.
 - Local changes: none. Every file is byte for byte as at the commit above; the firmware hooks
   around it (`platform/fm1/main.c`, `platform/fm1/lcd.c`, `platform/fm1/audio.c`).

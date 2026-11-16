@@ -35,7 +35,7 @@ author. `LICENSE` says:
 > sublicense, and distribute the Work and such Derivative Works in Source or Object form.
 
 Redistribution in Object form needs the licence text to go with it (section 4(a)): it is
-`LICENSE.release` here and `LICENSES/Apache-2.0.txt` in the repository, and `LICENSING.md` carries
+`LICENSE.release` here, and `LICENSING.md` carries
 the attribution.
 
 Beeper engine: the sound player in the game (`code/audio/soundPlayer.asm` in the repository, with

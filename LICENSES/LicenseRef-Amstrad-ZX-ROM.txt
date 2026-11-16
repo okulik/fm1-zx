@@ -1,8 +1,0 @@
-ZX Spectrum 48K ROM
-
-Copyright Amstrad plc.
-
-Amstrad has given permission to distribute the unmodified Spectrum ROMs with
-emulators. The ROM in third_party/zx-rom/48.rom is distributed unmodified and
-remains under this permission, not under the licence of the rest of this
-repository. See third_party/zx-rom/README.md for its provenance and checksums.

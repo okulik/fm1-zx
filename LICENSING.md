@@ -7,8 +7,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 FM-1 ZX is free software under the GNU General Public License, version 3 or (at your option)
 any later version (`GPL-3.0-or-later`, `LICENSE`). Some parts are other people's work under
-their own licences. Every file carries its licence as an SPDX tag or in `REUSE.toml`
-(`reuse lint` checks it), and the licence texts are in `LICENSES/`.
+their own licences. Our files carry an SPDX tag; each other part keeps its licence text beside it
+(listed below), and `LICENSE` is the GPL's.
 
 How a part is combined decides what it means for the whole:
 
@@ -52,9 +52,10 @@ and the game pack (above), Felucca's update loader (GPL-3.0-only; its complete s
 `third_party/felucca-loader/`, also at <https://github.com/hugelton/Felucca> commit
 `a53ecf428c29c780108fd70a31b71a32a6b5c313`) and the three SDK files (Apache-2.0). Whoever passes a
 package on should pass on with it, or point to, this repository at the same commit (the source
-of the GPL parts and the build of every byte), `LICENSES/` (in particular `GPL-3.0-or-later.txt`,
-`GPL-3.0-only.txt`, `LGPL-3.0-or-later.txt`, `MPL-2.0.txt`, `MIT.txt`,
-`CC-BY-SA-2.0.txt`, `Apache-2.0.txt`), the SDK files' licence text (`docs/third-party/AC79-SDK-Apache-2.0.txt`;
+of the GPL parts and the build of every byte), the licence texts (`LICENSE` for the GPL,
+`third_party/Z80/COPYING.LESSER`, `third_party/Z80InsnClock/LICENSE-0BSD`, `platform/fm1/bsp/LICENSE`,
+`third_party/felucca-loader/LICENSE`, `third_party/zx-rom/LICENSING.md` and each game's in
+`third_party/games/`), the SDK files' licence text (`docs/third-party/AC79-SDK-Apache-2.0.txt`;
 `tools/make-packages` puts a copy, `AC79-SDK-Apache-2.0.txt`, next to the packages) and this file
 with the games' attributions, and `third_party/games/` (each game's licence files, `COPYING.beeper`,
 and ZX Sopwith's Corresponding Source `zxspectrum-sopwith-c1f39d2.tar.gz`). The Apache License covers
@@ -140,7 +141,7 @@ scale and not taken from the Chrome game's sprite sheet, and it points to the RO
 than copying it. Attribution: ZX Dino by Kukovnikov Bonifas, <https://github.com/foxweb/zxdino>.
 
 **A World of One-Way** by Serdjuk (2021), `third_party/games/oneway/`. The repository's `LICENSE` is the
-Apache License 2.0 (`LICENSE.release`; text in `LICENSES/Apache-2.0.txt`; the appendix's copyright line is not filled in,
+Apache License 2.0 (`LICENSE.release`; the appendix's copyright line is not filled in,
 and all 62 commits are by the one author). The file is `Wow.tap`, version 0.41, unmodified (SPDX `Apache-2.0 AND MIT`).
 Its sound player is Juan J. Martínez's beeper engine (MIT, "Copyright (C) 2021 by Juan J. Martinez"; the notice is
 reproduced in `third_party/games/oneway/README.md` and copied as `COPYING.beeper`). The tape's font is the

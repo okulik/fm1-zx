@@ -150,7 +150,7 @@ fi
 cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
 "$root/web/patch-page.sh" "$out"
 mkdir -p "$out/licenses"
-cp "$root/LICENSES/GPL-3.0-or-later.txt" "$out/licenses/GPL-3.0-or-later.txt"
+cp "$root/LICENSE" "$out/licenses/GPL-3.0-or-later.txt"
 cp "$emu/LICENSE" "$out/licenses/fm1-emu-MIT.txt"
 echo "$out: fm1-emu $rev with FM-1 ZX $short"
 
