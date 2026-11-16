@@ -234,6 +234,47 @@ fn rests_stay_fm() {
 }
 
 #[test]
+fn a_stray_edge_in_a_note_stays_b() {
+    // a speaker edge from other code (a ROM address) among a note's edges, as a game's code that
+    // sets the speaker low after each call of its music routine makes one: the frame stays B's,
+    // with the same decision as without it; two such edges are other code's sound (an effect)
+    // and the frame is not B's
+    let list = encode_list(&[burst_entry()]);
+    let stray = |n: usize| {
+        let mut m = burst(0x8000);
+        let mut b = SndEngines::with_learned(&list).expect("decodes");
+        let (mut out, mut hit) = (Vec::new(), Vec::new());
+        for k in 0..300usize {
+            m.run_frame();
+            let mut edges = m.edges().to_vec();
+            if n > 0 && edges.len() >= 4 && k % 3 == 0 && k < 290 {
+                // just after the burst's first edge, the level the edge before left
+                let (t, level) = (edges[0].tstate + 20, edges[0].level ^ 2);
+                for j in 0..n {
+                    edges.insert(1 + j, zx_sys::zx_edge { tstate: t + 10 * j as u32, level: level ^ (2 * (j as u8 & 1)), pc: 0x0D6B });
+                }
+                hit.push(k);
+            }
+            out.push(b.frame(&m, &edges, m.edges_start_level()));
+        }
+        (out, hit)
+    };
+    let (clean, _) = stray(0);
+    let (one, hit) = stray(1);
+    let delay = SND_DELAY_FRAMES as usize;
+    let claimed = |d: &[SndFrame]| hit.iter().filter(|&&k| d[k + delay].confident != 0).count();
+    assert!(hit.len() >= 10, "{} frames with a stray edge", hit.len());
+    assert_eq!(claimed(&clean), hit.len(), "the frames are B's without the stray edge");
+    let lost: Vec<usize> = hit.iter().copied().filter(|&k| one[k + delay].confident == 0).collect();
+    assert!(lost.is_empty(), "{} of {} frames with one stray edge not B's: {lost:?}", lost.len(), hit.len());
+    for &k in &hit {
+        assert_eq!(one[k + delay].tone, clean[k + delay].tone, "frame {k}: the same voices");
+    }
+    let (two, _) = stray(2);
+    assert_eq!(claimed(&two), 0, "two stray edges in a frame are other code's sound");
+}
+
+#[test]
 fn mixer_plays_learned_entries() {
     // frames the mixer plays FM for in FM: engines, on burst_sna, with the built-in table and then
     // with the burst entry learned

@@ -8,8 +8,9 @@
  *  1. Every OUT site of the frame is looked up: a remembered match (its signature re-checked once
  *     a frame it is used) or, failing that, every entry's signature with the anchor that puts one
  *     of its sites at that OUT (not again for an address that matched nothing while the code
- *     around it stays the same). Every edge must come from a site of one matched engine, else the
- *     frame is not B's (other code drives the speaker; an engine's hold ends).
+ *     around it stays the same). Every edge must come from a site of one matched engine but one
+ *     (other code's single edge, left out), else the frame is not B's (other code drives the
+ *     speaker; an engine's hold ends).
  *  2. The engine's reader gives the voices at the frame's end (tonal sites), how long they have
  *     held (since the note began, or a slide's last step) and, if the engine moved on to its next
  *     note after its last edge, that note (then the frame's edges are the voices last seen); drum
@@ -772,13 +773,16 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 	en = &b->table[cl.mine->entry - 1u];
 	r->entry = cl.mine->entry;
 
-	/* every edge: its site's role, or other code's (the first ends it: the frame is not B's) */
+	/* every edge: its site's role, or other code's. One edge of other code's in the frame (the
+	 * engine's caller setting the speaker low after it returns, a stray click) is left out: the
+	 * check passes over it and FM does not play it. A second ends it: the frame is not B's (other
+	 * code's sound). An entry whose notes are calls has its every edge checked: none is left out */
 	r->last_mine = classify(&cl, e[n - 1u].pc) != NOWHERE;
 	for (i = 0; i < n; i++) {
 		uint32_t s = classify(&cl, e[i].pc);
 		if (s == NOWHERE) {
-			foreign = 1;
-			break;
+			if (++foreign > 1 || en->min_len) break;
+			continue;
 		}
 		for (k = 0; k < cl.ns; k++)
 			if (cl.sites[k].pc == e[i].pc) last_of[k] = e[i].tstate;
@@ -794,7 +798,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 			else tonal_site = 1;
 		}
 	}
-	if (foreign) return;
+	if (foreign > 1 || (foreign && en->min_len)) return;
 	r->kind = SND_B_MINE;
 	r->ok = 1;
 

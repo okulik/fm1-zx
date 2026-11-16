@@ -320,10 +320,12 @@ fn burst_holds_through_gaps() {
     assert!(bursts >= 20, "{bursts} bursts");
 }
 
-/// Writes a routine at F000h that drives the speaker (two `OUT`s) and returns, and calls it at
+/// Writes a routine at F000h that drives the speaker (four `OUT`s, high and low twice: at least
+/// two edges, more than the single edge of other code's B leaves out) and returns, and calls it at
 /// the machine's next instruction.
 fn call_other_code(m: &mut Machine) {
-    let code = [0xf5, 0x3e, 0x10, 0xd3, 0xfe, 0xaf, 0xd3, 0xfe, 0xf1, 0xc9]; // PUSH AF; LD A,10h; OUT; XOR A; OUT; POP AF; RET
+    // PUSH AF; LD A,10h; OUT; XOR A; OUT; LD A,10h; OUT; XOR A; OUT; POP AF; RET
+    let code = [0xf5, 0x3e, 0x10, 0xd3, 0xfe, 0xaf, 0xd3, 0xfe, 0x3e, 0x10, 0xd3, 0xfe, 0xaf, 0xd3, 0xfe, 0xf1, 0xc9];
     for (k, &c) in code.iter().enumerate() {
         m.poke(0xf000 + k as u16, c);
     }
@@ -352,7 +354,7 @@ fn mixed_frame_beeper() {
     for i in [gap, busy] {
         let pcs: Vec<u16> = r.frames[i].edges.iter().map(|e| e.pc).collect();
         println!("frame {i}: edges from {pcs:04X?}; confident {}, next {}", r.dec[i].confident, r.dec[i + 1].confident);
-        assert!(pcs.iter().any(|&p| (0xf000..0xf010).contains(&p)), "frame {i} has the other code's edges");
+        assert!(pcs.iter().filter(|&&p| (0xf000..0xf011).contains(&p)).count() >= 2, "frame {i} has the other code's edges");
         assert_eq!(r.dec[i].confident, 0, "frame {i} with the other code's edges is claimed");
         assert_ne!(r.dec[i + 1].confident, 0, "frame {} after it is not claimed", i + 1);
     }
@@ -728,7 +730,8 @@ fn unlisted_tonal_edges_beeper() {
 fn moved_on_needs_next_frame() {
     // Castaway frames whose decision starts the next note after the frame's last edge (the engine
     // moved on to it, read at the frame's end, nothing in the frame to check it by): with other
-    // code's edge added to the next frame (not the engine's), that note is not played there
+    // code's sound (two edges: a single one is left out) added to the next frame (not the
+    // engine's), that note is not played there
     let dry = run(music::castaway(), 1500, SndEngines::new(), None, no_edit);
     let after_last = |dec: &SndFrame, f: &Frame| -> bool {
         let last = f.edges.last().map_or(0, |e| e.tstate);
@@ -739,7 +742,8 @@ fn moved_on_needs_next_frame() {
     let r = run(music::castaway(), 1500, SndEngines::new(), None, |i, _, edges| {
         if let Some(edges) = edges.filter(|_| i > 0 && picked.contains(&(i - 1))) {
             let last = *edges.last().unwrap();
-            edges.push(zx_edge { tstate: (last.tstate + 100).min(69_800), level: last.level ^ 2, pc: 0xf000 });
+            edges.push(zx_edge { tstate: (last.tstate + 100).min(69_700), level: last.level ^ 2, pc: 0xf000 });
+            edges.push(zx_edge { tstate: (last.tstate + 200).min(69_800), level: last.level, pc: 0xf000 });
         }
     });
     let played: Vec<usize> = picked.iter().copied().filter(|&i| after_last(&r.dec[i], &r.frames[i])).collect();
