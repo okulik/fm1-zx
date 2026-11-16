@@ -19,7 +19,7 @@
 - Device audio stays sample-exact against the host's C (emu-gate `fw_audio`, `fw_personal`).
 - The D patch values are exactly the spec's table (step 1b); roles: 0 none/auto, 1 bass, 2 lead, 3 pad.
 - No pack version bump (pack and firmware ship together).
-- The owner's games never enter the repository (digests, offsets, formulas only; no game names in committed code, tests or docs). Never open Music.zip. Never flash, SysEx or open MIDI. Never name SIDOU. Commit messages: one line, no trailers.
+- The owner's games never enter the repository (digests, offsets, formulas only; no game names in committed code, tests or docs). Never open Music.zip. Never flash, SysEx or open MIDI. Never name the reference project. Commit messages: one line, no trailers.
 - Inner loop is host-only (`cd host && cargo test --release --workspace --exclude emu-gate`, `music-corpus`); the emu-gate suite runs once, at the end.
 
 ## Review Focus

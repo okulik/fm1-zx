@@ -18,7 +18,7 @@
 //! the routine's span, family and channels, each channel's half period as a formula of its
 //! inputs, the gates' figures (fit and replay), any drum sites, and the outcome: learned, or the
 //! reason it was left out. A learned routine's block, and the block of a built-in routine's `OUT`
-//! heard in the most frames, then give each channel's stored role and where it came from
+//! heard in the most frames (one refused as the built-in entry first), then give each channel's stored role and where it came from
 //! ([`ChannelRole`]): `roles: channel 0 bass (analysis), channel 1 lead (override)`.
 
 use crate::fit::FitResult;

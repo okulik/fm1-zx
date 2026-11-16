@@ -24,8 +24,8 @@
 //!    in its entry's `instrument[]`; each built-in routine the built-in table gave frames to while
 //!    listening gets them from those frames, in a kind-1 record ([`BuiltinRoles`]: after the
 //!    learned entries, while the list holds fewer than [`SND_LEARNED_MAX`]; none if it has no
-//!    role), reported in the block of its `OUT` heard in the most frames (none if no block has
-//!    one of its `OUT`s). The owner's overrides ([`LearnOptions::instruments`]) win, per channel:
+//!    role), reported in the block of its `OUT` heard in the most frames, a block refused as a
+//!    built-in entry first (none if no block has one of its `OUT`s). The owner's overrides ([`LearnOptions::instruments`]) win, per channel:
 //!    the routine named by any of its `OUT`s the report shows. An override that names no such
 //!    routine, a routine another key names too, or more channels than the routine has, is
 //!    [`GameSound::override_error`].
@@ -251,9 +251,8 @@ fn stored_roles(done: &mut [Judged], kept: &[usize], heard: &[crate::roles::Buil
     let table = SndEngines::new().entries();
     let shown: BTreeSet<u16> = done.iter().map(|j| j.routine.site).collect();
     for h in heard {
-        // the first block (the OUT heard in the most frames) of one of its OUTs, not a learned one
-        let block = done.iter().position(|j| j.routine.outcome.is_err() && h.outs.contains(&j.routine.site));
-        let Some(block) = block.filter(|b| takes.iter().all(|t| t.block != *b)) else { continue };
+        let blocks: Vec<(u16, &Result<(), String>)> = done.iter().map(|j| (j.routine.site, &j.routine.outcome)).collect();
+        let Some(block) = builtin_block(&blocks, &h.outs).filter(|b| takes.iter().all(|t| t.block != *b)) else { continue };
         let outs = h.outs.intersection(&shown).copied().collect();
         takes.push(Takes { block, channels: usize::from(table[h.index].channels), analysis: h.roles, outs, builtin: Some(h.index) });
     }
@@ -307,6 +306,16 @@ fn stored_roles(done: &mut [Judged], kept: &[usize], heard: &[crate::roles::Buil
         done[t.block].routine.roles = roles;
     }
     (records, error)
+}
+
+/// The block a built-in routine's roles go in, of `blocks` (each block's site and outcome, the
+/// OUT heard in the most frames first): of the refused blocks whose site sounded in the
+/// built-in's frames (`outs`), the first refused as a built-in entry ([`BUILTIN`]), else the
+/// first (a sound effect's OUT may sound in those frames too, and in more of them).
+fn builtin_block(blocks: &[(u16, &Result<(), String>)], outs: &BTreeSet<u16>) -> Option<usize> {
+    let refused = |&(site, outcome): &(u16, &Result<(), String>)| outcome.is_err() && outs.contains(&site);
+    let builtin = |b: &(u16, &Result<(), String>)| b.1.as_ref().is_err_and(|why| why.starts_with(BUILTIN));
+    blocks.iter().position(|b| refused(b) && builtin(b)).or_else(|| blocks.iter().position(refused))
 }
 
 /// Which of the learned entries `cands` (in order of preference) a game's list keeps: each in
@@ -418,9 +427,31 @@ fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard
 
 #[cfg(test)]
 mod tests {
-    use super::keep;
+    use super::{builtin_block, keep};
+    use crate::gate::BUILTIN;
     use crate::{LearnedEntry, Op};
+    use std::collections::BTreeSet;
     use zx_sys::SND_SITE_TONAL;
+
+    #[test]
+    fn builtin_roles_go_to_the_builtin_block() {
+        // a sound effect's OUT (refused: a sweep) heard in more frames than the built-in's, both
+        // sounding in the built-in's frames: the roles go to the block refused as the built-in
+        let sweep = Err("a sweep, not music".to_string());
+        let builtin = Err(format!("{BUILTIN} at 03B5h"));
+        let learned = Ok(());
+        let outs: BTreeSet<u16> = [0x9000, 0x03D1, 0x8014].into();
+        let blocks = [(0x8014, &learned), (0x9000, &sweep), (0x03D1, &builtin)];
+        assert_eq!(builtin_block(&blocks, &outs), Some(2));
+        // the judge's refusal (no address) marks a built-in entry too
+        let judged = Err(BUILTIN.to_string());
+        assert_eq!(builtin_block(&[(0x9000, &sweep), (0x03D1, &judged)], &outs), Some(1));
+        // no block refused as a built-in: the first refused block that sounded in its frames
+        assert_eq!(builtin_block(&[(0x8014, &learned), (0x7000, &sweep), (0x9000, &sweep)], &outs), Some(2));
+        // a built-in block whose site did not sound in its frames is not taken
+        assert_eq!(builtin_block(&[(0x9000, &sweep), (0x1234, &builtin)], &outs), Some(0));
+        assert_eq!(builtin_block(&[(0x8014, &learned)], &outs), None);
+    }
 
     fn sized(len: u16, n: u16) -> LearnedEntry {
         LearnedEntry {

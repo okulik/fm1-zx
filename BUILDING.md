@@ -237,9 +237,16 @@ report says `override` for those channels:
     "C694" = ["lead"]            # the routine whose OUT is at C694h: channel 0 lead
     "881F" = ["bass", "lead"]    # channels 0 and 1
 
-An address that names no learned or known routine of the game (the error lists the game's
-routine `OUT`s), more roles than the routine has channels, or a role name not in the list fails
-the run with the game's name and the bad key, and no pack is written.
+Each of these fails the run with the game's name and the bad key, and no pack is written: a
+key that is not 4 hex digits; the same address given twice (in any case); a list of fewer than
+1 or more than 3 roles; a role name not in the list; an address that names no learned or known
+routine of the game (the error lists the game's routine `OUT`s); an address that names a
+routine another key names too (two of its `OUT`s); more roles than the routine has channels;
+and an `[game.instruments]` table in a games file that is not a personal one.
+
+A channel with no stored role (the report says `by the live rule` for it) is ranked by the live
+rule only among the other voices without a stored role, so it may play the same instrument as a
+channel with one.
 
 A pack that does not fit fails: the command lists every game by packed size, largest first, and
 writes no pack or packages (those of an earlier run are removed). Then comment out some entries in
