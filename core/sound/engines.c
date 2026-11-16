@@ -509,6 +509,15 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 			continue;
 		}
 		any[seg] = 1;
+		/* one channel: no edge for longer than twice its period (decide's stop) and a quarter
+		 * of a frame (not the voices read alone: a wrong period must not end its own check) is
+		 * a pause, not a contradiction (a routine that plays a held note in short bursts); it
+		 * is followed afresh from here */
+		if (have && !en->pass && sg->v[seg] && sg->v[seg][0].period_q8 && (uint32_t)(t - pt) > FRAME_T / 4u &&
+		    (uint32_t)(t - pt) > 2u * (sg->v[seg][0].period_q8 >> 8) + 2000u) {
+			restart(&c, sg->v[seg]);
+			have = 0;
+		}
 		if ((seg && sg->pause[seg] && (uint32_t)t < sg->at[seg] + MARGIN) ||
 		    (seg + 1u < sg->n && sg->pause[seg + 1u] && (uint32_t)t + MARGIN >= sg->at[seg + 1u])) {
 			have = 0;   /* near a pause */

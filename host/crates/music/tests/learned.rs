@@ -12,7 +12,7 @@ use fmzx_pack::testprogs::{beep_tap, burst_sna};
 use soundlearn::{encode_list, LearnedEntry, Op};
 use music::{colony8, RATE};
 use zx_sys::{
-    Beeper, Machine, SndEngines, SndFrame, SndMixer, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD,
+    Beeper, Machine, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD,
     SND_SITE_TONAL,
 };
 
@@ -46,6 +46,56 @@ fn decisions(mut m: Machine, mut b: SndEngines, frames: usize) -> Vec<SndFrame> 
             b.frame(&m, m.edges(), m.edges_start_level())
         })
         .collect()
+}
+
+/// `burst_sna` at 8000h with its melody replaced: each of `notes` (n, bursts) a burst of 6 edges
+/// every 69,000 T (just under a frame, so one burst in nearly every frame), `bursts` times in a
+/// row at the same pitch: a held note the routine plays in short bursts with pauses between, as
+/// a game's interrupt-paced music does.
+fn burst_held(notes: &[(u8, usize)]) -> Machine {
+    let mut sna = burst_sna(0x8000);
+    let table = 27 + (0x8000 + 0x2C - 0x4000);
+    let mut t = Vec::new();
+    for &(n, bursts) in notes {
+        let half = 13 * u32::from(n) + 54;
+        let gap = ((69_000 - 98 - 6 * half) / 26) as u16;
+        for _ in 0..bursts {
+            t.push(n);
+            t.extend_from_slice(&6u16.to_le_bytes());
+            t.extend_from_slice(&gap.to_le_bytes());
+        }
+    }
+    t.push(0);
+    sna[table..table + t.len()].copy_from_slice(&t);
+    let mut m = Machine::new();
+    m.load_sna(&sna).expect("loads");
+    m
+}
+
+#[test]
+fn held_note_in_bursts_stays_confident() {
+    // a note held over several frames' bursts is B's on every one of them, not only the first:
+    // the pause between bursts (far longer than a period) is the engine stopping, not a
+    // contradiction of the note read
+    let list = encode_list(&[burst_entry()]);
+    let mut m = burst_held(&[(200, 8), (168, 8), (124, 8), (168, 8)]);
+    let mut b = SndEngines::with_learned(&list).expect("decodes");
+    let (mut edges, mut sounding, mut unclaimed) = (Vec::new(), 0, Vec::new());
+    for k in 0..400usize {
+        m.run_frame();
+        edges.push(m.edges().len());
+        let d = b.frame(&m, m.edges(), m.edges_start_level());
+        // the decision is about the frame SND_DELAY_FRAMES back
+        let Some(f) = k.checked_sub(SND_DELAY_FRAMES as usize) else { continue };
+        if f >= 10 && edges[f] > 0 {
+            sounding += 1;
+            if d.confident == 0 {
+                unclaimed.push(f);
+            }
+        }
+    }
+    assert!(sounding > 300, "{sounding} sounding decisions");
+    assert!(unclaimed.is_empty(), "{} of {sounding} decisions with a note not B's, first at {:?}", unclaimed.len(), &unclaimed[..unclaimed.len().min(8)]);
 }
 
 fn burst(base: u16) -> Machine {
