@@ -125,9 +125,11 @@ fn rest_longer_than_window_keeps_role() {
 fn stored_role_respected() {
     // voice 1 carries a stored role (pad, though it is the lowest): it keeps it, the others are
     // ranked among themselves (two: bass and lead); its pitch is tracked all the same, so when
-    // the stored role stops it is the bass at once
+    // the stored role stops it is the bass at once. Voice 1 lies within the margin of voice 0
+    // (400 against 440 Hz): untracked, it would be new when the stored role stops and stay above
+    // voice 0 (the pad), so only its tracked history makes it the bass
     let mut r = SndRoles::new();
-    let hz = [440.0, 110.0, 880.0];
+    let hz = [440.0, 400.0, 880.0];
     for i in 0..5 * FPS {
         let mut fr = voices(hz);
         fr.role[1] = P;
