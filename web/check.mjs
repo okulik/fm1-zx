@@ -3,7 +3,8 @@
 //
 // Headless smoke test of the built browser demo (tools/web-demo --check): boots DIR/fm1_web.wasm
 // with DIR/fmzx.fwsc as the page does (JIT on, 240 MHz) and checks that it boots, draws the
-// game picker, and plays sound from the border-and-tone test. One line per check; exit 0 when
+// game picker, plays sound from the border-and-tone test, reports the running game (fmzx_stats
+// at keymaps.json's address) and takes computer keys through web/fmzx.js. One line per check; exit 0 when
 // all pass, 1 otherwise. The preview package (RGB565) boots in a second instance as the colour
 // reference for the release package's RGB444.
 //   node web/check.mjs build/web build/fm1/fmzx-preview.fwsc
@@ -97,6 +98,34 @@ const loud = run(1.0);
   }
 }
 
+// the running game: the worklet reads fmzx_stats (view, game) at the address keymaps.json gives;
+// after PLAY the second game runs. Then computer keys through our layer (web/fmzx.js) reach the
+// firmware: Esc (HOME) opens the menu, Enter (PLAY there) resumes, Tab (PLAY) pauses.
+{
+  const km = JSON.parse(readFileSync(new URL("keymaps.json", dir), "utf8"));
+  const addr = km.fmzx_stats;
+  if (!Number.isInteger(addr) || !x.fm1_peek32) {
+    report("running game", false, `fmzx_stats ${addr}, fm1_peek32 ${typeof x.fm1_peek32}`);
+  } else {
+    const state = () => [x.fm1_peek32(addr + 12), x.fm1_peek32(addr + 16)];
+    const [view, game] = state();
+    report("running game", view === 1 && game === 1, `view ${view}, game ${game} (want 1, 1)`);
+    const { createKeys } = await import(new URL("fmzx.js", dir));
+    const encIds = [0, 6, 1, 2, 3, 4, 5]; // the drawing's encoder order to the matrix's
+    const keys = createKeys({ setKey: (id, d) => x.fm1_key(id, d ? 1 : 0), turn: (i, c) => x.fm1_enc(encIds[i], c) });
+    const tap = (code) => {
+      keys.setRunning(state()[0], km.games[state()[1]]);
+      keys.handle({ code, key: "", repeat: false }, true);
+      run(0.1);
+      keys.handle({ code, key: "", repeat: false }, false);
+      run(0.3);
+      return state()[0];
+    };
+    const seen = [tap("Escape"), tap("Enter"), tap("Tab"), tap("Tab")];
+    report("computer keys", seen.join() === "2,1,5,1", `views after Esc, Enter, Tab, Tab: ${seen.join(", ")} (want 2, 1, 5, 1)`);
+  }
+}
+
 const emulated = x.fm1_ms() / 1000;
 const wall = (performance.now() - start) / 1000;
 const speed = (emulated / wall).toFixed(2);
@@ -161,6 +190,9 @@ console.log(`speed: ${speed} emulated s / wall s (${span})`);
     [js, "if (window.fmzxKey?.(e, false)) return;"],
     [js, "const kept = f.fresh ? null : await keptEntry(f.id);"],
     [js, "let mhz = 240;"],
+    [js, "fmzxStats: window.fmzxStats || 0, mhz: clock"],
+    [js, "window.fmzxFrame?.(m);"],
+    [js, "window.fmzxDraw?.(ctx, W, H);"],
     [js, "fresh: !!f.fresh, persistedSectors:"],
     [js, "if (session.fresh) return Promise.resolve();"],
     [html, '<link rel="stylesheet" href="fmzx.css">'],

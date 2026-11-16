@@ -134,6 +134,19 @@ if [ -n "$packages" ]; then
 else
     "$root/host/target/release/fmzx-pack" keymaps "$root/games/games.toml" -o "$out/keymaps.json"
 fi
+# the address of the firmware's fmzx_stats (the page reads the running game from it), from the
+# ELF the packages were made from (build/fm1's); left out when that ELF is missing or newer than
+# the package (rebuilt since: its addresses may not be the package's), and the page then keeps
+# the side list's game
+elf="$root/build/fm1/platform/fm1/fmzx_app.elf"
+if [ ! -f "$elf" ]; then
+    echo "tools/web-demo: no $elf: the page will not see the running game" >&2
+elif [ "$elf" -nt "$fm1/fmzx.fwsc" ]; then
+    echo "tools/web-demo: $elf is newer than $fm1/fmzx.fwsc: the page will not see the running game" >&2
+else
+    python3 -I "$root/web/elf-symbol.py" "$elf" fmzx_stats 56 "$out/keymaps.json" ||
+        echo "tools/web-demo: no fmzx_stats in $elf: the page will not see the running game" >&2
+fi
 cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
 "$root/web/patch-page.sh" "$out"
 mkdir -p "$out/licenses"

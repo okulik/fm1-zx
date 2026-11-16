@@ -25,7 +25,7 @@ footer a[href="fm1-sid/"],
 
 /* The controls panel */
 .fmzx h3 { margin: 0 0 8px; font-size: 15px; }
-.fmzx dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 14px; }
+.fmzx dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 14px; }
 .fmzx dt { color: var(--ink); font-weight: 600; }
 .fmzx dd { margin: 0; color: var(--dim); }
 .fmzx select { width: 100%; margin-bottom: 10px; }
@@ -33,3 +33,29 @@ footer a[href="fm1-sid/"],
 .fmzx table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .fmzx th { text-align: left; color: var(--dim); font-weight: 500; }
 .fmzx th, .fmzx td { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--rule); }
+.fmzx h3 + select { margin-top: 2px; }
+.fmzx dl + p { margin-top: -4px; }
+.fmzx h3:not(:first-child) { margin-top: 14px; }
+.fmzx table { table-layout: auto; overflow-wrap: anywhere; }
+
+/* The guide without its contents column: one column, its sections as cards (two side by side
+   where two of at least 420 px fit), each line about 72 characters at most */
+.guide { grid-template-columns: minmax(0, 1fr) !important; }
+.guide > .article {
+  max-width: none;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(420px, calc((100% - 20px) / 2))), 1fr));
+  gap: 20px;
+  align-items: start;
+}
+.guide > .article > section {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  padding: 20px 24px;
+  min-width: 0;
+}
+.guide > .article > section > * { max-width: 72ch; }
+.guide > .article > section h2 { margin-top: 0; }
+@media (max-width: 760px) {
+  .guide > .article > section { padding: 16px; }
+}

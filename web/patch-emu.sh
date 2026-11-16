@@ -79,3 +79,29 @@ edit '    fn pixel_byte(&mut self, byte: u8) {
             return;
         }
 '
+
+# The running game for the page (web/fmzx.js): a word of RAM, so the worklet can read the
+# firmware's fmzx_stats (view, game) at the address tools/web-demo found in the ELF
+f="$emu/crates/fm1-web/src/lib.rs"
+edit '#[no_mangle]
+pub extern "C" fn fm1_enc(' '/// A word of the machine'"'"'s RAM at `addr` (0 outside it).
+#[no_mangle]
+pub extern "C" fn fm1_peek32(addr: u32) -> u32 {
+    machine().map_or(0, |m| {
+        let o = addr.wrapping_sub(fm1_soc::RAM_BASE);
+        if (o as usize).saturating_add(4) <= m.soc.ram.len() { m.soc.ram.read32(o) } else { 0 }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn fm1_enc('
+
+# the worklet: the boot message's fmzxStats (the address of fmzx_stats, 0 when unknown), and each
+# frame message carries [view, game] read from it (null without it)
+f="$emu/web/worklet.js"
+edit '    this.seq = m.seq;
+' '    this.seq = m.seq;
+    this.fmzxStats = (m.fmzxStats >>> 0) || 0;
+'
+edit 'frames: this.lastTiming?.frames ?? n }, transfer);' 'frames: this.lastTiming?.frames ?? n,
+        fmzx: this.fmzxStats && x.fm1_peek32 ? [x.fm1_peek32(this.fmzxStats + 12), x.fm1_peek32(this.fmzxStats + 16)] : null }, transfer);'
