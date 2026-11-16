@@ -332,6 +332,22 @@ Apple Silicon Mac when it learns, under 5 s from the cache. The Cave Runner and 
 method B were made from the owner's local copies of those games, which are not in the repository;
 they are tested only locally, with this tool.
 
+### Drops and clicks
+
+When FM: engines "clicks here and there", the `drops` example finds where and why. It runs each game
+as `music-corpus` does (key script, learned entries) through the mixer in FM: engines and lists:
+- every audible drop to the beeper inside the music, with method B's decision and the frame's edges
+  (count, OUT addresses, gaps) for each frame. A rejected frame of the engine's own OUT is the
+  check's doing; another OUT among them is other code's sound;
+- every jump in the output (a frame's largest second difference over three times the typical FM
+  frame's). A jump at an FM/beeper switch is a click; note attacks at big pitch steps show too.
+
+    cd host
+    cargo run --release -p music --example drops -- <game file>... [--seconds N] [--show A-B] [--wav FILE] [--cache DIR]
+
+`--show A-B` prints frames A to B in full, and `--wav` writes the mixer's output. Learned entries are
+cached in `build/drops-cache`.
+
 ## Toolchain pin
 
 The JieLi toolchain comes from `https://pkgman.jieliapp.com/s/linux-toolchain`
