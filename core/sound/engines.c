@@ -996,6 +996,8 @@ void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 		}
 	}
 	b->frames++;
+	for (k = 0; k < SND_TONAL; k++)
+		out->role[k] = SND_ROLE_AUTO;
 	if (b->frames > SND_DELAY_FRAMES) {
 		decide(b, out);
 		return;

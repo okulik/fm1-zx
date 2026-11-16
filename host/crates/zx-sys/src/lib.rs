@@ -593,6 +593,12 @@ pub const SND_STYLE_SLOTS: u8 = sys::snd_style_SND_STYLE_SLOTS as u8;
 pub const SND_STYLE_FLIPS: u8 = sys::snd_style_SND_STYLE_FLIPS as u8;
 pub const SND_STYLE_PULSES: u8 = sys::snd_style_SND_STYLE_PULSES as u8;
 pub const SND_STYLE_ENGINE: u8 = sys::snd_style_SND_STYLE_ENGINE as u8;
+/// A tonal voice's role in the tune (`SndFrame::role`), and so its FM instrument: none decided
+/// (played as lead), bass, lead, pad.
+pub const SND_ROLE_AUTO: u8 = sys::snd_role_SND_ROLE_AUTO as u8;
+pub const SND_ROLE_BASS: u8 = sys::snd_role_SND_ROLE_BASS as u8;
+pub const SND_ROLE_LEAD: u8 = sys::snd_role_SND_ROLE_LEAD as u8;
+pub const SND_ROLE_PAD: u8 = sys::snd_role_SND_ROLE_PAD as u8;
 /// Most note events in a [`SndFrame`].
 pub const SND_EVENTS: usize = sys::SND_EVENTS as usize;
 
@@ -636,6 +642,8 @@ pub struct SndFrame {
     pub engine: u8,
     /// Events in `ev`, applied in order after the frame's start (method A: 0).
     pub n_ev: u8,
+    /// Each tonal voice's role (`SND_ROLE_*`), taken by the synth when a note starts on it.
+    pub role: [u8; SND_TONAL],
     pub ev: [SndEvent; SND_EVENTS],
 }
 
@@ -656,6 +664,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SndFrame, confident) == std::mem::offset_of!(sys::snd_frame, confident));
     assert!(std::mem::offset_of!(SndFrame, engine) == std::mem::offset_of!(sys::snd_frame, engine));
     assert!(std::mem::offset_of!(SndFrame, n_ev) == std::mem::offset_of!(sys::snd_frame, n_ev));
+    assert!(std::mem::offset_of!(SndFrame, role) == std::mem::offset_of!(sys::snd_frame, role));
     assert!(std::mem::offset_of!(SndFrame, ev) == std::mem::offset_of!(sys::snd_frame, ev));
     assert!(std::mem::size_of::<SndEvent>() == std::mem::size_of::<sys::snd_event>());
     assert!(std::mem::align_of::<SndEvent>() == std::mem::align_of::<sys::snd_event>());
@@ -754,7 +763,7 @@ impl Default for SndDecoder {
     }
 }
 
-/// The FM synth: three 2-operator tonal voices and a noise drum.
+/// The FM synth: three 2-operator tonal voices, each playing its role's instrument, and a drum.
 pub struct SndFm {
     raw: Box<sys::snd_fm>,
 }
@@ -775,6 +784,16 @@ impl SndFm {
         // above); `out` holds `n` samples.
         unsafe { sys::snd_fm_render(&mut *self.raw, (fr as *const SndFrame).cast(), out.as_mut_ptr(), n as u32) };
         out
+    }
+
+    /// Tonal voice `k`'s envelope (Q16: 65536 = full).
+    pub fn voice_env(&self, k: usize) -> i32 {
+        self.raw.v[k].env
+    }
+
+    /// The role (`SND_ROLE_*`) tonal voice `k`'s note took when it started.
+    pub fn voice_role(&self, k: usize) -> u8 {
+        self.raw.v[k].role
     }
 }
 

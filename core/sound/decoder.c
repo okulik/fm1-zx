@@ -920,5 +920,7 @@ void snd_decoder_frame(snd_decoder *d, const zx_edge *e, uint32_t n, uint8_t sta
 	}
 	out->engine = 0;   /* method A: no engine, the voices hold for the whole frame */
 	out->n_ev = 0;
+	for (k = 0; k < SND_TONAL; k++)
+		out->role[k] = SND_ROLE_AUTO;
 	d->frames++;
 }

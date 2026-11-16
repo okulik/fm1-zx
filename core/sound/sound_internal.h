@@ -35,7 +35,8 @@ static inline uint64_t udiv64(uint64_t n, uint32_t d, uint32_t *rem)
 	return q;
 }
 
-/* The FM synth's voices and drum to rest; the rate and kfreq stay (snd_fm_init, snd_fm_reset). */
+/* The FM synth's voices and drum to rest; the rate, kfreq and drum_inc stay (snd_fm_init,
+ * snd_fm_reset). */
 static inline void fm_rest(snd_fm *f)
 {
 	uint32_t i;
@@ -44,7 +45,11 @@ static inline void fm_rest(snd_fm *f)
 	for (i = 0; i < SND_TONAL; i++) {
 		snd_fm_voice *v = &f->v[i];
 		v->phase = 0;
+		v->phase2 = 0;
 		v->inc = 0;
+		v->step = 0;
+		v->inc2 = 0;
+		v->ticks = 0;
 		v->period_q8 = 0;
 		v->env = 0;
 		v->rel_step = 0;
@@ -54,12 +59,17 @@ static inline void fm_rest(snd_fm *f)
 		v->lvl_target = 0;
 		v->amp = 0;
 		v->stage = OFF;
+		v->role = SND_ROLE_LEAD;
 	}
 	f->drum_env = 0;
 	f->drum_rel = 0;
+	f->drum_tenv = 0;
+	f->drum_trel = 0;
 	f->drum_lvl = 0;
 	f->drum_amp = 0;
+	f->drum_tamp = 0;
 	f->drum_lp = 0;
+	f->drum_phase = 0;
 	f->seed = 0x12345678u;
 	f->drum_stage = OFF;
 	f->drum_held = 0;

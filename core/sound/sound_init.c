@@ -11,6 +11,7 @@
 #include "sound_internal.h"
 
 #define CPU_Q8 896000000u   /* 3500000 * 256: frequency = CPU_Q8 / period_q8 */
+#define DRUM_TONE_PERIOD_Q8 4715789u   /* CPU_Q8 / 190: the FM drum's tone (fm.c) */
 
 void snd_decoder_init(snd_decoder *d)
 {
@@ -82,6 +83,7 @@ void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den)
 		f->kfreq = ~(uint64_t)0;
 	else
 		f->kfreq = (q << 32) | udiv64((uint64_t)r << 32, rate_num, 0);
+	f->drum_inc = (uint32_t)udiv64(f->kfreq, DRUM_TONE_PERIOD_Q8, 0);   /* the drum's 190 Hz tone */
 	fm_rest(f);
 }
 

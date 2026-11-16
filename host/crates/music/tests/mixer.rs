@@ -389,12 +389,12 @@ fn mix_live(m: &mut Machine, frames: usize, mode_of: impl Fn(usize) -> u8) -> (V
 
 #[test]
 fn fm_a_unchanged() {
-    // FM: sound (method A) plays sample for sample as it did when the mixer began holding FM
-    // through a lone unconfident decision (before that: unchanged since cb0f375, before method B
-    // and note events came)
+    // FM: sound (method A) plays sample for sample as it did when the synth got its instruments
+    // (every voice a lead while no role is decided); its decisions are pinned apart, unchanged
+    // since before (tests/instruments.rs, decisions_unchanged)
     for (name, m, want) in [
-        ("castaway", castaway(), 0x0dcec5c3c69a9a4bu64),
-        ("colony8", music::colony8(), 0x01dc13a6cfa1fe5d),
+        ("castaway", castaway(), 0x6dab25ba3fbdf52eu64),
+        ("colony8", music::colony8(), 0xd69dd22c970004b0),
     ] {
         let frames = capture(&mut { m }, &mut Beeper::new(RATE.0, RATE.1), 600);
         let dec = music::decode(frames.iter().map(|f| (f.edges.as_slice(), f.start_level)));

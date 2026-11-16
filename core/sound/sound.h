@@ -44,6 +44,10 @@ enum snd_style { SND_STYLE_NONE, SND_STYLE_SLOTS, SND_STYLE_FLIPS, SND_STYLE_PUL
  * known music engines (method B, "FM: engines"). Plan 7 adds FM_C before COUNT. */
 enum snd_mode { SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SND_MODE_COUNT };
 
+/* What a tonal voice plays in the tune, and so the FM instrument it gets (fm.c): AUTO is no role
+ * decided (the synth plays it as LEAD). */
+enum snd_role { SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD };
+
 typedef struct {
 	uint32_t period_q8;   /* full period in T-states, Q8 fixed point; 0 = voice off */
 	uint8_t level;        /* 0-255 loudness */
@@ -65,6 +69,8 @@ typedef struct {          /* what a method concluded about one past frame */
 	uint8_t confident;    /* 1 = play FM for this frame */
 	uint8_t engine;       /* 0 = none, else 1 + index in the engine table (method B) */
 	uint8_t n_ev;         /* events applied in order after the frame's start; method A: 0 */
+	uint8_t role[SND_TONAL];   /* enum snd_role of each tonal voice; a voice takes it only when a
+	                            * note starts on it (fm.c) */
 	snd_event ev[SND_EVENTS];
 } snd_frame;
 
@@ -240,15 +246,20 @@ void snd_slots_rechannel(snd_decoder *d, const uint32_t *w, uint32_t nw);
 
 /* ---- FM synth (fm.c) ---------------------------------------------------
  *
- * Phases are 32-bit (2^32 = one cycle). Each tonal voice is 2-operator FM at
- * a 1:1 ratio: out = sin(p + I * sin(p)), with the index I in "depth" units
- * of 2^16 / (2 pi) phase per unit (Q16 of one cycle per radian). Envelope
- * and index evolve on an 8 kHz tick (a fixed 0.125 ms, whatever the sample
- * rate), so their constants need no run-time maths. */
+ * Phases are 32-bit (2^32 = one cycle). Each tonal voice is 2-operator FM playing the instrument
+ * (patch) of its role: out = sin(p + I * sin(r * p)), the modulator at r = 1 or 2 times the
+ * carrier, with the index I in "depth" units of 2^16 / (2 pi) phase per unit (Q16 of one cycle
+ * per radian); the pad adds a second carrier 4 cents up, the lead a vibrato. Envelope, index and
+ * vibrato evolve on an 8 kHz tick (a fixed 0.125 ms, whatever the sample rate), so their
+ * constants need no run-time maths. */
 
 typedef struct {
-	uint32_t phase;       /* carrier (and modulator: ratio 1:1) */
-	uint32_t inc;         /* phase step per sample */
+	uint32_t phase;       /* carrier; the modulator's phase is r times it */
+	uint32_t phase2;      /* pad: the second carrier */
+	uint32_t inc;         /* the note's phase step per sample */
+	uint32_t step;        /* the step played: inc with the vibrato (lead), set per tick */
+	uint32_t inc2;        /* pad: the second carrier's step */
+	uint32_t ticks;       /* 8 kHz ticks since the note started (the vibrato's delay and phase) */
 	uint32_t period_q8;   /* the note's period last frame, 0 = off */
 	int32_t env;          /* Q16, 0-65536 */
 	int32_t rel_step;     /* env decrement per tick while releasing */
@@ -256,8 +267,9 @@ typedef struct {
 	int32_t depth_ex;     /* index above the base, decaying */
 	int32_t lvl;          /* level Q8 (0-65280), glides to lvl_target */
 	int32_t lvl_target;
-	int32_t amp;          /* (env >> 8) * (lvl >> 8): 0-65280, set per tick */
+	int32_t amp;          /* env * level * the patch's gain: out = sin * amp >> 17; set per tick */
 	uint8_t stage;        /* 0 off, 1 attack, 2 decay to sustain, 3 release */
+	uint8_t role;         /* enum snd_role of the note, latched at its start (never AUTO) */
 } snd_fm_voice;
 
 typedef struct snd_fm {   /* voice phases, envelopes */
@@ -265,11 +277,16 @@ typedef struct snd_fm {   /* voice phases, envelopes */
 	uint64_t kfreq;       /* inc = kfreq / period_q8 */
 	uint32_t tick_acc;    /* 8 kHz tick: += 8000 * den per sample, a tick per num */
 	snd_fm_voice v[SND_TONAL];
-	int32_t drum_env;     /* Q16 */
-	int32_t drum_rel;     /* decrement per tick while releasing */
+	int32_t drum_env;     /* the noise's envelope, Q24 */
+	int32_t drum_rel;     /* its decrement per tick while releasing */
+	int32_t drum_tenv;    /* the tone's envelope, Q24 */
+	int32_t drum_trel;
 	int32_t drum_lvl;     /* 0-255 */
-	int32_t drum_amp;
+	int32_t drum_amp;     /* the noise's and the tone's amplitude: out = x * amp >> 18 */
+	int32_t drum_tamp;
 	int32_t drum_lp;      /* one-pole low-passed noise */
+	uint32_t drum_phase;  /* the tone's phase */
+	uint32_t drum_inc;    /* its step per sample (190 Hz) */
 	uint32_t seed;        /* xorshift32 */
 	uint8_t drum_stage;   /* 0 off, 1 decaying, 3 release */
 	uint8_t drum_held;    /* the previous frame had a drum */
