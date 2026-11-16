@@ -38,35 +38,6 @@ _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
 
 #define ONE 32768
 
-void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)
-{
-	uint32_t i, xf;
-
-	if (!rate_num) rate_num = 1;
-	if (!rate_den) rate_den = 1;
-	snd_decoder_init(&m->dec);
-	snd_b_init(&m->b, snd_engine_table, snd_engine_count);
-	snd_fm_init(&m->fm, rate_num, rate_den);
-	for (i = 0; i < SND_RING_SAMPLES; i++)
-		m->ring[i] = 0;
-	m->rd = 0;
-	m->wr = 0;
-	m->fill = 0;
-	m->mute = 0;
-	m->live_g = ONE;
-	m->del_g = 0;
-	m->fm_g = 0;
-	xf = rate_num / rate_den / SND_XFADE_DIV;
-	if (!xf) xf = 1;
-	m->step = (int32_t)((ONE + xf - 1u) / xf);
-	m->primed = 0;
-	m->mode = SND_MODE_BEEPER;
-	m->fm_choice = SND_MODE_FM_A;
-	m->started = 0;
-	m->fm_on = 0;
-	m->run = 0;
-}
-
 static int32_t toward(int32_t g, int32_t target, int32_t step)
 {
 	if (g < target) {
@@ -77,11 +48,6 @@ static int32_t toward(int32_t g, int32_t target, int32_t step)
 		if (g < target) g = target;
 	}
 	return g;
-}
-
-void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n)
-{
-	snd_b_init(&m->b, table, n);
 }
 
 /* FM after `enter` confident decisions in a row, beeper after SND_LEAVE_FRAMES
@@ -132,7 +98,7 @@ void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_
 		m->fm_g = m->fm_on ? ONE : 0;
 	} else if (fm_mode && m->mode == SND_MODE_BEEPER) {
 		m->mute = m->fill;   /* the samples before this frame's */
-		snd_fm_init(&m->fm, m->fm.rate_num, m->fm.rate_den);
+		snd_fm_reset(&m->fm);
 		m->fm_g = m->fm_on ? ONE : 0;
 	} else if (!fm_mode && m->mode != SND_MODE_BEEPER) {
 		m->mute = 0;

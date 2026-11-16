@@ -86,11 +86,13 @@ target_compile_definitions(fmzx_app_image PRIVATE FMZX_LCD_DIVIDER=${FMZX_LCD_DI
 # felucca-bsp's headers are libraries of static helpers: the ones a unit does not use are fine.
 set_source_files_properties(${_ours} PROPERTIES
   COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-Wno-unused-function")
-# The renamed sound library and core instead of zx_sound and zx_core themselves, then the
-# rest of app/ (pixels.c and pixmodes.c come from the renamed objects above, so their archive
-# members are never pulled in).
-target_link_libraries(fmzx_app_image PRIVATE "${_ram}/libzx_sound.a" "${_ram}/libzx_core.a" "$<TARGET_FILE:fmzx_app>")
-add_dependencies(fmzx_app_image fmzx_app zx_core zx_sound)
+# The sound library's start-up functions (core/sound/sound_init.c: XIP, they call nothing in
+# RAMTEXT; main.c calls them directly), the renamed sound library and core instead of zx_sound and
+# zx_core themselves, then the rest of app/ (pixels.c and pixmodes.c come from the renamed objects
+# above, so their archive members are never pulled in).
+target_link_libraries(fmzx_app_image PRIVATE "$<TARGET_FILE:zx_sound_init>" "${_ram}/libzx_sound.a" "${_ram}/libzx_core.a"
+  "$<TARGET_FILE:fmzx_app>")
+add_dependencies(fmzx_app_image fmzx_app zx_core zx_sound zx_sound_init)
 target_link_options(fmzx_app_image PRIVATE
   -T "${CMAKE_CURRENT_SOURCE_DIR}/app.ld" --orphan-handling=error -e _start --gc-sections --emit-relocs
   "-Map=${CMAKE_CURRENT_BINARY_DIR}/fmzx_app.map")

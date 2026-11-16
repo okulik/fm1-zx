@@ -46,8 +46,6 @@ _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
 #define DEPTH_LEAD_START 16689        /* 1.6 */
 #define DEPTH_LEAD_END 6258           /* 0.6 */
 
-#define CPU_Q8 896000000u             /* 3500000 * 256: frequency = CPU_Q8 / period_q8 */
-
 enum { OFF, ATTACK, DECAY, RELEASE };
 
 static const int16_t sine_q15[256] = {
@@ -100,21 +98,12 @@ static int32_t sine(uint32_t ph)
 	return a + (((b - a) * (int32_t)((ph >> 16) & 255u)) >> 8);
 }
 
-void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den)
+/* The voices and the drum to rest; the rate and kfreq stay (sound_init.c's snd_fm_init sets
+ * them, then does the same). */
+void snd_fm_reset(snd_fm *f)
 {
-	uint32_t i, r;
-	uint64_t q;
+	uint32_t i;
 
-	if (!rate_num) rate_num = 1;
-	if (!rate_den) rate_den = 1;
-	f->rate_num = rate_num;
-	f->rate_den = rate_den;
-	/* kfreq = CPU_Q8 * 2^32 * den / num: the phase step is kfreq / period_q8 */
-	q = udiv64((uint64_t)CPU_Q8 * rate_den, rate_num, &r);
-	if (q >> 32)
-		f->kfreq = ~(uint64_t)0;
-	else
-		f->kfreq = (q << 32) | udiv64((uint64_t)r << 32, rate_num, 0);
 	f->tick_acc = 0;
 	for (i = 0; i < SND_TONAL; i++) {
 		snd_fm_voice *v = &f->v[i];

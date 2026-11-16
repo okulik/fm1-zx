@@ -200,61 +200,6 @@ static uint32_t ring(uint32_t frame)
 	return frame % SND_HIST;
 }
 
-void snd_decoder_init(snd_decoder *d)
-{
-	uint32_t i, k;
-
-	d->frames = 0;
-	for (i = 0; i < SND_HIST; i++) {
-		for (k = 0; k < SND_TONAL; k++) {
-			d->slot[i].hp_q8[k] = 0;
-			d->slot[i].pair_q8[k] = 0;
-		}
-		d->slot[i].n = 0;
-		d->slot[i].expl = 0;
-		d->slot[i].busy = 0;
-		d->slot[i].clean = 0;
-		d->slot[i].change = 0;
-		d->slot[i].full = 0;
-		d->slot[i].steady = 0;
-		d->slot[i].glide = 0;
-		d->slot[i].alt = 0;
-		d->slot[i].ear0 = 0;
-		d->slot[i].pulse = 0;
-		d->slot[i].width = 0;
-	}
-	d->timing = 0;
-	d->frame_notes = 0;
-	d->have_clean = 0;
-	d->have_change = 0;
-	d->broken = 0;
-	d->work = 0;
-	d->work_cap = 0xffffffffu;
-	d->clean_frame = 0;
-	d->change_frame = 0;
-	for (k = 0; k < SND_TONAL; k++) {
-		d->clean_q8[k] = 0;
-		d->out_q8[k] = 0;
-	}
-	d->since_tonal = REST_FRAMES;
-	d->prev_conf = 0;
-	for (k = 0; k < SND_TONAL; k++)
-		d->prev_q8[k] = 0;
-	d->ref_change_frame = 0;
-	d->ref_start = 0;
-	d->prev_start = 0;
-	d->have_prev = 0;
-	d->ref_change = 0;
-	d->returns = 0;
-	d->alt = 0;
-	d->pulse_style = 0;
-	d->pulse_width = 0;
-	d->busy_run = 0;
-	d->clean_pulse = 0;
-	d->ctx_pulse = 0;
-	snd_slots_reset(&d->sl);
-}
-
 /* Same voice: periods within 1/32 (about half a semitone). */
 static int same(uint32_t a, uint32_t b)
 {

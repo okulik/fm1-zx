@@ -276,6 +276,8 @@ typedef struct snd_fm {   /* voice phases, envelopes */
 } snd_fm;
 
 void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den);
+/* The voices and the drum to rest, as snd_fm_init leaves them; the rate stays. */
+void snd_fm_reset(snd_fm *f);
 /* Renders n samples of the frame *fr (all of its voices, whatever fr->confident): the voices
  * and the drum as at the frame's start, then each event from sample t * n / ZX_FRAME_TSTATES,
  * as if the frame had changed that voice there (a new period starts a note, period 0 releases

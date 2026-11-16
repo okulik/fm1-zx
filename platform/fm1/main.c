@@ -327,8 +327,8 @@ static void RAMTEXT game_release(void)
 /* The RAMTEXT code XIP calls (ramcalls.h). */
 struct ram_calls fmzx_ram = {
     zx_init, zx_load_sna, zx_load_z80, zx_tape_insert, zx_tape_autostart, zx_beeper_init,
-    snd_mixer_init, snd_mixer_set_engines, pix_compose_zx, zx_screen_line, zx_border_line, game_step,
-    game_release, lcd_pump_ram, zx_peek, zx_get_regs,
+    pix_compose_zx, zx_screen_line, zx_border_line, game_step, game_release, lcd_pump_ram,
+    zx_peek, zx_get_regs,
 };
 
 /* For the device copy of app/pixmodes.c, which runs from XIP (ramcalls.h). */
@@ -375,7 +375,7 @@ static void learned_start(uint32_t index)
         return;
     for (i = 0; i < snd_engine_count; i++)
         learned_table[i] = snd_engine_table[i];
-    fmzx_ram.set_engines(&mixer, learned_table, snd_engine_count + n);
+    snd_mixer_set_engines(&mixer, learned_table, snd_engine_count + n);
 }
 
 /* Loads pack entry `index` into fmzx_machine; ZX_OK, or the error (the game does not run). */
@@ -409,7 +409,7 @@ static int game_start(uint32_t index)
         return e;
     fmzx_ram.beeper_init(&beeper, 750000u, 17u);
     /* the decoder's history and the delay ring start empty: nothing of the last game plays */
-    fmzx_ram.mixer_init(&mixer, 750000u, 17u);
+    snd_mixer_init(&mixer, 750000u, 17u);
     learned_start(index);
     for (i = 0; i < LCD_ROWS; i++)
         border_sent[i] = line_seen[i] = NO_COLOUR;

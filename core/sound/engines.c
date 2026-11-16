@@ -993,64 +993,6 @@ static void decide(snd_b *b, snd_frame *out)
 	out->engine = b->engine;
 }
 
-void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n)
-{
-	uint32_t k;
-
-	b->table = table;
-	b->n = n;
-	b->frames = 0;
-	for (k = 0; k < SND_B_MATCHES; k++) {
-		b->match[k].anchor = 0;
-		b->match[k].entry = 0;
-		b->match[k].ok = 0;
-		b->match[k].frame = 0;
-		b->match[k].used = 0;
-	}
-	for (k = 0; k < SND_B_UNKNOWN; k++) {
-		b->unknown[k].pc = 0;
-		b->unknown[k].valid = 0;
-		b->unknown[k].sum = 0;
-		b->unknown[k].used = 0;
-	}
-	/* the window window_sum hashes: every byte a digest with a site at the address reads (a
-	 * relocated word's high byte may lie one past the signature) */
-	b->back = b->ahead = 0;
-	for (k = 0; k < n; k++) {
-		uint32_t s;
-		for (s = 0; s < table[k].n_sites; s++) {
-			const uint32_t off = table[k].sites[s].off, end = table[k].len + 1u;
-			if (off > b->back) b->back = (uint16_t)off;
-			if (end > off && end - off > b->ahead) b->ahead = (uint16_t)(end - off);
-		}
-	}
-	for (k = 0; k < SND_HIST; k++) {
-		uint32_t v;
-		b->rec[k].kind = SND_B_NONE;
-		b->rec[k].entry = 0;
-		b->rec[k].ok = 0;
-		b->rec[k].read = 0;
-		b->rec[k].carry = 0;
-		b->rec[k].next = 0;
-		b->rec[k].step = 0;
-		b->rec[k].whole = b->rec[k].cont = 0;
-		b->rec[k].t_first = b->rec[k].d_first = NOWHERE;
-		b->rec[k].t_last = 0;
-		for (v = 0; v < SND_TONAL; v++) {
-			b->rec[k].v[v].period_q8 = 0;
-			b->rec[k].v[v].level = 0;
-		}
-	}
-	silence(b);
-	for (k = 0; k < SND_TONAL; k++) {
-		b->lastv[k].period_q8 = 0;
-		b->lastv[k].level = 0;
-	}
-	b->last_entry = 0;
-	b->engine = 0;
-	b->held = 0;
-}
-
 void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out)
 {
 	uint32_t k;
