@@ -142,6 +142,9 @@ pub struct ChannelModel {
     pub half_period: Vec<Term>,
     /// The channel is silent when this input is 0 (none found by this reader yet).
     pub silent_if_zero: Option<Input>,
+    /// The channel is silent when `input & mask` is nonzero (true) or zero (false): the level
+    /// its `OUT`s take from that byte toggles only for the other value.
+    pub silent_if_bit: Option<(Input, u8, bool)>,
 }
 
 /// How long the note has held: its counter counts passes down from `counts_down_from` (the
@@ -211,11 +214,12 @@ pub struct EngineModel {
     pub wild: Vec<u16>,
     /// Offsets of the absolute addresses (words) inside the routine, ascending.
     pub reloc: Vec<u16>,
-    /// The pass pushes and pops: its times hold only while the stack lies in uncontended RAM
-    /// (the code reader cannot know where; the gates check what was heard).
+    /// The pass pushes and pops, or calls: its times hold only while the stack lies in
+    /// uncontended RAM (the code reader cannot know where; the gates check what was heard).
     pub stack: bool,
     /// The pass reads memory through a pointer (`(HL)`, `(IX+d)`, ...): its times hold only
-    /// while the pointer points into uncontended RAM (as for `stack`).
+    /// while the pointer points into uncontended RAM (as for `stack`). Also set for a read of a
+    /// fixed address in contended RAM (4000h-7FFFh), whose wait the formulas leave out.
     pub pointer_reads: bool,
 }
 
@@ -240,9 +244,10 @@ pub enum Why {
     StackOp,
     /// A store through a pointer in the pass.
     PointerStore,
-    /// A `CALL` or `RST` in the pass.
+    /// A `CALL` or `RST` in the pass the walk does not follow (conditional, a restart, into
+    /// ROM or more than three deep).
     CallInPass,
-    /// A return in the pass.
+    /// A return in the pass that is not a followed call's.
     ReturnInPass,
     /// `HALT` in the pass.
     HaltInPass,
@@ -298,6 +303,11 @@ pub enum Why {
     PassNotContiguous,
     /// The routine is longer than an entry's signature can be.
     TooLong,
+    /// A zero test leaving the pass inside a routine the pass calls.
+    TestInCallee,
+    /// A routine the pass calls lies too far from the pass for one signature to cover both
+    /// (the digest would not pin the called code the formulas depend on).
+    CalleeOutsideSignature,
     /// More channels or sites than an entry holds.
     TooManyChannels,
     /// More setup paths than the reader follows.
@@ -347,6 +357,8 @@ impl Why {
             Why::OverlappingCode => "overlapping-code",
             Why::PassNotContiguous => "pass-not-contiguous",
             Why::TooLong => "too-long",
+            Why::CalleeOutsideSignature => "callee-outside-signature",
+            Why::TestInCallee => "test-in-callee",
             Why::TooManyChannels => "too-many-channels",
             Why::SetupPaths => "setup-paths",
             Why::SetupOut => "setup-out",
@@ -390,6 +402,8 @@ impl Why {
             Why::OverlappingCode => "overlapping instructions",
             Why::PassNotContiguous => "other code inside the sound loop",
             Why::TooLong => "a routine too long for an entry",
+            Why::CalleeOutsideSignature => "a routine the sound loop calls too far away for an entry",
+            Why::TestInCallee => "a note's end inside a routine the sound loop calls",
             Why::TooManyChannels => "too many channels or OUTs for an entry",
             Why::SetupPaths => "too many paths between notes to follow",
             Why::SetupOut => "a speaker OUT between notes",
@@ -434,7 +448,10 @@ pub fn read_engine(peek: impl Fn(u16) -> u8, out_pc: u16) -> Result<EngineModel,
         _ => return Err(Refusal::NotSpeaker(out_pc)),
     }
     let mut g = cfg::build(peek, out_pc);
-    let items = cfg::walk(&g, peek, out_pc)?;
+    let walked = cfg::walk(&g, peek, out_pc)?;
+    g.inlined = walked.inlined;
+    g.callret = walked.callret;
+    let items = walked.items;
     let main = items.iter().map(cfg::Item::pc).collect();
     g.add_callers(peek, out_pc, &main);
     shape::analyse(peek, &g, items, out_pc)

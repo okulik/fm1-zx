@@ -185,8 +185,9 @@ as the FM-1 starts it: 40 s untouched, then ENTER, SPACE, 0, 1 and Kempston fire
 random play from a fixed seed (the same game gives the same run). A key script beside the game
 file, `<name>.keys` for `<name>.tzx` (the music corpus' format below, its times from the start),
 replaces that run. The learner reads the code of the routines it heard and of the speaker `OUT`s
-it finds in memory, and keeps a routine only when it is sure of it (the same notes heard as read,
-and method B playing them back); anything else stays on the beeper. After the table it prints one
+it finds in memory (with the calls a sound loop makes into code near it, and a loop that stops on
+a key press read as running with no key down), and keeps a routine only when it is sure of it (the
+same notes heard as read, and method B playing them back); anything else stays on the beeper. After the table it prints one
 line per game:
 
     tune: music learned (1 routine, heard, 1 channel)

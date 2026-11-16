@@ -812,6 +812,307 @@ pub fn note_change_tune() -> Fixture {
     }
 }
 
+/// The records (n, K: 300 edges, 16 bits) of the reader's generalisation fixtures, and a 0.
+fn records() -> Vec<u8> {
+    let mut v = Vec::new();
+    for n in [250u8, 222, 198, 187, 166, 148, 131, 124] {
+        v.extend_from_slice(&[n, 0x2C, 0x01]);
+    }
+    v.push(0);
+    v
+}
+
+/// The routine `code` (`table` bytes) with [`records`] after it.
+fn with_records(code: &[u8], table: usize) -> Vec<u8> {
+    assert_eq!(code.len(), table);
+    let mut code = code.to_vec();
+    code.extend_from_slice(&records());
+    sna(&code, &[])
+}
+
+/// As [`square_one_counter`], but the pass calls its delay: `wait` loads B from C and counts it
+/// down, then returns. The called routine lies after the loop, inside the routine's signature,
+/// or (`far`) at A000h, too far for one signature. Half period `13n + 78` T.
+///
+/// ```text
+/// 8000 21 21 80     start: LD HL,8021h    the first record: n, K (edges, 16 bits)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      DE = K
+/// 800C 23                  INC HL
+/// 800D 08           tog:   EX AF,AF'      4    A' = the level
+/// 800E EE 10               XOR 10h        7
+/// 8010 D3 FE               OUT (FEh),A    11   the edge
+/// 8012 08                  EX AF,AF'      4
+/// 8013 CD 1D 80            CALL wait      17   (far: CALL A000h)
+/// 8016 1B                  DEC DE         6
+/// 8017 7A                  LD A,D         4
+/// 8018 B3                  OR E           4
+/// 8019 20 F2               JR NZ,tog      12
+/// 801B 18 E6               JR note
+/// 801D 41           wait:  LD B,C         4    (far: at A000h)
+/// 801E 10 FE        d:     DJNZ d         13n - 5
+/// 8020 C9                  RET            10
+/// 8021                     records (n, K) and a 0
+/// ```
+pub fn call_in_pass(far: bool) -> Fixture {
+    let wait: [u8; 4] = [0x41, 0x10, 0xFE, 0xC9];
+    let [lo, hi] = if far { 0xA000u16 } else { 0x801D }.to_le_bytes();
+    #[rustfmt::skip]
+    let mut code = vec![
+        0x21, 0x21, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23,
+        0x08, 0xEE, 0x10, 0xD3, 0xFE, 0x08, 0xCD, lo, hi, 0x1B, 0x7A, 0xB3, 0x20, 0xF2, 0x18, 0xE6,
+    ];
+    code.extend_from_slice(&wait);
+    assert_eq!(code.len(), 0x21);
+    code.extend_from_slice(&records());
+    Fixture {
+        name: if far { "call_in_pass_far" } else { "call_in_pass" },
+        sna: sna(&code, &[(0xA000, &wait)]),
+        sites: vec![0x8010],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 78.0],
+    }
+}
+
+/// A square wave whose second `OUT` takes its level from bit 4 of (9000h): while that bit is
+/// clear the level goes high and low each pass, while it is set it stays high (silent). Each
+/// half is a `DJNZ` of B loaded from C. Half period `13n + 40` T (the bit stays clear).
+///
+/// ```text
+/// 8000 21 27 80     start: LD HL,8027h    the first record: n, K (edges, 16 bits)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      DE = K
+/// 800C 23                  INC HL
+/// 800D 3E 10        tog:   LD A,10h       7
+/// 800F D3 FE               OUT (FEh),A    11   high
+/// 8011 41                  LD B,C         4
+/// 8012 FE 00               CP 0           7
+/// 8014 10 FE        d1:    DJNZ d1        13n - 5
+/// 8016 3A 00 90            LD A,(9000h)   13
+/// 8019 E6 10               AND 10h        7
+/// 801B D3 FE               OUT (FEh),A    11   low (high while bit 4 of (9000h) is set)
+/// 801D 41                  LD B,C         4
+/// 801E 10 FE        d2:    DJNZ d2        13n - 5
+/// 8020 1B                  DEC DE         6
+/// 8021 7A                  LD A,D         4
+/// 8022 B3                  OR E           4
+/// 8023 20 E8               JR NZ,tog      12
+/// 8025 18 DC               JR note
+/// 8027                     records (n, K) and a 0
+/// ```
+pub fn toggle_silence() -> Fixture {
+    #[rustfmt::skip]
+    let code = [
+        0x21, 0x27, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23,
+        0x3E, 0x10, 0xD3, 0xFE, 0x41, 0xFE, 0x00, 0x10, 0xFE, 0x3A, 0x00, 0x90, 0xE6, 0x10,
+        0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1B, 0x7A, 0xB3, 0x20, 0xE8, 0x18, 0xDC,
+    ];
+    Fixture {
+        name: "toggle_silence",
+        sna: with_records(&code, 0x27),
+        sites: vec![0x800F, 0x801B],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 40.0],
+    }
+}
+
+/// As [`square_one_counter`], but the pass also reads a fixed address in contended RAM
+/// (6000h), whose wait for the screen the formula leaves out. Half period `13n + 71` T.
+///
+/// ```text
+/// 8000 21 22 80     start: LD HL,8022h    the first record: n, K (edges, 16 bits)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      DE = K
+/// 800C 23                  INC HL
+/// 800D 08           tog:   EX AF,AF'      4    A' = the level
+/// 800E EE 10               XOR 10h        7
+/// 8010 D3 FE               OUT (FEh),A    11   the edge
+/// 8012 08                  EX AF,AF'      4
+/// 8013 3A 00 60            LD A,(6000h)   13   the contended read
+/// 8016 1B                  DEC DE         6
+/// 8017 7A                  LD A,D         4
+/// 8018 B3                  OR E           4
+/// 8019 28 05               JR Z,next      7    the note's last edge
+/// 801B 41                  LD B,C         4
+/// 801C 10 FE        d:     DJNZ d         13n - 5
+/// 801E 18 ED               JR tog         12
+/// 8020 18 E1        next:  JR note
+/// 8022                     records (n, K) and a 0
+/// ```
+pub fn contended_fixed_read() -> Fixture {
+    #[rustfmt::skip]
+    let code = [
+        0x21, 0x22, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23,
+        0x08, 0xEE, 0x10, 0xD3, 0xFE, 0x08, 0x3A, 0x00, 0x60, 0x1B, 0x7A, 0xB3, 0x28, 0x05,
+        0x41, 0x10, 0xFE, 0x18, 0xED, 0x18, 0xE1,
+    ];
+    Fixture {
+        name: "contended_fixed_read",
+        sna: with_records(&code, 0x22),
+        sites: vec![0x8010],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 71.0],
+    }
+}
+
+/// As [`square_one_counter`], but each pass reads the keyboard and ends the note when a key is
+/// down (`IN A,(FEh); CPL; AND 1Fh; JR NZ`): no key is down, so the branch is never taken. Half
+/// period `13n + 87` T.
+///
+/// ```text
+/// 8000 21 26 80     start: LD HL,8026h    the first record: n, K (edges, 16 bits)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      DE = K
+/// 800C 23                  INC HL
+/// 800D 08           tog:   EX AF,AF'      4    A' = the level
+/// 800E EE 10               XOR 10h        7
+/// 8010 D3 FE               OUT (FEh),A    11   the edge
+/// 8012 08                  EX AF,AF'      4
+/// 8013 1B                  DEC DE         6
+/// 8014 7A                  LD A,D         4
+/// 8015 B3                  OR E           4
+/// 8016 28 0C               JR Z,next      7    the note's last edge
+/// 8018 DB FE               IN A,(FEh)     11   the keyboard
+/// 801A 2F                  CPL            4
+/// 801B E6 1F               AND 1Fh        7
+/// 801D 20 05               JR NZ,next     7    a key down
+/// 801F 41                  LD B,C         4
+/// 8020 10 FE        d:     DJNZ d         13n - 5
+/// 8022 18 E9               JR tog         12
+/// 8024 18 DD        next:  JR note
+/// 8026                     records (n, K) and a 0
+/// ```
+pub fn idle_keyboard() -> Fixture {
+    #[rustfmt::skip]
+    let code = [
+        0x21, 0x26, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23,
+        0x08, 0xEE, 0x10, 0xD3, 0xFE, 0x08, 0x1B, 0x7A, 0xB3, 0x28, 0x0C, 0xDB, 0xFE, 0x2F,
+        0xE6, 0x1F, 0x20, 0x05, 0x41, 0x10, 0xFE, 0x18, 0xE9, 0x18, 0xDD,
+    ];
+    Fixture {
+        name: "idle_keyboard",
+        sna: with_records(&code, 0x26),
+        sites: vec![0x8010],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 87.0],
+    }
+}
+
+/// [`square_one_counter`] with `LD B,C` between the counter's `OR E` and its test (`LD` leaves
+/// the flags alone). Half period `13n + 58` T.
+///
+/// ```text
+/// 8000 21 1F 80     start: LD HL,801Fh    the first record: n, K (edges, 16 bits)
+/// 8003 7E           note:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)
+/// 800A 23                  INC HL
+/// 800B 56                  LD D,(HL)      DE = K
+/// 800C 23                  INC HL
+/// 800D 08           tog:   EX AF,AF'      4    A' = the level
+/// 800E EE 10               XOR 10h        7
+/// 8010 D3 FE               OUT (FEh),A    11   the edge
+/// 8012 08                  EX AF,AF'      4
+/// 8013 1B                  DEC DE         6
+/// 8014 7A                  LD A,D         4
+/// 8015 B3                  OR E           4
+/// 8016 41                  LD B,C         4
+/// 8017 28 04               JR Z,next      7    the note's last edge
+/// 8019 10 FE        d:     DJNZ d         13n - 5
+/// 801B 18 F0               JR tog         12
+/// 801D 18 E4        next:  JR note
+/// 801F                     records (n, K) and a 0
+/// ```
+pub fn neutral_before_test() -> Fixture {
+    #[rustfmt::skip]
+    let code = [
+        0x21, 0x1F, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23,
+        0x08, 0xEE, 0x10, 0xD3, 0xFE, 0x08, 0x1B, 0x7A, 0xB3, 0x41, 0x28, 0x04, 0x10, 0xFE,
+        0x18, 0xF0, 0x18, 0xE4,
+    ];
+    Fixture {
+        name: "neutral_before_test",
+        sna: with_records(&code, 0x1F),
+        sites: vec![0x8010],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 58.0],
+    }
+}
+
+/// A routine called once a note that keeps the level in memory between calls: it loads A from
+/// 9000h, flips and outputs it each pass, and stores it back there before it returns. E counts
+/// the note's edges, a `DJNZ` of B loaded from C each half period. Half period `13n + 33` T.
+///
+/// ```text
+/// 8000 21 21 80     start: LD HL,8021h    the first record: n, K (edges)
+/// 8003 7E           main:  LD A,(HL)      n (0: the end of the table)
+/// 8004 B7                  OR A
+/// 8005 28 F9               JR Z,start
+/// 8007 4F                  LD C,A
+/// 8008 23                  INC HL
+/// 8009 5E                  LD E,(HL)      E = K
+/// 800A 23                  INC HL
+/// 800B CD 10 80            CALL note
+/// 800E 18 F3               JR main
+/// 8010 3A 00 90     note:  LD A,(9000h)   the level the last note left
+/// 8013 EE 10        tog:   XOR 10h        7
+/// 8015 D3 FE               OUT (FEh),A    11   the edge
+/// 8017 41                  LD B,C         4
+/// 8018 10 FE        d:     DJNZ d         13n - 5
+/// 801A 1D                  DEC E          4
+/// 801B 20 F6               JR NZ,tog      12
+/// 801D 32 00 90            LD (9000h),A   the level, for the next note
+/// 8020 C9                  RET
+/// 8021                     records (n, K) and a 0
+/// ```
+pub fn level_in_memory() -> Fixture {
+    #[rustfmt::skip]
+    let mut code = vec![
+        0x21, 0x21, 0x80, 0x7E, 0xB7, 0x28, 0xF9, 0x4F, 0x23, 0x5E, 0x23, 0xCD, 0x10, 0x80,
+        0x18, 0xF3, 0x3A, 0x00, 0x90, 0xEE, 0x10, 0xD3, 0xFE, 0x41, 0x10, 0xFE, 0x1D, 0x20,
+        0xF6, 0x32, 0x00, 0x90, 0xC9,
+    ];
+    assert_eq!(code.len(), 0x21);
+    for n in [250u8, 222, 198, 187, 166, 148, 131, 124] {
+        code.extend_from_slice(&[n, 151]); // an odd count: the level the note leaves alternates
+    }
+    code.push(0);
+    Fixture {
+        name: "level_in_memory",
+        sna: sna(&code, &[]),
+        sites: vec![0x8015],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(r.bc & 0xFF) + 33.0],
+    }
+}
+
 /// Every fixture.
 pub fn all() -> Vec<Fixture> {
     vec![
@@ -828,6 +1129,13 @@ pub fn all() -> Vec<Fixture> {
         toggler_saved_nested(),
         square_pointer_pass(false),
         square_pointer_pass(true),
+        call_in_pass(false),
+        call_in_pass(true),
+        toggle_silence(),
+        contended_fixed_read(),
+        idle_keyboard(),
+        neutral_before_test(),
+        level_in_memory(),
     ]
 }
 

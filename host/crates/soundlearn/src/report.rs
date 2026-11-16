@@ -158,7 +158,10 @@ pub fn block(r: &Routine) -> String {
         );
         for (c, ch) in m.channels.iter().enumerate() {
             let sites: Vec<String> = ch.sites.iter().map(|p| format!("{p:04X}h")).collect();
-            let silent = ch.silent_if_zero.as_ref().map_or(String::new(), |x| format!(", silent when {} is 0", input(x, m.anchor)));
+            let mut silent = ch.silent_if_zero.as_ref().map_or(String::new(), |x| format!(", silent when {} is 0", input(x, m.anchor)));
+            if let Some((x, mask, set)) = &ch.silent_if_bit {
+                silent += &format!(", silent when {} & {mask:02X}h is {}", input(x, m.anchor), if *set { "set" } else { "clear" });
+            }
             s += &format!("    channel {c}, OUT {}: half period {} T{silent}\n", sites.join(" "), formula(ch, m.anchor));
         }
     }

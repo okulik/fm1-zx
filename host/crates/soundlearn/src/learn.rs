@@ -37,7 +37,7 @@ use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_WORK_MAX};
 /// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
 /// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
 /// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
-pub const LEARNER_VERSION: u32 = 3;
+pub const LEARNER_VERSION: u32 = 4;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;

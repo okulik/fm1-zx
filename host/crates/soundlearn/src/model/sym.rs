@@ -171,6 +171,9 @@ pub(super) struct Pushed {
     pub advanced: bool,
 }
 
+/// What a `CALL` pushes: a return address, no pair's value.
+const RETURN: Pushed = Pushed { hi: Val::UNKNOWN, lo: Val::UNKNOWN, base: u32::MAX - 1, off: 0, advanced: false };
+
 #[derive(Clone, Debug)]
 pub(super) struct State {
     pub v: [Val; NSLOT],
@@ -598,6 +601,14 @@ impl State {
             }
             0xEB => self.swap_pairs(1, 2),
             0x10 => self.set(2, Val::UNKNOWN),
+            // a call the walk follows (its return address on the stack) and its return; the walk
+            // refuses the calls it does not follow
+            0xCD => self.stack.push(RETURN),
+            0xC9 => {
+                if self.stack.pop() != Some(RETURN) {
+                    self.stack_lost = true;
+                }
+            }
             0xC5 | 0xD5 | 0xE5 | 0xF5 => self.push(stack_pair(op, idx)),
             0xC1 | 0xD1 | 0xE1 | 0xF1 => self.pop(stack_pair(op, idx)),
             _ => {

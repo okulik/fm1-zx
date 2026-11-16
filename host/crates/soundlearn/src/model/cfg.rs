@@ -16,8 +16,18 @@ const ARM_MAX: usize = 48;
 const PASS_MAX: usize = 400;
 /// Most bytes of a delay loop.
 const DELAY_MAX: u16 = 64;
+/// Bytes of a called routine decoded from its start.
+const CALLEE_REACH: i32 = 256;
+/// Most calls the walk follows one inside another.
+const CALLS_MAX: usize = 3;
+/// Most instructions that leave the flags alone between a counter's `DEC` and its test.
+const NEUTRAL_MAX: usize = 4;
 
 pub(super) struct Cfg {
+    /// The pass's instructions inside the calls the walk follows (their delay loops' too), and
+    /// the `CALL`s and `RET`s it follows (set from the walk).
+    pub inlined: BTreeSet<u16>,
+    pub callret: BTreeSet<u16>,
     pub n: BTreeMap<u16, Insn>,
     pub preds: BTreeMap<u16, Vec<u16>>,
     /// Delay loops by their first instruction, and every instruction of one (to its head).
@@ -44,13 +54,14 @@ pub(super) fn succs(i: &Insn) -> Vec<u16> {
     v
 }
 
-/// The instructions reachable from `out` within the window.
+/// The instructions reachable from `out` within the window, and the code of the routines its
+/// `CALL`s in RAM go to (up to 256 bytes on from each, past the window too).
 pub(super) fn build(peek: &dyn Fn(u16) -> u8, out: u16) -> Cfg {
     let lo = (i32::from(out) - WINDOW).max(0);
     let hi = (i32::from(out) + WINDOW).min(0x10000);
     let mut n = BTreeMap::new();
-    let mut todo = vec![out];
-    while let Some(pc) = todo.pop() {
+    let mut todo = vec![(out, lo, hi)];
+    while let Some((pc, lo, hi)) = todo.pop() {
         if n.contains_key(&pc) || i32::from(pc) < lo {
             continue;
         }
@@ -58,7 +69,12 @@ pub(super) fn build(peek: &dyn Fn(u16) -> u8, out: u16) -> Cfg {
         if i32::from(pc) + i32::from(i.len) > hi {
             continue;
         }
-        todo.extend(succs(&i));
+        todo.extend(succs(&i).into_iter().map(|s| (s, lo, hi)));
+        if let Flow::Call(t) = i.flow {
+            if t >= 0x4000 {
+                todo.push((t, i32::from(t), (i32::from(t) + CALLEE_REACH).min(0x10000)));
+            }
+        }
         n.insert(pc, i);
     }
     let mut preds: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
@@ -67,7 +83,7 @@ pub(super) fn build(peek: &dyn Fn(u16) -> u8, out: u16) -> Cfg {
             preds.entry(s).or_default().push(*pc);
         }
     }
-    let mut cfg = Cfg { n, preds, delays: BTreeMap::new(), in_delay: BTreeMap::new() };
+    let mut cfg = Cfg { inlined: BTreeSet::new(), callret: BTreeSet::new(), n, preds, delays: BTreeMap::new(), in_delay: BTreeMap::new() };
     cfg.find_delays(peek);
     cfg
 }
@@ -201,7 +217,8 @@ impl Cfg {
 
     /// The idiom that sets the flags a zero test `b` (`JR`/`JP` `Z`/`NZ`, or `DJNZ`) reads, as
     /// the instructions just before it: `DEC r`, or `DEC rr; LD A,h; OR l` (either half first).
-    /// Gives the counter's register number and the idiom's instructions.
+    /// Up to four instructions that leave the flags alone ([`flag_neutral`]) may stand between
+    /// the idiom and the test. Gives the counter's register number and the idiom's instructions.
     pub(super) fn zero_idiom(&self, peek: &dyn Fn(u16) -> u8, b: &Insn) -> Option<(u8, Vec<u16>)> {
         if let Flow::Djnz(_) = b.flow {
             return Some((2, vec![b.pc]));
@@ -216,7 +233,13 @@ impl Cfg {
                 _ => None,
             }
         };
-        let p1 = before(b.pc)?;
+        let mut p1 = before(b.pc)?;
+        for _ in 0..NEUTRAL_MAX {
+            if !flag_neutral(peek, p1) {
+                break;
+            }
+            p1 = before(p1.pc)?;
+        }
         if let Some(r) = dec8(peek(p1.pc)).filter(|_| p1.len == 1) {
             return Some((r, vec![p1.pc, b.pc]));
         }
@@ -397,6 +420,9 @@ pub(super) enum Item {
     /// A zero test whose zero side leaves the pass (to the next note's setup): the pass goes on
     /// by the other side.
     Test { pc: u16, stay_taken: bool, counter: u8, exit: u16 },
+    /// A branch on a keyboard read whose side an idle keyboard takes ([`idle_keyboard`]): the
+    /// pass goes that way, `taken` or not.
+    Fixed { pc: u16, taken: bool },
     /// A zero test whose two sides meet again straight away, one of them with an `OUT`.
     Diamond { pc: u16, zero_taken: bool, taken: Vec<u16>, fall: Vec<u16>, merge: u16, counter: u8 },
 }
@@ -405,7 +431,7 @@ impl Item {
     /// The instruction the item starts at.
     pub(super) fn pc(&self) -> u16 {
         match self {
-            Item::Op(pc) | Item::Delay(pc) | Item::Test { pc, .. } | Item::Diamond { pc, .. } => *pc,
+            Item::Op(pc) | Item::Delay(pc) | Item::Test { pc, .. } | Item::Diamond { pc, .. } | Item::Fixed { pc, .. } => *pc,
         }
     }
 }
@@ -452,21 +478,47 @@ fn diamond(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, b: &Insn, target: u16) -> Option
     Some(Item::Diamond { pc: b.pc, zero_taken: Cfg::zero_taken(peek, b), taken, fall, merge, counter })
 }
 
+/// The pass found by [`walk`].
+pub(super) struct Walk {
+    pub items: Vec<Item>,
+    /// As [`Cfg::inlined`] and [`Cfg::callret`].
+    pub inlined: BTreeSet<u16>,
+    pub callret: BTreeSet<u16>,
+}
+
 /// The pass of the loop through `out`: from `out` forward, through delay loops, both arms of
-/// diamonds and the staying side of zero tests, until the walk comes back to where it has been.
-/// The pass is the cycle from there.
-pub(super) fn walk(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, out: u16) -> Result<Vec<Item>, Refusal> {
+/// diamonds, the staying side of zero tests, the side an idle keyboard takes, and into the
+/// routines the pass calls (up to three deep) and back from their returns, until the walk comes
+/// back to where it has been with the same calls open. The pass is the cycle from there.
+pub(super) fn walk(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, out: u16) -> Result<Walk, Refusal> {
     let mut items: Vec<Item> = Vec::new();
-    let mut at: BTreeMap<u16, usize> = BTreeMap::new();
+    // per item, whether it lies inside a call
+    let mut called: Vec<bool> = Vec::new();
+    let mut at: BTreeMap<(u16, Vec<u16>), usize> = BTreeMap::new();
+    // the return addresses of the calls open
+    let mut calls: Vec<u16> = Vec::new();
+    let mut callret = BTreeSet::new();
     let mut pc = out;
     loop {
-        if let Some(&k) = at.get(&pc) {
-            return Ok(items.split_off(k));
+        if let Some(&k) = at.get(&(pc, calls.clone())) {
+            let items = items.split_off(k);
+            let mut inlined = BTreeSet::new();
+            for (it, _) in items.iter().zip(&called[k..]).filter(|(_, c)| **c) {
+                match it {
+                    Item::Delay(h) => inlined.extend(&cfg.delays[h].nodes),
+                    it => {
+                        inlined.insert(it.pc());
+                    }
+                }
+            }
+            callret.retain(|p| items.iter().any(|it| it.pc() == *p));
+            return Ok(Walk { items, inlined, callret });
         }
         if items.len() >= PASS_MAX {
             return Err(Refusal::Unmodelled(Why::PassTooLong, out));
         }
-        at.insert(pc, items.len());
+        at.insert((pc, calls.clone()), items.len());
+        called.push(!calls.is_empty());
         if let Some(d) = cfg.delays.get(&pc) {
             items.push(Item::Delay(pc));
             pc = d.exit;
@@ -479,10 +531,11 @@ pub(super) fn walk(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, out: u16) -> Result<Vec<
         if undecoded(peek, i) {
             return Err(Refusal::Undecoded(pc));
         }
+        let next = || i.pc.checked_add(u16::from(i.len)).ok_or(Refusal::Unmodelled(Why::LeavesWindow, pc));
         match i.flow {
             Flow::Next if i.t == i.t_taken => {
                 items.push(Item::Op(pc));
-                pc = i.pc.checked_add(u16::from(i.len)).ok_or(Refusal::Unmodelled(Why::LeavesWindow, pc))?;
+                pc = next()?;
             }
             Flow::Jump(t) => {
                 items.push(Item::Op(pc));
@@ -496,15 +549,28 @@ pub(super) fn walk(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, out: u16) -> Result<Vec<
                     items.push(d);
                 } else if let Some((counter, _)) = cfg.zero_idiom(peek, i) {
                     let zero_taken = Cfg::zero_taken(peek, i);
-                    let next = i.pc.checked_add(u16::from(i.len)).ok_or(Refusal::Unmodelled(Why::LeavesWindow, pc))?;
-                    let (stay, exit) = if zero_taken { (next, t) } else { (t, next) };
+                    let (stay, exit) = if zero_taken { (next()?, t) } else { (t, next()?) };
                     items.push(Item::Test { pc, stay_taken: !zero_taken, counter, exit });
                     pc = stay;
+                } else if let Some(taken) = idle_keyboard(cfg, peek, i) {
+                    items.push(Item::Fixed { pc, taken });
+                    pc = if taken { t } else { next()? };
                 } else {
                     return Err(Refusal::Unmodelled(branch_kind(peek(pc)), pc));
                 }
             }
             Flow::JumpIndirect => return Err(Refusal::ComputedJump(pc)),
+            Flow::Call(t) if calls.len() < CALLS_MAX && cfg.n.contains_key(&t) => {
+                items.push(Item::Op(pc));
+                callret.insert(pc);
+                calls.push(next()?);
+                pc = t;
+            }
+            Flow::Ret if !calls.is_empty() => {
+                items.push(Item::Op(pc));
+                callret.insert(pc);
+                pc = calls.pop().unwrap_or(pc);
+            }
             Flow::Call(_) | Flow::CondCall(_) | Flow::Rst(_) => return Err(Refusal::Unmodelled(Why::CallInPass, pc)),
             Flow::Ret | Flow::CondRet => return Err(Refusal::Unmodelled(Why::ReturnInPass, pc)),
             Flow::Halt => return Err(Refusal::Unmodelled(Why::HaltInPass, pc)),
@@ -588,4 +654,95 @@ pub(super) fn setup_paths(cfg: &Cfg, from: u16, main: &BTreeSet<u16>, inside: &B
     let mut d = Dfs { cfg, main, inside, path: Vec::new(), visits: BTreeMap::new(), out: Vec::new(), steps: 0, cut: false };
     d.go(from);
     (!d.cut && d.out.len() <= PATHS_MAX).then_some(d.out)
+}
+
+/// A `JR`/`JP` `Z`/`NZ` whose flag comes from a keyboard read (`IN A,(n)`, n even) through
+/// `OR n`, `AND n`, `XOR n`, `CPL`, `INC A`, `DEC A`, `CP n`, `OR A`, `AND A` only, run straight
+/// into it: the side an idle keyboard takes, with the key bits (0-4) all 1 and the others not
+/// known (a side that depends on them is not known). The reader assumes no key is down while
+/// the music plays: a key that ends a note early is caught on the device, whose strict check of
+/// a learned entry (each rise one period of the formula after the last) leaves a frame that
+/// fails it to the beeper.
+fn idle_keyboard(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, b: &Insn) -> Option<bool> {
+    let op = peek(b.pc);
+    if !matches!(op, 0x20 | 0x28 | 0xC2 | 0xCA) {
+        return None;
+    }
+    // the unique instruction before `pc`, running into it
+    let before = |pc: u16| -> Option<&Insn> {
+        match cfg.preds.get(&pc).map(Vec::as_slice) {
+            Some([p]) => cfg.n.get(p).filter(|i| i.flow == Flow::Next && i.t == i.t_taken && i.pc.wrapping_add(u16::from(i.len)) == pc),
+            _ => None,
+        }
+    };
+    let mut chain = Vec::new();
+    let mut pc = b.pc;
+    loop {
+        let i = before(pc)?;
+        if peek(i.pc) == 0xDB && peek(i.pc.wrapping_add(1)) & 1 == 0 {
+            break;
+        }
+        if chain.len() >= 6 {
+            return None;
+        }
+        chain.push(i.pc);
+        pc = i.pc;
+    }
+    chain.reverse();
+    // A's value and the bits of it known; Z when known
+    let (mut a, mut known): (u8, u8) = (0x1F, 0x1F);
+    let mut z: Option<bool> = None;
+    let zero = |a: u8, known: u8| {
+        if a & known != 0 {
+            Some(false)
+        } else {
+            (known == 0xFF).then_some(true)
+        }
+    };
+    for &p in &chain {
+        let n = peek(p.wrapping_add(1));
+        match peek(p) {
+            0xF6 => {
+                (a, known) = (a | n, known | n);
+                z = zero(a, known);
+            }
+            0xE6 => {
+                (a, known) = (a & n, known | !n);
+                z = zero(a, known);
+            }
+            0xEE => {
+                a ^= n;
+                z = zero(a, known);
+            }
+            0x2F => a = !a,
+            0x3C | 0x3D if known == 0xFF => {
+                a = if peek(p) == 0x3C { a.wrapping_add(1) } else { a.wrapping_sub(1) };
+                z = Some(a == 0);
+            }
+            0xFE => z = zero(a ^ n, known),
+            0xB7 | 0xA7 => z = zero(a, known),
+            _ => return None,
+        }
+    }
+    let z = z?;
+    Some(if matches!(op, 0x28 | 0xCA) { z } else { !z })
+}
+
+/// An instruction that leaves the flags as they are, runs straight on and keeps the registers
+/// where they are (no exchange): loads, `INC`/`DEC` of a pair, `PUSH`, `POP` of a pair but AF,
+/// `OUT`.
+pub(super) fn flag_neutral(peek: &dyn Fn(u16) -> u8, i: &Insn) -> bool {
+    if i.flow != Flow::Next || i.t != i.t_taken {
+        return false;
+    }
+    let b0 = peek(i.pc);
+    if b0 == 0xED {
+        // OUT (C),r; LD (nn),rr; LD rr,(nn)
+        let o = peek(i.pc.wrapping_add(1));
+        return o & 0xC7 == 0x41 || o & 0xCF == 0x43 || o & 0xCF == 0x4B;
+    }
+    let op = if matches!(b0, 0xDD | 0xFD) && i.len > 1 { peek(i.pc.wrapping_add(1)) } else { b0 };
+    matches!(op, 0x00 | 0x01 | 0x11 | 0x21 | 0x31 | 0x02 | 0x12 | 0x0A | 0x1A | 0x22 | 0x2A | 0x32 | 0x3A | 0x03 | 0x13 | 0x23 | 0x33 | 0x0B | 0x1B | 0x2B | 0x3B | 0xD3 | 0xC5 | 0xD5 | 0xE5 | 0xF5 | 0xC1 | 0xD1 | 0xE1)
+        || op & 0xC7 == 0x06
+        || ((0x40..=0x7F).contains(&op) && op != 0x76)
 }

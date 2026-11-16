@@ -110,7 +110,8 @@ fn fit_periods(model: &EngineModel, heard: &SiteHeard, played: bool) -> Result<F
                 0
             })
         };
-        let silent = ch.silent_if_zero.is_some_and(|x| x.read(&peek, model.anchor, &snap.regs) == Some(0));
+        let silent = ch.silent_if_zero.is_some_and(|x| x.read(&peek, model.anchor, &snap.regs) == Some(0))
+            || ch.silent_if_bit.is_some_and(|(x, m, set)| x.read(&peek, model.anchor, &snap.regs).is_some_and(|v| (v & u32::from(m) != 0) == set));
         let half = eval_terms(&ch.half_period, &peek, model.anchor, &snap.regs);
         match half {
             Some(h) if !missing.get() && !silent && h > 0.0 => pairs.push((p.period_t + if played { p.contention_t } else { 0.0 }, per_sample * h)),
@@ -308,6 +309,17 @@ pub(crate) fn period_prog(ch: &ChannelModel) -> Vec<Op> {
     let mut ops = Vec::new();
     if let Some(x) = &ch.silent_if_zero {
         ops.extend([input_op(x), Op::ZeroSilent]);
+    }
+    if let Some((x, m, set)) = &ch.silent_if_bit {
+        // silent when set: m - (x & m) is 0 then; silent when clear: x & m is 0 then
+        if *set {
+            ops.push(Op::K(u32::from(*m)));
+        }
+        ops.extend([input_op(x), Op::K(u32::from(*m)), Op::And]);
+        if *set {
+            ops.push(Op::Sub);
+        }
+        ops.push(Op::ZeroSilent);
     }
     push_sum(&mut ops, &ch.half_period, PERIOD_SCALE);
     ops

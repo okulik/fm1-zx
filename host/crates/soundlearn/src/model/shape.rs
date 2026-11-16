@@ -249,6 +249,36 @@ fn toggles(levels: &[Bit]) -> bool {
     })
 }
 
+/// When the levels do not toggle at every `OUT` (see [`toggles`]): whether they do exactly when
+/// the one bit of the pass's start they depend on has one value. Gives the bit and that value
+/// (the channel is silent for the other).
+fn toggle_condition(levels: &[Bit]) -> Option<(Loc, u8, bool)> {
+    let mut vars: Vec<(Loc, u8)> = Vec::new();
+    for b in levels {
+        match *b {
+            Bit::E { loc, bit, .. } if !vars.contains(&(loc, bit)) => vars.push((loc, bit)),
+            Bit::E { .. } | Bit::Z | Bit::O => {}
+            Bit::X | Bit::Acc { .. } => return None,
+        }
+    }
+    if vars.len() != 1 {
+        return None;
+    }
+    let ok = |v: u32| {
+        let ev = |b: &Bit| match *b {
+            Bit::O => 1u32,
+            Bit::E { inv, .. } => v ^ u32::from(inv),
+            _ => 0,
+        };
+        levels.windows(2).all(|w| ev(&w[0]) != ev(&w[1]))
+    };
+    match (ok(0), ok(1)) {
+        (true, false) => Some((vars[0].0, vars[0].1, false)),
+        (false, true) => Some((vars[0].0, vars[0].1, true)),
+        _ => None,
+    }
+}
+
 /// A `PUSH` (true) or `POP` (false) of a pair, and the pair ([`stack_pair`]).
 fn push_pop(peek: &dyn Fn(u16) -> u8, i: &Insn) -> Option<(bool, u8)> {
     let (b0, b1) = (peek(i.pc), peek(i.pc.wrapping_add(1)));
@@ -354,6 +384,9 @@ struct Setup<'a> {
     test: usize,
     /// The level the Flips channels share.
     shared: &'a [Loc],
+    /// The addresses the test's exit stores A to on its way out of the routine
+    /// ([`level_stores`]): a path that loads A from one takes the level back as the test left it.
+    level_mem: Vec<u16>,
 }
 
 impl Setup<'_> {
@@ -379,10 +412,20 @@ impl Setup<'_> {
         };
         let normal = self.run(&around, at_test.end.clone()).ok_or(lost)?;
         let mut st = at_test.end;
+        let a_at_test = st.v[super::sym::A];
         let mut called = false;
         let mut set_shared = false;
         for pc in &p.nodes {
             let i = &cfg.n[pc];
+            // A loaded back from where the exit stored it: the level the test left
+            if (self.ctx.peek)(*pc) == 0x3A && i.len == 3 {
+                let a = u16::from((self.ctx.peek)(pc.wrapping_add(1))) | u16::from((self.ctx.peek)(pc.wrapping_add(2))) << 8;
+                if self.level_mem.contains(&a) {
+                    st.step(i, self.ctx);
+                    st.v[super::sym::A] = a_at_test;
+                    continue;
+                }
+            }
             if matches!(i.port_out, Some(PortRef::Imm(n)) if n & 1 == 0) || i.port_out == Some(PortRef::RegC) {
                 return Err(Why::SetupOut);
             }
@@ -412,6 +455,29 @@ impl Setup<'_> {
     }
 }
 
+/// A routine called once a note may keep the level between calls in memory: its exit stores
+/// A there on the straight way to its return, and the next call loads it back. The addresses
+/// of the `LD (nn),A` on the straight way from `exit` to a `RET` (at most eight instructions,
+/// none writing A), or none when the way does not end at a `RET`.
+fn level_stores(cfg: &Cfg, peek: &dyn Fn(u16) -> u8, exit: u16) -> Vec<u16> {
+    let mut stores = Vec::new();
+    let mut pc = exit;
+    for _ in 0..8 {
+        let Some(i) = cfg.n.get(&pc) else { break };
+        if peek(pc) == 0x32 && i.len == 3 {
+            stores.push(u16::from(peek(pc.wrapping_add(1))) | u16::from(peek(pc.wrapping_add(2))) << 8);
+        } else if i.writes & 1 != 0 || i.flow != Flow::Next {
+            break;
+        }
+        pc = pc.wrapping_add(u16::from(i.len));
+    }
+    if cfg.n.get(&pc).is_some_and(|i| i.flow == Flow::Ret) {
+        stores
+    } else {
+        Vec::new()
+    }
+}
+
 /// One traversal of the pass.
 struct Run {
     outs: Vec<Out>,
@@ -434,14 +500,14 @@ fn run_pass(cfg: &Cfg, ctx: &Ctx, conv: &Conv, items: &[Item], mut st: State, fi
     };
     for (k, it) in items.iter().enumerate() {
         match it {
-            Item::Op(pc) | Item::Test { pc, .. } => {
+            Item::Op(pc) | Item::Test { pc, .. } | Item::Fixed { pc, .. } => {
                 let i = &cfg.n[pc];
                 if let Some(bit) = spk(&st, i)? {
                     r.outs.push(Out { pc: *pc, bit, t: r.t.clone(), item: k, kept: st.unchanged() });
                 }
                 st.step(i, ctx);
                 r.t.k += match it {
-                    Item::Test { stay_taken: true, .. } => i64::from(i.t_taken),
+                    Item::Test { stay_taken: true, .. } | Item::Fixed { taken: true, .. } => i64::from(i.t_taken),
                     _ => i64::from(i.t),
                 };
             }
@@ -505,9 +571,11 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     let mut inside = BTreeSet::new();
     let mut all: Vec<u16> = Vec::new();
     for it in &items {
-        main.insert(it.pc());
+        if !cfg.inlined.contains(&it.pc()) {
+            main.insert(it.pc());
+        }
         match it {
-            Item::Op(pc) | Item::Test { pc, .. } => all.push(*pc),
+            Item::Op(pc) | Item::Test { pc, .. } | Item::Fixed { pc, .. } => all.push(*pc),
             Item::Delay(h) => {
                 let d = &cfg.delays[h];
                 all.extend(&d.nodes);
@@ -524,21 +592,30 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     if !distinct.contains(&out) {
         return Err(un(Why::OutNotInLoop, out));
     }
-    if distinct.len() != all.len() {
+    // the pass's own instructions run once (a routine it calls may run more than once)
+    let own: Vec<u16> = all.iter().copied().filter(|p| !cfg.inlined.contains(p)).collect();
+    let own_distinct: BTreeSet<u16> = own.iter().copied().collect();
+    if own_distinct.len() != own.len() {
         return Err(un(Why::PassShape, out));
     }
+    let mut contended_reads = false;
     for &pc in &all {
         let i = &cfg.n[&pc];
         // whole-T formulas cannot carry the contended range's delays
         let contended = |a: u16, n: u16| (u32::from(a) + u32::from(n) > 0x4000) && a < 0x8000;
-        let mem_contended = [i.mem_read, i.mem_write].iter().any(|m| matches!(m, Some(MemRef::Abs(a)) if contended(*a, 2)));
+        let mem_contended = matches!(i.mem_write, Some(MemRef::Abs(a)) if contended(a, 2));
+        // a read of a fixed address there waits for the screen as a read through a pointer may:
+        // the fit to what was played judges it (see `pointer_reads`)
+        if matches!(i.mem_read, Some(MemRef::Abs(a)) if contended(a, 2)) {
+            contended_reads = true;
+        }
         if contended(pc, i.len.into()) || mem_contended {
             return Err(un(Why::Contended, pc));
         }
         // stores through pointers and the stack: not modelled, but for PUSH and POP in the pass's
-        // straight code (matched below)
+        // straight code and the calls the walk follows (matched below)
         let stack = i.reads & 1 << 13 != 0 || i.writes & 1 << 13 != 0 || matches!(i.mem_write, Some(MemRef::Sp));
-        if stack && (push_pop(peek, i).is_none() || inside.contains(&pc)) {
+        if stack && !cfg.callret.contains(&pc) && (push_pop(peek, i).is_none() || inside.contains(&pc)) {
             return Err(un(Why::StackOp, pc));
         }
         if matches!(i.mem_write, Some(MemRef::Reg16(_) | MemRef::Indexed(..))) {
@@ -548,12 +625,15 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
 
     // PUSH and POP in the pass: each POP takes what a PUSH of the same pair put, the pass going
     // round (a POP before any PUSH takes what the end of the pass pushes); the pass starts with
-    // those pushed, as it leaves them (checked after the runs)
+    // those pushed, as it leaves them (checked after the runs). A RET takes what its CALL put
+    // (no pair: RETURN), and a called routine's POP never takes the return address
+    const RETURN: u8 = 0xFF;
     let mut open: Vec<u8> = Vec::new();
     let mut leading: Vec<u8> = Vec::new();
     for it in &items {
         let (Item::Op(pc) | Item::Test { pc, .. }) = it else { continue };
-        match push_pop(peek, &cfg.n[pc]) {
+        let call_ret = cfg.callret.contains(pc).then(|| (peek(*pc) == 0xCD, RETURN));
+        match call_ret.or_else(|| push_pop(peek, &cfg.n[pc])) {
             Some((true, p)) => open.push(p),
             Some((false, p)) => match open.pop() {
                 Some(q) if q == p => {}
@@ -563,10 +643,10 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
             None => {}
         }
     }
-    if leading.iter().rev().ne(open.iter()) {
+    if leading.iter().rev().ne(open.iter()) || open.contains(&RETURN) {
         return Err(un(Why::StackOp, out));
     }
-    let pointer_reads = all.iter().any(|pc| matches!(cfg.n[pc].mem_read, Some(MemRef::Reg16(_) | MemRef::Indexed(..))));
+    let pointer_reads = contended_reads || all.iter().any(|pc| matches!(cfg.n[pc].mem_read, Some(MemRef::Reg16(_) | MemRef::Indexed(..))));
     let uses_stack = !open.is_empty() || all.iter().any(|pc| push_pop(peek, &cfg.n[pc]).is_some());
     let seed: Vec<Pushed> = {
         let entry = State::entry();
@@ -581,6 +661,11 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     let mut carried: Vec<bool> = Vec::new();
     for (k, it) in items.iter().enumerate() {
         let Item::Test { pc, counter, exit, stay_taken } = it else { continue };
+        // a way out of the pass from inside a routine it calls: the way may return into the pass
+        // (setup paths that return are not followed)
+        if cfg.inlined.contains(pc) {
+            return Err(un(Why::TestInCallee, *pc));
+        }
         let i = &cfg.n[pc];
         let stay = match (i.flow, stay_taken) {
             (Flow::CondJump(t) | Flow::Djnz(t), true) => t,
@@ -608,11 +693,13 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         }
     }
 
-    let mut paths: Vec<Vec<SetupPath>> = tests.iter().map(|t| setup_paths(cfg, t.3, &main, &inside).ok_or(un(Why::SetupPaths, t.3))).collect::<Result<_, _>>()?;
+    // the code of the routines the pass calls is not where a path comes back into it
+    let avoid: BTreeSet<u16> = inside.union(&cfg.inlined).copied().collect();
+    let mut paths: Vec<Vec<SetupPath>> = tests.iter().map(|t| setup_paths(cfg, t.3, &main, &avoid).ok_or(un(Why::SetupPaths, t.3))).collect::<Result<_, _>>()?;
     // the code that runs straight into the pass from elsewhere (a routine called once a note or
     // a burst, its setup before the loop): a path into the pass too; with one zero test, one of
     // its setup paths
-    let leads = lead_ins(cfg, &main, &inside, &carries, &paths);
+    let leads = lead_ins(cfg, &main, &avoid, &carries, &paths);
     // the notes' setup loops back into the pass within the routine
     let looped = paths.iter().any(|ps| !ps.is_empty());
     let mut region: BTreeSet<u16> = distinct.clone();
@@ -622,6 +709,18 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         ps.extend(leads.iter().cloned());
     } else if leads.iter().flat_map(|p| &p.nodes).any(|pc| cfg.n[pc].port_out.is_some()) {
         return Err(un(Why::SetupOut, leads[0].nodes[0]));
+    }
+    // the routines the pass calls lie inside the signature, as the rest: the digest pins every
+    // byte the formulas depend on
+    let span = |r: &BTreeSet<u16>| match (r.first(), r.last()) {
+        (Some(&a), Some(&b)) => u32::from(b) + u32::from(cfg.n[&b].len) - u32::from(a),
+        _ => 0,
+    };
+    if span(&region) > u32::from(SND_LEARNED_LEN_MAX) {
+        let own: BTreeSet<u16> = region.iter().copied().filter(|p| !cfg.inlined.contains(p)).collect();
+        if own.len() != region.len() && span(&own) <= u32::from(SND_LEARNED_LEN_MAX) {
+            return Err(un(Why::CalleeOutsideSignature, out));
+        }
     }
     let anchor = *region.first().ok_or(un(Why::PassShape, out))?;
     let mut end = 0u32;
@@ -739,7 +838,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         let (channels, p, pos) = slots_channels(&conv, &all, cfg, &r1.end, &outs, &t, out)?;
         (Family::Slots, channels, p, pos, false)
     } else {
-        (Family::Square, vec![square_channel(&levels, &outs, delays, &t, out)?], 0, vec![0], false)
+        (Family::Square, vec![square_channel(&conv, &levels, &outs, delays, &t, out)?], 0, vec![0], false)
     };
     if channels.len() > SND_TONAL || channels.iter().map(|c| c.sites.len()).sum::<usize>() > SND_LEARNED_SITES_MAX {
         return Err(un(Why::TooManyChannels, out));
@@ -755,7 +854,8 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         })
         .collect();
     for (test, ps) in tests.iter().zip(&paths) {
-        let setup = Setup { cfg, ctx: &ctx, conv: &conv, items: &items, start: &r0.end, test: test.0, shared: &shared };
+        let level_mem = level_stores(cfg, peek, test.3);
+        let setup = Setup { cfg, ctx: &ctx, conv: &conv, items: &items, start: &r0.end, test: test.0, shared: &shared, level_mem };
         for p in ps {
             setup.keeps_level(p).map_err(|w| un(w, test.3))?;
         }
@@ -782,9 +882,9 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     let table_walk = ends.iter().flatten().any(|(_, end)| inputs.iter().any(|&x| walked(end, x, anchor)));
 
     // ---- where the memory is not to be read: outside the pass ----
-    let lo = *distinct.first().ok_or(un(Why::PassShape, out))?;
-    let hi = distinct.iter().map(|p| u32::from(*p) + u32::from(cfg.n[p].len)).max().unwrap_or(0);
-    let bytes: u32 = distinct.iter().map(|p| u32::from(cfg.n[p].len)).sum();
+    let lo = *own_distinct.first().ok_or(un(Why::PassShape, out))?;
+    let hi = own_distinct.iter().map(|p| u32::from(*p) + u32::from(cfg.n[p].len)).max().unwrap_or(0);
+    let bytes: u32 = own_distinct.iter().map(|p| u32::from(cfg.n[p].len)).sum();
     if hi - u32::from(lo) != bytes {
         return Err(un(Why::PassNotContiguous, lo));
     }
@@ -823,7 +923,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
         table_walk,
         wild: ctx.wild.iter().map(|a| a - anchor).collect(),
         reloc,
-        stack: uses_stack,
+        stack: uses_stack || !cfg.callret.is_empty(),
         pointer_reads,
     })
 }
@@ -880,14 +980,13 @@ fn walked(end: &State, x: Input, anchor: u16) -> bool {
 
 /// One channel toggled by every speaker `OUT` of the pass: half period = the pass over the
 /// number of `OUT`s.
-fn square_channel(levels: &[Bit], outs: &[Out], delays: &[DelayRun], t: &Sum, out: u16) -> Result<ChannelModel, Refusal> {
+fn square_channel(conv: &Conv, levels: &[Bit], outs: &[Out], delays: &[DelayRun], t: &Sum, out: u16) -> Result<ChannelModel, Refusal> {
     let un = Refusal::Unmodelled;
     if outs.is_empty() || outs.iter().any(|o| matches!(o.bit, Bit::Acc { .. })) {
         return Err(un(Why::PhaseShape, out));
     }
-    if !toggles(levels) {
-        return Err(un(Why::NoToggle, out));
-    }
+    // a level that toggles only for one value of a bit in memory: silent for the other
+    let cond = if toggles(levels) { None } else { Some(toggle_condition(levels).ok_or(un(Why::NoToggle, out))?) };
     // the partition: one reload counter feeds every half period; two registers fed from one
     // source in different half periods may be two channels in unison
     let fed: Vec<(usize, u8, Input)> = delays
@@ -914,7 +1013,12 @@ fn square_channel(levels: &[Bit], outs: &[Out], delays: &[DelayRun], t: &Sum, ou
     let half = t.div(outs.len() as i64).ok_or(un(Why::UnevenHalves, out))?;
     let mut sites: Vec<u16> = outs.iter().map(|o| o.pc).collect();
     sites.sort_unstable();
-    Ok(ChannelModel { sites, half_period: half.terms(), silent_if_zero: None })
+    let silent_if_bit = match cond {
+        Some((Loc::M(a), bit, want)) => Some((conv.mem(a, false).ok_or(un(Why::NoToggle, out))?, 1u8 << bit, !want)),
+        Some(_) => return Err(un(Why::NoToggle, out)),
+        None => None,
+    };
+    Ok(ChannelModel { sites, half_period: half.terms(), silent_if_zero: None, silent_if_bit })
 }
 
 /// A channel per speaker `OUT`, each a phase accumulator's top bit.
@@ -959,7 +1063,7 @@ fn slots_channels(
             Value::K(s) => Term::Const((HALF_PHASE * p + s / 2) / s),
             Value::In(x) => Term::Recip { num_t: HALF_PHASE * p, x },
         };
-        channels.push(ChannelModel { sites: vec![o.pc], half_period: vec![half], silent_if_zero: None });
+        channels.push(ChannelModel { sites: vec![o.pc], half_period: vec![half], silent_if_zero: None, silent_if_bit: None });
         pos.push((o.t.konst().ok_or(un(Why::PassTimeVaries, o.pc))? - t0).rem_euclid(p) as u16);
     }
     Ok((channels, p as u16, pos))
@@ -1046,7 +1150,7 @@ fn flips_channels(
         .map(|(r, v, site, extra)| {
             let mut s = Sum::default();
             s.add_count(p, extra, v, r >= 8);
-            ChannelModel { sites: vec![site], half_period: s.terms(), silent_if_zero: None }
+            ChannelModel { sites: vec![site], half_period: s.terms(), silent_if_zero: None, silent_if_bit: None }
         })
         .collect())
 }

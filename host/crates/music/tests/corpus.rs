@@ -397,21 +397,22 @@ fn schedule_keys_match_parse_action() {
 
 /// The learner with the built-in table disabled, on the repo's two games that have built-in
 /// entries (the spec's built-in agreement): neither tune routine is learned. The code reader
-/// leaves both out, at the same construct: a zero test of flags that are not a counter's
-/// (Castaway's channel counters, Colony 8's phase overflow), so no learned entry exists to set
-/// against the built-in one. (A reader that learns either must add that agreement here: the
-/// learned periods within 0.2% of the built-in reader's on every frame both claim.)
+/// leaves Castaway's out at a zero test of flags that are not a counter's (its channel
+/// counters), and Colony 8's at a stack operation (`ADD HL,SP`: SP holds a phase step), so no
+/// learned entry exists to set against the built-in one. (A reader that learns either must add
+/// that agreement here: the learned periods within 0.2% of the built-in reader's on every frame
+/// both claim.)
 #[test]
 fn builtins_agree() {
     use soundlearn::listen::schedule;
     use soundlearn::model::{Refusal, Why};
     use soundlearn::{learn_with, LearnOptions};
-    for (game, machine, sites, at) in [
-        ("castaway", music::castaway as fn() -> zx_sys::Machine, &[0xC87Cu16, 0xC886][..], 0xC88Au16),
-        ("colony8", music::colony8, &[0x950D, 0x9517, 0x9505][..], 0x9519),
+    for (game, machine, sites, why) in [
+        ("castaway", music::castaway as fn() -> zx_sys::Machine, &[0xC87Cu16, 0xC886][..], Refusal::Unmodelled(Why::BranchIdiom, 0xC88A)),
+        ("colony8", music::colony8, &[0x950D, 0x9517, 0x9505][..], Refusal::Unmodelled(Why::StackOp, 0x950F)),
     ] {
         let got = learn_with(&machine, &schedule(1), &LearnOptions { ignore_builtins: true });
-        let why = soundlearn::report::refusal(&Refusal::Unmodelled(Why::BranchIdiom, at));
+        let why = soundlearn::report::refusal(&why);
         assert!(got.entries.is_empty(), "{game}: {}", got.line);
         assert_eq!(got.line, format!("no music learned ({why})"), "{game}");
         // each of the tune's heard sites is read, and left out for that reason

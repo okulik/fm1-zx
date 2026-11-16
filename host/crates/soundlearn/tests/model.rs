@@ -641,3 +641,97 @@ fn leading_pop_takes_the_pair_the_pass_gives_back() {
     let changed = at_8000(&[0xEE, 0x10, 0xD3, 0xFE, 0xC1, 0xC5, 0x10, 0xFE, 0x06, 0x07, 0x18, 0xF4]);
     assert_eq!(read_engine(changed, 0x8002), Err(Refusal::Unmodelled(Why::StackOp, 0x8002)));
 }
+
+// ---- calls, keyboard branches, conditional toggles -------------------------------------------
+
+#[test]
+fn reads_a_call_inside_the_signature() {
+    // the pass calls its delay: the called routine's code is part of the pass, and of the
+    // signature (its bytes pinned by the digest)
+    let fx = fixtures::call_in_pass(false);
+    let md = model(&fx);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(78)]);
+    assert!(md.anchor <= 0x801D && md.code_end >= 0x8021, "{:04X}-{:04X}", md.anchor, md.code_end);
+    assert!(md.stack, "the call's return address is on the stack");
+    agrees(&fx, &md, 150, 0.0);
+    // the called routine changes the counter the pass tests (LD B,C becomes LD E,C): refused
+    let m = fixtures::machine(&fx.sna);
+    let mem = |a: u16| if a == 0x801D { 0x59 } else { m.peek(a) };
+    assert!(read_engine(mem, 0x8010).is_err(), "{:?}", read_engine(mem, 0x8010));
+    // a POP in the called routine takes its return address (LD B,C becomes POP BC): refused
+    let mem = |a: u16| if a == 0x801D { 0xC1 } else { m.peek(a) };
+    assert!(matches!(read_engine(mem, 0x8010), Err(Refusal::Unmodelled(Why::StackOp, _))), "{:?}", read_engine(mem, 0x8010));
+}
+
+#[test]
+fn refuses_a_call_outside_the_signature() {
+    // the called routine at A000h: one signature cannot cover it and the pass, so its bytes
+    // would go unpinned
+    let fx = fixtures::call_in_pass(true);
+    assert_eq!(read(&fx, 0x8010), Err(Refusal::Unmodelled(Why::CalleeOutsideSignature, 0x8010)));
+}
+
+#[test]
+fn reads_a_toggle_condition_as_silence() {
+    let fx = fixtures::toggle_silence();
+    let md = model(&fx);
+    assert_eq!(md.channels[0].silent_if_bit, Some((Input::Abs(0x9000), 0x10, true)));
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(40)]);
+    agrees(&fx, &md, 150, 0.0);
+    // the entry's period program (a full period, x 256): silent while the bit is set
+    let m = fixtures::machine(&fx.sna);
+    let prog = soundlearn::fit::to_entry(&md, |a| m.peek(a)).progs[0].clone();
+    let mut regs = Machine::new().regs();
+    regs.bc = 100;
+    let m = &m;
+    let with = |v: u8| move |a: u16| if a == 0x9000 { v } else { m.peek(a) };
+    assert_eq!(soundlearn::eval_prog(&prog, with(0x10), md.anchor, &regs), Some(None));
+    assert_eq!(soundlearn::eval_prog(&prog, with(0xEF), md.anchor, &regs), Some(Some(2 * 1340 * 256)));
+}
+
+#[test]
+fn contended_fixed_read_needs_the_played_fit() {
+    // a read of 6000h in the pass: read, its wait left to the fit as played (as a pointer's)
+    let fx = fixtures::contended_fixed_read();
+    let md = model(&fx);
+    assert!(md.pointer_reads);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(71)]);
+    agrees(&fx, &md, 150, 0.0);
+}
+
+#[test]
+fn reads_the_side_an_idle_keyboard_takes() {
+    let fx = fixtures::idle_keyboard();
+    let md = model(&fx);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(87)]);
+    agrees(&fx, &md, 150, 0.0);
+    // CPL; AND 1Fh becomes CPL; AND 7Fh: the side then depends on bits an idle keyboard does
+    // not fix, and the branch is refused
+    let m = fixtures::machine(&fx.sna);
+    let mem = |a: u16| if a == 0x801C { 0x7F } else { m.peek(a) };
+    assert_eq!(read_engine(mem, 0x8010), Err(Refusal::Unmodelled(Why::BranchIdiom, 0x801D)));
+}
+
+#[test]
+fn reads_a_counter_test_past_a_load() {
+    let fx = fixtures::neutral_before_test();
+    let md = model(&fx);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(58)]);
+    agrees(&fx, &md, 150, 0.0);
+    // LD B,C becomes INC B, which sets the flags: not the counter's test
+    let m = fixtures::machine(&fx.sna);
+    let mem = |a: u16| if a == 0x8016 { 0x04 } else { m.peek(a) };
+    assert!(read_engine(mem, 0x8010).is_err(), "{:?}", read_engine(mem, 0x8010));
+}
+
+#[test]
+fn reads_a_level_kept_in_memory_between_calls() {
+    let fx = fixtures::level_in_memory();
+    let md = model(&fx);
+    assert_eq!(md.channels[0].half_period, vec![Term::Lin { coef_t: 13, x: Input::Reg(3) }, Term::Const(33)]);
+    agrees(&fx, &md, 150, 0.0);
+    // the level stored somewhere else (LD (9001h),A): the next note's level is not the last's
+    let m = fixtures::machine(&fx.sna);
+    let mem = |a: u16| if a == 0x801E { 0x01 } else { m.peek(a) };
+    assert_eq!(read_engine(mem, 0x8015), Err(Refusal::Unmodelled(Why::SetupLevel, 0x801D)));
+}
