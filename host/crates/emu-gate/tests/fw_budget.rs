@@ -4,6 +4,11 @@
 //! The firmware's budgets: RAMTEXT, image and pack in the app slot, POOL below the stack, the
 //! CPU per Spectrum frame and the audio interrupt. Needs the device build (`FMZX_FM1_BUILD`).
 //!
+//! By default the CPU per frame is measured in the two heaviest Sound and Screen pairs only
+//! (`QUICK_RUNS`: FM: sound in Crop, FM: engines in Border; the learned-entries test in Border),
+//! a few minutes; `FMZX_BUDGET_FULL=1` measures every pair below (`RUNS`), about 12 minutes,
+//! before a release or after a change to per-frame code that one mode alone runs.
+//!
 //! CPU per frame is `game_frame` plus every `lcd_compose_band` call before the next frame, at
 //! the LCD divider that sends the most bands (1), in RGB444, over 10 s of play after the games
 //! are loaded and past their menus (`budgets::SETTLE_MS`), in Crop with all three Sound choices:
@@ -130,6 +135,23 @@ const RUNS: [(u32, u32); 6] = [
     (SOUND_FM_B, SCREEN_FIT_SMOOTH),
     (SOUND_FM_B, SCREEN_BORDER),
 ];
+/// The quick default: the two heaviest pairs, FM: sound in Crop (method A's decoder, the most
+/// sound work) and FM: engines in Border (the most screen work, with the default sound).
+const QUICK_RUNS: [(u32, u32); 2] = [(SOUND_FM, SCREEN_CROP), (SOUND_FM_B, SCREEN_BORDER)];
+
+/// Every pair (`FMZX_BUDGET_FULL=1`), or the quick default.
+fn full() -> bool {
+    std::env::var_os("FMZX_BUDGET_FULL").is_some_and(|v| v != "0")
+}
+
+/// The Sound and Screen pairs measured: RUNS in full, QUICK_RUNS by default.
+fn pairs() -> &'static [(u32, u32)] {
+    if full() {
+        &RUNS
+    } else {
+        &QUICK_RUNS
+    }
+}
 
 fn mode_name(sound: u32) -> &'static str {
     match sound {
@@ -152,7 +174,7 @@ fn cpu_per_frame_and_audio_isr() {
     games.extend(fixture_ids.iter().enumerate().map(|(i, id)| (id.to_string(), Vec::new(), &fw_fix, i as u32)));
     let opt = BootOpt { rgb565: false, divider: 1 };
     let runs: Vec<((u32, u32), Measure)> = std::thread::scope(|s| {
-        let hs: Vec<_> = RUNS
+        let hs: Vec<_> = pairs()
             .iter()
             .flat_map(|&run| games.iter().map(move |g| (run, g)))
             .map(|(run, (_, demo, fw, index))| {
@@ -163,10 +185,10 @@ fn cpu_per_frame_and_audio_isr() {
     });
     let mut isr_max = 0;
     let mut bad = Vec::new();
-    let mut worst = vec![(0u64, String::new()); RUNS.len()];
-    let mut snd_worst = vec![(0u64, String::new()); RUNS.len()];
+    let mut worst = vec![(0u64, String::new()); pairs().len()];
+    let mut snd_worst = vec![(0u64, String::new()); pairs().len()];
     // per run: the mixer's most in sites.sna and sites-var.sna
-    let mut sites = vec![(0u64, 0u64); RUNS.len()];
+    let mut sites = vec![(0u64, 0u64); pairs().len()];
     for ((id, ..), (run, r)) in games.iter().cycle().zip(&runs) {
         let mode = run_name(*run);
         let (max, avg) = (*r.cpu.iter().max().unwrap_or(&0), r.cpu.iter().sum::<u64>() / r.cpu.len().max(1) as u64);
@@ -178,7 +200,7 @@ fn cpu_per_frame_and_audio_isr() {
             r.frames,
             r.isr.len()
         );
-        let k = RUNS.iter().position(|m| m == run).expect("a measured run");
+        let k = pairs().iter().position(|m| m == run).expect("a measured run");
         if max > worst[k].0 {
             worst[k] = (max, id.clone());
         }
@@ -211,7 +233,7 @@ fn cpu_per_frame_and_audio_isr() {
             bad.push(format!("{id} ({mode}): {max} > {CPU_PER_FRAME}"));
         }
     }
-    for (k, run) in RUNS.iter().enumerate() {
+    for (k, run) in pairs().iter().enumerate() {
         println!(
             "{}: worst frame {} ({}), the mixer at most {} ({}); with four unknown OUT sites the mixer at most {} (code unchanged), {} (changing)",
             run_name(*run),
@@ -229,7 +251,7 @@ fn cpu_per_frame_and_audio_isr() {
     // method B remembers addresses that match no engine: unchanged code around four unknown OUT
     // sites costs the mixer less than half what looking them up every frame does
     for (k, &(same, var)) in sites.iter().enumerate() {
-        assert!(same * 2 < var, "{}: four unknown OUT sites cost the mixer {same} with the code unchanged, {var} changing", run_name(RUNS[k]));
+        assert!(same * 2 < var, "{}: four unknown OUT sites cost the mixer {same} with the code unchanged, {var} changing", run_name(pairs()[k]));
     }
 }
 
@@ -341,7 +363,8 @@ fn cpu_per_frame_with_learned_entries() {
     games.extend(stress_ids.iter().enumerate().map(|(i, id)| (format!("{id} (stress list)"), &fw_stress, i as u32)));
     games.push(("sites-var (no list)".into(), &fw_fix, 2));
     let opt = BootOpt { rgb565: false, divider: 1 };
-    let screens = [SCREEN_CROP, SCREEN_BORDER];
+    // (Border only by default: the more screen work; Crop too in full)
+    let screens: &[u32] = if full() { &[SCREEN_CROP, SCREEN_BORDER] } else { &[SCREEN_BORDER] };
     let runs: Vec<(String, u32, Measure)> = std::thread::scope(|s| {
         let hs: Vec<_> = screens
             .iter()

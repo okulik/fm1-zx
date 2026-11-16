@@ -385,7 +385,9 @@ Both need the device build (see Firmware above) and run in fm1-emu:
     cd host
     FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget --test fw_report -- --nocapture
 
-`fw_budget` (about 11 minutes) runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with ZX Sopwith under FM: sound at about 2.37M, or Border scroll at about 2.50M, both well under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+`fw_budget` measures the CPU per frame in the two heaviest Sound and Screen pairs by default (FM: sound in
+Crop, FM: engines in Border; a few minutes). `FMZX_BUDGET_FULL=1` runs the full matrix (about 12
+minutes): before a release, or after a change to per-frame code that only one mode runs. In full it runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with ZX Sopwith under FM: sound at about 2.37M, or Border scroll at about 2.50M, both well under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
