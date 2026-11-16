@@ -31,10 +31,9 @@
  *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
  * games), the 48K ROM's BEEPER, and Cave Runner's two tunes and Unison's music (the owner's local
- * games: their digests, offsets and formulas only); engines_test.c adds the test fixtures'
- * engines for host tests. */
+ * games: their digests, offsets and formulas only), in engines_builtin.c; engines_test.c adds
+ * the test fixtures' engines for host tests. */
 
-#include "engines_builtin.h"
 #include "sound_internal.h"
 
 #define FRAME_T ZX_FRAME_TSTATES
@@ -45,11 +44,6 @@
 #define OLDEST (-(1 << 24))   /* times carried from frames before are kept no older (240 frames) */
 
 /* ---- the table --------------------------------------------------------- */
-
-const snd_engine snd_engine_table[] = { SND_ENGINES_BUILTIN };
-const uint32_t snd_engine_count = sizeof snd_engine_table / sizeof snd_engine_table[0];
-_Static_assert(sizeof snd_engine_table / sizeof snd_engine_table[0] == SND_ENGINE_BUILTIN_MAX,
-               "SND_ENGINE_BUILTIN_MAX is the built-in count");
 
 const char *snd_engine_name(const snd_engine *table, uint32_t index)
 {

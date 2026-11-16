@@ -347,7 +347,8 @@ void fmzx_xip_compose_zx(const zx_machine *m, unsigned row, unsigned crop_x, uin
     fmzx_ram.compose_zx(m, row, crop_x, idx);
 }
 
-/* For the device copy of core/sound/learned.c, which runs from XIP (ramcalls.h). */
+/* For the device copies of core/sound/learned.c and engines_builtin.c, which run from XIP
+ * (ramcalls.h). */
 uint8_t fmzx_xip_peek(const zx_machine *m, uint16_t addr)
 {
     return fmzx_ram.peek(m, addr);

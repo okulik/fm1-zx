@@ -409,9 +409,9 @@ typedef struct snd_engine {   /* one table entry */
 	                           * (snd_learned_roles) in a table the firmware assembles */
 } snd_engine;
 
-extern const snd_engine snd_engine_table[];   /* the built-in engines */
+extern const snd_engine snd_engine_table[];   /* the built-in engines (engines_builtin.c) */
 extern const uint32_t snd_engine_count;
-#define SND_ENGINE_BUILTIN_MAX 6u   /* snd_engine_count, as a constant (engines.c checks it) */
+#define SND_ENGINE_BUILTIN_MAX 6u   /* snd_engine_count, as a constant (engines_builtin.c checks it) */
 /* The name of table[index] (index < the table's count). */
 const char *snd_engine_name(const snd_engine *table, uint32_t index);
 /* The signature digest of entry en with its anchor at `anchor` in m's memory. */

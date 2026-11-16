@@ -2,8 +2,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 /* Method B's built-in engine entries, as initializers (SND_ENGINE_*) with their readers and
- * tables: engines.c builds the firmware's table from them, the host's engines_test.c its test
- * table (the built-in entries plus the test fixtures'). Include once per file. */
+ * tables: engines_builtin.c builds the firmware's table from them, the host's engines_test.c its
+ * test table (the built-in entries plus the test fixtures'). Include once per file. */
 
 #ifndef ENGINES_BUILTIN_H
 #define ENGINES_BUILTIN_H

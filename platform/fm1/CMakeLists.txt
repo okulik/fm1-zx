@@ -66,13 +66,26 @@ add_custom_command(OUTPUT "${_ram}/learned.obj"
   COMMAND ${FMZX_PYTHON} "${_redefine}" --ar "${CMAKE_AR}" --member learned.c.obj "$<TARGET_FILE:fmzx_learned>"
           "${_ram}/learned.obj" zx_peek=fmzx_xip_peek zx_get_regs=fmzx_xip_get_regs
   DEPENDS fmzx_learned "${_redefine}" VERBATIM)
+# core/sound/engines_builtin.c (method B's built-in table, which sound_init.c and main.c read, and
+# the readers method B calls through an entry's read pointer) runs from XIP the same way, its
+# device copy calling zx_peek and zx_get_regs through fmzx_xip_*.
+add_library(fmzx_engines_builtin STATIC "${PROJECT_SOURCE_DIR}/core/sound/engines_builtin.c")
+target_compile_options(fmzx_engines_builtin PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(fmzx_engines_builtin PRIVATE zx_sound)
+add_custom_command(OUTPUT "${_ram}/engines_builtin.obj"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_ram}"
+  COMMAND ${FMZX_PYTHON} "${_redefine}" --ar "${CMAKE_AR}" --member engines_builtin.c.obj
+          "$<TARGET_FILE:fmzx_engines_builtin>" "${_ram}/engines_builtin.obj" zx_peek=fmzx_xip_peek
+          zx_get_regs=fmzx_xip_get_regs
+  DEPENDS fmzx_engines_builtin "${_redefine}" VERBATIM)
 add_custom_target(fmzx_ram_objects DEPENDS "${_ram}/libzx_core.a" "${_ram}/libzx_sound.a" "${_ram}/pixels.obj"
-  "${_ram}/pixmodes.obj" "${_ram}/learned.obj")
-set_source_files_properties("${_ram}/pixels.obj" "${_ram}/pixmodes.obj" "${_ram}/learned.obj" PROPERTIES
-  EXTERNAL_OBJECT TRUE GENERATED TRUE)
+  "${_ram}/pixmodes.obj" "${_ram}/learned.obj" "${_ram}/engines_builtin.obj")
+set_source_files_properties("${_ram}/pixels.obj" "${_ram}/pixmodes.obj" "${_ram}/learned.obj"
+  "${_ram}/engines_builtin.obj" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 
 add_executable(fmzx_app_image ${_ours} "${_bsp}/chip/fm1_vec.S" "${_bsp}/chip/fm1_isr.S"
-  "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c" "${_ram}/pixels.obj" "${_ram}/pixmodes.obj" "${_ram}/learned.obj")
+  "${CMAKE_CURRENT_BINARY_DIR}/rom_data.c" "${_ram}/pixels.obj" "${_ram}/pixmodes.obj" "${_ram}/learned.obj"
+  "${_ram}/engines_builtin.obj")
 add_dependencies(fmzx_app_image fmzx_ram_objects)
 set_target_properties(fmzx_app_image PROPERTIES OUTPUT_NAME fmzx_app SUFFIX .elf
   LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.ld;${_ram}/libzx_core.a;${_ram}/libzx_sound.a")
