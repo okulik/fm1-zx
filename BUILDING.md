@@ -343,7 +343,8 @@ as `music-corpus` does (key script, learned entries) through the mixer in FM: en
   a frame the mixer left on the beeper) or `bp` (the beeper). A `bp` frame the follower's gate kept
   says why: `two-voice` (many very short gaps, two voices mixed), `busy` (over 256 edges),
   `irregular` (no steady pitch for several frames) or `B-rejected` (method B's own frame that its
-  check refused: music, not an effect). The summary adds "follower for N of M frames with sound";
+  check refused, in a run of 1-2 frames: a brief rejection inside a known tune stays on the
+  beeper; a longer one is followed). The summary adds "follower for N of M frames with sound";
 - every jump in the output (a frame's largest second difference over three times the typical FM
   frame's). A jump at an FM/beeper switch is a click; note attacks at big pitch steps show too. `fx` frames
   count as not FM here: they are not method B's music.

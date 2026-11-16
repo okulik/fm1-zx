@@ -484,10 +484,9 @@ fn run_machine(mix: &mut SndMixer, mut m: Machine, frames: usize) -> MRun {
     r
 }
 
-#[test]
-fn fx_b_rejected_stays_beeper() {
-    // the ROM BEEP entry misread (its period a semitone too long): B's check refuses the melody's
-    // frames, and the follower leaves them on the beeper
+/// The ROM BEEP entry misread (its period a semitone too long): B's check refuses the melody's
+/// notes. The run, with the length of the rejected run each frame is in (0: not rejected).
+fn misread_beep_run() -> (MRun, Vec<usize>) {
     let tap = beep_tap();
     let mut m = Machine::new();
     m.tape_insert(&tap).expect("inserts");
@@ -495,22 +494,65 @@ fn fx_b_rejected_stays_beeper() {
     let mut mix = mixer();
     mix.set_misread_engines(MISREAD_BEEP);
     let r = run_machine(&mut mix, m, 300);
-    let (mut rejected, mut exact) = (0, 0);
-    for k in 0..r.out.len() {
-        if r.rec[k] != (1, 0) || r.fm_on[k] {
-            continue;   // not B's refused frame (or FM is still held through it: the gate reads OFF)
+    let rej: Vec<bool> = r.rec.iter().map(|&x| x == (1, 0)).collect();
+    let mut len = vec![0usize; rej.len()];
+    let mut k = 0;
+    while k < rej.len() {
+        let mut e = k;
+        while e < rej.len() && rej[e] && rej[k] {
+            e += 1;
         }
-        rejected += 1;
+        if rej[k] {
+            len[k..e].fill(e - k);
+            k = e;
+        } else {
+            k += 1;
+        }
+    }
+    (r, len)
+}
+
+#[test]
+fn fx_b_rejected_short_run_stays_beeper() {
+    // a brief rejection (1-2 frames) inside a known tune: the follower leaves it on the beeper
+    let (r, len) = misread_beep_run();
+    let (mut short, mut exact) = (0, 0);
+    for k in 0..r.out.len() {
+        if len[k] == 0 || len[k] >= 3 || r.fm_on[k] {
+            continue;   // not a short rejected run (or FM is still held through it: the gate reads OFF)
+        }
+        short += 1;
         assert_eq!(r.gate[k], SND_FX_B_REJECTED, "frame {k}");
         // the first frame of a run may still fade from the follower; from the second the beeper
         // alone (the frame before it was not the follower's either)
-        if k > 0 && r.gate[k - 1] != SND_FX_PLAY {
+        if k > 0 && !r.fm_on[k - 1] && r.gate[k - 1] != SND_FX_PLAY {
             exact += 1;
             assert_eq!(r.out[k], r.delayed[k], "frame {k} is the delayed beeper");
         }
     }
-    println!("{rejected} of B's refused frames stay beeper, {exact} of them exactly");
-    assert!(rejected > 20 && exact > 10, "B refuses the melody ({rejected} frames, {exact} exact)");
+    println!("{short} frames of 1-2 frame rejected runs stay beeper, {exact} of them exactly");
+    assert!(short >= 3, "the fixture has short rejected runs ({short} frames)");
+}
+
+#[test]
+fn fx_b_rejected_long_run_is_followed() {
+    // the melody's notes are refused for many frames in a row: a run of 3 or more is followed
+    let (r, len) = misread_beep_run();
+    let (mut played, mut differ) = (0, 0);
+    for k in 0..r.out.len() {
+        if len[k] < 3 || r.fm_on[k] {
+            continue;
+        }
+        assert_ne!(r.gate[k], SND_FX_B_REJECTED, "frame {k} is in a run of {}", len[k]);
+        if r.gate[k] == SND_FX_PLAY {
+            played += 1;
+            if r.out[k] != r.delayed[k] {
+                differ += 1;
+            }
+        }
+    }
+    println!("{played} frames of long rejected runs followed, {differ} differ from the beeper");
+    assert!(played > 50 && differ > 50, "the long run is followed ({played} played, {differ} differ)");
 }
 
 #[test]
@@ -551,3 +593,4 @@ fn fx_fm_music_unchanged_with_effects_on() {
     println!("{same} FM frames identical with effects on and off");
     assert!(same > 100, "the tune plays in FM ({same} frames)");
 }
+

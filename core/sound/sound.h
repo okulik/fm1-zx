@@ -581,7 +581,8 @@ void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 
 /* Why the frame played last did or did not go to the follower, as the field snd_fx.gate holds it:
  * SND_FX_OFF is effects off or a mode other than FM: engines (the mixer sets it); SND_FX_B_REJECTED
- * is method B's own frame that its check refused (its music stays on the beeper). While the mixer
+ * is method B's own frame that its check refused, in a run of under 3 such frames (a brief
+ * rejection inside a known tune stays on the beeper; a longer run goes through the other gates). While the mixer
  * plays FM music the field keeps the reader's gate: SndMixer::fx_gate (host) reports OFF for it. */
 enum snd_fx_gate { SND_FX_PLAY, SND_FX_OFF, SND_FX_TWO_VOICE, SND_FX_BUSY, SND_FX_IRREGULAR, SND_FX_B_REJECTED };
 /* What the follower sounds. */
@@ -614,6 +615,7 @@ typedef struct snd_fx {
 	uint32_t stop;        /* while sounding: when it stops if no transition comes first (absolute) */
 	uint32_t step;        /* the sound's step and low-pass, as in snd_fx_event */
 	uint32_t irr;         /* bit k: frame t - k is irregular (t: the frame fed last) */
+	uint32_t rej;         /* bit k: frame t - 3 - k was method B's refused frame (as it was played) */
 	uint16_t half[SND_FX_HALVES];   /* the last half periods, oldest first */
 	uint16_t k;
 	uint8_t n_half;

@@ -36,7 +36,7 @@ What works, in fm1-emu:
   - where FM cannot vouch for the notes (a routine it does not know) the original beeper plays;
   - in FM: engines the sound effects play as FM too (a tone follows the beeper's pitch, with ticks
     and brief noise); the Effects row under Sound (FM or Beeper) turns that off. Frames the follower
-    cannot follow (two voices mixed, very busy or irregular sound) stay on the beeper;
+    cannot follow (two voices mixed, very busy or irregular sound, or a brief 1-2 frame rejection inside a known tune) stay on the beeper;
 - the Spectrum at its own speed (50 frames a second) with beeper sound, paced by the audio, and
   the screen sent to the LCD by changed rows: 50 display frames a second at LCD divider 1;
 - an update package (`.fwsc`) with Felucca's update loader, and a preview package to try in

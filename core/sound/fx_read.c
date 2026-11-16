@@ -157,6 +157,19 @@ static uint8_t edge(snd_fx *f, uint32_t at)
 	return tick;
 }
 
+/* method B's own frame u that its check refused */
+static inline uint32_t rejected(const snd_b *b, uint32_t u)
+{
+	return b->rec[u % SND_HIST].kind == SND_B_MINE && b->rec[u % SND_HIST].ok == 0;
+}
+
+/* the rejected frame fr (bit 0 of `rej`; bits 1, 2: the 2 before it, as they were played) is in a run of 3
+ * or more rejected frames: one of the 3 windows holding it, with the 2 after it (`a`, `b`) */
+static inline uint32_t rejected_run(uint32_t rej, uint32_t a, uint32_t b)
+{
+	return ((rej & 6u) == 6u) || ((rej & 2u) && a) || (a && b);
+}
+
 void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n)
 {
 	const uint32_t t = d->frames - 1u;
@@ -177,6 +190,7 @@ void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n)
 	}
 	fr = t - SND_DELAY_FRAMES;
 	s = &d->slot[fr % SND_HIST];
+	f->rej = (f->rej << 1) | rejected(b, fr);
 	tt = d->t[fr % SND_HIST];
 	base = fr * ZX_FRAME_TSTATES;
 	emit(f, 0, 0, n);
@@ -200,8 +214,8 @@ void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n)
 	if (f->have_last && base + ZX_FRAME_TSTATES - f->last >= GAP) f->have_last = 0;
 	if (s->busy) f->have_last = f->n_half = 0;   /* the decoder kept 256 edges: `last` is mid-frame, the next gap would be bogus */
 
-	if (b->rec[fr % SND_HIST].kind == SND_B_MINE && b->rec[fr % SND_HIST].ok == 0)
-		f->gate = SND_FX_B_REJECTED;   /* method B's own frame that its check refused: music, not an effect */
+	if (rejected(b, fr) && !rejected_run(f->rej, rejected(b, fr + 1u), rejected(b, fr + 2u)))
+		f->gate = SND_FX_B_REJECTED;   /* method B's own frame that its check refused, in a run of under 3: music, not an effect */
 	else if (s->busy)
 		f->gate = SND_FX_BUSY;
 	else if (narrow * 5u > gaps * 2u)

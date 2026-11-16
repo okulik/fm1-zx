@@ -105,7 +105,7 @@ void snd_fx_init(snd_fx *f, uint32_t rate_num, uint32_t rate_den)
 	f->x_lo = (uint32_t)udiv64((uint64_t)411775u * 150u * rate_den, rate_num, 0);    /* 2 pi x 2^16 */
 	f->x_hi = (uint32_t)udiv64((uint64_t)411775u * 8000u * rate_den, rate_num, 0);
 	f->tick_inc = (uint32_t)udiv64((uint64_t)1500u * rate_den << 32, rate_num, 0);
-	f->last = f->stop = f->step = f->irr = 0;
+	f->last = f->stop = f->step = f->irr = f->rej = 0;
 	for (i = 0; i < SND_FX_HALVES; i++)
 		f->half[i] = 0;
 	f->k = 0;

@@ -10,8 +10,7 @@
 //!
 //! Per game:
 //! - a summary: frames with sound, how many played as FM and how many the effects follower played
-//!   as FM (`fx`), the switches to the beeper, and the
-//!   drops (back to FM within 2 s);
+//!   as FM (`fx`), the switches to the beeper, and the drops (back to FM within 2 s);
 //! - each audible drop (a beeper stretch with sound in it), with B's decision and the frame's
 //!   edges (count, OUT addresses, gaps, first and last T-state) for each of its frames: a rejected
 //!   frame of the engine's own (its OUT, decision c0) is the check's doing; another OUT is other
@@ -143,7 +142,7 @@ impl Run {
             return "FM".into();
         }
         match self.gate[k] {
-            SND_FX_PLAY => "fx".into(),
+            SND_FX_PLAY if self.sound[k] => "fx".into(),   // a silent frame has nothing to follow
             SND_FX_TWO_VOICE => "bp two-voice".into(),
             SND_FX_BUSY => "bp busy".into(),
             SND_FX_IRREGULAR => "bp irregular".into(),
@@ -157,7 +156,7 @@ fn report(path: &Path, r: &Run, show: Option<(usize, usize)>, learned: bool) {
     let frames = r.sound.len();
     let fm = (0..frames).filter(|&k| r.sound[k] && r.on[k]).count();
     // a beeper frame the follower played as FM effects (not B's FM)
-    let fx = (0..frames).filter(|&k| r.sound[k] && r.label(k) == "fx").count();
+    let fx = (0..frames).filter(|&k| r.sound[k] && r.gate[k] == SND_FX_PLAY && !r.on[k]).count();
     let sounding = r.sound.iter().filter(|&&s| s).count();
     // the beeper stretches after FM, and those back to FM within DROP_MAX frames
     let (mut switches, mut drops) = (0, Vec::new());
