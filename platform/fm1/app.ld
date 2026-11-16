@@ -54,7 +54,8 @@ SECTIONS
     {
         *(.text .text.*)
         KEEP(*(.rodata.fmzx_product))
-        *(EXCLUDE_FILE(*libzx_core.a:* *libzx_sound.a:* *audio.c.obj) .rodata EXCLUDE_FILE(*libzx_core.a:* *libzx_sound.a:* *audio.c.obj) .rodata.*)
+        *(EXCLUDE_FILE(*libzx_core.a:* *libzx_sound.a:* *audio.c.obj *engines_builtin.obj) .rodata
+          EXCLUDE_FILE(*libzx_core.a:* *libzx_sound.a:* *audio.c.obj *engines_builtin.obj) .rodata.*)
         . = ALIGN(4);
         __init_array_start = .;
         KEEP(*(SORT(.init_array.*)))
@@ -64,12 +65,15 @@ SECTIONS
     } > XIP
 
     /* The core's tables (contention, flags) and the sound library's (the sine) are read from
-     * SRAM, and the audio interrupt reads no flash. */
+     * SRAM, and the audio interrupt reads no flash. So are method B's built-in entries (their
+     * sites, signature offsets and names, read per edge and per byte matched), though their
+     * readers run from XIP. */
     .data : ALIGN(4)
     {
         _data_start = .;
         *libzx_core.a:*(.rodata .rodata.*)
         *libzx_sound.a:*(.rodata .rodata.*)
+        *engines_builtin.obj(.rodata .rodata.*)
         *audio.c.obj(.rodata .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
