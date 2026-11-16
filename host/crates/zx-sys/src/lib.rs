@@ -1615,6 +1615,13 @@ impl Menu {
         unsafe { sys::menu_set_divider(&mut *self.raw, d) }
     }
 
+    /// Starts the Sound and Screen items at `sound` (SND_MODE_*) and `screen` (PIX_*) instead of
+    /// the defaults, as the firmware does with emu-gate's boot options.
+    pub fn set_choices(&mut self, sound: u8, screen: u8) {
+        self.raw.sound = sound;
+        self.raw.screen = screen;
+    }
+
     pub fn runs_game(&self) -> bool {
         // SAFETY: `raw` was initialised by menu_init.
         unsafe { sys::menu_runs_game(&*self.raw) != 0 }

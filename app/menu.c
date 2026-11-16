@@ -87,6 +87,8 @@ void menu_init(menu *mn, uint32_t game_count)
     mn->view = VIEW_PICKER;
     mn->count = game_count;
     mn->divider = 4;
+    mn->sound = SND_MODE_FM_B;
+    mn->screen = PIX_FIT_SMOOTH;
 }
 
 int menu_view(const menu *mn)

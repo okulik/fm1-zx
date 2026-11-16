@@ -21,7 +21,8 @@ typedef struct menu {
     char msg[UI_COLS + 1u];
 } menu;
 
-/* Starts in VIEW_PICKER with `count` games (from pack_open), LCD speed 4, Sound Beeper, Screen Crop. */
+/* Starts in VIEW_PICKER with `count` games (from pack_open), LCD speed 4, Sound FM: engines,
+ * Screen Fit smooth. */
 void menu_init(menu *mn, uint32_t game_count);
 /* Returns a CMD_*. arg: CMD_START game index (the view stays VIEW_PICKER; the device then calls
  * menu_set_view(VIEW_GAME) or menu_message), CMD_DIVIDER the new divider, CMD_OSK_KEY

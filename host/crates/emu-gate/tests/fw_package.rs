@@ -9,6 +9,7 @@
 //! Then, from `host/`, `FMZX_FM1_BUILD=$PWD/../build/fm1` as for the other firmware tests; the
 //! preview build is `build/fm1-preview` next to it (or `FMZX_FM1_PREVIEW_BUILD`).
 
+use emu_gate::budgets::{screen_mode, sound_mode, SCREEN_FIT_SMOOTH, SOUND_FM_B};
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine};
 use fmzx_pack::inputs::{sha256_hex, Pins};
 use fmzx_pack::layout::pack_offset;
@@ -79,6 +80,8 @@ fn release_package_is_rgb444_without_boot_options() {
     m.run_ms(BOOT_MS);
     assert!(m.display_on());
     assert_eq!(m.stats().view, zx_sys::view::PICKER as u32);
+    // without boot options, the device's defaults: Sound FM: engines, Screen Fit smooth
+    assert_eq!((sound_mode(&m), screen_mode(&m)), (SOUND_FM_B, SCREEN_FIT_SMOOTH));
     let want = emu_gate::fw::read_png(&golden("picker.png")).expect("picker.png");
     let got: Vec<u8> = m.lcd_rgb565().iter().flat_map(|&v| emu_gate::fw::rgb565_to_rgb8(v)).collect();
     assert_ne!(got, want);

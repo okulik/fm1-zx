@@ -22,6 +22,9 @@ pub const APP_SLOT: u32 = fmzx_pack::layout::APP_SLOT;
 pub const PACK_ALIGN: u32 = fmzx_pack::layout::PACK_ALIGN;
 /// `fmzx_bootopt` word 0 when the boot options are valid ("ZXOP").
 pub const BOOTOPT_MAGIC: u32 = 0x5A58_4F50;
+/// `fmzx_bootopt` word 1: the Sound (bits 16-17) and Screen (bits 20-22) choices to start with are
+/// given.
+pub const BOOTOPT_MODES: u32 = 1 << 12;
 /// fm1-emu key id of the OCT- button.
 pub const KEY_OCT_DOWN: u8 = 0;
 /// The stock audio PLL as the FM-1's boot leaves it (felucca-bsp `FM1_AUDIO_PLL_STOCK0/1`;
@@ -117,6 +120,10 @@ impl Firmware {
 }
 
 /// What the firmware reads from `fmzx_bootopt` at boot.
+/// The boot options also start the firmware in Sound Beeper and Screen Crop (`BOOTOPT_MODES` with
+/// both 0), the baseline the tests are written against, not the device's defaults (FM: engines,
+/// Fit smooth); a test chooses another mode from the HOME menu. Boots without options (the web
+/// page's, the device's) get the defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct BootOpt {
     /// RGB565 instead of RGB444 (fm1-emu's LCD always parses RGB565: screen tests set it).
@@ -223,7 +230,7 @@ impl Machine {
         if let Some(opt) = opt {
             let bo = fw.symbol("fmzx_bootopt");
             soc.write32(bo, BOOTOPT_MAGIC);
-            soc.write32(bo + 4, u32::from(opt.rgb565) | u32::from(opt.divider & 15) << 8);
+            soc.write32(bo + 4, u32::from(opt.rgb565) | u32::from(opt.divider & 15) << 8 | BOOTOPT_MODES);
         }
         let mut cpu = Cpu::new(entry);
         cpu.user = true;

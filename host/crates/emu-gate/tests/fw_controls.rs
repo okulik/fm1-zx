@@ -169,12 +169,14 @@ fn pause_releases_keys() {
 }
 
 /// The host's composition of the HOME menu over the same pack, with the Sound item cycled
-/// `sound` times (0: Beeper), the Screen item `screen` times (0: Crop), and item `item` selected.
+/// `sound` times (0: Beeper), the Screen item `screen` times (0: Crop), and item `item` selected;
+/// from Beeper and Crop, as the firmware starts with the test boot options.
 fn host_menu_at(pack: &[u8], sound: u32, screen: u32, item: u32) -> Vec<u16> {
     let count = zx_sys::pack_open(pack).expect("pack opens on the host");
     let mut ui = zx_sys::Ui::new();
     let mut menu = zx_sys::Menu::new(count);
     menu.set_divider(4);
+    menu.set_choices(0, 0);
     assert_eq!(menu.event(zx_sys::ev::OK).0, zx_sys::cmd::START);
     menu.set_view(view::GAME);
     menu.event(zx_sys::ev::HOME);
@@ -496,7 +498,7 @@ fn assert_fresh_fm_start(m: &mut Machine, mark: usize, index: u32, mode: u8, wha
 fn sound_choice_survives_reset_and_new_game() {
     let mut m = start(BootOpt { rgb565: true, divider: 4 }, BORDER);
     master_full(&mut m);
-    assert_eq!(sound_mode(&m), 0, "Beeper by default");
+    assert_eq!(sound_mode(&m), 0, "Beeper with the test boot options");
     // FM: sound, then FM: engines, each chosen in border (with scroll the other game)
     sound_choice_holds(&mut m, SOUND_FM, BORDER, SCROLL);
     press_to(&mut m, HOME, view::GAME);
@@ -575,7 +577,7 @@ fn fm_new_game_starts_silent() {
 #[test]
 fn screen_menu_cycles_four() {
     let mut m = start(BootOpt { rgb565: true, divider: 4 }, SCROLL);
-    assert_eq!(screen_mode(&m), SCREEN_CROP, "Crop by default");
+    assert_eq!(screen_mode(&m), SCREEN_CROP, "Crop with the test boot options");
     menu_item(&mut m, SCREEN_ITEM);
     m.run_ms(300);
     assert!(m.lcd_rgb565() == &host_menu_at(pack(), 0, 0, SCREEN_ITEM)[..], "the LCD differs from the host's menu with Screen: Crop");

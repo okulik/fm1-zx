@@ -56,8 +56,9 @@ _Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole 
 #define NO_COLOUR 0xFFu
 
 /* Boot options from emu-gate (or anything that writes them before a reset): word 0 BOOTOPT_MAGIC,
- * word 1 bit 0 RGB565, bits 8-11 the LCD divider. First in NOINIT, never cleared by start-up;
- * word 0 is cleared once read. */
+ * word 1 bit 0 RGB565, bits 8-11 the LCD divider, and with bit 12 the Sound and Screen choices to
+ * start with instead of the defaults: bits 16-17 SND_MODE_*, bits 20-22 PIX_* (out of range: the
+ * default). First in NOINIT, never cleared by start-up; word 0 is cleared once read. */
 uint32_t fmzx_bootopt[2] __attribute__((section(".noinit.bootopt"), aligned(4)));
 
 /* Read by emu-gate (FwStats): keep the layout in step with host/crates/emu-gate/src/fw.rs. */
@@ -107,11 +108,11 @@ static snd_mixer mixer POOL("mixer");
 static snd_engine learned_table[SND_ENGINE_BUILTIN_MAX + SND_LEARNED_MAX] POOL("mixer");
 static snd_learned_ext learned_ext[SND_LEARNED_MAX] POOL("mixer");
 static zx_beeper beeper;
-/* The Sound item's choice, SND_MODE_* (CMD_SOUND): kept across games until power off. Read by
- * emu-gate. */
+/* The Sound item's choice, SND_MODE_* (CMD_SOUND; from the menu's default at power on): kept across
+ * games until power off. Read by emu-gate. */
 uint32_t fmzx_sound_mode;
-/* The Screen item's choice, PIX_CROP ... (CMD_SCREEN): kept across games until power off. Read by
- * emu-gate. */
+/* The Screen item's choice, PIX_CROP ... (CMD_SCREEN; from the menu's default at power on): kept
+ * across games until power off. Read by emu-gate. */
 uint32_t fmzx_screen_mode;
 static km_state kms;
 static struct {
@@ -724,11 +725,12 @@ static int frame_due(uint32_t *next)
 void fmzx_main(void)
 {
     int fmt = FMZX_LCD_RGB565 ? PIX_RGB565 : PIX_RGB444, view, last_view = -1;
-    uint32_t next, master_at;
+    uint32_t next, master_at, opt = 0;
 
     if (fmzx_bootopt[0] == BOOTOPT_MAGIC) {
-        fmt = (fmzx_bootopt[1] & 1u) ? PIX_RGB565 : PIX_RGB444;
-        divider = (fmzx_bootopt[1] >> 8) & 15u;
+        opt = fmzx_bootopt[1];
+        fmt = (opt & 1u) ? PIX_RGB565 : PIX_RGB444;
+        divider = (opt >> 8) & 15u;
     }
     fmzx_bootopt[0] = 0;
 
@@ -741,6 +743,12 @@ void fmzx_main(void)
     ui_init(rom_copy);
     menu_init(&mn, open_pack());
     menu_set_divider(&mn, divider);
+    if ((opt & (1u << 12)) && ((opt >> 16) & 3u) < SND_MODE_COUNT && ((opt >> 20) & 7u) < PIX_MODE_COUNT) {
+        mn.sound = (uint8_t)((opt >> 16) & 3u);
+        mn.screen = (uint8_t)((opt >> 20) & 7u);
+    }
+    fmzx_sound_mode = mn.sound;
+    fmzx_screen_mode = mn.screen;
 
     input_init();
     fmzx_master = input_master();

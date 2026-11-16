@@ -117,7 +117,7 @@ fn menu_items_and_divider_cycle() {
     let mut ui = Ui::new();
     let mut m = open_menu();
     ui.draw(&m, None);
-    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: Beeper", "Screen: Crop", "Back to games"] {
+    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: FM: engines", "Screen: Fit smooth", "Back to games"] {
         assert!(find_row(&ui, item).is_some(), "{item}");
     }
     for _ in 0..4 {
@@ -160,14 +160,15 @@ fn menu_sound_cycles_and_survives() {
     assert_eq!(SND_MODE_COUNT, 3, "Beeper, FM: sound and FM: engines");
     let mut m = Menu::new(2);
     to_sound(&mut m);
-    assert_eq!(sound_shown(&m), "Sound: Beeper", "Beeper by default");
-    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
+    assert_eq!(sound_shown(&m), "Sound: FM: engines", "FM: engines by default");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
     assert_eq!(m.view(), view::MENU, "the item stays in the menu");
+    assert_eq!(sound_shown(&m), "Sound: Beeper");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
     assert_eq!(sound_shown(&m), "Sound: FM: sound");
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_B as u32));
     assert_eq!(sound_shown(&m), "Sound: FM: engines");
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
-    assert_eq!(sound_shown(&m), "Sound: Beeper");
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
     // reset game: back in the game, the choice kept
     m.event(ev::UP);
@@ -217,14 +218,14 @@ fn menu_screen_cycles_and_survives() {
     assert_eq!(PIX_MODE_COUNT, 4, "Crop, Fit, Fit smooth and Border");
     let mut m = Menu::new(2);
     to_screen(&mut m);
-    assert_eq!(screen_shown(&m), "Screen: Crop", "Crop by default");
-    for (mode, label) in [(PIX_FIT, "Screen: Fit"), (PIX_FIT_SMOOTH, "Screen: Fit smooth"), (PIX_BORDER, "Screen: Border"), (PIX_CROP, "Screen: Crop")] {
+    assert_eq!(screen_shown(&m), "Screen: Fit smooth", "Fit smooth by default");
+    for (mode, label) in [(PIX_BORDER, "Screen: Border"), (PIX_CROP, "Screen: Crop"), (PIX_FIT, "Screen: Fit"), (PIX_FIT_SMOOTH, "Screen: Fit smooth")] {
         assert_eq!(m.event(ev::OK), (cmd::SCREEN, mode));
         assert_eq!(m.view(), view::MENU, "the item stays in the menu");
         assert_eq!(screen_shown(&m), label);
     }
-    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_FIT));
-    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_FIT_SMOOTH));
+    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_BORDER));
+    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_CROP));
     // reset game: back in the game, the choice kept
     for _ in 0..SCREEN_ITEM - 1 {
         m.event(ev::UP);
@@ -232,7 +233,7 @@ fn menu_screen_cycles_and_survives() {
     assert_eq!(m.event(ev::OK).0, cmd::RESET);
     assert_eq!(m.view(), view::GAME);
     m.event(ev::HOME);
-    assert_eq!(screen_shown(&m), "Screen: Fit smooth", "after a reset");
+    assert_eq!(screen_shown(&m), "Screen: Crop", "after a reset");
     // back to the picker and another game started
     m.event(ev::UP); // wraps to "Back to games"
     assert_eq!(m.event(ev::OK).0, cmd::LEAVE);
@@ -240,10 +241,10 @@ fn menu_screen_cycles_and_survives() {
     m.event(ev::DOWN);
     assert_eq!(m.event(ev::OK), (cmd::START, 1));
     to_screen(&mut m);
-    assert_eq!(screen_shown(&m), "Screen: Fit smooth", "after starting another game");
+    assert_eq!(screen_shown(&m), "Screen: Crop", "after starting another game");
     // and the next press cycles from the kept choice; Sound is untouched
-    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_BORDER));
-    assert_eq!(sound_shown(&m), "Sound: Beeper");
+    assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_FIT));
+    assert_eq!(sound_shown(&m), "Sound: FM: engines");
 }
 
 #[test]
