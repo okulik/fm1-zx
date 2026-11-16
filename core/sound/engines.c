@@ -298,7 +298,7 @@ static void restart(check_state *c, const snd_voice *v)
 	for (ch = 0; ch < SND_TONAL; ch++) {
 		c->tr[ch].bit = 2;
 		c->tr[ch].set = c->tr[ch].obs = c->tr[ch].rise = 0;
-		c->tr[ch].has_rise = 0;
+		c->tr[ch].has_rise = c->tr[ch].paired = 0;
 	}
 	voices(c, v);
 }
@@ -370,7 +370,12 @@ static void silent(check_state *c, const snd_engine *en, uint32_t j, uint32_t le
  * tolerance (more than one in eight off contradicts the voices, as for rises). An edge from an
  * OUT all channels share (SND_CHAN_ANY) is the flip of the channel it fits (after a whole number
  * of half periods: flips that fall in one pass cancel), else of one not yet seen, else of the
- * nearest. */
+ * nearest. Two flips in one pass cancel: a channel's flip that comes a few half periods after
+ * its last one is not a contradiction if each flip it missed is explained by another sounding
+ * channel due to flip then (cancelled). A new note's first two flips, taken by order, may be
+ * each other's (the channel second in order flipping first): an edge that fits no channel
+ * while two have been seen but have no pair counted exchanges their last flips if one of them
+ * then fits (exchange). */
 
 /* How far t is from a whole number (*k, at least 1) of half periods after channel ch's last
  * flip; NOWHERE for a silent channel. */
@@ -383,6 +388,67 @@ static uint32_t due(const check_state *c, uint32_t ch, int32_t t, uint32_t *k)
 	*k = (d + h / 2u) / h;
 	if (!*k) *k = 1;
 	return d > *k * h ? d - *k * h : *k * h - d;
+}
+
+/* Counts a pair of channel ch's flips, the later at t; bad: it contradicts the voices. */
+static void pair(check_state *c, uint32_t ch, int bad, int32_t t)
+{
+	c->pairs[ch]++;
+	c->tr[ch].paired = 1;
+	if (bad) {
+		c->bad[ch]++;
+		if (c->bad_at == NEVER) c->bad_at = t;
+	}
+}
+
+/* Channel ch flips at t, k (2 to 8) half periods after its last flip: is each flip it missed
+ * (its last plus j half periods) explained by another sounding channel flipping in the same
+ * pass (within half that channel's tolerance of a whole number of its half periods after its
+ * last flip; or its first flip, for one not yet seen)? Each such flip is that channel's, its
+ * pair counted against its own period. */
+static int cancelled(check_state *c, const snd_engine *en, uint32_t ch, int32_t t, uint32_t k)
+{
+	uint32_t j, o, ko;
+
+	if (k > 8u) return 0;
+	for (j = 1; j < k; j++) {
+		const int32_t m = c->tr[ch].obs + (int32_t)(j * (c->period[ch] / 2u));
+		for (o = 0; o < en->channels; o++) {
+			if (o == ch || !c->period[o]) continue;
+			if (c->tr[o].bit == 2) break;
+			if (c->tr[o].obs < m && due(c, o, m, &ko) <= c->tol[o] / 2u) {
+				pair(c, o, ko != 1u, t);
+				break;
+			}
+		}
+		if (o == en->channels) return 0;
+		c->tr[o].bit = 1;
+		c->tr[o].obs = m;
+	}
+	return 1;
+}
+
+/* An edge at t that fits no channel: two sounding channels seen but with no pair counted have
+ * their last flips exchanged if one of them then fits, one half period after its last flip.
+ * The channel that fits, else ch (nothing exchanged). */
+static uint32_t exchange(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
+{
+	uint32_t a, b, x, k;
+
+	for (a = 0; a < en->channels; a++) {
+		for (b = a + 1u; b < en->channels; b++) {
+			snd_b_track *ta = &c->tr[a], *tb = &c->tr[b];
+			const int32_t o = ta->obs;
+			if (ta->bit == 2 || tb->bit == 2 || ta->paired || tb->paired || !c->period[a] || !c->period[b]) continue;
+			ta->obs = tb->obs;
+			tb->obs = o;
+			for (x = a; x <= b; x += b - a)
+				if (due(c, x, t, &k) <= c->tol[x] / 2u && k == 1u) return x;
+			tb->obs = ta->obs;
+			ta->obs = o;
+		}
+	}
+	return ch;
 }
 
 static void flip(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
@@ -400,16 +466,14 @@ static void flip(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
 				ch = i;
 			}
 		}
+		if (best >> 31) ch = exchange(c, en, ch, t);   /* (none fits, all seen) */
 	}
 	if (!c->blind) {
 		if (!c->period[ch]) {
 			c->rises[ch]++;   /* a silent channel sounds */
 		} else if (c->tr[ch].bit != 2) {
-			c->pairs[ch]++;
-			if (due(c, ch, t, &k) > c->tol[ch] / 2u || k != 1) {
-				c->bad[ch]++;
-				if (c->bad_at == NEVER) c->bad_at = t;
-			}
+			off = due(c, ch, t, &k);
+			pair(c, ch, off > c->tol[ch] / 2u || (k != 1u && !cancelled(c, en, ch, t, k)), t);
 		}
 	}
 	c->tr[ch].bit = 1;   /* (seen: its level is not followed) */

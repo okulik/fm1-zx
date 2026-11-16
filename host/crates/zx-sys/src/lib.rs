@@ -833,8 +833,8 @@ enum Table {
     Builtin,
     /// The built-in engines plus the test fixtures'.
     Test,
-    /// The ROM BEEP entry with its period read a semitone off.
-    BeepMisread,
+    /// The ROM BEEP and Test flips entries with their periods misread.
+    Misread,
 }
 
 fn engine_table(which: Table) -> (*const sys::snd_engine, u32) {
@@ -843,7 +843,7 @@ fn engine_table(which: Table) -> (*const sys::snd_engine, u32) {
         match which {
             Table::Builtin => (std::ptr::addr_of!(sys::snd_engine_table).cast(), sys::snd_engine_count),
             Table::Test => (std::ptr::addr_of!(sys::snd_engine_test_table).cast(), sys::snd_engine_test_count),
-            Table::BeepMisread => (std::ptr::addr_of!(sys::snd_engine_misread_table).cast(), sys::snd_engine_misread_count),
+            Table::Misread => (std::ptr::addr_of!(sys::snd_engine_misread_table).cast(), sys::snd_engine_misread_count),
         }
     }
 }
@@ -915,10 +915,11 @@ impl SndEngines {
         Self::with_table(Table::Test)
     }
 
-    /// With one entry, ROM BEEP's with its reader's period a semitone too long (host tests: a
-    /// misread the check must reject).
-    pub fn new_beep_misread() -> Self {
-        Self::with_table(Table::BeepMisread)
+    /// With the misread table: ROM BEEP's entry with its reader's period a semitone too long, and
+    /// the "Test flips" entry with channel 1's period half the true one (host tests: misreads the
+    /// check must reject).
+    pub fn new_misread() -> Self {
+        Self::with_table(Table::Misread)
     }
 
     fn with_table(which: Table) -> Self {

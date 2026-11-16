@@ -311,6 +311,64 @@
 //! +2C              table
 //! ```
 //!
+//! # `flips_sna(base)` (not in the pack)
+//!
+//! Method B's two-channel test engine (the "Test flips" entry of `core/sound/engines_test.c`):
+//! a tiny music routine assembled at any address `base` whose two channels flip one speaker
+//! bit, so the speaker sounds the XOR of their levels, with interrupts off. Each pass of its loop
+//! counts D (channel 0) and E (channel 1) down; a counter that reaches 0 is reloaded from H (from
+//! L) and flips bit 4 of A, and one `OUT` a pass, which both channels share, writes A. Both
+//! branches of a channel take 34 T, so a pass is 96 T (a whole number of the ULA's 8-T
+//! contention cycles: the `OUT` keeps its place in them), 11 more every 256 passes (B wraps). A
+//! channel's half-period is its count n of passes, `(96 + 11/256) n` T, f = 3,500,000 /
+//! (2 (96 + 11/256) n). Two flips in one pass cancel (no edge). Each note starts both counters
+//! together, so two channels a whole number of passes apart flip in step: an octave (n1 = 2 n0)
+//! hides every flip of the low channel behind one of the high channel's. The melody is a table of
+//! [`FLIPS_MELODY`] rows read through IX (the absolute operand of `LD IX,table`, relocated with
+//! `base`): n0, n1 (0: 256) and the note's length in 256 passes (C), then a 0 that starts the
+//! melody again. The paper is white, the border black, SP `FD00h`, PC `base`.
+//!
+//! ```text
+//! +00 F3           start: DI
+//! +01 AF                  XOR A            A = the output level, bit 4 only
+//! +02 DD 21 tt tt  again: LD IX,table      the absolute operand (base + 41h)
+//! +06 DD 66 00     next:  LD H,(IX+0)      n0
+//! +09 24                  INC H
+//! +0A 25                  DEC H
+//! +0B 28 F5               JR Z,again       n0 = 0: the melody again
+//! +0D DD 6E 01            LD L,(IX+1)      n1
+//! +10 DD 4E 02            LD C,(IX+2)      C = the note's length (256 passes each)
+//! +13 06 00               LD B,0
+//! +15 54                  LD D,H
+//! +16 5D                  LD E,L
+//! +17 15           ch0:   DEC D            4
+//! +18 20 05               JR NZ,keep0      12/7
+//! +1A 54                  LD D,H           4
+//! +1B EE 10               XOR 10h          7    channel 0 flips
+//! +1D 18 05               JR ch1           12   34 T either way
+//! +1F 00           keep0: NOP              4
+//! +20 FE 00               CP 0             7
+//! +22 FE 00               CP 0             7
+//! +24 1D           ch1:   DEC E            4
+//! +25 20 05               JR NZ,keep1      12/7
+//! +27 5D                  LD E,L           4
+//! +28 EE 10               XOR 10h          7    channel 1 flips
+//! +2A 18 05               JR out           12
+//! +2C 00           keep1: NOP              4
+//! +2D FE 00               CP 0             7
+//! +2F FE 00               CP 0             7
+//! +31 00           out:   NOP              4
+//! +32 D3 FE               OUT (FEh),A      11   the edge (the engine's one OUT site)
+//! +34 10 E1               DJNZ ch0         13   96 T a pass
+//! +36 0D                  DEC C            4
+//! +37 20 DE               JR NZ,ch0        12   11 T more every 256 passes
+//! +39 DD 23               INC IX
+//! +3B DD 23               INC IX
+//! +3D DD 23               INC IX
+//! +3F 18 C5               JR next
+//! +41              table
+//! ```
+//!
 //! # `out_sites_sna(changing)` (not in the pack)
 //!
 //! Method B's matching worst case for the firmware's frame budget (`emu-gate`'s `fw_budget`
@@ -621,6 +679,24 @@ pub const BURST_MS: f64 = 9.0;
 pub const BURST_GAP_MS: f64 = 69.0;
 /// Offset of `burst_sna`'s `OUT` from `base`.
 pub const BURST_OUT: u16 = 0x1A;
+/// `flips_sna`'s melody: per note, channel 0's and channel 1's half-period counts n (passes) and
+/// the note's length (256 passes, about a third of a frame). Two ordinary notes; two close
+/// pitches (11% apart) whose first new flip is channel 1's, the second channel in order; an
+/// octave in step (n1 = 2 n0, every flip of channel 1 hidden) held for 8 frames; an ordinary
+/// note. No other two channels' flips meet within a note (their counts' least common multiple
+/// is longer than the note).
+pub const FLIPS_MELODY: [(u8, u8, u8); 5] = [(67, 80, 12), (64, 85, 12), (59, 53, 12), (75, 150, 24), (71, 95, 12)];
+/// `flips_sna`'s pass: 96 T, 11 more every 256 passes.
+pub const FLIPS_PASS: f64 = 96.0 + 11.0 / 256.0;
+/// The pitch of a half-period count n of `flips_sna`: 3,500,000 / (2 [`FLIPS_PASS`] n).
+pub fn flips_hz(n: u8) -> f64 {
+    let n = if n == 0 { 256.0 } else { f64::from(n) };
+    3_500_000.0 / (2.0 * FLIPS_PASS * n)
+}
+/// Offset of `flips_sna`'s `OUT` from `base`.
+pub const FLIPS_OUT: u16 = 0x32;
+/// Offset of `flips_sna`'s melody table from `base`.
+pub const FLIPS_TABLE: u16 = 0x41;
 /// `beep_tap`'s melody: each `BEEP` statement's duration (seconds) and pitch (semitones above
 /// middle C, as `BEEP` takes it: 440 x 2^((p - 9) / 12) Hz). Every note lasts at least 20 ms.
 pub const BEEP_NOTES: [(f64, i8); 9] =
@@ -940,6 +1016,65 @@ pub fn burst_sna(base: u16) -> Vec<u8> {
         code.push(n);
         code.extend_from_slice(&(edges as u16).to_le_bytes());
         code.extend_from_slice(&(gap as u16).to_le_bytes());
+    }
+    code.push(0);
+    let mut ram = vec![0u8; 0xC000];
+    let at = |a: u16| (a - RAM) as usize;
+    ram[at(base)..at(base) + code.len()].copy_from_slice(&code);
+    ram[0x1800..0x1B00].fill(0x38);
+    sna_at(ram, 0, base)
+}
+
+#[rustfmt::skip]
+const FLIPS_CODE: [u8; FLIPS_TABLE as usize] = [
+    0xF3,                   // start: DI
+    0xAF,                   //        XOR A
+    0xDD, 0x21, 0x00, 0x00, // again: LD IX,table (relocated)
+    0xDD, 0x66, 0x00,       // next:  LD H,(IX+0)
+    0x24,                   //        INC H
+    0x25,                   //        DEC H
+    0x28, 0xF5,             //        JR Z,again
+    0xDD, 0x6E, 0x01,       //        LD L,(IX+1)
+    0xDD, 0x4E, 0x02,       //        LD C,(IX+2)
+    0x06, 0x00,             //        LD B,0
+    0x54,                   //        LD D,H
+    0x5D,                   //        LD E,L
+    0x15,                   // ch0:   DEC D
+    0x20, 0x05,             //        JR NZ,keep0
+    0x54,                   //        LD D,H
+    0xEE, 0x10,             //        XOR 10h
+    0x18, 0x05,             //        JR ch1
+    0x00,                   // keep0: NOP
+    0xFE, 0x00,             //        CP 0
+    0xFE, 0x00,             //        CP 0
+    0x1D,                   // ch1:   DEC E
+    0x20, 0x05,             //        JR NZ,keep1
+    0x5D,                   //        LD E,L
+    0xEE, 0x10,             //        XOR 10h
+    0x18, 0x05,             //        JR out
+    0x00,                   // keep1: NOP
+    0xFE, 0x00,             //        CP 0
+    0xFE, 0x00,             //        CP 0
+    0x00,                   // out:   NOP
+    0xD3, 0xFE,             //        OUT (FEh),A
+    0x10, 0xE1,             //        DJNZ ch0
+    0x0D,                   //        DEC C
+    0x20, 0xDE,             //        JR NZ,ch0
+    0xDD, 0x23,             //        INC IX
+    0xDD, 0x23,             //        INC IX
+    0xDD, 0x23,             //        INC IX
+    0x18, 0xC5,             //        JR next
+];
+
+/// Method B's two-channel test engine assembled at `base` (8000h-FB00h), playing
+/// [`FLIPS_MELODY`] (see the module docs). Not one of [`PROGRAMS`].
+pub fn flips_sna(base: u16) -> Vec<u8> {
+    assert!((0x8000..=0xFB00).contains(&base), "flips_sna at {base:04X}");
+    let mut code = FLIPS_CODE.to_vec();
+    code[4..6].copy_from_slice(&(base + FLIPS_TABLE).to_le_bytes());
+    debug_assert_eq!(code[FLIPS_OUT as usize], 0xD3);
+    for (n0, n1, len) in FLIPS_MELODY {
+        code.extend_from_slice(&[n0, n1, len]);
     }
     code.push(0);
     let mut ram = vec![0u8; 0xC000];

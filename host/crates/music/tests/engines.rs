@@ -979,7 +979,7 @@ fn beep_nothing_from_other_rom() {
 #[test]
 fn beep_misread_rejected() {
     // the ROM BEEP entry with its reader's period a semitone too long: no melody frame is B's
-    let bp = beep_run(Machine::new(), 300, SndEngines::new_beep_misread(), None);
+    let bp = beep_run(Machine::new(), 300, SndEngines::new_misread(), None);
     let claimed: Vec<usize> = bp.melody.iter().flat_map(frames_of).filter(|&f| bp.r.dec[f].confident != 0).collect();
     println!("melody frames claimed with the period misread: {claimed:?}");
     assert!(claimed.is_empty(), "frames claimed with the period misread: {claimed:?}");
