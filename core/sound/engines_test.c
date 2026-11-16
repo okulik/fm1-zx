@@ -70,13 +70,31 @@ static void read_beep_misread(const zx_machine *m, const snd_engine *en, uint16_
 	out->v[0].period_q8 += out->v[0].period_q8 / 17u;
 }
 
-/* Test flips' channel 1 period half the true one (an octave up: in the octave, the low channel
+/* Test flips: channel 1's period half the true one (an octave up: in the octave, the low channel
  * read at the high one's pitch). */
-static void read_flips_misread(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_flips_1_half(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	read_flips(m, en, a, site, r, out);
 	out->v[1].period_q8 /= 2u;
 }
 
-const snd_engine snd_engine_misread_table[] = { SND_ENGINE_ROM_BEEP_READ(read_beep_misread), FLIPS_ENTRY(read_flips_misread) };
+/* Test flips: channel 0's period half the true one (an octave up: its flips one apart read two
+ * apart, the one between to be explained) in a note whose channel 1 is slow (n1 over 200), the
+ * other notes read right: the frame where that note begins is judged on its own edges. */
+static void read_flips_0_half(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+{
+	read_flips(m, en, a, site, r, out);
+	if (out->v[1].period_q8 > 200u * 49174u) out->v[0].period_q8 /= 2u;
+}
+
+/* Test flips: channel 1's period twice the true one (an octave down). */
+static void read_flips_1_double(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+{
+	read_flips(m, en, a, site, r, out);
+	out->v[1].period_q8 *= 2u;
+}
+
+/* (each entry alone in a table: the Test flips ones match the same code) */
+const snd_engine snd_engine_misread_table[] = { SND_ENGINE_ROM_BEEP_READ(read_beep_misread), FLIPS_ENTRY(read_flips_1_half),
+                                                FLIPS_ENTRY(read_flips_0_half), FLIPS_ENTRY(read_flips_1_double) };
 const uint32_t snd_engine_misread_count = sizeof snd_engine_misread_table / sizeof snd_engine_misread_table[0];

@@ -421,8 +421,9 @@ uint64_t snd_engine_digest(const zx_machine *m, const snd_engine *en, uint16_t a
  * entries plus test fixtures' engines. */
 extern const snd_engine snd_engine_test_table[];
 extern const uint32_t snd_engine_test_count;
-/* Also there: the misread table, ROM BEEP's entry with its reader's period a semitone too long
- * and Test flips' with channel 1's period half the true one (misreads). */
+/* Also there: the misread table, entries whose readers are off, each for a table of its own: ROM
+ * BEEP's with its period a semitone too long, then Test flips' with channel 1's period halved,
+ * channel 0's halved (in a note whose channel 1 is slow) and channel 1's doubled (misreads). */
 extern const snd_engine snd_engine_misread_table[];
 extern const uint32_t snd_engine_misread_count;
 
@@ -489,7 +490,8 @@ typedef struct {          /* a channel's level as the check followed it (engines
 	int32_t set;          /* when it took its level, T from the frame's start */
 	int32_t obs;          /* the last time it was known */
 	int32_t rise;         /* its last counted rise */
-	uint8_t bit;          /* 0, 1; 2 = not known */
+	uint8_t bit;          /* 0, 1; 2 = not known; 3 = entries with flips: seen only as a flip
+	                       * hidden in the XOR, guessed (engines.c, cancelled) */
 	uint8_t has_rise;
 	uint8_t paired;       /* entries with flips: a pair of its flips counted since it was
 	                       * followed afresh */

@@ -14,7 +14,7 @@ use music::score::midi_of;
 use music::truth::{Colony8Drums, Engine};
 use music::{capture, decode, hz_of_period_q8, repo, test_sna, Frame, RATE};
 use zx_sys::{
-    zx_edge, Beeper, KeyMapper, KmInput, Machine, SndEngines, SndFrame, SndMixer, SndVoice, SND_CHAN_ANY, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_SITE_DRUM,
+    zx_edge, Beeper, KeyMapper, MISREAD_BEEP, KmInput, Machine, SndEngines, SndFrame, SndMixer, SndVoice, SND_CHAN_ANY, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_SITE_DRUM,
     SND_SITE_STOP, SND_SITE_TONAL,
 };
 
@@ -979,7 +979,7 @@ fn beep_nothing_from_other_rom() {
 #[test]
 fn beep_misread_rejected() {
     // the ROM BEEP entry with its reader's period a semitone too long: no melody frame is B's
-    let bp = beep_run(Machine::new(), 300, SndEngines::new_misread(), None);
+    let bp = beep_run(Machine::new(), 300, SndEngines::new_misread(MISREAD_BEEP), None);
     let claimed: Vec<usize> = bp.melody.iter().flat_map(frames_of).filter(|&f| bp.r.dec[f].confident != 0).collect();
     println!("melody frames claimed with the period misread: {claimed:?}");
     assert!(claimed.is_empty(), "frames claimed with the period misread: {claimed:?}");

@@ -683,9 +683,13 @@ pub const BURST_OUT: u16 = 0x1A;
 /// the note's length (256 passes, about a third of a frame). Two ordinary notes; two close
 /// pitches (11% apart) whose first new flip is channel 1's, the second channel in order; an
 /// octave in step (n1 = 2 n0, every flip of channel 1 hidden) held for 8 frames; an ordinary
-/// note. No other two channels' flips meet within a note (their counts' least common multiple
-/// is longer than the note).
-pub const FLIPS_MELODY: [(u8, u8, u8); 5] = [(67, 80, 12), (64, 85, 12), (59, 53, 12), (75, 150, 24), (71, 95, 12)];
+/// note; a note whose channel 1 is slow (its first flip long after channel 0's second, so a note
+/// that begins late in a frame may show only two of channel 0's flips in it: the lengths put its
+/// start there in some of the melody's turns); the octave the other way round (the high voice on
+/// channel 1, every flip of channel 0 hidden) held for 7 frames. No other two channels' flips
+/// meet within a note (their counts' least common multiple is longer than the note).
+pub const FLIPS_MELODY: [(u8, u8, u8); 7] =
+    [(67, 80, 12), (64, 85, 12), (59, 53, 12), (75, 150, 24), (71, 95, 16), (48, 253, 12), (150, 75, 20)];
 /// `flips_sna`'s pass: 96 T, 11 more every 256 passes.
 pub const FLIPS_PASS: f64 = 96.0 + 11.0 / 256.0;
 /// The pitch of a half-period count n of `flips_sna`: 3,500,000 / (2 [`FLIPS_PASS`] n).

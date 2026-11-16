@@ -833,8 +833,8 @@ enum Table {
     Builtin,
     /// The built-in engines plus the test fixtures'.
     Test,
-    /// The ROM BEEP and Test flips entries with their periods misread.
-    Misread,
+    /// Entry i of the misread table alone.
+    Misread(usize),
 }
 
 fn engine_table(which: Table) -> (*const sys::snd_engine, u32) {
@@ -843,7 +843,10 @@ fn engine_table(which: Table) -> (*const sys::snd_engine, u32) {
         match which {
             Table::Builtin => (std::ptr::addr_of!(sys::snd_engine_table).cast(), sys::snd_engine_count),
             Table::Test => (std::ptr::addr_of!(sys::snd_engine_test_table).cast(), sys::snd_engine_test_count),
-            Table::Misread => (std::ptr::addr_of!(sys::snd_engine_misread_table).cast(), sys::snd_engine_misread_count),
+            Table::Misread(i) => {
+                assert!(i < sys::snd_engine_misread_count as usize, "misread entry {i}");
+                (std::ptr::addr_of!(sys::snd_engine_misread_table).cast::<sys::snd_engine>().add(i), 1)
+            }
         }
     }
 }
@@ -896,6 +899,14 @@ impl Learned {
     }
 }
 
+/// The misread table's entries ([`SndEngines::new_misread`]): ROM BEEP's period a semitone too
+/// long; "Test flips" with channel 1's period halved, channel 0's halved (in a note whose channel 1
+/// is slow), channel 1's doubled.
+pub const MISREAD_BEEP: usize = 0;
+pub const MISREAD_FLIPS_1_HALF: usize = 1;
+pub const MISREAD_FLIPS_0_HALF: usize = 2;
+pub const MISREAD_FLIPS_1_DOUBLE: usize = 3;
+
 /// Method B, the known music engines: feed it each frame's machine and edges, get its decision
 /// about the frame `SND_DELAY_FRAMES` earlier.
 pub struct SndEngines {
@@ -915,11 +926,11 @@ impl SndEngines {
         Self::with_table(Table::Test)
     }
 
-    /// With the misread table: ROM BEEP's entry with its reader's period a semitone too long, and
-    /// the "Test flips" entry with channel 1's period half the true one (host tests: misreads the
-    /// check must reject).
-    pub fn new_misread() -> Self {
-        Self::with_table(Table::Misread)
+    /// With one entry of the misread table (host tests: misreads the check must reject):
+    /// [`MISREAD_BEEP`], [`MISREAD_FLIPS_1_HALF`], [`MISREAD_FLIPS_0_HALF`] or
+    /// [`MISREAD_FLIPS_1_DOUBLE`].
+    pub fn new_misread(entry: usize) -> Self {
+        Self::with_table(Table::Misread(entry))
     }
 
     fn with_table(which: Table) -> Self {

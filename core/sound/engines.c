@@ -324,13 +324,13 @@ static int sounds(const snd_voice *v, const snd_engine *en)
 	return 0;
 }
 
-/* A channel's level not known (in the segment so far). */
+/* A channel's level not known (in the segment so far; a flip only guessed is not known). */
 static int unknown(const check_state *c, const snd_engine *en)
 {
 	uint32_t ch;
 
 	for (ch = 0; ch < en->channels; ch++)
-		if (c->tr[ch].bit == 2) return 1;
+		if (c->tr[ch].bit >= 2) return 1;
 	return 0;
 }
 
@@ -372,10 +372,16 @@ static void silent(check_state *c, const snd_engine *en, uint32_t j, uint32_t le
  * of half periods: flips that fall in one pass cancel), else of one not yet seen, else of the
  * nearest. Two flips in one pass cancel: a channel's flip that comes a few half periods after
  * its last one is not a contradiction if each flip it missed is explained by another sounding
- * channel due to flip then (cancelled). A new note's first two flips, taken by order, may be
- * each other's (the channel second in order flipping first): an edge that fits no channel
- * while two have been seen but have no pair counted exchanges their last flips if one of them
- * then fits (exchange). */
+ * channel due to flip then (cancelled); a channel not yet seen may be guessed to flip there,
+ * but is known only once a later flip of its own (hidden or not) fits that guess. A new note's
+ * first two flips, taken by order, may be each other's (the channel second in order flipping
+ * first): an edge that fits no channel while two have been seen but have no pair counted
+ * exchanges their last flips if one of them then fits (exchange). Edges one half period apart
+ * of a channel just seen, with nothing between, are the flips of a channel an octave above it
+ * not yet seen, if one sounds: that channel's flips between would show, unless the edges are
+ * its own and the lower channel's flips cancel every other one. An in-phase f + 2f sounds
+ * exactly like a single square at f, so a silent channel read as sounding exactly an octave
+ * above another is accepted by design. */
 
 /* How far t is from a whole number (*k, at least 1) of half periods after channel ch's last
  * flip; NOWHERE for a silent channel. */
@@ -404,27 +410,42 @@ static void pair(check_state *c, uint32_t ch, int bad, int32_t t)
 /* Channel ch flips at t, k (2 to 8) half periods after its last flip: is each flip it missed
  * (its last plus j half periods) explained by another sounding channel flipping in the same
  * pass (within half that channel's tolerance of a whole number of its half periods after its
- * last flip; or its first flip, for one not yet seen)? Each such flip is that channel's, its
- * pair counted against its own period. */
+ * last flip)? Each such flip is that channel's, its pair counted against its own period. A
+ * channel not yet seen is guessed to flip there (bit 3: no pair, still not known). Nothing
+ * changes unless every missed flip is explained. */
 static int cancelled(check_state *c, const snd_engine *en, uint32_t ch, int32_t t, uint32_t k)
 {
+	snd_b_track keep[SND_TONAL];
+	uint8_t who[8];   /* per missed flip: the channel, plus 4 if checked, plus 8 if bad */
 	uint32_t j, o, ko;
 
 	if (k > 8u) return 0;
+	for (o = 0; o < en->channels; o++)
+		keep[o] = c->tr[o];
 	for (j = 1; j < k; j++) {
 		const int32_t m = c->tr[ch].obs + (int32_t)(j * (c->period[ch] / 2u));
 		for (o = 0; o < en->channels; o++) {
 			if (o == ch || !c->period[o]) continue;
-			if (c->tr[o].bit == 2) break;
+			if (c->tr[o].bit == 2) {
+				c->tr[o].bit = 3;
+				who[j] = (uint8_t)o;
+				break;
+			}
 			if (c->tr[o].obs < m && due(c, o, m, &ko) <= c->tol[o] / 2u) {
-				pair(c, o, ko != 1u, t);
+				c->tr[o].bit = 1;
+				who[j] = (uint8_t)(o | 4u | (ko != 1u ? 8u : 0u));
 				break;
 			}
 		}
-		if (o == en->channels) return 0;
-		c->tr[o].bit = 1;
+		if (o == en->channels) {
+			for (o = 0; o < en->channels; o++)
+				c->tr[o] = keep[o];
+			return 0;
+		}
 		c->tr[o].obs = m;
 	}
+	for (j = 1; j < k; j++)
+		if (who[j] & 4u) pair(c, who[j] & 3u, who[j] & 8u, t);
 	return 1;
 }
 
@@ -439,7 +460,7 @@ static uint32_t exchange(check_state *c, const snd_engine *en, uint32_t ch, int3
 		for (b = a + 1u; b < en->channels; b++) {
 			snd_b_track *ta = &c->tr[a], *tb = &c->tr[b];
 			const int32_t o = ta->obs;
-			if (ta->bit == 2 || tb->bit == 2 || ta->paired || tb->paired || !c->period[a] || !c->period[b]) continue;
+			if (ta->bit != 1 || tb->bit != 1 || ta->paired || tb->paired || !c->period[a] || !c->period[b]) continue;
 			ta->obs = tb->obs;
 			tb->obs = o;
 			for (x = a; x <= b; x += b - a)
@@ -454,8 +475,9 @@ static uint32_t exchange(check_state *c, const snd_engine *en, uint32_t ch, int3
 static void flip(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
 {
 	uint32_t i, k, off, best = NOWHERE;
+	const int any = ch == SND_CHAN_ANY;   /* (only flips from one OUT can cancel) */
 
-	if (ch == SND_CHAN_ANY) {
+	if (any) {
 		for (i = ch = 0; i < en->channels; i++) {
 			off = due(c, i, t, &k);
 			if (c->tr[i].bit == 2) off = 1u << 30;
@@ -467,13 +489,26 @@ static void flip(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
 			}
 		}
 		if (best >> 31) ch = exchange(c, en, ch, t);   /* (none fits, all seen) */
+		/* one half period after the last flip of a channel just seen: the edges are those of a
+		 * channel an octave above it not yet seen, if one sounds */
+		if (c->tr[ch].bit == 1 && !c->tr[ch].paired && due(c, ch, t, &k) <= c->tol[ch] / 2u && k == 1u) {
+			for (i = 0; i < en->channels; i++) {
+				const uint32_t p2 = 2u * c->period[i];
+				if (c->tr[i].bit != 2 || !p2 || (p2 > c->period[ch] ? p2 - c->period[ch] : c->period[ch] - p2) > c->tol[ch]) continue;
+				c->tr[i].obs = c->tr[ch].obs;
+				c->tr[i].bit = 1;
+				c->tr[ch].bit = 2;
+				ch = i;
+				break;
+			}
+		}
 	}
 	if (!c->blind) {
 		if (!c->period[ch]) {
 			c->rises[ch]++;   /* a silent channel sounds */
 		} else if (c->tr[ch].bit != 2) {
 			off = due(c, ch, t, &k);
-			pair(c, ch, off > c->tol[ch] / 2u || (k != 1u && !cancelled(c, en, ch, t, k)), t);
+			pair(c, ch, off > c->tol[ch] / 2u || (k != 1u && (!any || !cancelled(c, en, ch, t, k))), t);
 		}
 	}
 	c->tr[ch].bit = 1;   /* (seen: its level is not followed) */
