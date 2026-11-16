@@ -768,6 +768,50 @@ pub fn square_pointer_pass(contended: bool) -> Fixture {
     }
 }
 
+/// The note-change tune's notes: B for each of its eight notes, all low (fewer than 8 rises a
+/// frame), so a frame a note change falls in has few pairs to outvote it.
+pub const NOTE_CHANGE_B: [u8; 8] = [240, 200, 170, 140, 110, 90, 60, 30];
+
+/// A square wave whose notes last 16 half periods each, about one and a half frames, so a note
+/// begins anywhere in a frame: the loop counts its half periods at 8200h and takes note
+/// `(count >> 4) & 7` from the table at 8300h. At each `OUT`, B holds the note it begins. Half
+/// period `13B + 4106` T.
+///
+/// ```text
+/// 8000 3A 00 82  l: LD A,(8200h)  13   the count
+/// 8003 3C           INC A          4
+/// 8004 32 00 82     LD (8200h),A  13
+/// 8007 0F 0F 0F 0F  RRCA x4       16
+/// 800B E6 07        AND 7          7
+/// 800D 6F           LD L,A         4
+/// 800E 26 83        LD H,83h       7
+/// 8010 46           LD B,(HL)      7   the note
+/// 8011 79           LD A,C         4   C: the level
+/// 8012 EE 10        XOR 10h        7
+/// 8014 4F           LD C,A         4
+/// 8015 D3 FE        OUT (FEh),A   11   the site
+/// 8017 10 FE    d1: DJNZ d1       13B - 5
+/// 8019 16 FA        LD D,250       7
+/// 801B 15       d2: DEC D          4
+/// 801C 20 FD        JR NZ,d2      16 x 250 - 5
+/// 801E 18 E0        JR l          12
+/// ```
+pub fn note_change_tune() -> Fixture {
+    #[rustfmt::skip]
+    let code = [
+        0x3A, 0x00, 0x82, 0x3C, 0x32, 0x00, 0x82, 0x0F, 0x0F, 0x0F, 0x0F, 0xE6, 0x07, 0x6F,
+        0x26, 0x83, 0x46, 0x79, 0xEE, 0x10, 0x4F, 0xD3, 0xFE, 0x10, 0xFE, 0x16, 0xFA, 0x15,
+        0x20, 0xFD, 0x18, 0xE0,
+    ];
+    Fixture {
+        name: "note_change_tune",
+        sna: sna(&code, &[(0x8300, &NOTE_CHANGE_B)]),
+        sites: vec![0x8015],
+        kind: Kind::Square,
+        truth: |_, r| vec![13.0 * f64::from(if r.bc >> 8 == 0 { 256 } else { r.bc >> 8 }) + 4106.0],
+    }
+}
+
 /// Every fixture.
 pub fn all() -> Vec<Fixture> {
     vec![

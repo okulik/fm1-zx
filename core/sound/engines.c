@@ -181,6 +181,7 @@ typedef struct {          /* which site of the engine an edge came from */
 	uint16_t extra_pc[EXTRA_PCS];      /* OUTs past the listed sites, and their site index */
 	uint32_t extra_site[EXTRA_PCS];
 	uint32_t n_extra;
+	int32_t bad_at;                    /* check: the edge before the first that contradicted the voices, or NEVER */
 } classifier;
 
 /* The engine's site index of an edge from pc, or NOWHERE (other code; also any OUT past the
@@ -243,6 +244,7 @@ typedef struct {
 	uint32_t period[SND_TONAL], tol[SND_TONAL], pass;
 	uint8_t blind;               /* the voices are not known: follow the levels only */
 	uint8_t strict;              /* rises one period apart only (snd_engine.strict) */
+	int32_t bad_at;              /* the first contradicting edge's time, or NEVER */
 } check_state;
 
 /* Channel ch's level is `level` from time t (its first OUT with it) to `until`. */
@@ -263,7 +265,10 @@ static void known(check_state *c, uint32_t ch, uint32_t level, int32_t t, int32_
 			uint32_t k = (d + p / 2u) / p;
 			uint32_t off = k ? (d > k * p ? d - k * p : k * p - d) : d;
 			c->pairs[ch]++;
-			if (!k || off > c->tol[ch] || (k > 1u && c->strict)) c->bad[ch]++;
+			if (!k || off > c->tol[ch] || (k > 1u && c->strict)) {
+				c->bad[ch]++;
+				if (c->bad_at == NEVER) c->bad_at = t;
+			}
 		}
 		c->rises[ch]++;
 		tr->has_rise = 1;
@@ -407,7 +412,10 @@ static void flip(check_state *c, const snd_engine *en, uint32_t ch, int32_t t)
 			c->rises[ch]++;   /* a silent channel sounds */
 		} else if (c->tr[ch].bit != 2) {
 			c->pairs[ch]++;
-			if (due(c, ch, t, &k) > c->tol[ch] / 2u || k != 1) c->bad[ch]++;
+			if (due(c, ch, t, &k) > c->tol[ch] / 2u || k != 1) {
+				c->bad[ch]++;
+				if (c->bad_at == NEVER) c->bad_at = t;
+			}
 		}
 	}
 	c->tr[ch].bit = 1;   /* (seen: its level is not followed) */
@@ -435,12 +443,13 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 	uint32_t first[SEGS], rises[SEGS][SND_TONAL], pairs[SEGS][SND_TONAL], bad[SEGS][SND_TONAL];
 	uint8_t held[SEGS][SND_TONAL], blank[SEGS];   /* blank: a channel's level never known in it */
 	uint8_t any[SEGS] = { 0, 0, 0 };              /* tonal edges from its start on, checked or not */
-	int32_t pt = 0;          /* the edge before: time, channel, level */
+	int32_t pt = 0, bad_at;  /* the edge before: time, channel, level */
 	uint32_t pj = 0, pl = 0;
 	int have = 0;
 
 	c.pass = en->pass;
 	c.strict = en->strict;
+	c.bad_at = NEVER;
 	for (ch = 0; ch < SND_TONAL; ch++)
 		c.period[ch] = 0;
 	restart(&c, sg->v[0]);
@@ -506,6 +515,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 			continue;
 		}
 		if (sg->v[seg] && first[seg] == NOWHERE) first[seg] = (uint32_t)t;
+		bad_at = c.bad_at;
 		if (en->flips) {
 			flip(&c, en, chan, t);
 		} else {
@@ -519,6 +529,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 			}
 			known(&c, chan, level, t, t);
 		}
+		if (bad_at == NEVER && c.bad_at != NEVER && have) c.bad_at = pt;   /* (from the edge before it: a new note's first) */
 		have = 1;
 		pt = t;
 		pj = chan;
@@ -535,6 +546,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 		restart(&c, sg->v[sg->n - 1u]);
 		have = 0;
 	}
+	cl->bad_at = c.bad_at;
 	if (out) {
 		for (ch = 0; ch < SND_TONAL; ch++)
 			out->tr[ch] = c.tr[ch];
@@ -718,6 +730,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 		const snd_b_rec *p = &b->rec[(b->frames + SND_HIST - 1u) % SND_HIST];
 		const int had = b->last_entry == r->entry;
 		const snd_voice *pv = b->lastv;   /* the voices the engine was last seen with */
+		int retry = 0;
 		const snd_b_carry *in = b->frames && p->read && p->entry == r->entry && p->carry && !p->next ? &p->cy : 0;
 		int same = 1;
 
@@ -726,6 +739,17 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 		sg.n = 1;
 		sg.at[0] = 0;
 		sg.pause[0] = 0;
+		/* a learned entry that does not know its notes' timing, and read a new note its edges do
+		 * not fit: the engine may have moved on to it after its last edge (a note changed on the
+		 * frame's interrupt), or within the frame, the edges before being the voices of the
+		 * frame before */
+		if (!rd.stale && en->strict && had && rd.since == SND_B_SINCE_ALL) {
+			for (k = 0; k < SND_TONAL; k++)
+				if (pv[k].period_q8 != rd.v[k].period_q8) retry = 1;
+			sg.v[0] = rd.v;
+			if (retry && !check(&cl, en, e, n, &sg, 0, 0)) rd.stale = 1;
+			else retry = 0;
+		}
 		if (rd.stale) {   /* the edges are the voices of the frame before, if it read them */
 			if (had) {   /* (from the frame's first edge, if the frame before did not play them) */
 				for (k = 0; k < SND_TONAL; k++)
@@ -733,7 +757,15 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 				r->read = 1;
 				r->t_row = r->t_first;
 				sg.v[0] = pv;
-				r->ok = (uint8_t)check(&cl, en, e, n, &sg, in, &r->cy);
+				/* (a retried new note may have begun within the frame: then the voices before
+				 * up to the edge before the first they do not fit, the note read from there,
+				 * unchecked here) */
+				while (!(r->ok = (uint8_t)check(&cl, en, e, n, &sg, in, &r->cy)) && retry-- > 0 && cl.bad_at > 0 && cl.bad_at < NEVER) {
+					sg.n = 2;
+					sg.at[1] = (uint32_t)cl.bad_at;
+					sg.v[1] = 0;
+					sg.pause[1] = 1;
+				}
 				r->carry = 1;
 			} else {
 				r->ok = 0;
@@ -741,7 +773,7 @@ static void observe(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n
 			if (rd.stale == 1) {   /* and the engine moved on to the voices read, after its last edge */
 				r->next = 1;
 				r->carry = 0;
-				r->t_next = rd.since < FRAME_T - r->t_last ? FRAME_T - rd.since : r->t_last + 1u;
+				r->t_next = sg.n > 1 ? sg.at[1] : rd.since < FRAME_T - r->t_last ? FRAME_T - rd.since : r->t_last + 1u;
 				for (k = 0; k < SND_TONAL; k++)
 					r->nv[k] = k < en->channels ? rd.v[k] : (snd_voice){ 0, 0 };
 			}

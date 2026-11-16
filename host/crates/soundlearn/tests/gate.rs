@@ -107,6 +107,68 @@ fn learns_tune_end_to_end() {
     assert!(total > 400 && good * 10 >= total * 9, "{good} of {total}");
 }
 
+/// A routine whose notes' timing is not known (a learned entry with no timing program and no
+/// stale rule), its notes beginning anywhere in a frame: a note that begins within a frame
+/// leaves the frame's first edges, or all but its last few, on the note before while the
+/// registers already hold the new one. Method B still claims those frames (the note before up
+/// to its first edge that does not fit, the new note from there once the next frame passes), so
+/// FM does not drop to the beeper at each note, and every pitch it plays is one of the tune's.
+#[test]
+fn learned_without_timing_claims_note_changes() {
+    let fx = fixtures::note_change_tune();
+    let mut entry = LearnedEntry {
+        kind: 0,
+        digest: 0,
+        len: 0x20,
+        wild: vec![],
+        reloc: vec![],
+        sites: vec![(0x15, SND_SITE_TONAL, 0)],
+        pass: 0,
+        pos: vec![0],
+        flips: false,
+        drum: 0,
+        stale: None,
+        level: vec![200],
+        // 2 (13B + 4106) x 256
+        progs: vec![vec![Op::Reg(2), Op::K(13), Op::Mul, Op::K(4106), Op::Add, Op::K(512), Op::Mul]],
+        timing: None,
+    };
+    let m = fixtures::machine(&fx.sna);
+    let index = learned_engine() as usize - 1;
+    entry.digest = SndEngines::with_learned(&encode_list(std::slice::from_ref(&entry))).expect("decodes").digest(&m, index, 0x8000);
+    let list = encode_list(std::slice::from_ref(&entry));
+    let hz: Vec<f64> = fixtures::NOTE_CHANGE_B.iter().map(|&b| CLOCK / (2.0 * (13.0 * f64::from(b) + 4106.0))).collect();
+    let tune = |p: u32| p == 0 || hz.iter().any(|t| (CLOCK * 256.0 / f64::from(p) - t).abs() <= 0.005 * t);
+
+    let mut m = fixtures::machine(&fx.sna);
+    let mut b = SndEngines::with_learned(&list).expect("decodes");
+    let frames = 600;
+    let mut sounding = Vec::new();
+    let mut decided = Vec::new();
+    for _ in 0..frames {
+        m.run_frame();
+        sounding.push(m.edges().iter().any(|e| e.pc == 0x8015));
+        decided.push(b.frame(&m, m.edges(), m.edges_start_level()));
+    }
+    let delay = zx_sys::SND_DELAY_FRAMES as usize;
+    let (mut total, mut claimed, mut wrong) = (0, 0, 0);
+    for f in 0..frames - delay {
+        let d = &decided[f + delay];
+        let mine = d.confident != 0 && d.engine == learned_engine();
+        if mine {
+            wrong += usize::from(!tune(d.tone[0].period_q8));
+            wrong += d.events().iter().filter(|ev| usize::from(ev.voice) < SND_TONAL && !tune(ev.period_q8)).count();
+        }
+        if sounding[f] {
+            total += 1;
+            claimed += usize::from(mine);
+        }
+    }
+    eprintln!("note-change tune: {claimed} of {total} sounding frames claimed, {wrong} wrong pitches");
+    assert_eq!(wrong, 0);
+    assert!(total > 500 && claimed * 100 >= total * 99, "{claimed} of {total}");
+}
+
 /// The fit's samples span two flips of a site, `2 s` half periods for a channel of `s` sites: the
 /// flips fixture (one site per channel) and the toggler (one channel, two sites) are learned from
 /// each of their sites; a time-slot routine's sites follow every channel, and are not fitted.
