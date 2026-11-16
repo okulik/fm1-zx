@@ -340,6 +340,16 @@ pub fn listen(m: &mut Machine, inputs: &Inputs, frames: u32) -> Heard {
 
 /// [`listen`] keeping at most `keep` period samples (and snapshots) per site, 4,096 for `listen`.
 pub fn listen_with(m: &mut Machine, inputs: &Inputs, frames: u32, keep: usize) -> Heard {
+    record(m, inputs, frames, keep, &mut |_| {})
+}
+
+/// [`listen`], `observe` given the machine after each frame (the learner's built-in table decides
+/// the frames alongside: [`crate::roles::BuiltinRun`]).
+pub fn listen_observed(m: &mut Machine, inputs: &Inputs, frames: u32, observe: &mut dyn FnMut(&Machine)) -> Heard {
+    record(m, inputs, frames, KEEP, observe)
+}
+
+fn record(m: &mut Machine, inputs: &Inputs, frames: u32, keep: usize, observe: &mut dyn FnMut(&Machine)) -> Heard {
     let rec = Rc::new(RefCell::new(Rec { keep, ..Rec::default() }));
     let frame = Rc::new(Cell::new(0u32));
     let (hook_rec, hook_frame) = (Rc::clone(&rec), Rc::clone(&frame));
@@ -359,6 +369,7 @@ pub fn listen_with(m: &mut Machine, inputs: &Inputs, frames: u32, keep: usize) -
         m.set_kempston(kemp);
         frame.set(f);
         m.run_frame();
+        observe(m);
     }
     m.set_trace(None, 0);
     let heard = rec.borrow_mut().finish(frames);

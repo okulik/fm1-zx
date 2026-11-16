@@ -194,10 +194,41 @@ line per game:
     border: no music learned (OUTs that do not always flip the speaker at 801Ah)
 
 `DIR/sound-report.txt` holds the same lines and, per routine, the speaker `OUT` it was read from,
-the routine, each channel's half period as a formula, the fit and replay figures, and why a
-routine was left out. The games are learned in parallel, a few seconds each; the results are
-cached in `DIR/sound-cache/` (by the converted game's CRC, its key script and the learner's
-version), which runs keep, so a re-run learns only new or changed games.
+the routine, each channel's half period as a formula, the fit and replay figures, why a
+routine was left out, and each channel's instrument. The games are learned in parallel, a few
+seconds each; the results are cached in `DIR/sound-cache/` (by the converted game's CRC, its key
+script, its instrument overrides and the learner's version), which runs keep, so a re-run learns
+only new or changed games.
+
+**Instruments.** In FM, each voice plays a bass, lead or pad instrument by its role in the tune.
+The FM-1 decides the roles live, by pitch; for the routines a game's music uses (learned ones,
+and the known routines of FM: engines), the command also works them out over the whole 3-minute
+run and stores them in the pack: per routine, its lowest channel the bass, its highest the lead,
+a third the pad, a lone channel the lead (none for a routine heard too little). The report shows
+each channel's role and where it came from:
+
+    OUT at 8014h, heard in 8999 frames (276934 edges)
+      ...
+      learned
+      roles: channel 0 lead (analysis)
+
+To choose the roles yourself, give the game an `[game.instruments]` table in
+`personal-games.toml`: a routine's `OUT` address as the report shows it (4 hex digits; any `OUT`
+of the routine the report shows), then its channels' roles from channel 0 (`"bass"`, `"lead"`
+or `"pad"`; a channel left out keeps the analysis' role). It wins over the analysis, and the
+report says `override` for those channels:
+
+    [[game]]
+    id = "some-game"
+    name = "Some game"
+    file = "..."
+    [game.instruments]
+    "C694" = ["lead"]            # the routine whose OUT is at C694h: channel 0 lead
+    "881F" = ["bass", "lead"]    # channels 0 and 1
+
+An address that names no learned or known routine of the game (the error lists the game's
+routine `OUT`s), more roles than the routine has channels, or a role name not in the list fails
+the run with the game's name and the bad key, and no pack is written.
 
 A pack that does not fit fails: the command lists every game by packed size, largest first, and
 writes no pack or packages (those of an earlier run are removed). Then comment out some entries in

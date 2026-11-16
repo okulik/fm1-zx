@@ -20,7 +20,6 @@ use zx_sys::{
 /// for n = 0, as `read_burst`.
 fn burst_entry() -> LearnedEntry {
     LearnedEntry {
-        kind: 0,
         digest: 0xd4b5_51f4_6da9_de4c,
         len: 0x2C,
         wild: vec![0x13],
@@ -32,6 +31,7 @@ fn burst_entry() -> LearnedEntry {
         drum: 0,
         stale: None,
         level: vec![200],
+        instrument: [0; 3],
         progs: vec![vec![Op::PeekRel(0x13), Op::ZeroSilent, Op::PeekRel(0x13), Op::K(13), Op::Mul, Op::K(54), Op::Add, Op::K(512), Op::Mul]],
         timing: None,
     }

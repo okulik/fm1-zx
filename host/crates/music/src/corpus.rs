@@ -150,7 +150,7 @@ fn learned(path: &Path, out: &Path) -> (Option<Vec<u8>>, String, String) {
     let file = format!("{}.{}", wav_stem(path), converted_ext(&l, path));
     let cache = out.join("sound-cache");
     let _ = std::fs::create_dir_all(&cache);
-    let s = learn_music(&file, &l.data, &path.with_extension("keys"), &cache);
+    let s = learn_music(&file, &l.data, &path.with_extension("keys"), &Default::default(), &cache);
     (s.list, s.line, s.details)
 }
 

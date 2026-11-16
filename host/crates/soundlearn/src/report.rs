@@ -17,11 +17,14 @@
 //! A block gives the speaker `OUT` the routine was read from (heard, or found in the code only),
 //! the routine's span, family and channels, each channel's half period as a formula of its
 //! inputs, the gates' figures (fit and replay), any drum sites, and the outcome: learned, or the
-//! reason it was left out.
+//! reason it was left out. A learned routine's block, and the block of a built-in routine's `OUT`
+//! heard in the most frames, then give each channel's stored role and where it came from
+//! ([`ChannelRole`]): `roles: channel 0 bass (analysis), channel 1 lead (override)`.
 
 use crate::fit::FitResult;
 use crate::gate::ReplayStats;
 use crate::model::{ChannelModel, EngineModel, Family, Input, Refusal, Term};
+use zx_sys::{SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD};
 
 /// One routine the learner looked at.
 #[derive(Clone, Debug)]
@@ -37,6 +40,60 @@ pub struct Routine {
     pub drums: Vec<u16>,
     /// Ok: learned; Err: why not.
     pub outcome: Result<(), String>,
+    /// Per channel, its stored role (empty: a routine with none: neither learned nor built-in).
+    pub roles: Vec<ChannelRole>,
+}
+
+/// A channel's stored role (`SND_ROLE_*`) and where it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelRole {
+    /// The analysis of the run ranked it ([`crate::roles`]).
+    Analysis(u8),
+    /// The owner's override (`[game.instruments]`).
+    Override(u8),
+    /// None: the channel never sounded in the routine's frames.
+    NotHeard,
+    /// None: too little music heard to rank the channels.
+    TooLittle,
+    /// None: the game's list already holds 8 entries (a built-in routine's roles take one).
+    NoRoom,
+}
+
+impl ChannelRole {
+    /// The role stored (0: none).
+    pub fn role(self) -> u8 {
+        match self {
+            ChannelRole::Analysis(r) | ChannelRole::Override(r) => r,
+            _ => 0,
+        }
+    }
+}
+
+/// The roles a channel can be given, by name (the report's and `[game.instruments]`' names).
+pub const ROLES: [(&str, u8); 3] = [("bass", SND_ROLE_BASS), ("lead", SND_ROLE_LEAD), ("pad", SND_ROLE_PAD)];
+
+/// A role's name ([`ROLES`]; "none" for any other value).
+pub fn role_name(role: u8) -> &'static str {
+    ROLES.iter().find(|r| r.1 == role).map_or("none", |r| r.0)
+}
+
+/// The roles line of a block (none for no roles).
+fn roles_line(roles: &[ChannelRole]) -> String {
+    if roles.is_empty() {
+        return String::new();
+    }
+    let each: Vec<String> = roles
+        .iter()
+        .enumerate()
+        .map(|(c, r)| match *r {
+            ChannelRole::Analysis(x) => format!("channel {c} {} (analysis)", role_name(x)),
+            ChannelRole::Override(x) => format!("channel {c} {} (override)", role_name(x)),
+            ChannelRole::NotHeard => format!("channel {c} by the live rule (not heard)"),
+            ChannelRole::TooLittle => format!("channel {c} by the live rule (too little music heard to rank)"),
+            ChannelRole::NoRoom => format!("channel {c} by the live rule (no room left in the game's list)"),
+        })
+        .collect();
+    format!("    roles: {}\n", each.join(", "))
 }
 
 /// A count and a noun, the noun plural unless the count is 1.
@@ -189,5 +246,5 @@ pub fn block(r: &Routine) -> String {
         Ok(()) => "    learned\n".to_string(),
         Err(why) => format!("    left out: {why}\n"),
     };
-    s
+    s + &roles_line(&r.roles)
 }

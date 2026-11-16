@@ -53,14 +53,19 @@
 //! if there is one (the `music-corpus` format, its times from time 0; one that does not parse is
 //! reported and the generic run is used), else the generic run seeded with the converted file's
 //! CRC-32. The games are learned in parallel, one thread per core. The pack's sound section holds each
-//! game's learned entries ([`attach_sound`]); [`table`] ends with one line per game
-//! (`<name>: music learned (...)` or `<name>: no music learned (<reason>)`), and
-//! `<out>/sound-report.txt` holds them with each routine's details. The results are cached in
-//! `<out>/sound-cache/<crc>-<version>.bin` (one CRC-32 over the converted file's data followed
-//! by the key script's text, if there is one; the learner's version), which runs keep: an unchanged game is not learned again. A
-//! cache file is used only if its CRC matches and method B's decoder takes its list; otherwise
-//! the game is learned again. A panic while learning a game gives that game a learner error,
-//! and the pack is still built.
+//! game's learned entries and the stored roles of its routines' channels ([`attach_sound`]:
+//! learned entries' `instrument[]`, built-in entries' kind-1 records), the game's
+//! `[game.instruments]` overrides ([`crate::manifest`]) winning over the learner's analysis; an
+//! override that names no learned or built-in routine of the game (or more channels than it has)
+//! fails the run, naming the game and the key, and no pack is written. [`table`] ends with one
+//! line per game (`<name>: music learned (...)` or `<name>: no music learned (<reason>)`), and
+//! `<out>/sound-report.txt` holds them with each routine's details and its channels' roles. The
+//! results are cached in `<out>/sound-cache/<crc>-<version>.bin` (one CRC-32 over the converted
+//! file's data followed by the key script's text, if there is one, and the overrides; the
+//! learner's version), which runs keep: an unchanged game is not learned again. A cache file is
+//! used only if its CRC matches and method B's decoder takes its list; otherwise the game is
+//! learned again (a game with a bad override is not cached). A panic while learning a game gives
+//! that game a learner error, and the pack is still built.
 
 use crate::keymaps::keymaps_json;
 use crate::keys::{inputs, parse_keys};
@@ -69,8 +74,8 @@ use crate::manifest::{game_path, parse_manifest, parse_personal_manifest, Game, 
 use crate::pack::{attach_sound, build_pack};
 use crate::tapeload::{self, Kind, Loaded};
 use soundlearn::listen::{schedule, Inputs};
-use soundlearn::{encode_list, learn, LEARNER_VERSION};
-use std::collections::{HashMap, HashSet};
+use soundlearn::{encode_list_with, learn_with, LearnOptions, LEARNER_VERSION};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -206,7 +211,13 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
                 let at = conv.join(&file);
                 std::fs::write(&at, &l.data).map_err(|e| format!("{}: {e}", shown(&at)))?;
                 row.how = l.how.clone();
-                jobs.push(Job { name: g.name.clone(), data: l.data.clone(), file: file.clone(), keys: key.with_extension("keys") });
+                jobs.push(Job {
+                    name: g.name.clone(),
+                    data: l.data.clone(),
+                    file: file.clone(),
+                    keys: key.with_extension("keys"),
+                    instruments: g.instruments.clone(),
+                });
                 packed.push((g.clone(), file, rows.len()));
             }
         }
@@ -236,6 +247,10 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
     let manifest_path = conv.join("manifest.toml");
     let text = manifest_text(&packed);
     std::fs::write(&manifest_path, &text).map_err(|e| format!("{}: {e}", shown(&manifest_path)))?;
+    // after the converted files' manifest, which keeps the folder ours for the next run
+    if let Some((j, e)) = jobs.iter().zip(&sounds).find_map(|(j, s)| s.override_error.as_ref().map(|e| (j, e))) {
+        return Err(format!("game {:?}: {e}", j.name));
+    }
     let mut pack = build_pack(&manifest_path)?;
     attach_sound(&mut pack, &sounds.iter().map(|s| s.list.clone()).collect::<Vec<_>>())?;
     for (i, (_, _, r)) in packed.iter().enumerate() {
@@ -264,26 +279,30 @@ const REPORT_HEAD: &str = "\
 # The music tools/make-personal-pack learned for each game (BUILDING.md, \"Your own games\"), and
 # per routine: the speaker OUT it was read from, the routine, each channel's half period in
 # T-states (an input in a product counts a loop: 0 counts 256, 65,536 for a word), the gates'
-# figures, and whether it was learned or why not.
+# figures, whether it was learned or why not, and its channels' stored roles in the FM synth
+# (from the analysis of the run, or your override in [game.instruments]).
 ";
 
-/// A packed game, for learning its music: its name, its converted file's bytes and name, and
-/// where its key script would be.
+/// A packed game, for learning its music: its name, its converted file's bytes and name, where
+/// its key script would be, and its overrides of the stored roles.
 struct Job {
     name: String,
     data: Vec<u8>,
     file: String,
     keys: PathBuf,
+    instruments: BTreeMap<u16, Vec<u8>>,
 }
 
 /// What was learned of a game: its entry list (None: none), its line without the name, its
-/// details, and the key script's problem if it had one.
+/// details, the key script's problem if it had one, and an override that does not fit
+/// ([`soundlearn::GameSound::override_error`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sound {
     pub list: Option<Vec<u8>>,
     pub line: String,
     pub details: String,
     pub keys_error: Option<String>,
+    pub override_error: Option<String>,
 }
 
 /// The key script's problem as a details line, if any.
@@ -336,7 +355,13 @@ fn isolated(f: impl FnOnce() -> Sound) -> Sound {
 
 /// A game's music when learning it failed.
 fn learner_error(why: &str) -> Sound {
-    Sound { list: None, line: format!("no music learned (learner error: {why})"), details: format!("  learner error: {why}\n"), keys_error: None }
+    Sound {
+        list: None,
+        line: format!("no music learned (learner error: {why})"),
+        details: format!("  learner error: {why}\n"),
+        keys_error: None,
+        override_error: None,
+    }
 }
 
 /// Milliseconds per Spectrum frame, for the key scripts' times.
@@ -346,15 +371,16 @@ const CACHE_MAGIC: &[u8; 8] = b"FMZXSND2";
 
 /// A game's music: from the cache, or learned and then cached.
 fn learn_cached(job: &Job, cache: &Path) -> Sound {
-    learn_music(&job.file, &job.data, &job.keys, cache)
+    learn_music(&job.file, &job.data, &job.keys, &job.instruments, cache)
 }
 
 /// The music of a game as the personal pack learns it: `file` and `data` its converted file
 /// ([`tapeload::prepare`]'s data, named with [`converted_ext`]), `keys` where its key script
-/// would be, `cache` the cache folder (it must exist). From the cache, or learned under the key
-/// script's steps (or the generic run, seeded by the converted data's CRC-32) and then cached.
-/// `music-corpus` learns through this too, so both learn the same.
-pub fn learn_music(file: &str, data: &[u8], keys: &Path, cache: &Path) -> Sound {
+/// would be, `instruments` its overrides of the stored roles ([`crate::manifest::Game`]), `cache`
+/// the cache folder (it must exist). From the cache, or learned under the key script's steps (or
+/// the generic run, seeded by the converted data's CRC-32) and then cached (not with an override
+/// that does not fit). `music-corpus` learns through this too, so both learn the same.
+pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<u16, Vec<u8>>, cache: &Path) -> Sound {
     let script = std::fs::read_to_string(keys).ok();
     let (steps, keys_error) = match script.as_deref().map(parse_keys) {
         Some(Ok(steps)) => (Some(steps), None),
@@ -366,33 +392,47 @@ pub fn learn_music(file: &str, data: &[u8], keys: &Path, cache: &Path) -> Sound 
     if let Some(t) = &script {
         crc.update(t.as_bytes());
     }
+    for (out, roles) in instruments {
+        crc.update(&out.to_le_bytes());
+        crc.update(&[roles.len() as u8]);
+        crc.update(roles);
+    }
     let path = cache.join(format!("{:08x}-{LEARNER_VERSION}.bin", crc.finalize()));
     if let Some((list, line, details)) = std::fs::read(&path).ok().as_deref().and_then(cache_decode) {
-        return Sound { list, line, details, keys_error };
+        return Sound { list, line, details, keys_error, override_error: None };
     }
-    let (list, line, details) = learn_converted(file, data, steps);
+    let (list, line, details, override_error) = learn_converted(file, data, steps, instruments);
     // written whole, then renamed: a half-written file is never read
     let tmp = cache.join(format!("{file}.tmp"));
-    if std::fs::write(&tmp, cache_encode(list.as_deref(), &line, &details)).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+    if override_error.is_none()
+        && std::fs::write(&tmp, cache_encode(list.as_deref(), &line, &details)).is_ok()
+        && std::fs::rename(&tmp, &path).is_err()
+    {
         let _ = std::fs::remove_file(&tmp);
     }
-    Sound { list, line, details, keys_error }
+    Sound { list, line, details, keys_error, override_error }
 }
 
-/// Learns a game's music under its key script's steps, or the generic run: its entry list (None:
-/// none), line and details.
-fn learn_converted(file: &str, data: &[u8], steps: Option<Vec<crate::keys::Step>>) -> (Option<Vec<u8>>, String, String) {
+/// Learns a game's music under its key script's steps, or the generic run, with its overrides of
+/// the stored roles: its entry list (None: none), line, details and an override that does not fit.
+fn learn_converted(
+    file: &str,
+    data: &[u8],
+    steps: Option<Vec<crate::keys::Step>>,
+    instruments: &BTreeMap<u16, Vec<u8>>,
+) -> (Option<Vec<u8>>, String, String, Option<String>) {
     if let Err(e) = machine(file, data) {
-        return (None, format!("no music learned (the game does not load: {e})"), String::new());
+        return (None, format!("no music learned (the game does not load: {e})"), String::new(), None);
     }
     let run: Inputs = match steps {
         Some(steps) => Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS)),
         None => schedule(u64::from(crc32fast::hash(data))),
     };
     // it loaded just now, so it loads again: the fallback is never used
-    let got = learn(&|| machine(file, data).unwrap_or_else(|_| Machine::new()), &run);
-    let list = (!got.entries.is_empty()).then(|| encode_list(&got.entries));
-    (list, got.line, got.details)
+    let opts = LearnOptions { instruments: instruments.clone(), ..LearnOptions::default() };
+    let got = learn_with(&|| machine(file, data).unwrap_or_else(|_| Machine::new()), &run, &opts);
+    let list = (!got.entries.is_empty() || !got.roles.is_empty()).then(|| encode_list_with(&got.entries, &got.roles));
+    (list, got.line, got.details, got.override_error)
 }
 
 /// A cache file: the magic, the CRC-32 of the rest (u32, little-endian), then the entry list,

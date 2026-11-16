@@ -56,7 +56,7 @@ fn learns_tune_end_to_end() {
     assert!(stats.music_gate);
 
     // the entry: the routine's signature, its site, the formula and the timing
-    assert_eq!((entry.kind, entry.len), (0, model.code_end - model.anchor));
+    assert_eq!((entry.instrument, entry.len), ([0; 3], model.code_end - model.anchor));
     assert_eq!(entry.sites, vec![(0x14, SND_SITE_TONAL, 0)]);
     assert_eq!((entry.pass, entry.flips, entry.drum, entry.stale), (0, false, 0, model.stale));
     assert!(entry.timing.is_some());
@@ -117,7 +117,6 @@ fn learns_tune_end_to_end() {
 fn learned_without_timing_claims_note_changes() {
     let fx = fixtures::note_change_tune();
     let mut entry = LearnedEntry {
-        kind: 0,
         digest: 0,
         len: 0x20,
         wild: vec![],
@@ -129,6 +128,7 @@ fn learned_without_timing_claims_note_changes() {
         drum: 0,
         stale: None,
         level: vec![200],
+        instrument: [0; 3],
         // 2 (13B + 4106) x 256
         progs: vec![vec![Op::Reg(2), Op::K(13), Op::Mul, Op::K(4106), Op::Add, Op::K(512), Op::Mul]],
         timing: None,
@@ -254,7 +254,7 @@ fn builtin_wins() {
     assert_eq!(judge(&model, &m, None, None, None), Verdict::Refused(BUILTIN.into()));
     // and a replay that the built-in table claims, whatever else it shows
     let model = model_at(&tune, 0x8014);
-    let stats = ReplayStats { routine_frames: 500, claimed: 500, music_gate: true, builtin_claimed: 450 };
+    let stats = ReplayStats { routine_frames: 500, claimed: 500, music_gate: true, builtin_claimed: 450, roles: None };
     assert_eq!(judge(&model, &tune, None, Some(&stats), None), Verdict::Refused(BUILTIN.into()));
     assert_eq!(BUILTIN, "built-in entry");
 }
@@ -453,7 +453,7 @@ fn stack_contention_must_not_move_the_pitch() {
     let heard = listen(&mut m, &none(), 300);
     let mut site = heard.sites.iter().max_by_key(|s| s.edges).expect("heard").clone();
     let model = model_at(&m, site.pc);
-    let stats = ReplayStats { routine_frames: 290, claimed: 290, music_gate: true, builtin_claimed: 0 };
+    let stats = ReplayStats { routine_frames: 290, claimed: 290, music_gate: true, builtin_claimed: 0, roles: None };
     let fit = check_fit(&model, &site).expect("fits");
     assert_eq!(judge(&model, &m, Some(&site), Some(&stats), Some(&fit)), Verdict::Learned { heard: true });
     for p in &mut site.periods {
@@ -478,7 +478,7 @@ fn claim_gate_follows_the_fit() {
     let strong = check_fit(&model, site).expect("fits");
     assert!(strong.inliers >= 0.95, "{strong:?}");
     let weaker = soundlearn::fit::FitResult { inliers: 0.90, ..strong.clone() };
-    let claims = |claimed: u32| ReplayStats { routine_frames: 100, claimed, music_gate: true, builtin_claimed: 0 };
+    let claims = |claimed: u32| ReplayStats { routine_frames: 100, claimed, music_gate: true, builtin_claimed: 0, roles: None };
     assert_eq!(judge(&model, &m, Some(site), Some(&claims(85)), Some(&strong)), Verdict::Learned { heard: true });
     let v = judge(&model, &m, Some(site), Some(&claims(85)), Some(&weaker));
     assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("replay") && why.ends_with("(at least 90%)")), "{v:?}");
@@ -502,7 +502,7 @@ fn fit_refuses_a_wrong_note_group() {
     let mut m = fixtures::machine(&fx.sna);
     let heard = listen(&mut m, &none(), 300);
     let model = model_at(&m, heard.sites[0].pc);
-    let stats = ReplayStats { routine_frames: 100, claimed: 100, music_gate: true, builtin_claimed: 0 };
+    let stats = ReplayStats { routine_frames: 100, claimed: 100, music_gate: true, builtin_claimed: 0, roles: None };
     let v = judge(&model, &m, Some(&heard.sites[0]), Some(&stats), Some(&f));
     assert!(matches!(&v, Verdict::Refused(why) if why.starts_with("fit: a note")), "{v:?}");
     // a group under 8 samples is too few to say: not a wrong note
@@ -533,7 +533,7 @@ fn pointer_reads_in_the_pass_need_the_played_fit() {
         waited.push(waits);
         // heard, its played periods 2% longer than the code's: refused by the fit as played
         let fit = check_fit(&model, &site).expect("fits");
-        let ok = ReplayStats { routine_frames: 290, claimed: 290, music_gate: true, builtin_claimed: 0 };
+        let ok = ReplayStats { routine_frames: 290, claimed: 290, music_gate: true, builtin_claimed: 0, roles: None };
         for p in &mut site.periods {
             p.contention_t += 0.02 * p.period_t;
         }
@@ -577,7 +577,6 @@ fn drum_keeps_the_matching_work_bounded() {
     // a 300-byte entry with 13 sites: a drum 10 bytes past it makes 14 sites x 312 bytes = 4368,
     // over the 4096 a game's list may match; with 12 sites, 13 x 312 = 4056 is within it
     let with_sites = |n: u16| LearnedEntry {
-        kind: 0,
         digest: 0,
         len: 300,
         wild: vec![],
@@ -589,6 +588,7 @@ fn drum_keeps_the_matching_work_bounded() {
         drum: 0,
         stale: None,
         level: vec![200],
+        instrument: [0; 3],
         progs: vec![vec![Op::K(300)]],
         timing: None,
     };

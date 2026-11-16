@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Learned entries as data: the program encoder and reference evaluator against the C
-//! interpreter (`core/sound/learned.c`), and the decoder's validation of entry lists.
+//! interpreter (`core/sound/learned.c`), the decoder's validation of entry lists, and the stored
+//! roles (`instrument[]`, kind-1 records) as method B reads them.
 
-use soundlearn::{encode_list, encode_prog, eval_prog, LearnedEntry, Op};
-use zx_sys::{zx_regs, Machine, SndEngines, SND_SITE_TONAL};
+mod fixtures;
+
+use soundlearn::fit::to_entry;
+use soundlearn::model::read_engine;
+use soundlearn::{encode_list, encode_list_with, encode_prog, eval_prog, BuiltinRoles, LearnedEntry, Op};
+use zx_sys::{zx_regs, Machine, SndEngines, SndFrame, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD, SND_SITE_TONAL};
 
 /// xorshift64*: a seeded generator, so a failure repeats.
 struct Rng(u64);
@@ -155,7 +160,6 @@ const PROG_LEN: usize = ENTRY + 32;
 /// A valid one-channel entry: 36 bytes of header, wild, reloc, a site, pos, a 3-byte program.
 fn base() -> LearnedEntry {
     LearnedEntry {
-        kind: 0,
         digest: 0x0123_4567_89AB_CDEF,
         len: 0x20,
         wild: vec![0x05],
@@ -167,6 +171,7 @@ fn base() -> LearnedEntry {
         drum: 0,
         stale: None,
         level: vec![200],
+        instrument: [0; 3],
         progs: vec![vec![Op::K(300)]],
         timing: None,
     }
@@ -359,4 +364,79 @@ fn decode_bounds_the_matching_work() {
     over[3] = sized(512, 2);
     assert!(!ok(&over), "4608 over the list");
     assert_eq!((zx_sys::SND_LEARNED_LEN_MAX, zx_sys::SND_LEARNED_WORK_MAX), (512, 4096));
+}
+
+/// B's decisions about `frames` frames of `m` with the table `b`.
+fn decisions(mut m: Machine, mut b: SndEngines, frames: usize) -> Vec<SndFrame> {
+    (0..frames)
+        .map(|_| {
+            m.run_frame();
+            b.frame(&m, m.edges(), m.edges_start_level())
+        })
+        .collect()
+}
+
+/// The roles of the frames `engine` claims, and of all the others.
+fn roles_of(d: &[SndFrame], engine: u8) -> (Vec<[u8; 3]>, Vec<[u8; 3]>) {
+    let (mine, rest): (Vec<&SndFrame>, Vec<&SndFrame>) = d.iter().partition(|f| f.confident != 0 && f.engine == engine);
+    (mine.iter().map(|f| f.role).collect(), rest.iter().map(|f| f.role).collect())
+}
+
+#[test]
+fn encodes_instrument_bytes() {
+    // instrument[c] at +29 of the entry; past the channels as given (the decoder makes it 0)
+    const INSTRUMENT: usize = ENTRY + 29;
+    let l = encode_list(&[LearnedEntry { instrument: [SND_ROLE_PAD, 0, 0], ..base() }]);
+    assert_eq!(l[INSTRUMENT..INSTRUMENT + 3], [3, 0, 0]);
+    assert_eq!(l[INSTRUMENT - 3..INSTRUMENT], [200, 0, 0], "level[] before it");
+    assert_eq!(encode_list(&[base()])[INSTRUMENT..INSTRUMENT + 3], [0, 0, 0]);
+    assert_eq!(SndEngines::with_learned(&l).unwrap().entries().last().unwrap().role, [SND_ROLE_PAD, 0, 0]);
+
+    // tune.sna's routine with a stored role: every frame B gives it carries the role, the others
+    // none (AUTO)
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../games/test/tune.sna");
+    let tune = || fixtures::machine(&std::fs::read(path).expect("tune.sna"));
+    let m = tune();
+    let entry = to_entry(&read_engine(|a| m.peek(a), 0x8014).expect("tune's routine"), |a| m.peek(a));
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    for role in [SND_ROLE_BASS, SND_ROLE_LEAD] {
+        let list = encode_list(&[LearnedEntry { instrument: [role, 0, 0], ..entry.clone() }]);
+        let (claimed, rest) = roles_of(&decisions(tune(), SndEngines::with_learned(&list).unwrap(), 300), mine);
+        assert!(claimed.len() > 250, "{} frames claimed", claimed.len());
+        assert!(claimed.iter().all(|r| *r == [role, 0, 0]), "{claimed:?}");
+        assert!(rest.iter().all(|r| *r == [SND_ROLE_AUTO; 3]), "{rest:?}");
+    }
+}
+
+#[test]
+fn encodes_kind1_record() {
+    // u16 size 16, u8 kind 1, u8 channels, u64 digest, u8 role[3], a byte of padding
+    let rec = BuiltinRoles { digest: 0x1122_3344_5566_7788, channels: 2, roles: [SND_ROLE_PAD, SND_ROLE_BASS, 0] };
+    let l = encode_list_with(&[], &[rec]);
+    assert_eq!(l, [1, 0, 0, 0, 16, 0, 1, 2, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 3, 1, 0, 0]);
+    // after the learned entries, counted with them
+    let both = encode_list_with(&[base()], &[rec, rec]);
+    assert_eq!(both[0], 3);
+    assert_eq!(both[4..56], encode_list(&[base()])[4..]);
+    assert_eq!(both[56..72], l[4..]);
+    assert_eq!(both[72..], l[4..]);
+    assert_eq!(encode_list_with(&[base()], &[]), encode_list(&[base()]));
+
+    // through the decoder: ROM BEEP's digest gives ROM BEEP the roles, and B's frames for the
+    // three BEEP notes carry them
+    let table = SndEngines::new().entries();
+    let beep = table.iter().position(|e| e.name == "ROM BEEP").expect("ROM BEEP");
+    let list = encode_list_with(&[], &[BuiltinRoles { digest: table[beep].digest, channels: 1, roles: [SND_ROLE_LEAD, 0, 0] }]);
+    let b = SndEngines::with_learned(&list).expect("decodes");
+    assert_eq!(b.entries()[beep].role, [SND_ROLE_LEAD, 0, 0]);
+    let engine = beep as u8 + 1;
+    let sna = fixtures::rom_beep_sna();
+    let (claimed, rest) = roles_of(&decisions(fixtures::machine(&sna), b, 300), engine);
+    assert!(claimed.len() > 200, "{} frames claimed", claimed.len());
+    assert!(claimed.iter().all(|r| *r == [SND_ROLE_LEAD, 0, 0]), "{claimed:?}");
+    assert!(rest.iter().all(|r| *r == [SND_ROLE_AUTO; 3]), "{rest:?}");
+    // without the record, the same frames are claimed with no role
+    let (plain, _) = roles_of(&decisions(fixtures::machine(&sna), SndEngines::new(), 300), engine);
+    assert_eq!(plain.len(), claimed.len());
+    assert!(plain.iter().all(|r| *r == [SND_ROLE_AUTO; 3]));
 }

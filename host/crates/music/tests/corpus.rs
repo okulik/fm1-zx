@@ -411,7 +411,7 @@ fn builtins_agree() {
         ("castaway", music::castaway as fn() -> zx_sys::Machine, &[0xC87Cu16, 0xC886][..], Refusal::Unmodelled(Why::BranchIdiom, 0xC88A)),
         ("colony8", music::colony8, &[0x950D, 0x9517, 0x9505][..], Refusal::Unmodelled(Why::StackOp, 0x950F)),
     ] {
-        let got = learn_with(&machine, &schedule(1), &LearnOptions { ignore_builtins: true });
+        let got = learn_with(&machine, &schedule(1), &LearnOptions { ignore_builtins: true, ..LearnOptions::default() });
         let why = soundlearn::report::refusal(&why);
         assert!(got.entries.is_empty(), "{game}: {}", got.line);
         assert_eq!(got.line, format!("no music learned ({why})"), "{game}");

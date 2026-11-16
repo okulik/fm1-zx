@@ -7,7 +7,9 @@
 //! again). Games the learner cannot read
 //! (a machine halted for good, a speaker loop with an undecoded instruction) get "no music
 //! learned" and the pack still builds. A key script beside a game is part of the cache key, and
-//! one that does not parse is reported. Every folder holds only generated test programs.
+//! one that does not parse is reported. The tune's one channel gets the lead as its stored role,
+//! an override in the games file wins and is reported, and a bad override fails the build with
+//! the game's name. Every folder holds only generated test programs.
 
 use fmzx_pack::pack::sound_list;
 use fmzx_pack::personal::{run_with_limit, table, Report};
@@ -188,4 +190,76 @@ fn corrupt_cache_is_relearned() {
     assert!(line(&table(&r), "tune").starts_with("tune: music learned ("), "{}", table(&r));
     assert!(std::fs::read(out.0.join("games.bin")).unwrap() == pack, "the corrupt list went into the pack");
     assert!(std::fs::read(&cache).unwrap() == good, "the cache file is not learned again and rewritten");
+}
+
+/// The game `name`'s learned entry's `instrument[]` bytes in the pack (its list holds that one
+/// entry), and its block of `sound-report.txt`.
+fn stored_roles(out: &Path, name: &str) -> ([u8; 3], String) {
+    let pack = std::fs::read(out.join("games.bin")).expect("games.bin written");
+    let n = pack_open(&pack).expect("the pack opens");
+    let i = (0..n).find(|&i| pack_game_at(&pack, i).unwrap().name() == name).expect("the game");
+    let l = sound_list(&pack, i).expect("a sound list");
+    assert_eq!(l[0], 1, "one entry");
+    let report = std::fs::read_to_string(out.join("sound-report.txt")).expect("sound-report.txt");
+    let block = &report[report.find(&format!("\n{name}: ")).expect("the game's block")..];
+    let block = &block[..block[1..].find("\n\n").map_or(block.len(), |e| e + 1)];
+    (l[4 + 29..4 + 32].try_into().unwrap(), block.to_string())
+}
+
+#[test]
+fn tune_gets_lead_role() {
+    let games = Tmp::new("roles");
+    games.file("tune.sna", &tune_sna());
+    let out = Tmp::new("roles-out");
+    run(&games.0, &out.0);
+    let (roles, block) = stored_roles(&out.0, "tune");
+    println!("{block}");
+    assert_eq!(roles, [zx_sys::SND_ROLE_LEAD, 0, 0]);
+    assert!(block.contains("\n    roles: channel 0 lead (analysis)\n"), "{block}");
+}
+
+/// A games file holding `tune.sna` as "Tune Game", with `instruments` as its `[game.instruments]`
+/// table's lines.
+fn games_file(dir: &Tmp, instruments: &str) -> PathBuf {
+    dir.file("tune.sna", &tune_sna());
+    let text = format!("[[game]]\nid = \"tune\"\nname = \"Tune Game\"\nfile = \"tune.sna\"\n[game.instruments]\n{instruments}\n");
+    dir.file("games.toml", text.as_bytes());
+    dir.0.join("games.toml")
+}
+
+#[test]
+fn override_wins_and_is_reported() {
+    let games = Tmp::new("override");
+    let out = Tmp::new("override-out");
+    run(&games_file(&games, "\"8014\" = [\"bass\"]"), &out.0);
+    let (roles, block) = stored_roles(&out.0, "Tune Game");
+    println!("{block}");
+    assert_eq!(roles, [zx_sys::SND_ROLE_BASS, 0, 0]);
+    assert!(block.contains("\n    roles: channel 0 bass (override)\n"), "{block}");
+
+    // the overrides are part of the cache key: another one is learned anew, not read back
+    run(&games_file(&games, "\"8014\" = [\"pad\"]"), &out.0);
+    let (roles, block) = stored_roles(&out.0, "Tune Game");
+    assert_eq!(roles, [zx_sys::SND_ROLE_PAD, 0, 0]);
+    assert!(block.contains("\n    roles: channel 0 pad (override)\n"), "{block}");
+    assert_eq!(std::fs::read_dir(out.0.join("sound-cache")).unwrap().count(), 2);
+}
+
+#[test]
+fn bad_override_fails_with_game_name() {
+    let games = Tmp::new("bad-override");
+    let out = Tmp::new("bad-override-out");
+    run(&games_file(&games, ""), &out.0);
+    assert!(out.0.join("games.bin").is_file());
+    for (table, key) in [
+        ("\"9999\" = [\"lead\"]", "\"9999\""),     // no routine's OUT
+        ("\"8014\" = [\"drums\"]", "\"drums\""),   // no such role
+        ("\"801\" = [\"lead\"]", "\"801\""),       // not 4 hex digits
+        ("\"8014\" = [\"lead\", \"bass\"]", "\"8014\""), // 2 roles, 1 channel
+    ] {
+        let err = run_with_limit(&games_file(&games, table), &out.0, None).expect_err(table);
+        println!("{err}");
+        assert!(err.contains("Tune Game") && err.contains(key), "{table}: {err}");
+        assert!(!out.0.join("games.bin").exists(), "{table}: a pack was written");
+    }
 }

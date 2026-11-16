@@ -190,7 +190,6 @@ pub fn to_entry(model: &EngineModel, peek: impl Fn(u16) -> u8) -> LearnedEntry {
         .collect();
     sites.sort_unstable();
     LearnedEntry {
-        kind: 0,
         digest: digest(&peek, model.anchor, len, &model.wild, &model.reloc),
         len,
         wild: model.wild.clone(),
@@ -202,6 +201,7 @@ pub fn to_entry(model: &EngineModel, peek: impl Fn(u16) -> u8) -> LearnedEntry {
         drum: 0,
         stale: model.stale,
         level: vec![LEVEL; model.channels.len()],
+        instrument: [0; 3],
         progs: model.channels.iter().map(period_prog).collect(),
         timing: model.duration.as_ref().and_then(timing_prog),
     }

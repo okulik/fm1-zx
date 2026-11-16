@@ -1113,6 +1113,33 @@ pub fn level_in_memory() -> Fixture {
     }
 }
 
+/// Three notes (440, 550 and 660 Hz, 0.2 s each) played by the ROM's `BEEPER` (03B5h), over and
+/// over: a routine the built-in entry ROM BEEP plays. Not a code reader's fixture (not in
+/// [`all`]).
+///
+/// ```text
+/// 8000 21 C4 03     loop: LD HL,964      437500 / 440 - 30
+/// 8003 11 58 00           LD DE,88       440 x 0.2
+/// 8006 CD B5 03           CALL 03B5h
+/// 8009 21 FD 02           LD HL,765      550 Hz
+/// 800C 11 6E 00           LD DE,110
+/// 800F CD B5 03           CALL 03B5h
+/// 8012 21 79 02           LD HL,633      660 Hz
+/// 8015 11 84 00           LD DE,132
+/// 8018 CD B5 03           CALL 03B5h
+/// 801B 18 E3              JR loop
+/// ```
+pub fn rom_beep_sna() -> Vec<u8> {
+    #[rustfmt::skip]
+    let code = [
+        0x21, 0xC4, 0x03, 0x11, 0x58, 0x00, 0xCD, 0xB5, 0x03,
+        0x21, 0xFD, 0x02, 0x11, 0x6E, 0x00, 0xCD, 0xB5, 0x03,
+        0x21, 0x79, 0x02, 0x11, 0x84, 0x00, 0xCD, 0xB5, 0x03,
+        0x18, 0xE3,
+    ];
+    sna(&code, &[])
+}
+
 /// Every fixture.
 pub fn all() -> Vec<Fixture> {
     vec![

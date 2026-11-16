@@ -92,14 +92,15 @@ The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole lis
 - the list is at least 4 bytes and 4-byte aligned in memory, and `count` is at most 8;
 - the entry's `size` and `kind` lie in the list; `kind` is 0 or 1; `size` is at least 36 (a kind-1 record: 16), a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
 - a kind-1 record's `channels` is 1-3; it counts towards `count`'s 8, has no sites and adds no work; nothing else in it is checked (its roles are read as above);
-- for a learned entry: `channels` is 1-3; `flips` and `timing` are 0 or 1;
-- `len` is 1 to 512 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
-- over the whole list, the sum of `n_sites x len` is at most 4096 (`SND_LEARNED_WORK_MAX`): method B hashes each site's signature for an `OUT` no entry is known at yet, so this bounds that work per frame;
-- `prog_len[c]` is 1-64 for each channel and 0 for the unused ones; `timing_len` is 1-64 with a timing program, else 0;
-- the arrays and programs together fit in `size` after the 36 fixed bytes;
-- `wild` offsets strictly ascend and are below `len`; `reloc` offsets ascend at least 2 apart and are below `len`;
-- every site offset is below `len`, `role` is at most 2, and a tonal site's `chan` is below `channels` (or `0xFF` on a `flips` entry);
-- every program is valid (below).
+- for a learned entry (kind 0):
+  - `channels` is 1-3; `flips` and `timing` are 0 or 1;
+  - `len` is 1 to 512 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
+  - `prog_len[c]` is 1-64 for each channel and 0 for the unused ones; `timing_len` is 1-64 with a timing program, else 0;
+  - the arrays and programs together fit in `size` after the 36 fixed bytes;
+  - `wild` offsets strictly ascend and are below `len`; `reloc` offsets ascend at least 2 apart and are below `len`;
+  - every site offset is below `len`, `role` is at most 2, and a tonal site's `chan` is below `channels` (or `0xFF` on a `flips` entry);
+  - every program is valid (below);
+- over the whole list, the sum of the learned entries' `n_sites x len` is at most 4096 (`SND_LEARNED_WORK_MAX`): method B hashes each site's signature for an `OUT` no entry is known at yet, so this bounds that work per frame.
 
 The reserved bytes (the 2 after the list's `count`, the padding) are ignored.
 

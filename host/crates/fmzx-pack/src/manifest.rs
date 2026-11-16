@@ -11,8 +11,20 @@
 //! [game.keys]
 //! "note.F3" = "key.O"
 //! ```
+//!
+//! A personal games file (`personal-games.toml`) may give a game the stored roles of its music
+//! routines' channels, overriding the learner's analysis (BUILDING.md, "Your own games",
+//! Instruments): a routine's speaker `OUT` (4 hex digits, as `sound-report.txt` shows it) to its
+//! channels' roles, from channel 0, each `"bass"`, `"lead"` or `"pad"`.
+//!
+//! ```toml
+//! [game.instruments]
+//! "C694" = ["lead"]
+//! "881F" = ["bass", "lead"]
+//! ```
 
 use serde::Deserialize;
+use soundlearn::report::ROLES;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -55,6 +67,9 @@ pub struct Game {
     pub keys: BTreeMap<String, String>,
     /// Stored verbatim; parsed by the pack writer.
     pub demo: Option<String>,
+    /// A music routine's speaker `OUT` to its channels' stored roles (`SND_ROLE_*`, 1-3), from
+    /// channel 0; a personal games file's only.
+    pub instruments: BTreeMap<u16, Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +87,8 @@ struct RawGame {
     #[serde(default)]
     keys: BTreeMap<String, String>,
     demo: Option<String>,
+    #[serde(default)]
+    instruments: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -122,12 +139,40 @@ fn parse(text: &str, absolute_ok: bool) -> Result<Manifest, String> {
             return Err(format!("game {id}: file {:?} must be relative to the manifest", g.file));
         }
         encode_keymap(&g.keys).map_err(|e| format!("game {id}: {e}"))?;
-        game.push(Game { id, name: g.name, file: g.file, crop, keys: g.keys, demo: g.demo });
+        if !absolute_ok && !g.instruments.is_empty() {
+            return Err(format!("game {id}: [game.instruments] belongs in a personal games file"));
+        }
+        let instruments = parse_instruments(&g.instruments).map_err(|e| format!("game {:?}: [game.instruments] {e}", g.name))?;
+        game.push(Game { id, name: g.name, file: g.file, crop, keys: g.keys, demo: g.demo, instruments });
     }
     if game.is_empty() {
         return Err("manifest: no games".to_string());
     }
     Ok(Manifest { game })
+}
+
+/// A `[game.instruments]` table: each key 4 hex digits (once, whatever its case), each value 1-3
+/// role names.
+fn parse_instruments(raw: &BTreeMap<String, Vec<String>>) -> Result<BTreeMap<u16, Vec<u8>>, String> {
+    let names: Vec<&str> = ROLES.iter().map(|r| r.0).collect();
+    let mut out = BTreeMap::new();
+    for (key, roles) in raw {
+        let addr = (key.len() == 4 && key.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| u16::from_str_radix(key, 16).ok())
+            .flatten()
+            .ok_or_else(|| format!("{key:?}: not a speaker OUT's address (4 hex digits, as sound-report.txt shows it)"))?;
+        if !(1..=3).contains(&roles.len()) {
+            return Err(format!("{key:?}: give 1-3 roles, one per channel from channel 0"));
+        }
+        let roles = roles
+            .iter()
+            .map(|r| ROLES.iter().find(|x| x.0 == r).map(|x| x.1).ok_or_else(|| format!("{key:?}: {r:?} is not a role ({})", names.join(", "))))
+            .collect::<Result<Vec<u8>, String>>()?;
+        if out.insert(addr, roles).is_some() {
+            return Err(format!("{key:?}: the address is given twice"));
+        }
+    }
+    Ok(out)
 }
 
 /// The game file's path: `file` resolved against the manifest's directory (an absolute `file`

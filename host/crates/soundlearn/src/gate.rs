@@ -28,6 +28,7 @@ use crate::fit::{check_fit_played, digest, period_ok, timing_prog, FitResult, Wr
 use crate::listen::{Inputs, SiteHeard};
 use crate::model::EngineModel;
 use crate::prog::Op;
+use crate::roles::rank;
 use std::collections::HashMap;
 use zx_sys::{Machine, SndEngines, SndFrame, SND_DELAY_FRAMES, SND_LEARNED_LEN_MAX, SND_LEARNED_SITES_MAX, SND_LEARNED_WORK_MAX, SND_SITE_DRUM, SND_TONAL};
 
@@ -67,6 +68,8 @@ pub struct ReplayStats {
     pub music_gate: bool,
     /// Of the routine's frames, those the built-in table alone claims.
     pub builtin_claimed: u32,
+    /// The entry's channels' roles over the frames it is given ([`crate::roles::rank`]).
+    pub roles: Option<[u8; SND_TONAL]>,
 }
 
 /// What a replay saw of the other speaker `OUT`s, for drums (see [`replay_with_others`]).
@@ -151,7 +154,7 @@ pub fn replay_table(load: &dyn Fn() -> Machine, inputs: &Inputs, frames: u32, en
         }
         builtin[k] = b.is_some_and(|b| b.confident != 0 && b.engine != 0);
     }
-    let mut st = ReplayStats { routine_frames: 0, claimed: 0, music_gate: music_gate(&notes), builtin_claimed: 0 };
+    let mut st = ReplayStats { routine_frames: 0, claimed: 0, music_gate: music_gate(&notes), builtin_claimed: 0, roles: rank(&notes) };
     for k in (0..n).filter(|&k| sounded[k]) {
         st.routine_frames += 1;
         st.claimed += u32::from(claimed[k]);
@@ -188,7 +191,7 @@ fn is_site(entry: &LearnedEntry, pc: u16, m: &Machine) -> bool {
 /// The notes a decision sounds: per voice, the last pitch it sounded in the frame (its start's,
 /// then its events'; a release keeps the pitch it ends). A routine that plays a short burst of its
 /// note each frame is released after each burst, so its voices at the frame's end are silent.
-fn sounded_notes(d: &SndFrame) -> [u32; SND_TONAL] {
+pub(crate) fn sounded_notes(d: &SndFrame) -> [u32; SND_TONAL] {
     let mut v = d.tone.map(|t| if t.level != 0 { t.period_q8 } else { 0 });
     for e in d.events().iter().filter(|e| e.period_q8 != 0 && e.level != 0) {
         if let Some(p) = v.get_mut(e.voice as usize) {
@@ -199,7 +202,7 @@ fn sounded_notes(d: &SndFrame) -> [u32; SND_TONAL] {
 }
 
 /// The music gate over each frame's note (None: not claimed, or silent).
-fn music_gate(notes: &[Option<[u32; SND_TONAL]>]) -> bool {
+pub(crate) fn music_gate(notes: &[Option<[u32; SND_TONAL]>]) -> bool {
     let total = notes.iter().flatten().count();
     if total == 0 {
         return false;
