@@ -144,6 +144,30 @@ fn default_matches_c() {
 }
 
 #[test]
+fn basic_matches_c() {
+    assert_eq!(basic_keymap(), zx_sys::km_basic());
+}
+
+#[test]
+fn default_joystick() {
+    let m = default_keymap();
+    let at = |n: &str| m[input_index(n).unwrap()][0];
+    for n in ["note.F3", "note.G3", "note.A3", "note.B3"] {
+        assert_eq!(at(n), parse_action("kempston.down").unwrap(), "{n}");
+    }
+    for n in ["note.F#3", "note.G#3", "note.A#3"] {
+        assert_eq!(at(n), parse_action("kempston.up").unwrap(), "{n}");
+    }
+    for (n, a) in [("note.C#4", "left"), ("note.D#4", "right"), ("note.C#5", "left"), ("note.D#5", "right")] {
+        assert_eq!(at(n), parse_action(&format!("kempston.{a}")).unwrap(), "{n}");
+    }
+    for n in ["note.C5", "note.D5", "note.E5", "note.F5", "note.G5"] {
+        assert_eq!(at(n), parse_action("kempston.fire").unwrap(), "{n}");
+    }
+    assert_eq!(at("note.F#4"), NONE);
+}
+
+#[test]
 fn rejects_empty_file() {
     let e = parse_manifest("[[game]]\nid = \"a\"\nname = \"A\"\nfile = \"\"\n").unwrap_err();
     assert!(e.contains("file") && e.contains("empty"), "{e}");

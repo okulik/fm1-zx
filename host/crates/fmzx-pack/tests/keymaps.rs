@@ -48,12 +48,18 @@ fn games_toml_keymaps() {
     let json = keymaps_json(&m).unwrap();
     let ids: Vec<usize> = ["scroll", "border", "castaway"].iter().map(|g| json.find(&format!("\"id\":\"{g}\"")).unwrap()).collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "game order");
-    assert_eq!(json.matches("\"id\":").count(), m.game.len());
-    assert!(entry(&json, "scroll", "note.F3").unwrap().ends_with("\"actions\":[\"kempston.left\"]}"));
+    assert_eq!(json.matches("\"id\":").count(), m.game.len() + 1, "the games and BASIC");
+    assert!(entry(&json, "scroll", "note.F3").unwrap().ends_with("\"actions\":[\"kempston.down\"]}"));
     assert!(entry(&json, "castaway", "note.F3").unwrap().ends_with("\"actions\":[\"key.O\"]}"));
     assert!(entry(&json, "castaway", "note.G3").is_none());
     assert!(entry(&json, "castaway", "note.B3").unwrap().ends_with("\"actions\":[\"key.H\"]}"));
-    assert!(!json.contains("button.HOME") && !json.contains("button.PLAY"));
+    let games = &json[json.find("\"games\":").unwrap()..];
+    assert!(!json.contains("button.HOME") && !games.contains("button.PLAY"));
+    // BASIC first, outside the games list (games[i] is pack entry i)
+    assert!(json.starts_with("{\"basic\":{\"id\":\"basic\",\"name\":\"Spectrum BASIC\""));
+    for (input, action) in [("note.F3", "key.A"), ("note.F#5", "key.Z"), ("note.G5", "key.SPACE"), ("button.PLAY", "key.ENTER"), ("button.SEQ", "key.CAPS")] {
+        assert!(entry(&json, "basic", input).unwrap().ends_with(&format!("\"actions\":[\"{action}\"]}}")), "{input}");
+    }
 }
 
 #[test]
@@ -61,5 +67,5 @@ fn json_escapes_names() {
     let m = parse_manifest("[[game]]\nid = \"a\"\nname = 'Say \"hi\" \\ bye'\nfile = \"a.sna\"\n").unwrap();
     let json = keymaps_json(&m).unwrap();
     assert!(json.contains(r#""name":"Say \"hi\" \\ bye""#), "{json}");
-    assert!(json.starts_with("{\"games\":[{\"id\":\"a\",") && json.trim_end().ends_with("]}]}"));
+    assert!(json.contains(",\"games\":[{\"id\":\"a\",") && json.trim_end().ends_with("]}]}"));
 }

@@ -1247,6 +1247,19 @@ pub fn km_default() -> [[u8; 2]; KM_INPUTS] {
     }
 }
 
+/// The picker's Spectrum BASIC key map (`km_basic`).
+pub fn km_basic() -> [[u8; 2]; KM_INPUTS] {
+    let mut k = MaybeUninit::<sys::keymap>::zeroed();
+    // SAFETY: km_basic fills the whole table.
+    unsafe {
+        sys::km_basic(k.as_mut_ptr());
+        k.assume_init().act
+    }
+}
+
+/// CMD_START's arg and `fmzx_stats.game` for the picker's Spectrum BASIC (`MENU_BASIC`).
+pub const MENU_BASIC: u32 = sys::MENU_BASIC;
+
 /// One poll of the FM-1 controls.
 #[derive(Clone, Copy, Default)]
 pub struct KmInput {

@@ -54,6 +54,7 @@
 _Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole frame");
 #define GAIN_FRAMES 10u     /* MASTER -> gain every 10 frames */
 #define NO_COLOUR 0xFFu
+#define BASIC_CROP 8u       /* Spectrum BASIC's crop: the pack's default (fmzx-pack CROP_DEFAULT) */
 
 /* Boot options from emu-gate (or anything that writes them before a reset): word 0 BOOTOPT_MAGIC,
  * word 1 bit 0 RGB565, bits 8-11 the LCD divider, and with bit 12 the Sound and Screen choices to
@@ -378,7 +379,8 @@ static void learned_start(uint32_t index)
     fmzx_ram.set_engines(&mixer, learned_table, snd_engine_count + n);
 }
 
-/* Loads pack entry `index` into fmzx_machine; ZX_OK, or the error (the game does not run). */
+/* Loads pack entry `index` (MENU_BASIC: the ROM alone, to BASIC) into fmzx_machine; ZX_OK, or
+ * the error (the game does not run). */
 static int game_start(uint32_t index)
 {
     zx_machine *m = &fmzx_machine;
@@ -392,11 +394,18 @@ static int game_start(uint32_t index)
     game.frames = 0;
     fmzx_stats.frames = 0;
     fmzx_stats.game = index;
-    if (!pack_base || pack_game_at(pack_base, index, &g) != ZX_OK ||
-        pack_extract(&g, game_file, sizeof game_file, &len) != ZX_OK)
+    if (index == MENU_BASIC) {
+        g.crop_x = BASIC_CROP;
+        km_basic(&g.keys);
+        g.kind = 0;
+    } else if (!pack_base || pack_game_at(pack_base, index, &g) != ZX_OK ||
+               pack_extract(&g, game_file, sizeof game_file, &len) != ZX_OK) {
         return ZX_ERR_FORMAT;
+    }
     fmzx_ram.init(m, rom_copy);
-    if (g.kind == PACK_SNA) {
+    if (index == MENU_BASIC) {
+        e = ZX_OK;
+    } else if (g.kind == PACK_SNA) {
         e = fmzx_ram.load_sna(m, game_file, len);
     } else if (g.kind == PACK_Z80) {
         e = fmzx_ram.load_z80(m, game_file, len);
@@ -410,7 +419,8 @@ static int game_start(uint32_t index)
     fmzx_ram.beeper_init(&beeper, 750000u, 17u);
     /* the decoder's history and the delay ring start empty: nothing of the last game plays */
     fmzx_ram.mixer_init(&mixer, 750000u, 17u);
-    learned_start(index);
+    if (pack_base)
+        learned_start(index); /* (BASIC: no entry, the built-in table) */
     for (i = 0; i < LCD_ROWS; i++)
         border_sent[i] = line_seen[i] = NO_COLOUR;
     game.crop_x = g.crop_x;
@@ -620,7 +630,8 @@ static void poll_input(void)
         for (e = v == VIEW_OSK ? 2u : 0u; e < KM_ENCODERS; e++)
             held_in.enc[e] = enc_add(held_in.enc[e], in.enc[e]);
     if (v == VIEW_GAME || v == VIEW_PAUSED) {
-        if (pressed & BTN(KM_BTN_PLAY))
+        /* (PLAY pauses unless the game's map gives it a key: BASIC's ENTER) */
+        if ((pressed & BTN(KM_BTN_PLAY)) && (v == VIEW_PAUSED || game.keys.act[KM_BTN_PLAY][0] == KM_NONE))
             handle_event(EV_PAUSE);
         else if (pressed & BTN(KM_BTN_HOME))
             handle_event(EV_HOME);

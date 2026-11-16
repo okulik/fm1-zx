@@ -226,18 +226,24 @@ fn apply_keys(map: &mut [[u8; 2]; INPUTS], keys: &BTreeMap<String, String>) -> R
     Ok(())
 }
 
-pub const DEFAULTS: [(&str, &str); 26] = [
-    ("note.F3", "kempston.left"),
+pub const DEFAULTS: [(&str, &str); 32] = [
+    ("note.F3", "kempston.down"),
     ("note.F#3", "kempston.up"),
     ("note.G3", "kempston.down"),
     ("note.G#3", "kempston.up"),
-    ("note.A3", "kempston.right"),
+    ("note.A3", "kempston.down"),
+    ("note.A#3", "kempston.up"),
+    ("note.B3", "kempston.down"),
     ("note.C4", "key.ENTER"),
+    ("note.C#4", "kempston.left"),
     ("note.D4", "key.SPACE"),
+    ("note.D#4", "kempston.right"),
     ("note.E4", "key.Y"),
     ("note.F4", "key.N"),
     ("note.C5", "kempston.fire"),
+    ("note.C#5", "kempston.left"),
     ("note.D5", "kempston.fire"),
+    ("note.D#5", "kempston.right"),
     ("note.E5", "kempston.fire"),
     ("note.F5", "kempston.fire"),
     ("note.G5", "kempston.fire"),
@@ -261,6 +267,19 @@ pub fn default_keymap() -> [[u8; 2]; INPUTS] {
     for (input, value) in DEFAULTS {
         apply_keys(&mut map, &BTreeMap::from([(input.to_string(), value.to_string())])).expect("default table is valid");
     }
+    map
+}
+
+/// The picker's Spectrum BASIC (no pack entry): the default's buttons, A..Z on the notes F3..F#5
+/// in chromatic order, SPACE on G5, ENTER on PLAY; mirrors `km_basic` in `app/keymap.c`.
+pub fn basic_keymap() -> [[u8; 2]; INPUTS] {
+    let mut map = default_keymap();
+    for n in 0..NOTE_COUNT {
+        let key = if n < 26 { ((b'A' + n as u8) as char).to_string() } else { "SPACE".to_string() };
+        map[BUTTON_COUNT + n] = [parse_action(&format!("key.{key}")).expect("a Spectrum key"), NONE];
+    }
+    let play = BUTTONS.iter().position(|b| *b == "PLAY").expect("PLAY");
+    map[play] = [parse_action("key.ENTER").expect("ENTER"), NONE];
     map
 }
 

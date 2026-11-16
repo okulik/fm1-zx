@@ -12,8 +12,9 @@ fn note(n: u32) -> u32 {
 #[test]
 fn default_kempston() {
     let mut km = KeyMapper::new();
-    let (rows, k) = km.apply(&KmInput { notes: note(0) | note(3), ..Default::default() });
-    assert_eq!(k, 0b1010);
+    // F3 down, G#3 up, C#4 left, D#5 right
+    let (rows, k) = km.apply(&KmInput { notes: note(0) | note(3) | note(8) | note(22), ..Default::default() });
+    assert_eq!(k, 0b1111);
     assert_eq!(rows, [0; 8]);
 }
 
@@ -125,14 +126,36 @@ fn encoder_ccw_mapped() {
 }
 
 #[test]
-fn home_play_ignored() {
+fn basic_letters_space_enter() {
+    let mut km = KeyMapper::new();
+    km.set_map(&km_basic());
+    // F3 = A (row 1 bit 0), F#5 = Z (row 0 bit 1), G5 = SPACE (row 7 bit 0), PLAY = ENTER (row 6 bit 0)
+    let (rows, k) = km.apply(&KmInput { notes: note(0) | note(25) | note(26), buttons: 1 << 12, ..Default::default() });
+    assert_eq!(k, 0);
+    assert_eq!(rows, [2, 1, 0, 0, 0, 0, 1, 1]);
+    // every Spectrum key is on some input
+    let mut seen = [false; 40];
+    for a in km_basic().iter().flatten() {
+        if *a < 40 {
+            seen[*a as usize] = true;
+        }
+    }
+    assert!(seen.iter().all(|s| *s), "keys missing: {seen:?}");
+}
+
+#[test]
+fn home_ignored_play_when_mapped() {
     let mut km = KeyMapper::new();
     let mut map = [[0u8; 2]; KM_INPUTS]; // everything maps to key 0 (CAPS SHIFT), even HOME and PLAY
     map[8] = [1, 0x44];
     map[12] = [1, 0x44];
     map[0] = [KM_NONE; 2];
     km.set_map(&map);
-    let (rows, k) = km.apply(&KmInput { buttons: (1 << 8) | (1 << 12), ..Default::default() });
-    assert_eq!(rows, [0; 8]);
+    let (rows, k) = km.apply(&KmInput { buttons: 1 << 8, ..Default::default() });
+    assert_eq!(rows, [0; 8], "HOME never maps");
     assert_eq!(k, 0);
+    let (rows, k) = km.apply(&KmInput { buttons: 1 << 12, ..Default::default() });
+    assert_eq!((rows[0], k), (2, 0x10), "PLAY maps where the table sets it (BASIC's ENTER)");
+    let mut def = KeyMapper::new();
+    assert_eq!(def.apply(&KmInput { buttons: 1 << 12, ..Default::default() }), ([0; 8], 0), "the default leaves PLAY unset");
 }

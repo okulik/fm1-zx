@@ -85,7 +85,8 @@ void menu_init(menu *mn, uint32_t game_count)
 {
     memset(mn, 0, sizeof *mn);
     mn->view = VIEW_PICKER;
-    mn->count = game_count;
+    mn->count = game_count + 1u; /* Spectrum BASIC first */
+    mn->sel = game_count != 0u ? 1u : 0u;
     mn->divider = 4;
     mn->sound = SND_MODE_FM_B;
     mn->screen = PIX_FIT_SMOOTH;
@@ -298,15 +299,12 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
     *arg = 0;
     switch (mn->view) {
     case VIEW_PICKER:
-        if (mn->count == 0) {
-            return CMD_NONE;
-        }
         if (ev == EV_UP) {
             mn->sel = mn->sel == 0 ? mn->count - 1u : mn->sel - 1u;
         } else if (ev == EV_DOWN) {
             mn->sel = mn->sel + 1u >= mn->count ? 0u : mn->sel + 1u;
         } else if (ev == EV_OK) {
-            *arg = mn->sel;
+            *arg = mn->sel == 0u ? MENU_BASIC : mn->sel - 1u;
             return CMD_START;
         }
         if (mn->sel < mn->top) {
@@ -435,17 +433,15 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
     unsigned r;
     ui_clear(INK, PAPER);
     centred(0, "FM-1 ZX", TITLE_INK, PAPER);
-    if (mn->count == 0) {
-        centred(14, "No games", INK, PAPER);
-        return;
-    }
     for (r = 0; r < PICKER_ROWS && mn->top + r < mn->count; r++) {
         uint32_t i = mn->top + r;
         int sel = i == mn->sel;
         char line[UI_COLS + 1u];
         pack_game g;
         const char *name = "(bad entry)";
-        if (pack != 0 && pack_game_at(pack, i, &g) == 0) {
+        if (i == 0u) {
+            name = "Spectrum BASIC";
+        } else if (pack != 0 && pack_game_at(pack, i - 1u, &g) == 0) {
             name = g.name;
         }
         line[0] = ' ';
@@ -502,7 +498,10 @@ static void draw_keys(const menu *mn, const uint8_t *pack)
     char title[UI_COLS + 1u];
     unsigned n = 0, total, page, r;
     uint32_t pages;
-    if (pack != 0 && mn->count != 0 && pack_game_at(pack, mn->sel, &g) == 0) {
+    if (mn->sel == 0u) {
+        km_basic(&km);
+        put_str(title, &n, "KEYS Spectrum BASIC");
+    } else if (pack != 0 && pack_game_at(pack, mn->sel - 1u, &g) == 0) {
         km = g.keys;
         put_str(title, &n, "KEYS ");
         while (n < UI_COLS && g.name[n - 5u] != '\0') {

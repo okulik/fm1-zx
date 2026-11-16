@@ -40,8 +40,8 @@ demo = "button.OCT-@12000, button.OCT-@14500, note.F3@16000+300, note.A3@16600+2
 "note.B3" = "key.H"                     # pause
 
 # ZX Sopwith: Q/A pull up and down, O/P throttle down and up, SPACE fire, F flip, B bomb, H fly home,
-# M sound, 1 abandon. The default Kempston notes fly and fire the same way (F#3/G#3 up, G3 down,
-# F3 throttle down, A3 throttle up, C5-G5 fire); F4 (N) starts a novice game, and the keys below add
+# M sound, 1 abandon. The default Kempston notes fly and fire the same way (F#3/G#3 up, F3/G3/A3
+# down, C#5 throttle down, D#5 throttle up, C5-G5 fire); F4 (N) starts a novice game, and the keys below add
 # the rest: A#3 = F, B3 = B, C4 = H, C#4 = C (against the computer), D#4 = E (expert), LFO = M.
 # demo: N starts a novice game, four throttle-up steps, then every few seconds a pull-up, a shot, a
 # dive, a bomb and a flip: 30 s with the plane and the status bar moving (a crash only starts the
@@ -50,7 +50,7 @@ demo = "button.OCT-@12000, button.OCT-@14500, note.F3@16000+300, note.A3@16600+2
 id = "sopwith"
 name = "ZX Sopwith"
 file = "../third_party/games/sopwith/sopwith.sna"
-demo = "note.F4@2500+200, note.A3@4500+150, note.A3@5000+150, note.A3@5500+150, note.A3@6000+150, note.F#3@8000+700, note.C5@9400+200, note.G3@10300+400, note.F#3@11400+500, note.C5@12600+200, note.B3@13500+150, note.A#3@14350+150, note.G3@15200+300, note.F#3@16200+700, note.C5@17600+200, note.G3@18500+400, note.F#3@19600+500, note.C5@20800+200, note.B3@21700+150, note.A#3@22550+150, note.G3@23400+300, note.F#3@24400+700, note.C5@25800+200, note.G3@26700+400, note.F#3@27800+500, note.C5@29000+200, note.B3@29900+150, note.A#3@30750+150, note.G3@31600+300"
+demo = "note.F4@2500+200, note.D#5@4500+150, note.D#5@5000+150, note.D#5@5500+150, note.D#5@6000+150, note.F#3@8000+700, note.C5@9400+200, note.G3@10300+400, note.F#3@11400+500, note.C5@12600+200, note.B3@13500+150, note.A#3@14350+150, note.G3@15200+300, note.F#3@16200+700, note.C5@17600+200, note.G3@18500+400, note.F#3@19600+500, note.C5@20800+200, note.B3@21700+150, note.A#3@22550+150, note.G3@23400+300, note.F#3@24400+700, note.C5@25800+200, note.G3@26700+400, note.F#3@27800+500, note.C5@29000+200, note.B3@29900+150, note.A#3@30750+150, note.G3@31600+300"
 
 [game.keys]
 "note.A#3" = "key.F"                    # flip
