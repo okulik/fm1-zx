@@ -342,8 +342,10 @@ as `music-corpus` does (key script, learned entries) through the mixer in FM: en
 - every jump in the output (a frame's largest second difference over three times the typical FM
   frame's). A jump at an FM/beeper switch is a click; note attacks at big pitch steps show too.
 
-    cd host
-    cargo run --release -p music --example drops -- <game file>... [--seconds N] [--show A-B] [--wav FILE] [--cache DIR]
+    tools/drops <game file>... [--seconds N] [--show A-B] [--wav FILE] [--cache DIR]
+
+`tools/drops` runs the example from any directory (`cd host && cargo run --release -p music --example
+drops -- …` does the same, with paths taken from `host/`).
 
 `--show A-B` prints frames A to B in full, and `--wav` writes the mixer's output. Learned entries are
 cached in `build/drops-cache`.

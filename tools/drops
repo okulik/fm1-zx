@@ -1,0 +1,51 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Where FM: engines drops to the beeper and where its output jumps (BUILDING.md, "Drops and clicks"):
+#   tools/drops <game file>... [--seconds N] [--show A-B] [--wav FILE] [--cache DIR]
+# Runs host/crates/music's drops example from any directory; relative paths are taken from where
+# you run it.
+#   --seconds N   run each game N seconds (default 40)
+#   --show A-B    print frames A to B in full
+#   --wav FILE    write the mixer's output (one game per run)
+#   --cache DIR   where the learned entries are cached (default build/drops-cache)
+set -eu
+
+usage() {
+    sed -n '5,12s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+}
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+abs() {
+    case $1 in
+        /*) printf '%s' "$1" ;;
+        *) printf '%s/%s' "$PWD" "$1" ;;
+    esac
+}
+
+[ $# -gt 0 ] || usage
+args=""
+while [ $# -gt 0 ]; do
+    case $1 in
+        -h | --help) usage ;;
+        --seconds | --show)
+            [ $# -ge 2 ] || usage
+            args="$args $1 $(printf '%s' "$2" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")"
+            shift 2
+            ;;
+        --wav | --cache)
+            [ $# -ge 2 ] || usage
+            args="$args $1 '$(abs "$2" | sed "s/'/'\\\\''/g")'"
+            shift 2
+            ;;
+        *)
+            args="$args '$(abs "$1" | sed "s/'/'\\\\''/g")'"
+            shift
+            ;;
+    esac
+done
+
+cd "$root/host"
+eval "exec cargo run --release -q -p music --example drops -- $args"
