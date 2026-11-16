@@ -9,7 +9,7 @@
 
 use music::{colony8, period_q8, RATE};
 use zx_sys::{
-    Beeper, Machine, SndEngines, SndFrame, SndMixer, SndRoles, SndVoice, SND_MODE_BEEPER, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS,
+    Beeper, Machine, SndEngines, SndFrame, SndMixer, SndRoles, SndVoice, SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS,
     SND_ROLE_LEAD, SND_ROLE_PAD, SND_TONAL,
 };
 
@@ -140,6 +140,27 @@ fn stored_role_respected() {
     all(&all_auto, hz, "PBL", "stored role gone");
 }
 
+#[test]
+fn newcomer_ranked_by_own_pitch() {
+    // a melody plays alone 5 s, then a harmony joins 2 or 2.5 semitones below it (within the
+    // margin): the newcomer's first notes are ranked by their own pitch, so it is the lower role
+    // and the melody keeps the lead; with a bass already playing, the newcomer is the pad
+    for semis in [2.0, 2.5] {
+        let below = 440.0 * f64::powf(2.0, -semis / 12.0);
+        let mut r = SndRoles::new();
+        let alone = [440.0, 0.0, 0.0];
+        all(&run(&mut r, alone, 5 * FPS), alone, "L--", "the melody alone");
+        let joined = [440.0, below, 0.0];
+        all(&run(&mut r, joined, 5 * FPS), joined, "LB-", &format!("{semis} semitones below joins"));
+
+        let mut r = SndRoles::new();
+        let two = [440.0, 0.0, 110.0];
+        all(&run(&mut r, two, 5 * FPS), two, "L-B", "melody and bass");
+        let joined = [440.0, below, 110.0];
+        all(&run(&mut r, joined, 5 * FPS), joined, "LPB", &format!("{semis} semitones below joins the two"));
+    }
+}
+
 // ---- in the mixer, on the corpus ----------------------------------------------------------------
 
 fn max_step(s: &[i16]) -> i32 {
@@ -147,12 +168,13 @@ fn max_step(s: &[i16]) -> i32 {
 }
 
 /// Colony 8 through a mixer in the mode `mode_of(frame)`, the machine given to it as the
-/// firmware does: per frame its output, the mixer's live roles and its synth's voices' roles, and
-/// whether it plays FM.
+/// firmware does: per frame its output, the mixer's live roles (and each slot's frames heard) and
+/// its synth's voices' roles, and whether it plays FM.
 struct Run {
     out: Vec<Vec<i16>>,
     live: Vec<[u8; SND_TONAL]>,
     avg: Vec<[i32; SND_TONAL]>,
+    heard: Vec<[u8; SND_TONAL]>,
     synth: Vec<[u8; SND_TONAL]>,
     fm_on: Vec<bool>,
     beeper: Vec<Vec<i16>>,
@@ -162,7 +184,7 @@ fn mix_colony8(frames: usize, mode_of: impl Fn(usize) -> u8) -> Run {
     let mut m: Machine = colony8();
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
-    let mut r = Run { out: vec![], live: vec![], avg: vec![], synth: vec![], fm_on: vec![], beeper: vec![] };
+    let mut r = Run { out: vec![], live: vec![], avg: vec![], heard: vec![], synth: vec![], fm_on: vec![], beeper: vec![] };
     for i in 0..frames {
         m.run_frame();
         let start_level = m.edges_start_level();
@@ -173,6 +195,7 @@ fn mix_colony8(frames: usize, mode_of: impl Fn(usize) -> u8) -> Run {
         let (live, avg) = mixer.roles();
         r.live.push(live);
         r.avg.push(avg);
+        r.heard.push(mixer.roles_heard());
         r.synth.push(std::array::from_fn(|k| mixer.voice_role(k)));
         r.fm_on.push(mixer.fm_on());
         r.beeper.push(samples);
@@ -224,17 +247,38 @@ fn fm_turn_on_restarts_roles() {
     assert!(got_in <= own_fm, "silence -> FM: step {got_in} above the FM's own {own_fm}");
 }
 
+#[test]
+fn fm_method_switch_restarts_roles() {
+    // FM: engines then FM: sound at 12 s, and the other way round: method A's slots are not
+    // method B's channels, so the live rule starts afresh at the switch (every slot heard at
+    // most in the switch frame), where a run that stays in one mode keeps its history
+    let s = 12 * FPS;
+    for (before, after) in [(SND_MODE_FM_B, SND_MODE_FM_A), (SND_MODE_FM_A, SND_MODE_FM_B)] {
+        let run = mix_colony8(s + 1, |i| if i < s { before } else { after });
+        assert!(run.fm_on[s - 1] && run.fm_on[s], "Colony 8's music plays in FM around the switch");
+        assert!(run.heard[s - 1].iter().any(|&n| n > 100), "a history before the switch: {:?}", run.heard[s - 1]);
+        assert!(run.heard[s].iter().all(|&n| n <= 1), "mode {before} -> {after}: the live rule afresh: {:?}", run.heard[s]);
+        let stay = mix_colony8(s + 1, |_| before);
+        assert!(stay.heard[s].iter().any(|&n| n > 100), "mode {before} throughout keeps its history: {:?}", stay.heard[s]);
+    }
+}
+
 /// Colony 8's channels low to high, as the listening test ranked them by their mean pitch: 0, 2,
 /// 1, so bass, lead, pad by channel.
 const COLONY8_ROLES: [u8; SND_TONAL] = [B, L, P];
+/// Colony 8's roles while channel 2, a second bass line, starts 2 semitones below channel 0: the
+/// bass by its own pitch, channel 0 the pad, until it lies the margin above channel 0.
+const COLONY8_ENTRY_ROLES: [u8; SND_TONAL] = [P, L, B];
 
 #[test]
 fn corpus_roles_stable() {
-    // Colony 8 in FM: engines, 30 s: the synth's roles change only at a note start (its latch, on
-    // a real run), and from 2 s into the music every sounding channel has its own role and keeps
-    // it (channels 0 and 1 play from the start; channel 2, close to channel 0's pitch, enters at
-    // about 11 s and is the pad from its first frame)
-    let frames = 30 * FPS;
+    // Colony 8 in FM: engines, 40 s: the synth's roles change only at a note start (its latch, on
+    // a real run), and from 2 s into the music every sounding channel has its role and keeps it:
+    // channels 0 and 1 play from the start, bass and lead; channel 2 enters at about 11.5 s, 2
+    // semitones below channel 0, and is the bass from its first frame (ranked by its own pitch),
+    // channel 0 the pad; the two swap once, when channel 2 lies the margin above channel 0 (about
+    // 35 s), to their lasting roles
+    let frames = 40 * FPS;
     let run = mix_colony8(frames, |_| SND_MODE_FM_B);
     // the decisions the mixer renders (method B's, the same engine state)
     let mut m = colony8();
@@ -270,29 +314,41 @@ fn corpus_roles_stable() {
     }
     println!("synth role changes: {changes}");
 
-    // settled 2 s after the music starts: every sounding channel's live role is its own, and the
-    // synth plays it from each voice's next note
+    // channel 2's entry, and the one swap after it
+    let entry = (first..frames)
+        .find(|&t| run.fm_on[t] && dec[t].confident != 0 && (dec[t].tone[2].period_q8 != 0 || dec[t].events().iter().any(|e| e.voice == 2)))
+        .expect("channel 2 enters");
+    let swap = (entry..frames).find(|&t| run.live[t][2] == P).expect("channel 2 becomes the pad");
+    println!("channel 2 enters at frame {entry}, the pad from frame {swap}");
+    assert!((11 * FPS..12 * FPS).contains(&entry), "channel 2 enters at about 11.5 s: frame {entry}");
+    assert!((30 * FPS..38 * FPS).contains(&swap), "channels 0 and 2 swap once, at about 35 s: frame {swap}");
+
+    // settled 2 s after the music starts: every sounding channel's live role is its phase's, and
+    // the synth plays it from each voice's next note
     let settle = first + 2 * FPS;
     let early: Vec<String> = (first..settle).step_by(10).map(|t| sounding(run.live[t], dec[t].tone.map(|v| v.period_q8 as f64))).collect();
     println!("live roles in the first 2 s (every 200 ms): {early:?}");
+    let want_at = |t: usize| if (entry..swap).contains(&t) { COLONY8_ENTRY_ROLES } else { COLONY8_ROLES };
     for t in settle..frames {
         if !run.fm_on[t] || dec[t].confident == 0 {
             continue;
         }
         let hz = dec[t].tone.map(|v| if v.period_q8 != 0 && v.level != 0 { 1.0 } else { 0.0 });
-        let want = sounding(COLONY8_ROLES, hz);
-        assert_eq!(sounding(run.live[t], hz), want, "frame {t}: the live roles");
+        assert_eq!(sounding(run.live[t], hz), sounding(want_at(t), hz), "frame {t}: the live roles");
     }
-    let mut synth_ok = [false; SND_TONAL];
-    for t in settle..frames {
-        for k in 0..SND_TONAL {
-            if synth_ok[k] {
-                assert_eq!(run.synth[t][k], COLONY8_ROLES[k], "frame {t}: voice {k} plays its role");
-            } else {
-                synth_ok[k] = run.synth[t][k] == COLONY8_ROLES[k];
+    // the synth: in each phase, every voice reaches the phase's role and keeps it to the phase's
+    // end (channel 2 enters in the second, so it has no role to reach in the first)
+    for (from, to, want, voices) in [(settle, entry, COLONY8_ROLES, 0..2), (entry, swap, COLONY8_ENTRY_ROLES, 0..3), (swap, frames, COLONY8_ROLES, 0..3)] {
+        let mut synth_ok = [false; SND_TONAL];
+        for t in from..to {
+            for k in voices.clone() {
+                if synth_ok[k] {
+                    assert_eq!(run.synth[t][k], want[k], "frame {t}: voice {k} plays its role");
+                } else {
+                    synth_ok[k] = run.synth[t][k] == want[k];
+                }
             }
         }
+        assert!(voices.clone().all(|k| synth_ok[k]), "frames {from}..{to}: every voice plays its role after the settling: {synth_ok:?}");
     }
-    assert!(synth_ok.iter().all(|&x| x), "every voice plays its role after the settling: {synth_ok:?}");
 }
-

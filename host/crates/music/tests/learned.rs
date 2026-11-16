@@ -368,7 +368,7 @@ fn colony8_digest() -> u64 {
 fn partial_stored_roles_fall_back() {
     // Colony 8 (the built-in entry, three channels) with a kind-1 record giving channel 1 the pad
     // and channels 0 and 2 none
-    let frames = 30 * 50;
+    let frames = 40 * 50;
     let list = list_of(&[kind1(colony8_digest(), 3, [0, 3, 0])]);
 
     // B: its claimed frames carry the stored roles, its unclaimed ones none
@@ -378,8 +378,9 @@ fn partial_stored_roles_fall_back() {
 
     // the mixer: the synth's voice 1 plays the pad whenever it sounds; voices 0 and 2 take the
     // live rule's roles among the voices without one (voice 0 alone: the lead; from channel 2's
-    // entry at about 11 s, the lower of the two, voice 0, the bass and voice 2 the lead), and
-    // the live rule tracks every voice, voice 1 included
+    // entry at about 11.5 s, 2 semitones below voice 0 and ranked by its own pitch, voice 2 the
+    // bass and voice 0 the lead; from about 35 s, voice 2 the margin above voice 0, voice 0 the
+    // bass and voice 2 the lead), and the live rule tracks every voice, voice 1 included
     let mut m = colony8();
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);
@@ -400,6 +401,7 @@ fn partial_stored_roles_fall_back() {
     let first = seen.iter().position(|v| v[1] == P).expect("voice 1 plays the pad");
     assert!(seen[first..].iter().all(|v| v[1] == P), "voice 1 the pad from its first note on");
     assert!(seen.iter().any(|v| v[0] == L && v[1] == P), "voice 0 alone without a role: the lead");
+    assert!(seen.contains(&[L, P, B]), "voice 2 enters as the bass, by its own pitch");
     assert_eq!(seen.last(), Some(&[B, P, L]), "at the end");
     assert!(mixer.roles().1.iter().all(|&a| a != -(1 << 30)), "every voice tracked (SND_ROLES_NONE: never heard)");
 }

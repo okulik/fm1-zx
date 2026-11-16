@@ -77,7 +77,7 @@ static inline void fm_rest(snd_fm *f)
 
 /* The live rule afresh: no slot with history (its average SND_ROLES_NONE until its first pitch
  * sets it), none heard recently, ranked 0, 1, 2, every role lead (snd_roles_init, snd_mixer_init
- * and the mixer's FM turn-on). A copy of a constant: data costs no fast memory, code would. */
+ * and the mixer's FM turn-on and FM_A <-> FM_B switch). A copy of a constant: data costs no fast memory, code would. */
 static inline void roles_rest(snd_roles *r)
 {
 	static const snd_roles rest = {

@@ -603,7 +603,8 @@ void snd_mixer_set_engines(snd_mixer *m, const snd_engine *table, uint32_t n);
  * left as it was.
  *
  * Every frame the synth renders first goes through the live rule (snd_roles_frame), which gives
- * its voices without a role theirs; an FM turn-on starts the rule afresh, with the synth. */
+ * its voices without a role theirs; an FM turn-on starts the rule afresh, with the synth, and an
+ * FM_A <-> FM_B switch starts it afresh alone (method A's slots are not method B's channels). */
 void snd_mixer_frame(snd_mixer *m, uint8_t mode, const zx_machine *zm, const zx_edge *e, uint32_t n_edges,
                      uint8_t start_level, const int16_t *beeper, uint32_t n, int16_t *out);
 

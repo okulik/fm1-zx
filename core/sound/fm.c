@@ -45,8 +45,9 @@ _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
 
 /* Overall gain, Q8 (256: a gain-1 voice at level 255 peaks at 8160, as every voice did before the
  * instruments); calibrated so the corpus' FM mix keeps its RMS loudness (tests/instruments.rs,
- * with every voice a lead: AUTO). The lead's 2:1 FM is square-ish, more RMS for its peak, so the
- * mix's peaks are 2-3.5 dB below before. */
+ * each voice with the live rule's role): RMS within +0.64 dB of before at worst (Colony 8 in FM:
+ * engines), the mix's peaks 0-2.7 dB below before (the lead's 2:1 FM is square-ish, more RMS for
+ * its peak). */
 #define GAIN 210
 /* A patch gain given in thousandths, as Q8 with GAIN in (at most 512, so amp stays below 2^16). */
 #define G(milli) (((milli) * GAIN + 500) / 1000)

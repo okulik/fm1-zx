@@ -1177,6 +1177,12 @@ impl SndMixer {
         (self.raw.roles.role, self.raw.roles.avg)
     }
 
+    /// The frames each slot of the mixer's live rule has been heard in (its average's weight, up
+    /// to 255; 0: no history).
+    pub fn roles_heard(&self) -> [u8; SND_TONAL] {
+        self.raw.roles.n
+    }
+
     /// The role (`SND_ROLE_*`) the mixer's synth's tonal voice `k` took at its note's start.
     pub fn voice_role(&self, k: usize) -> u8 {
         self.raw.fm.v[k].role

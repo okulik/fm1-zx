@@ -9,25 +9,28 @@
  * a mean (the first frame's pitch alone, then a weight halving at each doubling of the frames
  * heard), so a slot's first notes are ranked by their own pitch. The slots are kept in an order,
  * lowest average first, slots never heard last; two neighbours swap only when the higher one's
- * average lies MARGIN below the other's, so a brief crossing leaves them (two slots both heard
- * for the first time swap on their pitch alone; a slot new among others starts above them and
- * moves down past each it lies MARGIN below). The slots heard within the last WINDOW frames are
- * ranked: of those that carry no role of their own in the frame (SND_ROLE_AUTO), the lowest is
- * the bass, the highest the lead, a third the pad, a lone one the lead. A slot silent for longer
- * leaves the ranking and keeps its history, so a bass line that pauses comes back as the bass.
- * Every sounding slot is tracked, whatever decides its role.
+ * average lies MARGIN below the other's, so a brief crossing leaves them (a slot heard for the
+ * first time is placed among the others by its pitch alone, so a harmony that joins a melody
+ * just below it is the lower role and the melody keeps the lead). The slots heard within the
+ * last WINDOW frames are ranked: of those that carry no role of their own in the frame
+ * (SND_ROLE_AUTO), the lowest is the bass, the highest the lead, a third the pad, a lone one the
+ * lead. A slot silent for longer leaves the ranking and keeps its history, so a bass line that
+ * pauses comes back as the bass. Every sounding slot is tracked, whatever decides its role.
  *
  * The rule gives a role every frame; the synth takes a voice's role only when a note starts on it
  * (fm.c), so a voice never changes instrument inside a note.
  *
  * The values (2.56 s, 3 semitones, 4 s: the starting points kept), checked on the corpus over 3
- * minutes each in the mixer (tests/roles.rs): in FM: engines Colony 8 settles on its channels'
- * roles (0 bass, 2 pad, 1 lead) as each channel enters and never changes them again, and
+ * minutes each in the mixer (tests/roles.rs): in FM: engines Colony 8's channels 0 and 1 are
+ * bass and lead from the start; channel 2, a second bass line, enters at 11.5 s 2 semitones
+ * below channel 0 and is the bass by its own pitch (channel 0 the pad), until it lies the margin
+ * above channel 0 at 35 s and the two swap once, to their lasting roles (0 bass, 2 pad, 1 lead);
  * Castaway (two voices) keeps the roles of its first notes; in FM: sound Castaway's two slots
  * swap once, at 7 s. Time constants of 1.28 and 5.12 s, margins of 4 and 5 semitones and windows
- * of 3 and 5 s change none of that. FM: sound on Colony 8 is the one that moves: the decoder's
- * slots are its voices in the order found, not channels, and they trade roles 28 times in the 3
- * minutes (38 at 1.28 s, 24 at 5.12 s or 5 semitones, 54 with a 3 s window, 28 with 5 s). */
+ * of 3 and 5 s change none of that (Colony 8's one swap comes between 34 and 38 s). FM: sound on
+ * Colony 8 is the one that moves: the decoder's slots are its voices in the order found, not
+ * channels, and they trade roles 28 times in the 3 minutes (38 at 1.28 s, 24 at 5.12 s, 26 and 23
+ * at 4 and 5 semitones, 54 with a 3 s window, 28 with 5 s). */
 
 #include "sound_internal.h"
 
@@ -84,11 +87,12 @@ void snd_roles_frame(snd_roles *r, snd_frame *fr)
 		if (r->left[k] && fr->role[k] == SND_ROLE_AUTO) ranked++;
 	}
 
-	/* neighbours swap past the margin (two heard for the first time on their pitch alone; a slot
-	 * never heard, at SND_ROLES_NONE, goes last): pairs 0-1, 1-2, 0-1 sort three */
+	/* neighbours swap past the margin (a pair with a slot heard for the first time on their
+	 * pitch alone; a slot never heard, at SND_ROLES_NONE, goes last): pairs 0-1, 1-2, 0-1 sort
+	 * three */
 	for (s = 0; s < 3; s++) {
 		const uint32_t a = r->order[s & 1], b = r->order[(s & 1) + 1];
-		if (r->avg[b] > r->avg[a] + (fresh >> a & fresh >> b & 1 ? 0 : MARGIN)) {
+		if (r->avg[b] > r->avg[a] + ((fresh >> a | fresh >> b) & 1 ? 0 : MARGIN)) {
 			r->order[s & 1] = (uint8_t)b;
 			r->order[(s & 1) + 1] = (uint8_t)a;
 		}

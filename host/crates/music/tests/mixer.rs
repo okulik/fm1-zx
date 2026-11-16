@@ -471,8 +471,8 @@ fn switch_between_fm_choices() {
     let d = SND_DELAY_FRAMES as usize;
 
     // the FM the mixer plays: the chosen method's voices where it is confident (A's in FM:
-    // sound, B's in FM: engines), silence elsewhere, with the live rule's roles, through one synth
-    // that never restarts
+    // sound, B's in FM: engines), silence elsewhere, with the live rule's roles (afresh at each
+    // switch: A's slots are not B's channels), through one synth that never restarts
     let (mut dec, mut eng, mut fm, mut roles) = (SndDecoder::new(), SndEngines::new(), SndFm::new(RATE.0, RATE.1), SndRoles::new());
     let mut m = castaway();
     let mut fm_out = Vec::new();
@@ -485,6 +485,9 @@ fn switch_between_fm_choices() {
         } else {
             let fr = if mode(t) == SND_MODE_FM_A { fa } else { fb };
             let mut src = if fr.confident != 0 { fr } else { SndFrame::default() };
+            if mode(t) != mode(t - 1) {
+                roles = SndRoles::new();
+            }
             roles.frame(&mut src);
             fm_out.extend(fm.render(&src, f.beeper.len()));
         }
