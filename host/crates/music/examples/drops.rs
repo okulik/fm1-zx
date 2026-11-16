@@ -9,7 +9,8 @@
 //!         [--wav FILE] [--cache DIR]
 //!
 //! Per game:
-//! - a summary: frames with sound and how many played as FM, the switches to the beeper, and the
+//! - a summary: frames with sound, how many played as FM and how many the effects follower played
+//!   as FM (`fx`), the switches to the beeper, and the
 //!   drops (back to FM within 2 s);
 //! - each audible drop (a beeper stretch with sound in it), with B's decision and the frame's
 //!   edges (count, OUT addresses, gaps, first and last T-state) for each of its frames: a rejected
@@ -18,7 +19,8 @@
 //! - jumps: frames whose largest second difference of the output is over three times the run's
 //!   typical FM frame (90th percentile), with the decision and its note events. Note attacks at
 //!   large pitch steps show here too; a jump at an FM/beeper switch is a click;
-//! - with `--show A-B`, frames A to B: FM or beeper, the decision, the output's range and level,
+//! - with `--show A-B`, frames A to B: FM, `fx` (the follower) or beeper (`bp`, with the gate's
+//!   reason: two-voice, busy, irregular, B-rejected), the decision, the output's range and level,
 //!   the edges;
 //! - with `--wav FILE`, the mixer's output (one game per run).
 //!
@@ -30,7 +32,8 @@ use fmzx_pack::tapeload;
 use music::corpus::{inputs, load, parse_keys, wav_stem};
 use music::{capture, hz_of_period_q8, repo, sample_rate, wav, RATE};
 use std::path::{Path, PathBuf};
-use zx_sys::{Beeper, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B};
+use zx_sys::{Beeper, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_FX_B_REJECTED, SND_FX_BUSY,
+    SND_FX_IRREGULAR, SND_FX_PLAY, SND_FX_TWO_VOICE, SND_MODE_FM_B};
 
 /// A drop that comes back to FM within this many frames (2 s) is a drop inside the music.
 const DROP_MAX: usize = 100;
@@ -87,6 +90,7 @@ fn jump(o: &[i16]) -> (i32, usize) {
 
 struct Run {
     on: Vec<bool>,           // the mixer plays FM (frame k)
+    gate: Vec<u8>,           // the effects follower's gate (SND_FX_*) for frame k
     sound: Vec<bool>,        // the speaker level changes in frame k
     dec: Vec<SndFrame>,      // B's decision about frame k
     edges: Vec<String>,      // frame k's edges, described
@@ -104,7 +108,7 @@ fn run(path: &Path, frames: usize, list: Option<&[u8]>) -> Result<Run, String> {
     }
     let mut beeper = Beeper::new(RATE.0, RATE.1);
     let delay = SND_DELAY_FRAMES as usize;
-    let mut r = Run { on: Vec::new(), sound: Vec::new(), dec: Vec::new(), edges: Vec::new(), out: Vec::new() };
+    let mut r = Run { on: Vec::new(), sound: Vec::new(), gate: Vec::new(), dec: Vec::new(), edges: Vec::new(), out: Vec::new() };
     // the decisions and the mixer's output come SND_DELAY_FRAMES after their frame: run that
     // much further
     for k in 0..frames + delay {
@@ -121,6 +125,7 @@ fn run(path: &Path, frames: usize, list: Option<&[u8]>) -> Result<Run, String> {
         if k >= delay {
             r.out.push(o);
             r.on.push(mix.fm_on());
+            r.gate.push(mix.fx_gate());
         }
         r.dec.push(b.frame(&m, &f.edges, f.start_level));
     }
@@ -130,9 +135,29 @@ fn run(path: &Path, frames: usize, list: Option<&[u8]>) -> Result<Run, String> {
     Ok(r)
 }
 
+impl Run {
+    /// Frame k's playback: `FM` (the mixer's music), `fx` (the follower's effects as FM), or `bp`
+    /// (the beeper), with the gate's reason when a gate kept the beeper.
+    fn label(&self, k: usize) -> String {
+        if self.on[k] {
+            return "FM".into();
+        }
+        match self.gate[k] {
+            SND_FX_PLAY => "fx".into(),
+            SND_FX_TWO_VOICE => "bp two-voice".into(),
+            SND_FX_BUSY => "bp busy".into(),
+            SND_FX_IRREGULAR => "bp irregular".into(),
+            SND_FX_B_REJECTED => "bp B-rejected".into(),
+            _ => "bp".into(),
+        }
+    }
+}
+
 fn report(path: &Path, r: &Run, show: Option<(usize, usize)>, learned: bool) {
     let frames = r.sound.len();
     let fm = (0..frames).filter(|&k| r.sound[k] && r.on[k]).count();
+    // a beeper frame the follower played as FM effects (not B's FM)
+    let fx = (0..frames).filter(|&k| r.sound[k] && r.label(k) == "fx").count();
     let sounding = r.sound.iter().filter(|&&s| s).count();
     // the beeper stretches after FM, and those back to FM within DROP_MAX frames
     let (mut switches, mut drops) = (0, Vec::new());
@@ -153,14 +178,14 @@ fn report(path: &Path, r: &Run, show: Option<(usize, usize)>, learned: bool) {
     }
     let audible: Vec<(usize, usize)> = drops.iter().copied().filter(|&(s, n)| (s..s + n).any(|k| r.sound[k])).collect();
     println!(
-        "== {}: learned entries {}; FM for {fm} of {sounding} frames with sound; {switches} switches to the beeper, \
+        "== {}: learned entries {}; FM for {fm} of {sounding} frames with sound; follower for {fx} of {sounding} frames with sound; {switches} switches to the beeper, \
          {} drops ({} audible)",
         path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
         if learned { "yes" } else { "no" },
         drops.len(),
         audible.len()
     );
-    let line = |k: usize| format!("f{k:5} {:6.2}s {} {:34} | {}", k as f64 / 50.0, if r.on[k] { "FM" } else { "bp" }, decision(&r.dec[k]), r.edges[k]);
+    let line = |k: usize| format!("f{k:5} {:6.2}s {:13} {:34} | {}", k as f64 / 50.0, r.label(k), decision(&r.dec[k]), r.edges[k]);
     for &(s, n) in &audible {
         println!("  drop at {:.2}s: {n} frames on the beeper", s as f64 / 50.0);
         for k in s.saturating_sub(2)..(s + n + 1).min(frames) {
