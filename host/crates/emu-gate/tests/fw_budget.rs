@@ -261,7 +261,7 @@ fn stress_list() -> Vec<u8> {
     let len = zx_sys::SND_LEARNED_LEN_MAX;
     let entries: Vec<LearnedEntry> = (0..8u16)
         .map(|k| LearnedEntry {
-            kind: 0,
+            instrument: [0; 3],
             digest: 0x5EED_0000_0000_0000 | u64::from(k),
             len,
             wild: vec![],
