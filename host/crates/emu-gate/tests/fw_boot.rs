@@ -59,21 +59,21 @@ fn boots_to_picker() {
 }
 
 #[test]
-fn no_pack_offers_basic_only() {
+fn no_pack_shows_no_games() {
     let m = boot(firmware());
     assert!(m.display_on());
     assert_eq!(m.stats().view, zx_sys::view::PICKER as u32);
-    assert_screen(&m, "basic_only.png");
+    assert_screen(&m, "no_games.png");
 }
 
 #[test]
-fn corrupt_pack_offers_basic_only() {
+fn corrupt_pack_shows_no_games() {
     let mut p = pack().to_vec();
     let at = p.len() / 2;
     p[at] ^= 0x10;
     let m = boot(&firmware().with_pack(&p));
     assert!(m.display_on());
-    assert_screen(&m, "basic_only.png");
+    assert_screen(&m, "no_games.png");
 }
 
 #[test]
@@ -145,5 +145,5 @@ fn picker_matches_host_composition() {
     let m = boot(&firmware().with_pack(pack()));
     assert!(m.lcd_rgb565() == &host_picker(Some(pack()))[..], "the LCD differs from the host's picker");
     let m = boot(firmware());
-    assert!(m.lcd_rgb565() == &host_picker(None)[..], "the LCD differs from the host's BASIC-only picker");
+    assert!(m.lcd_rgb565() == &host_picker(None)[..], "the LCD differs from the host's \"No games\"");
 }

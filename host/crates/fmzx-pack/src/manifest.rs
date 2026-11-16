@@ -270,19 +270,6 @@ pub fn default_keymap() -> [[u8; 2]; INPUTS] {
     map
 }
 
-/// The picker's Spectrum BASIC (no pack entry): the default's buttons, A..Z on the notes F3..F#5
-/// in chromatic order, SPACE on G5, ENTER on PLAY; mirrors `km_basic` in `app/keymap.c`.
-pub fn basic_keymap() -> [[u8; 2]; INPUTS] {
-    let mut map = default_keymap();
-    for n in 0..NOTE_COUNT {
-        let key = if n < 26 { ((b'A' + n as u8) as char).to_string() } else { "SPACE".to_string() };
-        map[BUTTON_COUNT + n] = [parse_action(&format!("key.{key}")).expect("a Spectrum key"), NONE];
-    }
-    let play = BUTTONS.iter().position(|b| *b == "PLAY").expect("PLAY");
-    map[play] = [parse_action("key.ENTER").expect("ENTER"), NONE];
-    map
-}
-
 /// The key map of a game: the default with each listed input replaced.
 pub fn encode_keymap(keys: &BTreeMap<String, String>) -> Result<[[u8; 2]; INPUTS], String> {
     let mut map = default_keymap();

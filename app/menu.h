@@ -21,14 +21,10 @@ typedef struct menu {
     char msg[UI_COLS + 1u];
 } menu;
 
-/* CMD_START's arg (and fmzx_stats.game) for the picker's first entry, Spectrum BASIC: the 48K ROM
- * alone, before the pack's games. */
-#define MENU_BASIC 0xFFFFFFFFu
-
-/* Starts in VIEW_PICKER with `count` pack games (from pack_open) after Spectrum BASIC, the picker on
- * the first game (on BASIC when there is none), LCD speed 4, Sound FM: engines, Screen Fit smooth. */
+/* Starts in VIEW_PICKER with `count` games (from pack_open), LCD speed 4, Sound FM: engines,
+ * Screen Fit smooth. */
 void menu_init(menu *mn, uint32_t game_count);
-/* Returns a CMD_*. arg: CMD_START the pack's game index, or MENU_BASIC (the view stays VIEW_PICKER; the device then calls
+/* Returns a CMD_*. arg: CMD_START game index (the view stays VIEW_PICKER; the device then calls
  * menu_set_view(VIEW_GAME) or menu_message), CMD_DIVIDER the new divider, CMD_OSK_KEY
  * key | caps << 8 | sym << 9 with key 0-39 = Spectrum row*5+bit (the sticky shifts are cleared),
  * CMD_SOUND the new SND_MODE_* (the Sound item cycles Beeper -> FM: sound -> FM: engines ->
@@ -51,7 +47,7 @@ int menu_runs_game(const menu *mn);
  * paused rows 0-23, OSK rows 200-239. */
 int menu_row_is_ui(const menu *mn, unsigned lcd_row);
 /* Draws the current view into the ui grid. Game names and the selected game's key map come from
- * the pack (pack_game_at; BASIC's from km_basic); pack_base may be NULL when there are no games. */
+ * the pack (pack_game_at); pack_base may be NULL when there are no games. */
 void menu_draw(const menu *mn, const uint8_t *pack_base);
 
 #endif

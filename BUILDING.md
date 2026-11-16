@@ -111,8 +111,7 @@ stock audio PLL, so the firmware plays sound, an LCD that honours COLMOD, so RGB
 running game: an export reads a word of RAM (`fm1_peek32`) and the worklet adds the firmware's view
 and game index (`fmzx_stats`, words 3 and 4) to each frame message. The address of `fmzx_stats` comes
 from the ELF the packages were made from (`build/fm1/platform/fm1/fmzx_app.elf`, read by
-`web/elf-symbol.py`) and is written into the served `keymaps.json` (whose `basic` entry is Spectrum
-BASIC's built-in map, `games[i]` the pack's entry `i`); it is left out, with a warning,
+`web/elf-symbol.py`) and is written into the served `keymaps.json`; it is left out, with a warning,
 when that ELF is missing or newer than the package, and the page then keeps the fixed keys. In the
 page (`web/patch-page.sh`): the fresh package is never read from or saved to the browser's IndexedDB,
 the clock is pinned at 240 MHz, input hooks let our keyboard layer (`web/fmzx.js`: Spectrum keys by
@@ -127,9 +126,7 @@ listens on 127.0.0.1 only and sends every file with `Cache-Control: no-store`. `
 unit tests (`web/fmzx.test.mjs`) and the smoke test (`web/check.mjs`), which boots the built wasm at
 240 MHz and checks that the package boots, the picker draws, the border-and-tone test sounds, the
 running game is reported (view and game after PLAY), computer keys through `web/fmzx.js` reach the
-firmware (Esc opens the menu, Enter resumes, Tab pauses and resumes), Spectrum BASIC starts from
-the picker's first entry (reported as game `0xFFFFFFFF`; Tab, its ENTER, does not pause it), the
-colours match the preview
+firmware (Esc opens the menu, Enter resumes, Tab pauses and resumes), the colours match the preview
 package, and every page patch is in place; it needs node.
 
 The wasm build uses the active Rust toolchain (`rustc --print sysroot` in `host/`), which needs

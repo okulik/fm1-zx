@@ -65,20 +65,6 @@ void km_default(keymap *k)
     set1(k, KM_BUTTONS + 26, KEMP(KEMP_FIRE));   /* G5 */
 }
 
-/* Spectrum key index (row*5 + bit) of A..Z */
-static const uint8_t letters[26] = {
-    5, 39, 3, 7, 12, 8, 9, 34, 27, 33, 32, 31, 37, 38, 26, 25, 10, 13, 6, 14, 28, 4, 11, 2, 29, 1,
-};
-
-void km_basic(keymap *k)
-{
-    unsigned i;
-    km_default(k);
-    for (i = 0; i < KM_NOTES; i++)
-        set1(k, KM_BUTTONS + i, i < 26u ? letters[i] : K_(7, 0));   /* F3 = A ... F#5 = Z, G5 SPACE */
-    set1(k, BTN_PLAY, K_(6, 0));                                    /* ENTER */
-}
-
 void km_reset(km_state *s)
 {
     memset(s, 0, sizeof *s);
@@ -102,7 +88,7 @@ void km_apply(const keymap *k, km_state *s, const km_input *in, uint8_t rows[8],
     uint8_t kemp = 0;
     memset(rows, 0, 8);
     for (i = 0; i < KM_BUTTONS; i++)
-        if (i != KM_BTN_HOME && (in->buttons >> i & 1u))
+        if (i != KM_BTN_HOME && i != KM_BTN_PLAY && (in->buttons >> i & 1u))
             press(k->act[i], rows, &kemp);
     for (i = 0; i < KM_NOTES; i++)
         if (in->notes >> i & 1u)

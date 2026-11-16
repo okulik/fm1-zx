@@ -54,41 +54,24 @@ fn dirty_rows() {
 
 #[test]
 fn picker_wrap_and_start() {
-    // Spectrum BASIC first, then the 3 games; the picker opens on the first game
     let mut m = Menu::new(3);
     assert_eq!(m.view(), view::PICKER);
-    assert_eq!(m.event(ev::OK), (cmd::START, 0));
-    assert_eq!(m.view(), view::PICKER);
     assert_eq!(m.event(ev::UP), (cmd::NONE, 0));
-    assert_eq!(m.event(ev::OK), (cmd::START, MENU_BASIC));
-    assert_eq!(m.event(ev::UP).0, cmd::NONE);
     assert_eq!(m.event(ev::OK), (cmd::START, 2));
+    assert_eq!(m.view(), view::PICKER);
     assert_eq!(m.event(ev::DOWN).0, cmd::NONE);
-    assert_eq!(m.event(ev::OK), (cmd::START, MENU_BASIC));
+    assert_eq!(m.event(ev::OK), (cmd::START, 0));
 }
 
 #[test]
-fn picker_without_games_offers_basic() {
+fn picker_empty() {
     let mut ui = Ui::new();
     let mut m = Menu::new(0);
     ui.draw(&m, None);
-    let r = find_row(&ui, "Spectrum BASIC").expect("BASIC listed");
-    assert_eq!(ui.compose_row(r * 8 + 3)[239], 13, "and selected");
+    assert!(find_row(&ui, "No games").is_some());
+    assert_eq!(m.event(ev::OK).0, cmd::NONE);
     assert_eq!(m.event(ev::UP).0, cmd::NONE);
     assert_eq!(m.event(ev::DOWN).0, cmd::NONE);
-    assert_eq!(m.event(ev::OK), (cmd::START, MENU_BASIC));
-}
-
-#[test]
-fn basic_key_page() {
-    let mut ui = Ui::new();
-    let mut m = Menu::new(2);
-    m.event(ev::UP);
-    m.set_view(view::KEYS);
-    ui.draw(&m, None);
-    assert!(find_row(&ui, "KEYS Spectrum BASIC").is_some());
-    assert!(find_row(&ui, "F3   A").is_some());
-    assert!(find_row(&ui, "E5   X").is_some());
 }
 
 #[test]
@@ -100,10 +83,9 @@ fn picker_lists_and_scrolls() {
     let mut m = Menu::new(30);
     ui.draw(&m, Some(&pack));
     assert!(ui.row_text(0).contains("FM-1 ZX"));
-    assert!(find_row(&ui, "Spectrum BASIC").is_some());
     assert!(find_row(&ui, "Game 00").is_some());
-    assert!(find_row(&ui, "Game 22").is_some());
-    assert!(find_row(&ui, "Game 23").is_none());
+    assert!(find_row(&ui, "Game 23").is_some());
+    assert!(find_row(&ui, "Game 24").is_none());
     // the selected row has the bright cyan bar
     let r = find_row(&ui, "Game 00").unwrap();
     assert_eq!(ui.compose_row(r * 8 + 3)[239], 13);
@@ -114,9 +96,8 @@ fn picker_lists_and_scrolls() {
     assert!(find_row(&ui, "Game 00").is_none());
     let r = find_row(&ui, "Game 26").unwrap();
     assert_eq!(ui.compose_row(r * 8 + 3)[239], 13);
-    // up to BASIC, then wrap from the top to the end
+    // wrap from the top to the end
     let mut m = Menu::new(30);
-    m.event(ev::UP);
     m.event(ev::UP);
     ui.draw(&m, Some(&pack));
     let r = find_row(&ui, "Game 29").unwrap();

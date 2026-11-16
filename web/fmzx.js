@@ -13,8 +13,6 @@
 
 export const VIEW = { PICKER: 0, GAME: 1, MENU: 2, KEYS: 3, OSK: 4, PAUSED: 5, MESSAGE: 6 };
 export const HOME = 8;
-// fmzx_stats.game for the picker's Spectrum BASIC (MENU_BASIC); keymaps.json's "basic" is its map
-export const BASIC = 0xFFFFFFFF;
 export const PLAY = 12;
 
 // The views where the game's keys count: the game, paused (PLAY resumes it) and the on-screen
@@ -316,9 +314,6 @@ export function panelRows(game, following = true) {
 // in the picker and the menus the knobs the arrows turn.
 export function labels(game, view) {
   const out = [{ target: { key: HOME }, text: "HOME (Esc)" }, { target: { key: PLAY }, text: "PLAY (Tab)" }];
-  // a map that gives PLAY a key (BASIC's ENTER): that key, still on Tab
-  const play = game?.keys?.find((k) => k.input === "button.PLAY");
-  if (play && (view === null || gameView(view))) out[1].text = `${play.actions.map(shortName).join("+")} (Tab)`;
   if (view !== null && !gameView(view)) {
     out.push({ target: { enc: 0, step: 0 }, text: "← →" }, { target: { enc: 2, step: 0 }, text: "↑ ↓" });
     return out;
@@ -329,7 +324,7 @@ export function labels(game, view) {
     const t = target(input);
     const text = actions.map(shortName).filter(Boolean).join("+");
     if (!t || !text) continue;
-    if ("key" in t && t.key !== PLAY) out.push({ target: t, text });
+    if ("key" in t) out.push({ target: t, text });
     else if (!(view === VIEW.OSK && (t.enc === 0 || t.enc === 2))) {
       const both = turns.get(t.enc) ?? {};
       both[t.step > 0 ? "cw" : "ccw"] = text;
@@ -413,7 +408,7 @@ function drawLabels(ctx, boxes, list) {
 // ---------------------------------------------------------------- the page
 
 export function install(win, doc) {
-  const state = { games: null, basic: null, shown: null, running: null, snapped: null, keys: null, boxes: null, board: -1, onRun: null };
+  const state = { games: null, shown: null, running: null, snapped: null, keys: null, boxes: null, board: -1, onRun: null };
   const keys = () => (state.keys ??= win.fmzxInput ? createKeys(win.fmzxInput) : null);
   win.fmzxKey = (e, down) => keys()?.handle(e, down) ?? false;
   win.addEventListener?.("blur", () => state.keys?.releaseAll());
@@ -421,13 +416,12 @@ export function install(win, doc) {
   // each frame: [view, game] from the firmware (null: the package has no address)
   win.fmzxFrame = (m) => {
     const r = m.fmzx;
-    if (!state.games || !Array.isArray(r)) return;
-    const view = r[0] >>> 0, game = r[1] >>> 0; // (the wasm's u32 arrives signed)
-    const g = game === BASIC ? state.basic : state.games[game];
-    if (!g || view > VIEW.MESSAGE) return;
+    const games = state.games;
+    if (!games || !Array.isArray(r) || r[0] > VIEW.MESSAGE || r[1] >= games.length) return;
+    const [view, game] = r;
     if (state.running && state.running.view === view && state.running.game === game) return;
-    state.running = { view, game, g };
-    keys()?.setRunning(view, g);
+    state.running = { view, game };
+    keys()?.setRunning(view, games[game]);
     // the key map snaps to a game when it starts (not in the picker: none runs there)
     if (gameView(view) && state.snapped !== game) {
       state.snapped = game;
@@ -445,7 +439,7 @@ export function install(win, doc) {
       state.board = board;
     }
     const r = state.running;
-    const list = r ? labels(r.g, r.view) : labels(state.shown, null);
+    const list = r ? labels(state.games[r.game], r.view) : labels(state.shown, null);
     drawLabels(ctx, state.boxes, list);
   };
 
@@ -484,10 +478,8 @@ export function install(win, doc) {
   fetch("keymaps.json")
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then((doc_) => {
-      state.games = doc_.games;
-      state.basic = doc_.basic ?? null;
-      // the picker's order: Spectrum BASIC, then the pack's games
-      const games = [...(state.basic ? [state.basic] : []), ...doc_.games];
+      const games = doc_.games;
+      state.games = games;
       if (Number.isInteger(doc_.fmzx_stats)) win.fmzxStats = doc_.fmzx_stats;
       msg.textContent = win.fmzxStats
         ? "A key presses the FM-1 input the running game maps to that Spectrum key; one the game does not map does nothing."
@@ -537,7 +529,7 @@ export function install(win, doc) {
       });
       // the list follows the running game (it snaps back when the running game changes)
       state.onRun = () => {
-        const g = state.running.g;
+        const g = games[state.running.game];
         if (g && select.value !== g.id) { select.value = g.id; fill(); }
       };
       fill();

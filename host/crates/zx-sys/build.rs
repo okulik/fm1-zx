@@ -129,7 +129,7 @@ fn main() {
         .allowlist_type("(zx|pix|lcd|km|pack|snd)_.*")
         .allowlist_type("keymap")
         .allowlist_type("menu")
-        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND|MENU|snd)_.*")
+        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND|snd)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {

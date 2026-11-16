@@ -269,24 +269,6 @@ test("labels: the game's map in a game view, the menu controls elsewhere", () =>
   assert.ok(labels(GAME, null).some((l) => l.text === "CS+5")); // no running game: the side list's
 });
 
-test("labels: a map that gives PLAY a key (BASIC's ENTER) shows it on PLAY, still Tab", () => {
-  const basic = { id: "basic", keys: [{ input: "button.PLAY", actions: ["key.ENTER"] }, { input: "note.F3", actions: ["key.A"] }] };
-  const l = labels(basic, VIEW.GAME);
-  assert.deepEqual(l.filter((x) => x.target.key === PLAY).map((x) => x.text), ["ENT (Tab)"]);
-  assert.ok(l.some((x) => x.target.key === 14 && x.text === "A"));
-  assert.equal(labels(basic, VIEW.MENU).find((x) => x.target.key === PLAY).text, "PLAY (Tab)");
-});
-
-test("BASIC: Enter presses PLAY (its ENTER) in the game", () => {
-  const basic = { id: "basic", keys: [{ input: "button.PLAY", actions: ["key.ENTER"] }] };
-  const s = spy();
-  const k = createKeys(s);
-  k.setRunning(VIEW.GAME, basic);
-  k.handle(ev("Enter"), true);
-  assert.deepEqual(s.calls, [["setKey", PLAY, true]]);
-  assert.deepEqual(panelRows(basic)[0], { computer: "Enter", fm1: "PLAY", spectrum: "ENTER" });
-});
-
 test("short names", () => {
   assert.equal(shortName("key.SYM"), "SS");
   assert.equal(shortName("kempston.down"), "↓");

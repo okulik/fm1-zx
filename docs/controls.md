@@ -12,7 +12,7 @@ The FM-1's 14 buttons, 27 note keys and 7 encoders stand in for the Spectrum key
 | Button | Use |
 |--------|-----|
 | HOME   | Opens the menu (and goes back) |
-| PLAY   | Pauses and resumes the game; OK in the menu; presses the on-screen keyboard's key. In Spectrum BASIC it is ENTER instead (no pause) |
+| PLAY   | Pauses and resumes the game; OK in the menu; presses the on-screen keyboard's key |
 
 A game cannot map HOME or PLAY.
 
@@ -90,25 +90,8 @@ The ids fm1-emu (and the firmware's matrix scan) use, as in felucca-bsp's `FM1_K
 
 Buttons act on their press.
 
-**Game picker.** The first entry is **Spectrum BASIC** (below), then the pack's games; the picker
-opens on the first game (on BASIC when the pack has none). SELECT and ALGORITHM turns and OCT-/OCT+
-scroll (clockwise and OCT+ go to the next entry); PLAY starts the selected one.
-
-**Spectrum BASIC.** The 48K ROM alone, to the BASIC editor (no tape, no snapshot), with its own key
-map for all 40 Spectrum keys:
-
-| FM-1 input | Spectrum key |
-|------------|--------------|
-| OCT-, OCT+, FX, SCL, ENV, LFO, EDIT, GLO, SAVE, ARP | 1 to 9, 0 |
-| SEQ / REC | CAPS SHIFT / SYMBOL SHIFT |
-| PLAY | ENTER (it does not pause BASIC) |
-| F3, F#3, G3, ... F#5 (the 26 notes in chromatic order) | A, B, C, ... Z |
-| G5 | SPACE |
-
-HOME opens the HOME menu as in a game, where PLAY is OK as usual; Key map shows this map, Reset game
-starts BASIC again, Back to games returns to the picker. The sound plays as for any game (FM:
-engines plays BASIC's `BEEP` notes as FM). `fmzx_stats.game` reports BASIC as `0xFFFFFFFF`
-(`MENU_BASIC`); for a game it is the pack's index.
+**Game picker.** SELECT and ALGORITHM turns and OCT-/OCT+ scroll (clockwise and OCT+ go to the
+next game); PLAY starts the selected game.
 
 **In the game.** Every frame, the held inputs go through the game's key map to the Spectrum
 keyboard and the Kempston joystick. PLAY pauses the game ("PAUSED" in the top border) and resumes
@@ -149,7 +132,7 @@ and ALGORITHM encoders belong to the keyboard while it is open.
 
 ## Computer keyboard (browser page)
 
-The browser test bench (`tools/web-demo`) knows which game runs, Spectrum BASIC included (the firmware's view and game index,
+The browser test bench (`tools/web-demo`) knows which game runs (the firmware's view and game index,
 read from `fmzx_stats` by the emulator). While a game runs, the computer keys type Spectrum keys:
 a key presses the FM-1 input the running game maps to that Spectrum key. Keys are matched by their
 place (`event.code`), so a non-US layout types the key printed in that place on a US keyboard.

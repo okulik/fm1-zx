@@ -114,8 +114,7 @@ const loud = run(1.0);
     const encIds = [0, 6, 1, 2, 3, 4, 5]; // the drawing's encoder order to the matrix's
     const keys = createKeys({ setKey: (id, d) => x.fm1_key(id, d ? 1 : 0), turn: (i, c) => x.fm1_enc(encIds[i], c) });
     const tap = (code) => {
-      const g = state()[1] >>> 0;
-      keys.setRunning(state()[0], g === 0xFFFFFFFF ? km.basic : km.games[g]);
+      keys.setRunning(state()[0], km.games[state()[1]]);
       keys.handle({ code, key: "", repeat: false }, true);
       run(0.1);
       keys.handle({ code, key: "", repeat: false }, false);
@@ -124,19 +123,6 @@ const loud = run(1.0);
     };
     const seen = [tap("Escape"), tap("Enter"), tap("Tab"), tap("Tab")];
     report("computer keys", seen.join() === "2,1,5,1", `views after Esc, Enter, Tab, Tab: ${seen.join(", ")} (want 2, 1, 5, 1)`);
-    // Spectrum BASIC, the picker's first entry: back to games (the menu's last item, one up from
-    // Resume), up to BASIC, PLAY; reported as game 0xFFFFFFFF, and Tab (PLAY: ENTER there) does
-    // not pause it
-    tap("Escape");
-    tap("ArrowUp");
-    tap("Enter");
-    tap("ArrowUp");
-    tap("ArrowUp");
-    tap("Enter");
-    const [bv, bg] = state();
-    const basicOk = bv === 1 && bg >>> 0 === 0xFFFFFFFF && km.basic?.id === "basic";
-    const afterTab = tap("Tab");
-    report("basic", basicOk && afterTab === 1, `view ${bv}, game ${(bg >>> 0).toString(16)}, keymaps basic ${km.basic?.id}, view after Tab ${afterTab}`);
   }
 }
 

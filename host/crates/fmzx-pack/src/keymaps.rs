@@ -3,7 +3,7 @@
 
 //! The resolved key map of every game as JSON, for the browser page.
 
-use crate::manifest::{action_name, basic_keymap, encode_keymap, input_name, Manifest, INPUTS, NONE};
+use crate::manifest::{action_name, encode_keymap, input_name, Manifest, NONE};
 
 /// A JSON string literal.
 fn json_str(s: &str) -> String {
@@ -23,28 +23,21 @@ fn json_str(s: &str) -> String {
     o
 }
 
-/// One game's `{"id":..,"name":..,"keys":[{"input":..,"actions":[..]}]}`: inputs in index order,
-/// inputs without an action left out.
-fn game_json(id: &str, name: &str, map: &[[u8; 2]; INPUTS]) -> String {
-    let mut keys = Vec::new();
-    for (i, acts) in map.iter().enumerate() {
-        if acts[0] == NONE {
-            continue;
-        }
-        let names: Vec<String> = acts.iter().filter_map(|&a| action_name(a)).map(|n| json_str(&n)).collect();
-        keys.push(format!("{{\"input\":{},\"actions\":[{}]}}", json_str(&input_name(i)), names.join(",")));
-    }
-    format!("{{\"id\":{},\"name\":{},\"keys\":[{}]}}", json_str(id), json_str(name), keys.join(","))
-}
-
-/// `{"basic":{..},"games":[{..}]}`: the picker's Spectrum BASIC (its built-in map), then the games
-/// in manifest order (the pack's order: `games[i]` is pack entry `i`).
+/// `{"games":[{"id":..,"name":..,"keys":[{"input":..,"actions":[..]}]}]}`: games in manifest
+/// order, inputs in index order, inputs without an action left out.
 pub fn keymaps_json(m: &Manifest) -> Result<String, String> {
     let mut games = Vec::new();
     for g in &m.game {
         let map = encode_keymap(&g.keys).map_err(|e| format!("game {}: {e}", g.id))?;
-        games.push(game_json(&g.id, &g.name, &map));
+        let mut keys = Vec::new();
+        for (i, acts) in map.iter().enumerate() {
+            if acts[0] == NONE {
+                continue;
+            }
+            let names: Vec<String> = acts.iter().filter_map(|&a| action_name(a)).map(|n| json_str(&n)).collect();
+            keys.push(format!("{{\"input\":{},\"actions\":[{}]}}", json_str(&input_name(i)), names.join(",")));
+        }
+        games.push(format!("{{\"id\":{},\"name\":{},\"keys\":[{}]}}", json_str(&g.id), json_str(&g.name), keys.join(",")));
     }
-    let basic = game_json("basic", "Spectrum BASIC", &basic_keymap());
-    Ok(format!("{{\"basic\":{basic},\"games\":[{}]}}\n", games.join(",")))
+    Ok(format!("{{\"games\":[{}]}}\n", games.join(",")))
 }

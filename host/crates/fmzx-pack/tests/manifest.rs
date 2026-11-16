@@ -144,11 +144,6 @@ fn default_matches_c() {
 }
 
 #[test]
-fn basic_matches_c() {
-    assert_eq!(basic_keymap(), zx_sys::km_basic());
-}
-
-#[test]
 fn default_joystick() {
     let m = default_keymap();
     let at = |n: &str| m[input_index(n).unwrap()][0];
