@@ -26,7 +26,7 @@
  * tick (0.125 ms, whatever the sample rate), so the decay factors below are
  * constants: exp(-0.125 / tau) in Q16. A voice at level 255 peaks at 8160. */
 
-#include "sound.h"
+#include "sound_internal.h"
 
 _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
 
@@ -45,8 +45,6 @@ _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
 #define DEPTH_BASS_END 10430          /* 1.0 */
 #define DEPTH_LEAD_START 16689        /* 1.6 */
 #define DEPTH_LEAD_END 6258           /* 0.6 */
-
-enum { OFF, ATTACK, DECAY, RELEASE };
 
 static const int16_t sine_q15[256] = {
 	     0,    804,   1608,   2410,   3212,   4011,   4808,   5602,   6393,   7179,   7962,   8739,
@@ -73,23 +71,6 @@ static const int16_t sine_q15[256] = {
 	 -3212,  -2410,  -1608,   -804,
 };
 
-/* n / d by restoring division: no 64-bit divide helper on the device. */
-static uint64_t udiv64(uint64_t n, uint32_t d, uint32_t *rem)
-{
-	uint64_t q = 0, r = 0;
-	int i;
-
-	for (i = 63; i >= 0; i--) {
-		r = (r << 1) | ((n >> i) & 1u);
-		if (r >= d) {
-			r -= d;
-			q |= (uint64_t)1 << i;
-		}
-	}
-	if (rem) *rem = (uint32_t)r;
-	return q;
-}
-
 static int32_t sine(uint32_t ph)
 {
 	uint32_t i = ph >> 24;
@@ -98,35 +79,9 @@ static int32_t sine(uint32_t ph)
 	return a + (((b - a) * (int32_t)((ph >> 16) & 255u)) >> 8);
 }
 
-/* The voices and the drum to rest; the rate and kfreq stay (sound_init.c's snd_fm_init sets
- * them, then does the same). */
 void snd_fm_reset(snd_fm *f)
 {
-	uint32_t i;
-
-	f->tick_acc = 0;
-	for (i = 0; i < SND_TONAL; i++) {
-		snd_fm_voice *v = &f->v[i];
-		v->phase = 0;
-		v->inc = 0;
-		v->period_q8 = 0;
-		v->env = 0;
-		v->rel_step = 0;
-		v->depth_base = 0;
-		v->depth_ex = 0;
-		v->lvl = 0;
-		v->lvl_target = 0;
-		v->amp = 0;
-		v->stage = OFF;
-	}
-	f->drum_env = 0;
-	f->drum_rel = 0;
-	f->drum_lvl = 0;
-	f->drum_amp = 0;
-	f->drum_lp = 0;
-	f->seed = 0x12345678u;
-	f->drum_stage = OFF;
-	f->drum_held = 0;
+	fm_rest(f);
 }
 
 static int new_note(uint32_t p, uint32_t old)

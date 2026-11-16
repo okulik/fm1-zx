@@ -32,11 +32,9 @@
  * moves if the new method decides otherwise. In steady Beeper mode the output
  * is a plain copy and the ring and both methods are still fed. */
 
-#include "sound.h"
+#include "sound_internal.h"
 
 _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
-
-#define ONE 32768
 
 static int32_t toward(int32_t g, int32_t target, int32_t step)
 {

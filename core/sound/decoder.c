@@ -175,13 +175,12 @@
  * Voices keep their tone slot from one decision to the next, so the synth
  * hears a held note as one note. */
 
-#include "sound.h"
+#include "sound_internal.h"
 
 #define FIT_CLEAN 90u       /* % of a frame's edges its own voices explain: clean */
 #define FIT_TONAL 85u       /* % explained for a confident tonal frame */
 #define FIT_DRUM 50u        /* % explained below which an unexplained busy frame is a drum */
 #define MUSIC_FRAMES 100u   /* a pitch change within this many frames: music */
-#define REST_FRAMES 50u     /* a rest keeps FM this long after the last confident voices */
 #define CHANGE_GAP 10u      /* most frames between two clean frames for a pitch change (200 ms) */
 #define WORK_ANALYSIS (SND_WORK_MAX * 2u / 3u)   /* of the frame's work, the most its own analysis may use */
 #define TIMING_MAX 3

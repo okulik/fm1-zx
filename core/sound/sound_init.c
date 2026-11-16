@@ -5,96 +5,12 @@
  * the FM synth's. They run once per game start, so on the device they run from flash (XIP): the
  * firmware builds this file as its own library (zx_sound_init), apart from the rest of
  * core/sound in SRAM (RAMTEXT). Code in flash cannot call RAMTEXT directly, so nothing here
- * calls the other sound files: the few helpers the start-up needs are copies (static) of
- * theirs, and the FM synth's turn-on reset inside a frame is fm.c's own snd_fm_reset.
- * The copies and the constants below must stay in step with the files they come from. */
+ * calls the other sound files: the helpers it shares with them are static inline, in
+ * sound_internal.h. */
 
-#include "sound.h"
+#include "sound_internal.h"
 
 #define CPU_Q8 896000000u   /* 3500000 * 256: frequency = CPU_Q8 / period_q8 */
-#define FM_OFF 0            /* fm.c: a voice's or the drum's stage OFF */
-#define REST_FRAMES 50u     /* decoder.c */
-#define NOWHERE 0xFFFFFFFFu /* engines.c: no carried event; no site */
-#define ONE 32768           /* mixer.c: a Q15 gain of 1 */
-
-/* fm.c's udiv64: n / d by restoring division, no 64-bit divide helper on the device. */
-static uint64_t udiv64(uint64_t n, uint32_t d, uint32_t *rem)
-{
-	uint64_t q = 0, r = 0;
-	int i;
-
-	for (i = 63; i >= 0; i--) {
-		r = (r << 1) | ((n >> i) & 1u);
-		if (r >= d) {
-			r -= d;
-			q |= (uint64_t)1 << i;
-		}
-	}
-	if (rem) *rem = (uint32_t)r;
-	return q;
-}
-
-/* slots.c's reset_channels and snd_slots_reset. */
-static void reset_channels(snd_slots *s)
-{
-	uint32_t c;
-	s->cur = 0;
-	for (c = 0; c < SND_SLOTS; c++) {
-		s->cand[c] = 0;
-		s->run[c] = 0;
-		s->nrise[c] = 0;
-	}
-}
-
-static void slots_reset(snd_slots *s)
-{
-	uint32_t i;
-
-	s->loop_q8 = 0;
-	s->loop_frame = 0;
-	s->other_q8 = 0;
-	s->bare = 0;
-	s->grid_q8 = 0;
-	s->last_t = 0;
-	s->cum = 0;
-	s->h[0] = s->h[1] = 0;
-	s->recip = 0;
-	s->running = 0;
-	s->level = 0;
-	s->primed = 0;
-	s->lv[0] = s->lv[1] = 0xffffu;
-	for (i = 0; i < SND_LEVEL_BINS; i++)
-		s->hist[i] = 0;
-	s->hist_total = 0;
-	s->learnt_frame = 0;
-	s->k = 0;
-	for (i = 0; i < SND_SLOTS; i++)
-		s->w[i] = 0;
-	for (i = 0; i < 257u; i++)
-		s->lut[i] = 0;
-	reset_channels(s);
-	s->good = s->samples = 0;
-	for (i = 0; i < SND_TONAL; i++)
-		s->sref_q8[i] = s->pend_q8[i] = 0;
-	s->sref_frame = s->schange_frame = s->pend_frame = 0;
-	s->pend_n = 0;
-	s->have_sref = s->have_schange = 0;
-	s->sbroken = 0;
-}
-
-/* engines.c's silence. */
-static void silence(snd_b *b)
-{
-	uint32_t k;
-
-	for (k = 0; k < SND_TONAL; k++) {
-		b->tone[k].period_q8 = 0;
-		b->tone[k].level = 0;
-	}
-	b->drum = 0;
-	for (k = 0; k <= SND_TONAL; k++)
-		b->carry[k] = NOWHERE;
-}
 
 void snd_decoder_init(snd_decoder *d)
 {
@@ -148,12 +64,12 @@ void snd_decoder_init(snd_decoder *d)
 	d->busy_run = 0;
 	d->clean_pulse = 0;
 	d->ctx_pulse = 0;
-	slots_reset(&d->sl);
+	slots_clear(&d->sl);
 }
 
 void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den)
 {
-	uint32_t i, r;
+	uint32_t r;
 	uint64_t q;
 
 	if (!rate_num) rate_num = 1;
@@ -166,29 +82,7 @@ void snd_fm_init(snd_fm *f, uint32_t rate_num, uint32_t rate_den)
 		f->kfreq = ~(uint64_t)0;
 	else
 		f->kfreq = (q << 32) | udiv64((uint64_t)r << 32, rate_num, 0);
-	f->tick_acc = 0;
-	for (i = 0; i < SND_TONAL; i++) {
-		snd_fm_voice *v = &f->v[i];
-		v->phase = 0;
-		v->inc = 0;
-		v->period_q8 = 0;
-		v->env = 0;
-		v->rel_step = 0;
-		v->depth_base = 0;
-		v->depth_ex = 0;
-		v->lvl = 0;
-		v->lvl_target = 0;
-		v->amp = 0;
-		v->stage = FM_OFF;
-	}
-	f->drum_env = 0;
-	f->drum_rel = 0;
-	f->drum_lvl = 0;
-	f->drum_amp = 0;
-	f->drum_lp = 0;
-	f->seed = 0x12345678u;
-	f->drum_stage = FM_OFF;
-	f->drum_held = 0;
+	fm_rest(f);
 }
 
 void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n)

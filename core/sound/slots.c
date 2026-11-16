@@ -64,7 +64,7 @@
  * looked at and per table entry; every pass checks the cap. A frame whose
  * work runs out is not decoded (the sampler restarts at its end). */
 
-#include "sound.h"
+#include "sound_internal.h"
 
 #define IV_MIN 40u           /* carrier intervals, T */
 #define IV_MAX 400u
@@ -105,51 +105,9 @@ static uint32_t tdist(uint32_t a, uint32_t b)
 	return x < 0 ? 0u - (uint32_t)x : (uint32_t)x;
 }
 
-static void reset_channels(snd_slots *s)
-{
-	uint32_t c;
-	s->cur = 0;
-	for (c = 0; c < SND_SLOTS; c++) {
-		s->cand[c] = 0;
-		s->run[c] = 0;
-		s->nrise[c] = 0;
-	}
-}
-
 void snd_slots_reset(snd_slots *s)
 {
-	uint32_t i;
-
-	s->loop_q8 = 0;
-	s->loop_frame = 0;
-	s->other_q8 = 0;
-	s->bare = 0;
-	s->grid_q8 = 0;
-	s->last_t = 0;
-	s->cum = 0;
-	s->h[0] = s->h[1] = 0;
-	s->recip = 0;
-	s->running = 0;
-	s->level = 0;
-	s->primed = 0;
-	s->lv[0] = s->lv[1] = 0xffffu;
-	for (i = 0; i < SND_LEVEL_BINS; i++)
-		s->hist[i] = 0;
-	s->hist_total = 0;
-	s->learnt_frame = 0;
-	s->k = 0;
-	for (i = 0; i < SND_SLOTS; i++)
-		s->w[i] = 0;
-	for (i = 0; i < 257u; i++)
-		s->lut[i] = 0;
-	reset_channels(s);
-	s->good = s->samples = 0;
-	for (i = 0; i < SND_TONAL; i++)
-		s->sref_q8[i] = s->pend_q8[i] = 0;
-	s->sref_frame = s->schange_frame = s->pend_frame = 0;
-	s->pend_n = 0;
-	s->have_sref = s->have_schange = 0;
-	s->sbroken = 0;
+	slots_clear(s);
 }
 
 /* ---- the loop carrier --------------------------------------------------- */

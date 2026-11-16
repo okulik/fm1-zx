@@ -35,9 +35,9 @@
  * engines for host tests. */
 
 #include "engines_builtin.h"
+#include "sound_internal.h"
 
 #define FRAME_T ZX_FRAME_TSTATES
-#define NOWHERE 0xFFFFFFFFu   /* no carried event; no site */
 #define DRUM_GAP 4000u        /* T without a drum edge that ends a drum */
 #define DRUM_TAIL 1000u       /* the drum is released this long after its last edge */
 #define EPS 24u               /* T a channel's OUT may come early or late (contention, branches) */
@@ -861,19 +861,6 @@ static void off_at(snd_b *b, ev_list *l, uint32_t t, uint8_t voice)
 		t -= FRAME_T;
 		b->carry[voice] = t < FRAME_T ? t : FRAME_T - 1u;
 	}
-}
-
-static void silence(snd_b *b)
-{
-	uint32_t k;
-
-	for (k = 0; k < SND_TONAL; k++) {
-		b->tone[k].period_q8 = 0;
-		b->tone[k].level = 0;
-	}
-	b->drum = 0;
-	for (k = 0; k <= SND_TONAL; k++)
-		b->carry[k] = NOWHERE;
 }
 
 /* The next tonal (drum) edge after frame f's, as T-states from frame f's start; NOWHERE if none
