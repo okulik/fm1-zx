@@ -201,7 +201,7 @@ fn host_menu_at(pack: &[u8], sound: u32, screen: u32, item: u32) -> Vec<u16> {
     ui.draw(&menu, Some(pack));
     (0..240)
         .flat_map(|r| {
-            let bytes = zx_sys::PixFormat::Rgb565.pack(&ui.compose_row(r));
+            let bytes = zx_sys::ui_pack_row(zx_sys::PixFormat::Rgb565, &ui.compose_row(r));
             bytes.chunks(2).map(|b| u16::from_be_bytes([b[0], b[1]])).collect::<Vec<_>>()
         })
         .collect()

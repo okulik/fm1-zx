@@ -344,10 +344,10 @@ fn screen_overlays_unchanged() {
     choose_screen(&mut m, SCREEN_BORDER);
     m.run_ms(300);
     let menu_border = menu_lcd(&mut m);
-    // the menu differs only in its Screen line (grid row 16: LCD rows 128-135)
-    let bad: Vec<usize> = diff_rows(&menu_border, &menu_crop, 0..240).into_iter().filter(|r| !(128..136).contains(r)).collect();
+    // the menu differs only in its Screen line (grid row 21: LCD rows 168-175)
+    let bad: Vec<usize> = diff_rows(&menu_border, &menu_crop, 0..240).into_iter().filter(|r| !(168..176).contains(r)).collect();
     assert!(bad.is_empty(), "the HOME menu in Border differs from Crop's in rows {bad:?}");
-    assert!(!diff_rows(&menu_border, &menu_crop, 128..136).is_empty(), "the Screen line did not change");
+    assert!(!diff_rows(&menu_border, &menu_crop, 168..176).is_empty(), "the Screen line did not change");
     let osk_border = osk_rows(&mut m, &mut host, SCREEN_BORDER);
     assert!(osk_border == osk_crop, "the on-screen keyboard in Border differs from Crop's");
     let paused_border = paused_rows(&mut m, &mut host, SCREEN_BORDER);

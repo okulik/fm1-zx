@@ -453,6 +453,9 @@ void lcd_compose_band(unsigned row0, unsigned rows)
         if (menu_row_is_ui(&mn, r)) {
             ui_compose_row(r, row_idx);
             border_sent[r] = NO_COLOUR;
+            /* the UI palette: the 16 colours and the art's and stripes' (16-28), from flash */
+            ui_pack_row(fmt, row_idx, out + i * rb);
+            continue;
         } else if (!game.loaded) {
             memset(row_idx, 0, sizeof row_idx);
             border_sent[r] = NO_COLOUR;
