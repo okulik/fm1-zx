@@ -777,18 +777,53 @@ fn art_with_no_games() {
 #[test]
 fn art_redraw_is_not_dirty_but_view_change_is() {
     let mut ui = Ui::new();
-    let m = Menu::new(3);
+    let mut m = Menu::new(3);
     ui.draw(&m, None);
     ui.dirty_rows();
     ui.draw(&m, None);
     assert_eq!(ui.dirty_rows().0, 0, "the same picker again repaints nothing");
+    m.set_view(view::KEYS);
+    ui.draw(&m, None);
+    assert_eq!(ui.dirty_rows().0, 240, "a view change repaints every LCD row");
+}
+
+fn rgb565(rgb: [u8; 3]) -> u16 {
+    let (r, g, b) = (rgb[0] as u32, rgb[1] as u32, rgb[2] as u32);
+    (((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)) as u16
+}
+
+#[test]
+fn band_colours_match_the_ui_palette() {
+    // each BAND entry: the palette index packs to the colour the PNG has
+    for &(rgb, i) in fmzx_pack::menu_art::BAND.iter() {
+        let mut idx = [0u8; 240];
+        idx[0] = i;
+        let o = zx_sys::ui_pack_row(PixFormat::Rgb565, &idx);
+        assert_eq!(u16::from_be_bytes([o[0], o[1]]), rgb565(rgb), "palette index {i} for #{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+    }
+    // and every pixel of the band as the LCD gets it equals the PNG's pixel
+    let file = std::fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../app/art/menu-top.png")).unwrap();
+    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = dec.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    let ch = info.color_type.samples();
+    for y in 0..64usize {
+        let o = zx_sys::ui_pack_row(PixFormat::Rgb565, &zx_sys::ui_art_top_row(y as u32));
+        for x in 0..240usize {
+            let p = (y * 240 + x) * ch;
+            let got = u16::from_be_bytes([o[x * 2], o[x * 2 + 1]]);
+            assert_eq!(got, rgb565([buf[p], buf[p + 1], buf[p + 2]]), "band pixel ({x}, {y})");
+        }
+    }
 }
 
 #[test]
 fn ui_pack_row_every_new_colour() {
-    // ui_palette[16..29] as 4-bit channels (RGB888 is each nibble * 17)
+    // the plan's colours 16-28 (#cc99dd, #8877dd, #6666bb, #221166, ...) as 4-bit channels (RGB888 is each nibble * 17)
     let pal: [(u32, u32, u32); 13] = [
-        (0xc, 0x9, 0xd), (0x8, 0x7, 0xd), (0x6, 0x6, 0xb), (0x2, 0x2, 0x1), (0x3, 0x3, 0x6), (0x9, 0x8, 0xd), (0x8, 0x7, 0xc),
+        (0xc, 0x9, 0xd), (0x8, 0x7, 0xd), (0x6, 0x6, 0xb), (0x2, 0x1, 0x6), (0x3, 0x3, 0x6), (0x9, 0x8, 0xd), (0x8, 0x7, 0xc),
         (0x7, 0x6, 0xb), (0xd, 0xe, 0xe), (0xe, 0x2, 0x2), (0xf, 0xa, 0x1), (0x5, 0xb, 0x4), (0x1, 0x9, 0xd),
     ];
     for (i, &(r, g, b)) in pal.iter().enumerate() {

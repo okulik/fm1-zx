@@ -20,8 +20,9 @@ const MAX_INSNS = 50_000_000;
 // key ids (docs/controls.md)
 const OCT_UP = 1;
 const PLAY = 12;
-// the picker is text on black: about 2300 lit pixels; a blank or
-// barely started screen has none (upstream's smoke test uses the same bound)
+// the picker is the menu art, its stripes and the game list on black: well over 1000 lit pixels
+// (the art alone lights several thousand); a blank or barely started screen has none. The
+// threshold is unchanged: it still separates a drawn picker from an empty one.
 const PICKER_LIT = 1000;
 
 const arg = process.argv[2];

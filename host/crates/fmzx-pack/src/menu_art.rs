@@ -31,7 +31,7 @@ pub const BAND: [([u8; 3], u8); 11] = [
 /// The band's pixels as positions in `BAND`, row by row.
 fn decode(png: &[u8]) -> Result<Vec<u8>, String> {
     let mut dec = png::Decoder::new(std::io::Cursor::new(png));
-    dec.set_transformations(png::Transformations::EXPAND);
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = dec.read_info().map_err(|e| format!("png: {e}"))?;
     let mut buf = vec![0; reader.output_buffer_size().ok_or("png: too large")?];
     let info = reader.next_frame(&mut buf).map_err(|e| format!("png: {e}"))?;

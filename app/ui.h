@@ -38,7 +38,8 @@ void ui_clear(uint8_t ink, uint8_t paper);
 void ui_text(unsigned col, unsigned row, const char *s, uint8_t ink, uint8_t paper);
 /* The characters of grid row `row` (NUL-terminated, UI_COLS + 1 bytes); for tests. */
 void ui_get_text(unsigned row, char out[UI_COLS + 1u]);
-/* 240 palette indices of LCD row `lcd_row` (0-239). */
+/* 240 UI palette indices (0-28; the art and stripes use 16-28) of LCD row `lcd_row` (0-239).
+ * Pack them with ui_pack_row, not pix_pack, which masks with & 15. */
 void ui_compose_row(unsigned lcd_row, uint8_t idx[LCD_W]);
 /* Makes every LCD row count as changed at the next ui_dirty_rows, for when the LCD no longer
  * shows the grid (the game was drawn over it). menu.c calls it on every view change. */
