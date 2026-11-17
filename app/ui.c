@@ -146,7 +146,8 @@ void ui_compose_row(unsigned lcd_row, uint8_t idx[LCD_W])
         ui_art_top_row(lcd_row, idx);
     } else if (lcd_row >= 130u) {
         /* corner stripes: u = 100 * (x - 193) - 42 * (239 - y), k = floor(u / 500), drawn for 0 <= k < 4;
-         * u grows with x, so start at the first x with u >= 0 and step to k = 4 */
+         * u grows with x, so start at the first x with u >= 0 and step to k = 4. Not on a cell with
+         * a paper other than black: the selection bar is drawn over them. */
         int base = -19300 - 42 * (int)(239u - lcd_row); /* u at x = 0 */
         for (x = 0; x < LCD_W; x++) {
             int u = base + 100 * (int)x;
@@ -155,7 +156,9 @@ void ui_compose_row(unsigned lcd_row, uint8_t idx[LCD_W])
                 if (k >= 4) {
                     break;
                 }
-                idx[x] = (uint8_t)(25 + k);
+                if ((cell_at[r][x >> 3] >> 4) == 0u) {
+                    idx[x] = (uint8_t)(25 + k);
+                }
             }
         }
     }

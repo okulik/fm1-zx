@@ -739,8 +739,9 @@ fn art_only_on_picker_and_home() {
     check(&ui, "message");
 }
 
+/// The selection bar is drawn over the corner stripes: where they cross it, its paper and ink stay.
 #[test]
-fn art_stripes_over_selection() {
+fn art_selection_over_stripes() {
     let n = names(25);
     let refs: Vec<&str> = n.iter().map(String::as_str).collect();
     let pack = build_pack(&refs);
@@ -754,14 +755,13 @@ fn art_stripes_over_selection() {
     let row = ui.compose_row(220);
     let x0 = stripe_start(220).unwrap();
     assert!(row[x0 - 8..x0].iter().all(|&p| p == 13), "bar paper just left of the stripes (past the text)");
-    for x in 0..240 {
-        let u = 100 * (x as i32 - 171 - 22) - 42 * (239 - 220);
-        if (0..2000).contains(&u) {
-            assert_eq!(row[x] as i32, 25 + u / 500, "x={x}");
-        } else if x < x0 {
-            assert!(row[x] == 13 || row[x] == 0, "bar paper or ink at x={x}: {}", row[x]);
-        }
+    for (x, &p) in row.iter().enumerate() {
+        assert!(p == 13 || p == 0, "bar paper or ink at x={x}: {p}");
     }
+    // a row of the same stripes off the bar still has them
+    let other = ui.compose_row(212);
+    let x1 = stripe_start(212).unwrap();
+    assert_eq!(other[x1], 25, "stripes off the bar");
 }
 
 #[test]
