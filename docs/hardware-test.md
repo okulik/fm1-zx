@@ -5,8 +5,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # First device test
 
-The checklist for the day an FM-1 is available. Until then everything is proven in the host
-tests and fm1-emu only.
+The checklist for an FM-1. Before 2026-11-17 everything was proven in the host tests and fm1-emu
+only; the results so far are at the end.
 
 **The device rule.** Every step that flashes the FM-1, sends it SysEx or opens its MIDI ports
 is marked **[owner's yes]** and is done only with the owner's explicit yes for that step, given
@@ -131,3 +131,26 @@ or click.
 
 Only when all of section 2 has passed may `docs/install.md` drop its warning and a package be
 offered to anyone else.
+
+## Results
+
+### 2026-11-17: first run
+
+The unit: stock firmware 015, flash chip 0x856014 (Puya). M-Flasher 0.12.1 backed up the whole
+flash before each write. Installed with M-Flasher (`docs/install.md`), first behind m-bootloader 2.4,
+then behind M-VAVE's stock bootloader.
+
+- **Black screen, backlight on**, behind both bootloaders. The cause: the LCD start-up kept CS low
+  from SWRESET to DISPON, and the panel ignored every command after SWRESET. fm1-emu's panel ignores
+  CS, so no test saw it. Fixed: CS goes high after each command and its arguments; emu-gate
+  `lcd_deselects_between_start_up_commands` fails without the fix. Found with the boot probe
+  (preset `fm1-probe`): blink codes showed the start-up running, full-screen fills drawn the way
+  other FM-1 firmware draws them stayed dark until CS was raised.
+- **Boots to the game picker** with the fix (the release package `fmzx.fwsc`).
+- **The UBOOT gesture works** behind the stock bootloader: OCT- held at power-on, the computer saw
+  the boot loader on USB and M-Flasher installed from there.
+- Behind m-bootloader its own keys work regardless of the firmware: PLAY at power-on opens its menu
+  (it showed APP OK for FM-1 ZX), REC at power-on enters download mode.
+
+Still open: everything in section 2 from the picker's colours on.
+

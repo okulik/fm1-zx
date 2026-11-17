@@ -23,6 +23,7 @@
 #include "menu.h"
 #include "pack.h"
 #include "pixels.h"
+#include "probe.h"
 #include "ramcalls.h"
 #include "sound.h"
 #include "ui.h"
@@ -170,6 +171,12 @@ volatile uint32_t fmzx_master;
 static void fm1_fault(const fm1_crash_t *c)
 {
     (void)c; /* the record stays in .noinit for the next boot */
+#if FMZX_BOOT_PROBE
+    {
+        const uint32_t w[4] = {c->pc, c->rets, c->vec, c->dbg};
+        probe_fault(w, 4);
+    }
+#endif
     fm1_reboot();
 }
 
@@ -233,11 +240,19 @@ void fmzx_cstart(void)
     const uint32_t *s;
     void (**f)(void);
 
+    probe_mark(1, 0);
     fm1_cpu1_stop();
+    probe_mark(2, 0);
     fm1_time_init();
+    probe_early(0xF0Fu);
+    probe_mark(3, 1);
+    probe_power();
+    probe_early(0x0F0u);
+    probe_mark(4, 1);
     fm1_wdt_arm(WDT_8S);
     if (uboot_gesture())
         fmzx_enter_uboot();
+    probe_mark(5, 1);
     fm1_irq_init();
     for (p = _bss_start; p < _bss_end; p++)
         *p = 0;
@@ -251,6 +266,7 @@ void fmzx_cstart(void)
     for (f = __init_array_start; f < __init_array_end; f++)
         (*f)();
     fm1_mailbox_clear();
+    probe_mark(6, 1);
     fmzx_main();
     for (;;)
         ;
@@ -748,15 +764,23 @@ void fmzx_main(void)
         divider = (opt >> 8) & 15u;
     }
     fmzx_bootopt[0] = 0;
+    probe_start(fmt);
+    probe_mark(7, 1);
 
     lcd_init(fmt);
     lcd_set_divider(divider);
     budget = lcd_budget_bytes(divider);
     lcd_mark_all(0); /* the first picture and DISPON do not wait for the UI */
+    probe_stage(1, PROBE_GREEN);
 
     memcpy(rom_copy, zx_rom_data, ZX_ROM_SIZE);
     ui_init(rom_copy);
-    menu_init(&mn, open_pack());
+    probe_stage(2, PROBE_GREEN);
+    {
+        uint32_t games = open_pack();
+        menu_init(&mn, games);
+        probe_stage(3, games ? PROBE_GREEN : PROBE_YELLOW);
+    }
     menu_set_divider(&mn, divider);
     if ((opt & (1u << 12)) && ((opt >> 16) & 3u) < SND_MODE_COUNT && ((opt >> 20) & 7u) < PIX_MODE_COUNT) {
         mn.sound = (uint8_t)((opt >> 16) & 3u);
@@ -770,10 +794,15 @@ void fmzx_main(void)
 
     input_init();
     fmzx_master = input_master();
+    probe_stage(4, PROBE_GREEN);
     audio_init();
+    probe_stage(5, PROBE_GREEN);
     audio_on = audio_start() == 0;
+    probe_stage(6, audio_on ? PROBE_GREEN : PROBE_YELLOW);
     fm1_timer5_start(isr_timer5, TIMER5_PRIO);
+    probe_stage(7, PROBE_GREEN);
     fm1_irq_enable_all();
+    probe_stage(8, PROBE_GREEN);
 
     next = fm1_ticks();
     master_at = next;

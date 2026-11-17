@@ -15,10 +15,18 @@
       "inherits": "fm1",
       "binaryDir": "${sourceDir}/build/fm1-preview",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "FMZX_LCD_RGB565": "ON" }
+    },
+    {
+      "name": "fm1-probe",
+      "displayName": "JieLi pi32v2 (FM-1), the boot probe: start-up stages and faults on the LCD",
+      "inherits": "fm1",
+      "binaryDir": "${sourceDir}/build/fm1-probe",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "FMZX_BOOT_PROBE": "ON" }
     }
   ],
   "buildPresets": [
     { "name": "fm1", "configurePreset": "fm1" },
-    { "name": "fm1-preview", "configurePreset": "fm1-preview" }
+    { "name": "fm1-preview", "configurePreset": "fm1-preview" },
+    { "name": "fm1-probe", "configurePreset": "fm1-probe" }
   ]
 }

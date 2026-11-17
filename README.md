@@ -10,9 +10,10 @@ working on it.
 
 ## Status
 
-**Not yet run on a real FM-1.** The firmware is complete for v1 and proven in the host tests and
-in the FM-1 emulator [fm1-emu](https://github.com/joakimeriksson/fm1-emu) only. Do not install it
-on a unit before the [first device test](docs/hardware-test.md) has passed.
+**First run on a real FM-1: 2026-11-17.** The firmware boots to the game picker on the device; the
+rest of the [first device test](docs/hardware-test.md) is still to do, and everything else is
+proven in the host tests and in the FM-1 emulator [fm1-emu](https://github.com/joakimeriksson/fm1-emu)
+only. Do not install it on a unit of your own before that test has passed.
 
 What works, in fm1-emu:
 

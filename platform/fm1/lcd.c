@@ -79,11 +79,15 @@ static void wait_ms(uint32_t ms)
     }
 }
 
+/* CS goes high after every command and after its arguments, as the panel needs: an ST7789 left
+ * selected through SWRESET ignores the commands after it (on the FM-1: no picture at all). */
 static void cmd(uint8_t c)
 {
     lcd_wait();
     fm1_lcd_send_cmd(c);
     st.xfer = 1;
+    lcd_wait();
+    fm1_lcd_deselect();
 }
 
 static void cmd_arg(uint8_t c, uint8_t a)
@@ -94,6 +98,7 @@ static void cmd_arg(uint8_t c, uint8_t a)
     fm1_lcd_send_data(args, 1);
     st.xfer = 1;
     lcd_wait();
+    fm1_lcd_deselect();
 }
 
 static void RAMTEXT shown(unsigned row0, unsigned rows)

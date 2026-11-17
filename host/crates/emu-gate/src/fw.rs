@@ -278,6 +278,11 @@ impl Machine {
         }
     }
 
+    /// Runs one step: an instruction (with a due interrupt's entry first) or a chip reset.
+    pub fn step_one(&mut self) {
+        self.step();
+    }
+
     /// Runs for `us` emulated microseconds.
     pub fn run_us(&mut self, us: u64) {
         let end = self.soc.periph.cycles + self.soc.periph.cycle_of_ms(us) / 1000;

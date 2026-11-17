@@ -5,6 +5,7 @@
 
 set(FMZX_LCD_DIVIDER 4 CACHE STRING "LCD SPI clock divider at boot, 0-15: 60 MHz / (divider + 1)")
 option(FMZX_LCD_RGB565 "RGB565 instead of RGB444 when no boot option is set (the fm1-emu preview package)" OFF)
+option(FMZX_BOOT_PROBE "The boot probe (probe.h): start-up stages and faults drawn on the LCD, a diagnostic build" OFF)
 set(FMZX_PRODUCT "FM-1_948" CACHE STRING "Product identity in the image and the update package: FM-1_ and three digits")
 if(NOT FMZX_PRODUCT MATCHES "^FM-1_[0-9][0-9][0-9]$")
   message(FATAL_ERROR "FMZX_PRODUCT must be FM-1_ and three digits (got '${FMZX_PRODUCT}')")
@@ -24,6 +25,12 @@ fmzx_embed("${PROJECT_SOURCE_DIR}/third_party/zx-rom/48.rom" zx_rom_data
 
 set(_bsp "${CMAKE_CURRENT_SOURCE_DIR}/bsp")
 set(_ours crt0.S main.c lcd.c input.c audio.c libc_min.c rt_mem.c)
+if(FMZX_BOOT_PROBE)
+  list(APPEND _ours probe.c)
+  set(_probe 1)
+else()
+  set(_probe 0)
+endif()
 
 # Code in RAMTEXT cannot reach XIP's memcpy and friends: the device copies of the core, of the
 # sound library (core/sound: the decoder and the FM synth run every frame) and of app/pixels.c
@@ -94,7 +101,7 @@ target_include_directories(fmzx_app_image PRIVATE "${_bsp}/chip" "${_bsp}/boards
   $<TARGET_PROPERTY:zx_core,INTERFACE_INCLUDE_DIRECTORIES>
   $<TARGET_PROPERTY:zx_sound,INTERFACE_INCLUDE_DIRECTORIES>)
 target_compile_definitions(fmzx_app_image PRIVATE FMZX_LCD_DIVIDER=${FMZX_LCD_DIVIDER}
-  FMZX_LCD_RGB565=${_rgb565} "FMZX_PRODUCT=\"${FMZX_PRODUCT}\""
+  FMZX_LCD_RGB565=${_rgb565} FMZX_BOOT_PROBE=${_probe} "FMZX_PRODUCT=\"${FMZX_PRODUCT}\""
   $<TARGET_PROPERTY:zx_core,INTERFACE_COMPILE_DEFINITIONS>)
 # felucca-bsp's headers are libraries of static helpers: the ones a unit does not use are fine.
 set_source_files_properties(${_ours} PROPERTIES

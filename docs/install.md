@@ -5,12 +5,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Installing FM-1 ZX, and the way back
 
-> **FM-1 ZX has not run on a real FM-1 yet.** The firmware is proven in the emulator (fm1-emu)
-> only. Nothing in the install, update-mode or recovery sections below has been tried on
-> hardware: those steps are the plan, marked *unverified*, not tested instructions. Do not
-> install FM-1 ZX on a unit, and do not publish the package, until the first device test
-> (`docs/hardware-test.md`) has passed, including the way back to the stock firmware. Installing
-> any custom firmware is at your own risk.
+> **FM-1 ZX has run on a real FM-1 once (2026-11-17), and most of the first device test is still
+> open.** "Installing with M-Flasher" and the UBOOT gesture below have been done on hardware; the
+> other routes are the plan, marked *unverified*. Do not publish the package until the first
+> device test (`docs/hardware-test.md`) has passed, including the way back to the stock firmware.
+> Installing any custom firmware is at your own risk.
 
 ## The packages
 
@@ -103,7 +102,27 @@ checks the game picker. Two things to know:
   revision the tests pin, `93cb7ee`) boots the package; if it does not, run fm1-emu's web build
   at that revision locally.
 
-## Installing on an FM-1 (after the first device test; unverified)
+## Installing with M-Flasher (done on hardware)
+
+[M-Flasher](https://github.com/jvitkauskas/m-flasher) (a community tool, not M-VAVE's) writes a
+package over the chip's own USB download mode, whatever firmware is installed. It saves a backup
+of the whole flash before every write (`~/Documents/M-Flasher/backups`), writes the package's app
+area only (from 0x4000: the unit's bootloader stays as it is) and checks what it wrote. This is how
+FM-1 ZX was first installed.
+
+1. Get the unit into download mode (the computer sees a USB disk named `WL82 UBOOT1.00`, which is
+   not opened):
+   - from the stock firmware or another community firmware that answers it: M-Flasher's DOWNLOAD
+     MODE button (a SysEx);
+   - with [m-bootloader](https://github.com/jvitkauskas/m-bootloader) installed: hold **REC** while
+     switching on (**PLAY** opens its menu instead, which also has DOWNLOAD MODE);
+   - from FM-1 ZX: the UBOOT gesture below.
+2. In M-Flasher, install `build/fm1/fmzx.fwsc`.
+3. Switch off and on: FM-1 ZX starts into the game picker.
+
+To go back, restore one of M-Flasher's backups the same way, or install another firmware's package.
+
+## Installing on an FM-1 with a USB-MIDI installer (unverified)
 
 FM-1 firmware is updated through the firmware that is running: the community installers (for
 example Felucca's web installer, or the FM-1 Firmware Hub) send a `.fwsc` over USB-MIDI to the
@@ -124,16 +143,16 @@ the FM-1 as a MIDI device, so no installer can reach it while FM-1 ZX is running
 (with a newer FM-1 ZX, another firmware or the stock firmware), use the update mode below. The
 in-app update over USB comes with a later version.
 
-## The update mode (UBOOT gesture; unverified on hardware)
+## The update mode (UBOOT gesture)
 
 Hold **OCT-** while switching the FM-1 on, and keep holding it for one second. FM-1 ZX then calls
 the boot loader's update-mode entry (`fmzx_enter_uboot`, which calls felucca-bsp's
 `fm1_enter_uboot`: it sets `usb_update_mode` and resets the chip) instead of starting. What is
 proven: in fm1-emu, `fmzx_enter_uboot` is reached just after one second with OCT- held, and a
-short tap of OCT- at power-on does not reach it (FM-1 ZX starts normally). *Unverified:* that the
-FM-1 then shows no picture, that the computer sees its boot loader on USB, and that the community
-recovery and installer tools (for example FM-1-transporter,
-<https://github.com/kurogedelic/FM-1-transporter>, or M-flasher) can write a firmware from there.
+short tap of OCT- at power-on does not reach it (FM-1 ZX starts normally). Done on hardware
+(2026-11-17, behind M-VAVE's stock bootloader): the computer saw the boot loader on USB and
+M-Flasher installed a package from there. *Unverified:* the other recovery tools (for example
+FM-1-transporter, <https://github.com/kurogedelic/FM-1-transporter>) from there.
 
 If the FM-1 ZX image itself does not start at all, the gesture cannot run either. The chip's own
 update mode, below every firmware, is reported by the community to be reached by holding

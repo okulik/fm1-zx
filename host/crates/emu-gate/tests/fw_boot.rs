@@ -8,6 +8,7 @@
 //! once per run with `fmzx-pack`.
 
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine, KEY_OCT_DOWN};
+use fm1_core::Bus;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -44,6 +45,35 @@ fn boot(fw: &Firmware) -> Machine {
 fn assert_screen(m: &Machine, name: &str) {
     let actual = build_dir().join(format!("{}.actual.png", name.trim_end_matches(".png")));
     assert_golden(m.lcd_rgb565(), &golden(name), &actual);
+}
+
+/// The panel's start-up commands, up to its first window, each with whether CS (PC7) went high
+/// since the command before. fm1-emu's panel ignores CS; an ST7789 kept selected through SWRESET
+/// ignores the commands after it, and the FM-1 shows no picture at all.
+#[test]
+fn lcd_deselects_between_start_up_commands() {
+    let fw = firmware();
+    let mut m = Machine::boot(fw, RGB565);
+    let (mut buf, mut cs_rose, mut cmds) = (m.soc.read32(0x11d08), true, Vec::new());
+    while !m.display_on() && m.ms() < BOOT_MS {
+        m.step_one();
+        let pc = m.soc.read32(0x50080);
+        cs_rose |= pc & 0x80 != 0;
+        let b = m.soc.read32(0x11d08);
+        if b != buf && pc & 0x100 == 0 {
+            if b as u8 == 0x2a {
+                break;
+            }
+            cmds.push((b as u8, cs_rose));
+            cs_rose = false;
+        }
+        buf = b;
+    }
+    let codes: Vec<u8> = cmds.iter().map(|c| c.0).collect();
+    assert_eq!(codes, [0x01, 0x11, 0x3a, 0x36, 0x21, 0x13], "SWRESET, SLPOUT, COLMOD, MADCTL, INVON, NORON");
+    for (c, rose) in &cmds {
+        assert!(rose, "command {c:#04x} sent with CS still low since the command before");
+    }
 }
 
 #[test]

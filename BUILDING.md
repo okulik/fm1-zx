@@ -259,7 +259,7 @@ run clears those files first. The packages are made and verified by
 **Trying and installing.** `--try` serves the browser demo with `DIR/fmzx.fwsc` and the games'
 key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware). Install
 `build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`, with the same
-warnings: FM-1 ZX has not run on a real FM-1 yet.
+warnings: FM-1 ZX has run on a real FM-1 only once so far (`docs/hardware-test.md`, "Results").
 
 The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
 (the games file, the converted games in `DIR/converted/` with a manifest of their own,
@@ -382,6 +382,7 @@ the test suite.
 | --- | --- | --- | --- |
 | 2026-11-12 | 6c1f0e6 | Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.81 instructions per T-state |
 | 2026-11-12 | n/a | same, after the final-review fix wave | 13.90 instructions per T-state |
+| 2026-11-17 | lcd-cs | first run on a real FM-1 (stock firmware 015, flash 0x856014), installed with M-Flasher 0.12.1 | boots to the picker |
 
 Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate -- --ignored --nocapture`.
 
