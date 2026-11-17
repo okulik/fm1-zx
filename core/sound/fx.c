@@ -4,7 +4,9 @@
 /* The effects follower's voice: renders the reader's event list (fx_read.c) for the mixer.
  *
  *   tone   sin(p + 1.3 sin 2p) (the lead's ratio and index), gain 0.8; its step glides to the
- *          target exponentially with a 2 ms time constant, and jumps there when the tone starts
+ *          target exponentially with a 2 ms time constant (an exponential approach of the phase
+ *          step, so linear in frequency: it stands in for the spec's log-frequency glide, and at
+ *          2 ms the difference is inaudible), and jumps there when the tone starts
  *          from silence
  *   noise  xorshift32 sampled and held at the edge rate, one-pole low-passed (the reader's
  *          coefficient), x 1.6 (the low-pass's loss) at gain 0.55

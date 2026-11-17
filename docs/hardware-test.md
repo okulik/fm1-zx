@@ -68,6 +68,9 @@ screen. It is not part of this plan and is written first when the device arrives
       pitch over a minute.
 - [ ] MASTER changes the volume smoothly, down to silence.
 - [ ] Castaway's effects sound right, at every LCD speed.
+- [ ] FM: engines with Effects: FM in ZX Sopwith or Castaway: no crackle at LCD speeds 4, 1 and 0, and
+      the Effects row toggles (the reader runs from flash every frame; `fw_budget` cannot see flash
+      wait states).
 - [ ] ZX Sopwith's effects (engine, shots, bombs, crashes) sound right, with no crackle, at every LCD speed.
 - [ ] Escape from Colony 8's effects and title tune sound right, with no crackle, at every LCD speed.
 - [ ] ZX Dino's jump and crash sounds are clean and in time with the screen; nothing crackles while the dinosaur runs.

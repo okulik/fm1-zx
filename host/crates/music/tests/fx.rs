@@ -523,15 +523,13 @@ fn fx_b_rejected_short_run_stays_beeper() {
         }
         short += 1;
         assert_eq!(r.gate[k], SND_FX_B_REJECTED, "frame {k}");
-        // the first frame of a run may still fade from the follower; from the second the beeper
-        // alone (the frame before it was not the follower's either)
-        if k > 0 && !r.fm_on[k - 1] && r.gate[k - 1] != SND_FX_PLAY {
-            exact += 1;
-            assert_eq!(r.out[k], r.delayed[k], "frame {k} is the delayed beeper");
-        }
+        // whatever came before, both the follower's and the FM's crossfades settle within 4 ms
+        exact += 1;
+        assert_eq!(r.out[k][ms(4.5)..], r.delayed[k][ms(4.5)..], "frame {k} is the delayed beeper after the crossfade");
     }
     println!("{short} frames of 1-2 frame rejected runs stay beeper, {exact} of them exactly");
     assert!(short >= 3, "the fixture has short rejected runs ({short} frames)");
+    assert!(exact >= 1, "at least one short-run frame is checked exactly");
 }
 
 #[test]
@@ -593,4 +591,3 @@ fn fx_fm_music_unchanged_with_effects_on() {
     println!("{same} FM frames identical with effects on and off");
     assert!(same > 100, "the tune plays in FM ({same} frames)");
 }
-

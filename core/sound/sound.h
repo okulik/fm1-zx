@@ -643,7 +643,7 @@ void snd_fx_init(snd_fx *f, uint32_t rate_num, uint32_t rate_den);
 /* Called once a frame after the decoder and method B have taken frame t (n: the samples the mixer
  * plays for it): classifies frame t, then reads frame t - 3 into the event list and sets the gate
  * (SND_FX_OFF before frame t - 3 exists). Flash on the device: it calls nothing in the other sound
- * files. b: method B, for its records (unused yet). */
+ * files. b: method B, for its records (which of its own frames its check refused). */
 void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n);
 /* Renders the event list into n samples (SRAM). */
 void snd_fx_render(snd_fx *f, int16_t *out, uint32_t n);

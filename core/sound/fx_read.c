@@ -98,6 +98,8 @@ static void emit(snd_fx *f, uint32_t ft, uint8_t tick, uint32_t n)
 	snd_fx_event *e;
 	uint32_t at = (ft < ZX_FRAME_TSTATES ? ft : ZX_FRAME_TSTATES - 1u) * n / ZX_FRAME_TSTATES;
 
+	/* once the 32 events fill, later changes overwrite the last event at its earlier sample (a late stop
+	 * or tick can take effect early in a busy frame; harmless in practice) */
 	if (f->n_ev) {
 		int same;
 		e = &f->ev[f->n_ev - 1u];
@@ -214,6 +216,8 @@ void snd_fx_read(snd_fx *f, const snd_decoder *d, const snd_b *b, uint32_t n)
 	if (f->have_last && base + ZX_FRAME_TSTATES - f->last >= GAP) f->have_last = 0;
 	if (s->busy) f->have_last = f->n_half = 0;   /* the decoder kept 256 edges: `last` is mid-frame, the next gap would be bogus */
 
+	/* an unconfirmed `ok == 2` record is not counted as rejected (only `ok == 0`), so such a frame goes to
+	 * the follower; a lone one is masked by the hysteresis */
 	if (rejected(b, fr) && !rejected_run(f->rej, rejected(b, fr + 1u), rejected(b, fr + 2u)))
 		f->gate = SND_FX_B_REJECTED;   /* method B's own frame that its check refused, in a run of under 3: music, not an effect */
 	else if (s->busy)
