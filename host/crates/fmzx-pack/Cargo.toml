@@ -13,6 +13,7 @@ publish = false
 [dependencies]
 crc32fast = "1.5.5"
 lz4_flex = "0.14.0"
+png = "0.18"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 soundlearn = { path = "../soundlearn" }

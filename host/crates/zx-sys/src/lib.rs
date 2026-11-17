@@ -1760,3 +1760,19 @@ impl Menu {
         unsafe { sys::menu_row_is_ui(&*self.raw, lcd_row as u32) != 0 }
     }
 }
+
+/// Packs 240 UI palette indices (0-28) into panel bytes the way the firmware's menu rows are packed.
+pub fn ui_pack_row(fmt: PixFormat, idx: &[u8; 240]) -> Vec<u8> {
+    let mut out = vec![0u8; fmt.row_bytes()];
+    // SAFETY: idx is LCD_W bytes and out holds one row of the format.
+    unsafe { sys::ui_pack_row(fmt.raw(), idx.as_ptr(), out.as_mut_ptr()) };
+    out
+}
+
+/// Row `y` (0-63) of the menu art's top band, as UI palette indices.
+pub fn ui_art_top_row(y: u32) -> [u8; 240] {
+    let mut out = [0u8; 240];
+    // SAFETY: the buffer is LCD_W bytes.
+    unsafe { sys::ui_art_top_row(y, out.as_mut_ptr()) };
+    out
+}

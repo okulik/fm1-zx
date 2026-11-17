@@ -13,6 +13,19 @@
 #define UI_COLS 30u
 #define UI_ROWS 30u
 
+/* The UI palette: indices 0-15 are the Spectrum's (as PIX_R8/G8/B8), 16-24 the menu art's band
+ * colours, 25-28 the corner stripes. RGB888; the panel keeps 4 bits (RGB444) or 5-6-5 of each. */
+#define UI_PAL_N 29u
+extern const uint8_t ui_palette[UI_PAL_N][3];
+
+/* Packs 240 UI palette indices (0-28) into panel bytes, the layout of pix_pack (PIX_RGB444 or
+ * PIX_RGB565). Plain flash code: it calls nothing in RAMTEXT. */
+void ui_pack_row(int fmt, const uint8_t idx[LCD_W], uint8_t *out);
+
+/* The menu art's top band: 240 x 64 pixels, as UI palette indices. Row y (0-63). */
+#define UI_ART_TOP_ROWS 64u
+void ui_art_top_row(unsigned y, uint8_t idx[LCD_W]);
+
 /* Copies the font (ROM 0x3D00, chars 32-127) and clears the grid to white on black; every row
  * counts as changed afterwards. `rom` is the 16 KiB 48K ROM. */
 void ui_init(const uint8_t *rom);

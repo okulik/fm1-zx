@@ -4,6 +4,7 @@
 //! `fmzx-pack games <manifest.toml> -o <pack.bin>`
 //! `fmzx-pack keymaps <manifest.toml> -o <keymaps.json>`
 //! `fmzx-pack testprogs <dir>` (writes `scroll.sna`, `border.sna`, `tape.tap` and `tune.sna`)
+//! `fmzx-pack menu-art <png> -o <c file>` (the menu art's top band as C: `app/menu_art.c`)
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
 //!     [--product FM-1_948] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_948]`
@@ -24,6 +25,7 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack keymaps <manifest.toml> -o <keymaps.json>
        fmzx-pack testprogs <dir>
+       fmzx-pack menu-art <png> -o <c file>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
                       [--product FM-1_948] [--cache DIR] [--offline]
        fmzx-pack verify <pkg.fwsc> [--product FM-1_948]
@@ -160,6 +162,11 @@ fn run(args: &[String]) -> Result<(), String> {
             for path in write_all(&PathBuf::from(dir))? {
                 println!("{}", path.display());
             }
+            Ok(())
+        }
+        [cmd, png, flag, out] if cmd == "menu-art" && flag == "-o" => {
+            std::fs::write(out, fmzx_pack::menu_art::generate(&read(png)?)?).map_err(|e| format!("{out}: {e}"))?;
+            println!("{out}");
             Ok(())
         }
         [cmd, rest @ ..] if cmd == "fwsc" => fwsc(rest),

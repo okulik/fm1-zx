@@ -12,6 +12,70 @@ static uint8_t cell_at[UI_ROWS][UI_COLS];
 static uint8_t shown_ch[UI_ROWS][UI_COLS];
 static uint8_t shown_at[UI_ROWS][UI_COLS];
 
+#define PIDX(i) {PIX_R8(i), PIX_G8(i), PIX_B8(i)}
+#define PCOL(r, g, b) {(uint8_t)((r) * 17u), (uint8_t)((g) * 17u), (uint8_t)((b) * 17u)}
+
+const uint8_t ui_palette[UI_PAL_N][3] = {
+    PIDX(0), PIDX(1), PIDX(2), PIDX(3), PIDX(4), PIDX(5), PIDX(6), PIDX(7),
+    PIDX(8), PIDX(9), PIDX(10), PIDX(11), PIDX(12), PIDX(13), PIDX(14), PIDX(15),
+    PCOL(0xc, 0x9, 0xd), /* 16 lilac */
+    PCOL(0x8, 0x7, 0xd), /* 17 key bed */
+    PCOL(0x6, 0x6, 0xb), /* 18 keys */
+    PCOL(0x2, 0x2, 0x1), /* 19 key edges */
+    PCOL(0x3, 0x3, 0x6), /* 20 key slits */
+    PCOL(0x9, 0x8, 0xd), /* 21 button panel */
+    PCOL(0x8, 0x7, 0xc), /* 22 buttons */
+    PCOL(0x7, 0x6, 0xb), /* 23 OCT panel */
+    PCOL(0xd, 0xe, 0xe), /* 24 silver */
+    PCOL(0xe, 0x2, 0x2), /* 25 stripe red */
+    PCOL(0xf, 0xa, 0x1), /* 26 stripe yellow */
+    PCOL(0x5, 0xb, 0x4), /* 27 stripe green */
+    PCOL(0x1, 0x9, 0xd), /* 28 stripe cyan */
+};
+
+void ui_pack_row(int fmt, const uint8_t idx[LCD_W], uint8_t *out)
+{
+    unsigned x;
+    if (fmt == PIX_RGB565) {
+        for (x = 0; x < LCD_W; x++) {
+            const uint8_t *c = ui_palette[idx[x] < UI_PAL_N ? idx[x] : 0u];
+            unsigned v = ((c[0] >> 3) << 11) | ((c[1] >> 2) << 5) | (c[2] >> 3);
+            *out++ = (uint8_t)(v >> 8);
+            *out++ = (uint8_t)v;
+        }
+        return;
+    }
+    for (x = 0; x < LCD_W; x += 2) {
+        const uint8_t *a = ui_palette[idx[x] < UI_PAL_N ? idx[x] : 0u];
+        const uint8_t *b = ui_palette[idx[x + 1u] < UI_PAL_N ? idx[x + 1u] : 0u];
+        *out++ = (uint8_t)((a[0] & 0xF0u) | (a[1] >> 4));
+        *out++ = (uint8_t)((a[2] & 0xF0u) | (b[0] >> 4));
+        *out++ = (uint8_t)((b[1] & 0xF0u) | (b[2] >> 4));
+    }
+}
+
+extern const uint8_t ui_art_top_pal[];
+extern const uint16_t ui_art_top_off[UI_ART_TOP_ROWS];
+extern const uint8_t ui_art_top[];
+
+void ui_art_top_row(unsigned y, uint8_t idx[LCD_W])
+{
+    const uint8_t *p;
+    unsigned x = 0;
+    if (y >= UI_ART_TOP_ROWS) {
+        memset(idx, 0, LCD_W);
+        return;
+    }
+    p = ui_art_top + ui_art_top_off[y];
+    while (x < LCD_W) {
+        uint8_t v = ui_art_top_pal[*p >> 4];
+        unsigned n = (*p++ & 15u) + 1u;
+        while (n-- != 0u && x < LCD_W) {
+            idx[x++] = v;
+        }
+    }
+}
+
 static uint8_t attr(uint8_t ink, uint8_t paper)
 {
     return (uint8_t)((ink & 15u) | ((paper & 15u) << 4));

@@ -14,6 +14,7 @@ pub mod keys;
 pub mod layout;
 pub mod lz4blk;
 pub mod manifest;
+pub mod menu_art;
 pub mod pack;
 pub mod package;
 pub mod personal;

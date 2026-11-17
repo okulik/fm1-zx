@@ -571,3 +571,77 @@ fn menu_calls_wait_for_the_ui() {
     let _ui = Ui::new();
     Menu::new(1).set_view(view::MENU);
 }
+
+// ---- the UI palette, the flash packer and the menu art's band ----
+
+#[test]
+fn ui_pack_row_matches_pix_pack() {
+    let mut idx = [0u8; 240];
+    for (x, v) in idx.iter_mut().enumerate() {
+        *v = ((x * 7 + x / 16) % 16) as u8;
+    }
+    for fmt in [PixFormat::Rgb444, PixFormat::Rgb565] {
+        assert_eq!(zx_sys::ui_pack_row(fmt, &idx), fmt.pack(&idx));
+    }
+}
+
+#[test]
+fn ui_pack_row_rgb444_new_colours() {
+    let mut idx = [0u8; 240];
+    idx[0] = 16;
+    idx[1] = 28;
+    let out = zx_sys::ui_pack_row(PixFormat::Rgb444, &idx);
+    // pixel 0 = c 9 d, pixel 1 = 1 9 d: bytes R0G0, B0R1, G1B1
+    assert_eq!(&out[..3], &[0xC9, 0xD1, 0x9D]);
+    assert_eq!(out.len(), 360);
+}
+
+#[test]
+fn ui_pack_row_rgb565_new_colours() {
+    let mut idx = [0u8; 240];
+    idx[0] = 16;
+    idx[1] = 28;
+    let out = zx_sys::ui_pack_row(PixFormat::Rgb565, &idx);
+    let c565 = |r: u32, g: u32, b: u32| (((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)) as u16;
+    assert_eq!(u16::from_be_bytes([out[0], out[1]]), c565(0xCC, 0x99, 0xDD));
+    assert_eq!(u16::from_be_bytes([out[2], out[3]]), c565(0x11, 0x99, 0xDD));
+    assert_eq!(out.len(), 480);
+}
+
+#[test]
+fn art_band_matches_png() {
+    // the band's colours in palette order: black 0, white 15, then 16-24
+    let rgb_to_idx = |c: [u8; 3]| -> u8 {
+        match c {
+            [0, 0, 0] => 0,
+            [255, 255, 255] => 15,
+            [0xcc, 0x99, 0xdd] => 16,
+            [0x88, 0x77, 0xdd] => 17,
+            [0x66, 0x66, 0xbb] => 18,
+            [0x22, 0x11, 0x66] => 19,
+            [0x33, 0x33, 0x66] => 20,
+            [0x99, 0x88, 0xdd] => 21,
+            [0x88, 0x77, 0xcc] => 22,
+            [0x77, 0x66, 0xbb] => 23,
+            [0xdd, 0xee, 0xee] => 24,
+            c => panic!("unexpected colour {c:02x?}"),
+        }
+    };
+    let file = std::fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../app/art/menu-top.png")).unwrap();
+    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
+    dec.set_transformations(png::Transformations::EXPAND);
+    let mut reader = dec.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!((info.width, info.height), (240, 64));
+    let ch = info.color_type.samples();
+    for y in 0..64usize {
+        let want: Vec<u8> = (0..240usize)
+            .map(|x| {
+                let o = (y * 240 + x) * ch;
+                rgb_to_idx([buf[o], buf[o + 1], buf[o + 2]])
+            })
+            .collect();
+        assert_eq!(zx_sys::ui_art_top_row(y as u32).to_vec(), want, "band row {y}");
+    }
+}

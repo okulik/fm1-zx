@@ -207,6 +207,7 @@ dependencies = [
  "fm1-soc",
  "lz4_flex",
  "music",
+ "png",
  "serde",
  "sha2",
  "soundlearn",
@@ -621,5 +622,6 @@ dependencies = [
  "fmzx-pack",
  "lz4_flex",
  "music",
+ "png",
  "zx-sys",
 ]

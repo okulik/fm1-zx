@@ -19,3 +19,4 @@ workspace = true
 fmzx-pack = { path = "../fmzx-pack" }
 music = { path = "../music" }
 lz4_flex = "0.14.0"
+png = "0.18"
