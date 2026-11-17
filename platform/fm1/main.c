@@ -506,13 +506,15 @@ static uint32_t open_pack(void)
 extern void isr_timer5(void);
 
 #define BTN(b) (1u << (b))
+#define BTN_OCT_DOWN 0u
+#define BTN_OCT_UP 1u
 #define BTN_SAVE 9u
 #define BTN_REC 13u
 #define ENC_SELECT 0u
 #define ENC_ALGORITHM 1u
 /* What the on-screen keyboard takes from the key map: PLAY (OK), SAVE (CAPS SHIFT), REC (SYMBOL
  * SHIFT) and the SELECT and ALGORITHM encoders (the cursor). */
-#define OSK_BUTTONS (BTN(KM_BTN_PLAY) | BTN(BTN_SAVE) | BTN(BTN_REC))
+#define OSK_BUTTONS (BTN(KM_BTN_PLAY) | BTN(BTN_SAVE) | BTN(BTN_REC) | BTN(BTN_OCT_DOWN) | BTN(BTN_OCT_UP))
 
 /* The keyboard's key and its sticky shifts (CMD_OSK_KEY's arg) as Spectrum rows. */
 static void osk_press(uint32_t arg)
@@ -614,7 +616,8 @@ static void menu_controls(const km_input *in, uint32_t pressed)
 }
 
 /* The on-screen keyboard: SELECT moves left/right, ALGORITHM up/down, SAVE and REC toggle CAPS
- * and SYMBOL SHIFT for the next key, PLAY presses the key, HOME closes. */
+ * and SYMBOL SHIFT for the next key, PLAY presses the key, OCT- / OCT+ move the keyboard to the
+ * top / bottom of the screen, HOME closes. */
 static void osk_controls(const km_input *in, uint32_t pressed)
 {
     enc_events(in->enc[ENC_SELECT], EV_LEFT, EV_RIGHT);
@@ -625,6 +628,10 @@ static void osk_controls(const km_input *in, uint32_t pressed)
         handle_event(EV_SYM);
     if (pressed & BTN(KM_BTN_PLAY))
         handle_event(EV_OK);
+    if (pressed & BTN(BTN_OCT_DOWN))
+        handle_event(EV_KEYS_TOP);
+    if (pressed & BTN(BTN_OCT_UP))
+        handle_event(EV_KEYS_BOTTOM);
     if (pressed & BTN(KM_BTN_HOME))
         handle_event(EV_HOME);
 }
@@ -812,8 +819,8 @@ void fmzx_main(void)
             master_at += MASTER_MS * 1000u * FM1_TICKS_PER_US;
             fmzx_master = input_master();
         }
-        view = menu_view(&mn);
-        if (view != last_view) { /* every view change repaints the whole panel, from now */
+        view = menu_layout(&mn);
+        if (view != last_view) { /* every view (or keyboard place) change repaints the whole panel, from now */
             unsigned r;
             last_view = view;
             /* the new view's first LCD frame without waiting for the old pace: this pass's

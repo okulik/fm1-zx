@@ -97,7 +97,7 @@ ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the
 - [ ] In a game: the notes and buttons act as the game's key map says (`docs/controls.md`,
       `games/games.toml`); PLAY pauses and resumes; HOME opens the menu; Reset game, Keyboard,
       Key map and Back to games work.
-- [ ] On-screen keyboard: the cursor moves, PLAY types, SAVE and REC give CAPS and SYMBOL SHIFT.
+- [ ] On-screen keyboard: the cursor moves, PLAY types, SAVE and REC give CAPS and SYMBOL SHIFT, OCT- moves it to the top of the screen and OCT+ back (the text adventure: what you type shows on its bottom line with the keyboard at the top).
 - [ ] Encoders: no skipped or doubled detents when turned slowly and quickly.
 - [ ] ZX Sopwith: F4 (N) starts a game; F#3/G#3 and G3 pull the plane up and down, A3 and F3 raise and lower the throttle, C5 fires; the status bar and the plane move without tearing.
 - [ ] Escape from Colony 8: OCT- chooses keyboard control at the title; F3/A3 walk left and right, F#3 and G3 go up and down, C5 shoots, and a held C5 charges a missile that leaves when released; the room scrolls without shifted rows.

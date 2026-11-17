@@ -7,7 +7,8 @@
 // fmzx_stats at the address tools/web-demo writes into keymaps.json). While a game runs, the
 // computer keys type Spectrum keys: a key presses the FM-1 input the running game maps to that
 // Spectrum key (docs/controls.md, "Computer keyboard"). Esc is HOME and Tab is PLAY in every view;
-// in the picker and the menus Enter is PLAY and the arrows turn SELECT and ALGORITHM. Without the
+// in the picker, the menus and the on-screen keyboard Enter is PLAY and the arrows turn SELECT and
+// ALGORITHM. Without the
 // running game (a package without the address, or before the first frame) the keys are the
 // fixed table below (LEGACY) and the labels follow the key map's game.
 
@@ -207,7 +208,8 @@ export function createKeys(input) {
         return true;
       }
       const enter = code === "Enter" || code === "NumpadEnter";
-      if (enter && (down ? !inGame : asPlay.has(code))) {
+      // Enter is PLAY where the arrows move a cursor: the picker, the menus, the on-screen keyboard
+      if (enter && (down ? !inGame || view === VIEW.OSK : asPlay.has(code))) {
         // (a key let go acts as it was pressed: Enter that started a game lets PLAY go)
         e.preventDefault?.();
         if (down) asPlay.add(code);
@@ -309,6 +311,10 @@ export function panelRows(game, following = true) {
 
 // ---------------------------------------------------------------- labels on the drawing
 
+// The on-screen keyboard's own buttons (the game's key map does not get them while it is open):
+// OCT- / OCT+ move it to the top / bottom of the screen, SAVE and REC shift the next key.
+const OSK_BUTTON_LABELS = { 0: "KEYS ↑", 1: "KEYS ↓", 9: "CS", 13: "SS" };
+
 // What to write on the FM-1 drawing: [{ target, text }]. HOME and PLAY always; in a game view
 // (or game given with view null: the key map's game) each mapped key, button and encoder turn;
 // in the picker and the menus the knobs the arrows turn.
@@ -318,14 +324,16 @@ export function labels(game, view) {
     out.push({ target: { enc: 0, step: 0 }, text: "← →" }, { target: { enc: 2, step: 0 }, text: "↑ ↓" });
     return out;
   }
-  if (view === VIEW.OSK) out.push({ target: { enc: 0, step: 0 }, text: "← →" }, { target: { enc: 2, step: 0 }, text: "↑ ↓" });
+  if (view === VIEW.OSK) out.push({ target: { enc: 0, step: 0 }, text: "← →" }, { target: { enc: 2, step: 0 }, text: "↑ ↓" },
+    ...Object.entries(OSK_BUTTON_LABELS).map(([key, text]) => ({ target: { key: Number(key) }, text })));
   const turns = new Map();
   for (const { input, actions } of game?.keys ?? []) {
     const t = target(input);
     const text = actions.map(shortName).filter(Boolean).join("+");
     if (!t || !text) continue;
-    if ("key" in t) out.push({ target: t, text });
-    else if (!(view === VIEW.OSK && (t.enc === 0 || t.enc === 2))) {
+    if ("key" in t) {
+      if (!(view === VIEW.OSK && t.key in OSK_BUTTON_LABELS)) out.push({ target: t, text });
+    } else if (!(view === VIEW.OSK && (t.enc === 0 || t.enc === 2))) {
       const both = turns.get(t.enc) ?? {};
       both[t.step > 0 ? "cw" : "ccw"] = text;
       turns.set(t.enc, both);
@@ -464,7 +472,7 @@ export function install(win, doc) {
   const FIXED = [
     ["Esc", "HOME"],
     ["Tab", "PLAY (pause, OK)"],
-    ["Enter", "PLAY in the picker and the menu"],
+    ["Enter", "PLAY in the picker, the menu and the on-screen keyboard"],
     ["Arrows", "move in the picker and the menu; Kempston in a game"],
     ["A–Z 0–9", "the same Spectrum key (Space, Enter too)"],
     ["L Shift", "CAPS SHIFT"],

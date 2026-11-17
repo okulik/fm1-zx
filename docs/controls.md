@@ -116,8 +116,9 @@ the item, HOME resumes the game.
 | Screen: *choice* | How the 256-pixel-wide Spectrum picture fits the 240-pixel panel. **Crop** shows 240 of the 256 columns, from where each game's crop puts them, and no side border. **Fit** shows all 256 columns by leaving out one column in 16, evenly spaced; the colours stay the Spectrum's own. **Fit smooth** (the default) shows all 256 columns by blending neighbouring columns, so thin lines and text keep their weight. **Border** scales the picture with 8 border pixels each side down to 240 x 212, blended, with the border colour above and below. In every choice the menu, the keyboard and PAUSED look the same. PLAY cycles Crop, Fit, Fit smooth, Border. The choice stays through Reset game, Back to games and starting another game, but not through power-off. |
 | Back to games | Stops the game and returns to the picker |
 
-**On-screen keyboard.** The Spectrum keyboard in the bottom five text rows, while the game keeps
-running above it.
+**On-screen keyboard.** All 40 Spectrum keys in five text rows at the bottom of the screen (or the
+top), while the game keeps running around it. Many games show what you type on their bottom line
+(BASIC, adventures, names): move the keyboard to the top to see it.
 
 | Control | Does |
 |---------|------|
@@ -126,10 +127,11 @@ running above it.
 | PLAY | Presses the key under the cursor; it stays down while PLAY is held |
 | SAVE | CAPS SHIFT for the next key (press again to cancel) |
 | REC | SYMBOL SHIFT for the next key |
+| OCT- / OCT+ | Moves the keyboard to the top / bottom of the screen (kept until power-off) |
 | HOME | Closes the keyboard |
 
-The game's other mapped inputs keep working under the keyboard; PLAY, SAVE, REC and the SELECT
-and ALGORITHM encoders belong to the keyboard while it is open.
+The game's other mapped inputs keep working under the keyboard; PLAY, SAVE, REC, OCT-, OCT+ and the
+SELECT and ALGORITHM encoders belong to the keyboard while it is open.
 
 ## Computer keyboard (browser page)
 
@@ -156,8 +158,8 @@ place (`event.code`), so a non-US layout types the key printed in that place on 
 - In every view **Esc is HOME** and **Tab is PLAY** (pause in a game, OK in the menus).
 - In the picker, the HOME menu, the key map page and messages the arrows turn SELECT (← →) and
   ALGORITHM (↑ ↓) and Enter is PLAY; the letters do nothing there. On the on-screen keyboard the arrows
-  move its cursor and the other keys still reach the game; SAVE and REC (its CAPS and SYMBOL toggles)
-  are clicked on the drawing.
+  move its cursor, Enter presses its key and the other keys still reach the game; SAVE and REC (its
+  CAPS and SYMBOL toggles) and OCT- / OCT+ (top / bottom) are clicked on the drawing.
 - fm1-emu's own piano keys (A to ' as notes, Z / X octave, R REC, 1 to 0 the top buttons) are off.
 
 The FM-1 drawing shows each mapped key's Spectrum key (`ENT`, `SPC`, `CS`, `SS`, `←` `↑` `→` `↓`

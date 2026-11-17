@@ -448,6 +448,47 @@ fn osk_draws_bottom_rows() {
     assert_eq!(ui.compose_row(232)[0], 0, "CAPS not latched");
 }
 
+/// KEYS_TOP moves the on-screen keyboard to the top of the screen (grid rows 0-4, LCD rows 0-39),
+/// KEYS_BOTTOM back; the place is kept when the keyboard closes and opens again.
+#[test]
+fn osk_moves_between_top_and_bottom() {
+    let mut ui = Ui::new();
+    let mut m = Menu::new(1);
+    m.set_view(view::MENU);
+    ui.draw(&m, None); // the menu art on, as the device has it when the keyboard opens
+    m.set_view(view::OSK);
+    let bottom = m.layout();
+    assert_eq!(m.event(ev::KEYS_TOP).0, cmd::NONE);
+    assert_eq!(m.view(), view::OSK);
+    assert_ne!(m.layout(), bottom, "the layout changes with the place");
+    assert!((0..240).all(|r| m.row_is_ui(r) == (r < 40)), "UI rows 0-39");
+    ui.draw(&m, None);
+    assert!(ui.row_text(0).contains('1') && ui.row_text(0).contains('0'));
+    assert!(ui.row_text(1).contains('Q'));
+    assert!(ui.row_text(3).contains("CAP") && ui.row_text(3).contains("SPC"));
+    assert!(ui.row_text(4).contains("CAPS SHIFT"));
+    assert_eq!(ui.compose_row(0)[0], 13, "cursor at the top");
+    assert_eq!(m.event(ev::OK), (cmd::OSK_KEY, 15), "keys work at the top");
+    m.event(ev::HOME);
+    m.set_view(view::OSK);
+    assert!(m.row_is_ui(0) && !m.row_is_ui(239), "still at the top after closing");
+    m.event(ev::KEYS_BOTTOM);
+    assert_eq!(m.layout(), bottom);
+    assert!((0..240).all(|r| m.row_is_ui(r) == (r >= 200)), "UI rows 200-239");
+}
+
+/// The PAUSED bar after the HOME menu (whose art covers rows 0-63) shows PAUSED, not the art.
+#[test]
+fn paused_after_menu_has_no_art() {
+    let mut ui = Ui::new();
+    let mut m = Menu::new(1);
+    m.set_view(view::MENU);
+    ui.draw(&m, None);
+    m.set_view(view::PAUSED);
+    ui.draw(&m, None);
+    assert!(ui.compose_row(12).iter().all(|&p| p < 16), "art colours on the PAUSED bar");
+}
+
 #[test]
 fn keys_page_lists_default() {
     let pack = build_pack(&["Alpha", "Beta"]);

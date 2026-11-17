@@ -1575,6 +1575,8 @@ pub mod ev {
     pub const PAUSE: i32 = sys::EV_PAUSE as i32;
     pub const CAPS: i32 = sys::EV_CAPS as i32;
     pub const SYM: i32 = sys::EV_SYM as i32;
+    pub const KEYS_TOP: i32 = sys::EV_KEYS_TOP as i32;
+    pub const KEYS_BOTTOM: i32 = sys::EV_KEYS_BOTTOM as i32;
 }
 
 /// Views of the menu state machine.
@@ -1748,6 +1750,12 @@ impl Menu {
     pub fn set_choices(&mut self, sound: u8, screen: u8) {
         self.raw.sound = sound;
         self.raw.screen = screen;
+    }
+
+    /// The view, with the on-screen keyboard's place: changes whenever the LCD's layout does.
+    pub fn layout(&self) -> i32 {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_layout(&*self.raw) }
     }
 
     pub fn runs_game(&self) -> bool {

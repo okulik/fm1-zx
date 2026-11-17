@@ -153,13 +153,13 @@ test("Esc is HOME and Tab is PLAY in every view, and without the running game", 
   }
 });
 
-test("Enter is PLAY in the picker and the menus, ENTER in the game views", () => {
-  for (const view of [VIEW.PICKER, VIEW.MENU, VIEW.KEYS, VIEW.MESSAGE]) {
+test("Enter is PLAY in the picker, the menus and the on-screen keyboard, ENTER in the game", () => {
+  for (const view of [VIEW.PICKER, VIEW.MENU, VIEW.KEYS, VIEW.MESSAGE, VIEW.OSK]) {
     const { s, k } = playing(view);
     k.handle(ev("Enter"), true);
     assert.deepEqual(s.calls, [["setKey", PLAY, true]], `view ${view}`);
   }
-  for (const view of [VIEW.GAME, VIEW.PAUSED, VIEW.OSK]) {
+  for (const view of [VIEW.GAME, VIEW.PAUSED]) {
     const { s, k } = playing(view);
     k.handle(ev("Enter"), true);
     assert.deepEqual(s.calls, [["setKey", 21, true]], `view ${view}`);
@@ -267,6 +267,18 @@ test("labels: the game's map in a game view, the menu controls elsewhere", () =>
   const menu = labels(GAME, VIEW.MENU);
   assert.deepEqual(menu.map((l) => l.text), ["HOME (Esc)", "PLAY (Tab)", "← →", "↑ ↓"]);
   assert.ok(labels(GAME, null).some((l) => l.text === "CS+5")); // no running game: the side list's
+});
+
+test("labels in the on-screen keyboard: its own buttons, the game's map for the rest", () => {
+  const osk = labels(GAME, VIEW.OSK);
+  const text = (l, t) => l.find((x) => JSON.stringify(x.target) === JSON.stringify(t))?.text;
+  assert.equal(text(osk, { key: 0 }), "KEYS ↑"); // OCT- (the game's 1 does not reach it here)
+  assert.equal(text(osk, { key: 1 }), "KEYS ↓"); // OCT+
+  assert.equal(text(osk, { key: 9 }), "CS"); // SAVE: CAPS SHIFT for the next key
+  assert.equal(text(osk, { key: 13 }), "SS"); // REC: SYMBOL SHIFT
+  assert.equal(osk.filter((l) => l.target.key === 0).length, 1);
+  assert.equal(text(osk, { key: 2 }), "CS+5"); // FX: still the game's
+  assert.equal(text(osk, { enc: 0, step: 0 }), "← →");
 });
 
 test("short names", () => {

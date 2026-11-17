@@ -103,6 +103,17 @@ int menu_view(const menu *mn)
     return mn->view;
 }
 
+int menu_layout(const menu *mn)
+{
+    return mn->view | (mn->view == VIEW_OSK && mn->osk_top ? 0x100 : 0);
+}
+
+/* The keyboard's first grid row: its four key rows, then the CAPS / SYMBOL SHIFT line. */
+static unsigned osk_first(const menu *mn)
+{
+    return mn->osk_top ? 0u : OSK_FIRST;
+}
+
 void menu_set_view(menu *mn, int view)
 {
     ui_invalidate();
@@ -147,7 +158,7 @@ int menu_row_is_ui(const menu *mn, unsigned lcd_row)
     case VIEW_PAUSED:
         return lcd_row < LCD_TOP_BORDER;
     case VIEW_OSK:
-        return lcd_row >= LCD_ROWS - 5u * 8u && lcd_row < LCD_ROWS;
+        return mn->osk_top ? lcd_row < 5u * 8u : lcd_row >= LCD_ROWS - 5u * 8u && lcd_row < LCD_ROWS;
     default:
         return lcd_row < LCD_ROWS;
     }
@@ -417,6 +428,12 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
             mn->caps ^= 1u;
         } else if (ev == EV_SYM) {
             mn->sym ^= 1u;
+        } else if (ev == EV_KEYS_TOP || ev == EV_KEYS_BOTTOM) {
+            uint8_t top = ev == EV_KEYS_TOP;
+            if (top != mn->osk_top) {
+                mn->osk_top = top;
+                ui_invalidate();
+            }
         } else if (ev == EV_HOME || ev == EV_BACK) {
             mn->view = VIEW_GAME;
         } else if (ev == EV_OK) {
@@ -565,7 +582,8 @@ static void draw_keys(const menu *mn, const uint8_t *pack)
 
 static void draw_osk(const menu *mn)
 {
-    unsigned x, y;
+    unsigned x, y, first = osk_first(mn);
+    ui_set_art(0); /* the HOME menu's art would cover the keyboard (its band rows 0-63, stripes from 130) */
     for (y = 0; y < 4u; y++) {
         for (x = 0; x < OSK_KEYS; x++) {
             unsigned k = osk_key(x, y);
@@ -580,17 +598,18 @@ static void draw_osk(const menu *mn)
                 cell[2] = ' ';
             }
             cell[OSK_KEY_W] = '\0';
-            ui_text(x * OSK_KEY_W, OSK_FIRST + y, cell, cur ? BAR_INK : KEY_INK, cur ? BAR_PAPER : KEY_PAPER);
+            ui_text(x * OSK_KEY_W, first + y, cell, cur ? BAR_INK : KEY_INK, cur ? BAR_PAPER : KEY_PAPER);
         }
     }
-    full_row(OSK_FIRST + 4u, "", INK, PAPER);
-    ui_text(0, OSK_FIRST + 4u, "CAPS SHIFT", mn->caps ? BAR_INK : INK, mn->caps ? BAR_PAPER : PAPER);
-    ui_text(12, OSK_FIRST + 4u, "SYMBOL SHIFT", mn->sym ? BAR_INK : INK, mn->sym ? BAR_PAPER : PAPER);
+    full_row(first + 4u, "", INK, PAPER);
+    ui_text(0, first + 4u, "CAPS SHIFT", mn->caps ? BAR_INK : INK, mn->caps ? BAR_PAPER : PAPER);
+    ui_text(12, first + 4u, "SYMBOL SHIFT", mn->sym ? BAR_INK : INK, mn->sym ? BAR_PAPER : PAPER);
 }
 
 static void draw_paused(void)
 {
     unsigned r;
+    ui_set_art(0); /* the HOME menu's art band would cover the bar */
     for (r = 0; r < 3u; r++) {
         full_row(r, "", INK, PAPER);
     }

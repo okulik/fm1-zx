@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use zx_sys::view;
 
+const OCT_DOWN: u8 = 0;
 const OCT_UP: u8 = 1;
 const HOME: u8 = 8;
 const SAVE: u8 = 9;
@@ -263,6 +264,30 @@ fn osk_types_key() {
 
     press_to(&mut m, HOME, view::GAME); // HOME closes the keyboard
     assert_frames_run(&mut m, "after the keyboard");
+}
+
+/// OCT- moves the on-screen keyboard to the top of the screen and OCT+ back to the bottom; the
+/// game shows where it was, and neither reaches the game's key map.
+#[test]
+fn osk_moves_to_top() {
+    let mut m = start(BootOpt { rgb565: true, divider: 4 }, SCROLL);
+    menu_item(&mut m, 2); // "Keyboard"
+    press_to(&mut m, PLAY, view::OSK);
+    m.run_ms(200);
+    let lcd = |m: &Machine, row: usize| m.lcd_rgb565()[row * 240];
+    let cursor = lcd(&m, 200); // the cursor's key, the keyboard's top left
+    assert_ne!(lcd(&m, 0), cursor);
+    m.press(OCT_DOWN, 30);
+    m.run_ms(200);
+    assert_eq!(m.stats().view, view::OSK as u32);
+    assert_eq!(lcd(&m, 0), cursor, "the keyboard at the top");
+    assert_ne!(lcd(&m, 200), cursor, "the game at the bottom again");
+    assert_eq!((keys(&m), kempston(&m)), ([0; 8], 0), "OCT- reached the key map");
+    assert_frames_run(&mut m, "with the keyboard at the top");
+    m.press(OCT_UP, 30);
+    m.run_ms(200);
+    assert_eq!(lcd(&m, 200), cursor, "the keyboard at the bottom");
+    assert_ne!(lcd(&m, 0), cursor, "the game at the top again");
 }
 
 /// (Spectrum frames, LCD bytes sent) over the next `ms`.
