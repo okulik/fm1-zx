@@ -1601,6 +1601,7 @@ pub mod cmd {
     pub const OSK_KEY: i32 = sys::CMD_OSK_KEY as i32;
     pub const SOUND: i32 = sys::CMD_SOUND as i32;
     pub const SCREEN: i32 = sys::CMD_SCREEN as i32;
+    pub const EFFECTS: i32 = sys::CMD_EFFECTS as i32;
 }
 
 pub const UI_COLS: usize = sys::UI_COLS as usize;

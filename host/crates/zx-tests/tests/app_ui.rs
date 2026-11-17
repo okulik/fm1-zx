@@ -117,7 +117,7 @@ fn menu_items_and_divider_cycle() {
     let mut ui = Ui::new();
     let mut m = open_menu();
     ui.draw(&m, None);
-    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: FM: engines", "Screen: Fit smooth", "Back to games"] {
+    for item in ["Resume", "Reset game", "Keyboard", "Key map", "LCD speed: 4", "Sound: FM: engines", "Effects: FM", "Screen: Fit smooth", "Back to games"] {
         assert!(find_row(&ui, item).is_some(), "{item}");
     }
     for _ in 0..4 {
@@ -191,8 +191,9 @@ fn menu_sound_cycles_and_survives() {
     assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_B as u32));
 }
 
-/// The HOME menu's Screen item: directly after Sound.
-const SCREEN_ITEM: usize = SOUND_ITEM + 1;
+/// The HOME menu's Screen item: after Sound and its Effects row.
+/// (Sound is FM: engines by default, so the Effects row sits between them.)
+const SCREEN_ITEM: usize = SOUND_ITEM + 2;
 
 /// Opens the HOME menu from the game and moves to the Screen item.
 fn to_screen(m: &mut Menu) {
@@ -209,7 +210,7 @@ fn screen_shown(m: &Menu) -> String {
     let rows = rows_text(&ui);
     let i = rows.iter().position(|t| t.contains("Screen: ")).expect("no Screen item");
     let j = rows.iter().position(|t| t.contains("Sound: ")).expect("no Sound item");
-    assert_eq!(i, j + 2, "the Screen item is not the line after Sound");
+    assert_eq!(i, j + 4, "the Screen item is not two lines after Sound (Effects between)");
     rows[i].trim().to_string()
 }
 
@@ -245,6 +246,80 @@ fn menu_screen_cycles_and_survives() {
     // and the next press cycles from the kept choice; Sound is untouched
     assert_eq!(m.event(ev::OK), (cmd::SCREEN, PIX_FIT));
     assert_eq!(sound_shown(&m), "Sound: FM: engines");
+}
+
+fn row_with(m: &Menu, text: &str) -> Option<String> {
+    let mut ui = Ui::new();
+    ui.draw(m, None);
+    rows_text(&ui).into_iter().find(|t| t.contains(text)).map(|t| t.trim().to_string())
+}
+
+fn rows_of(m: &Menu) -> Vec<String> {
+    let mut ui = Ui::new();
+    ui.draw(m, None);
+    rows_text(&ui)
+}
+
+#[test]
+fn menu_effects_row_only_in_fm_engines() {
+    let mut m = Menu::new(2);
+    to_sound(&mut m);
+    let rows = rows_of(&m);
+    let s = rows.iter().position(|t| t.contains("Sound: ")).unwrap();
+    assert_eq!(rows[s + 2].trim(), "Effects: FM", "directly under Sound");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
+    assert!(row_with(&m, "Effects:").is_none(), "hidden on Beeper");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_A as u32));
+    assert!(row_with(&m, "Effects:").is_none(), "hidden on FM: sound");
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_FM_B as u32));
+    assert_eq!(row_with(&m, "Effects:").as_deref(), Some("Effects: FM"));
+    // a kept Beeper value comes back
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::EFFECTS, 0));
+    m.event(ev::UP);
+    m.event(ev::OK);
+    m.event(ev::OK);
+    m.event(ev::OK);
+    assert_eq!(row_with(&m, "Effects:").as_deref(), Some("Effects: Beeper"), "value kept");
+}
+
+#[test]
+fn menu_effects_toggles_and_survives() {
+    let mut m = Menu::new(2);
+    to_sound(&mut m);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::EFFECTS, 0));
+    assert_eq!(m.view(), view::MENU);
+    assert_eq!(row_with(&m, "Effects:").as_deref(), Some("Effects: Beeper"));
+    assert_eq!(m.event(ev::OK), (cmd::EFFECTS, 1));
+    assert_eq!(row_with(&m, "Effects:").as_deref(), Some("Effects: FM"));
+    assert_eq!(m.event(ev::OK), (cmd::EFFECTS, 0));
+    // back to the picker and another game started
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP);
+    m.event(ev::UP); // wraps to "Back to games"
+    assert_eq!(m.event(ev::OK).0, cmd::LEAVE);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::START, 1));
+    to_sound(&mut m);
+    m.event(ev::DOWN);
+    assert_eq!(row_with(&m, "Effects:").as_deref(), Some("Effects: Beeper"), "after starting another game");
+    assert_eq!(m.event(ev::OK), (cmd::EFFECTS, 1));
+}
+
+#[test]
+fn menu_navigation_skips_hidden_effects() {
+    let mut m = Menu::new(2);
+    to_sound(&mut m);
+    assert_eq!(m.event(ev::OK), (cmd::SOUND, SND_MODE_BEEPER as u32));
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK).0, cmd::SCREEN, "DOWN from Sound lands on Screen");
+    m.event(ev::UP);
+    assert_eq!(m.event(ev::OK).0, cmd::SOUND, "UP from Screen lands on Sound");
 }
 
 #[test]

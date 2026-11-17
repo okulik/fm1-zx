@@ -25,7 +25,7 @@
 #define OSK_KEYS 10u
 #define OSK_KEY_W 3u
 
-enum { IT_RESUME, IT_RESET, IT_KEYBOARD, IT_KEYMAP, IT_SPEED, IT_SOUND, IT_SCREEN, IT_LEAVE, IT_COUNT };
+enum { IT_RESUME, IT_RESET, IT_KEYBOARD, IT_KEYMAP, IT_SPEED, IT_SOUND, IT_EFFECTS, IT_SCREEN, IT_LEAVE, IT_COUNT };
 
 /* The Sound item's choices, by SND_MODE_*. */
 static const char *const sound_names[] = { "Beeper", "FM: sound", "FM: engines" };
@@ -81,6 +81,12 @@ static void centred(unsigned row, const char *s, uint8_t ink, uint8_t paper)
     ui_text(n >= UI_COLS ? 0u : (UI_COLS - n) / 2u, row, s, ink, paper);
 }
 
+/* The Effects item exists only while Sound is FM: engines. */
+static int item_shown(const menu *mn, unsigned item)
+{
+    return item != IT_EFFECTS || mn->sound == SND_MODE_FM_B;
+}
+
 void menu_init(menu *mn, uint32_t game_count)
 {
     memset(mn, 0, sizeof *mn);
@@ -88,6 +94,7 @@ void menu_init(menu *mn, uint32_t game_count)
     mn->count = game_count;
     mn->divider = 4;
     mn->sound = SND_MODE_FM_B;
+    mn->effects = 1u;
     mn->screen = PIX_FIT_SMOOTH;
 }
 
@@ -335,8 +342,14 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
     case VIEW_MENU:
         if (ev == EV_UP) {
             mn->item = (uint8_t)(mn->item == 0 ? IT_COUNT - 1u : mn->item - 1u);
+            if (!item_shown(mn, mn->item)) {
+                mn->item--;
+            }
         } else if (ev == EV_DOWN) {
             mn->item = (uint8_t)(mn->item + 1u >= IT_COUNT ? 0u : mn->item + 1u);
+            if (!item_shown(mn, mn->item)) {
+                mn->item++;
+            }
         } else if (ev == EV_HOME || ev == EV_BACK) {
             mn->view = VIEW_GAME;
             return CMD_RESUME;
@@ -362,6 +375,10 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
                 mn->sound = (uint8_t)(mn->sound + 1u >= SND_MODE_COUNT ? 0u : mn->sound + 1u);
                 *arg = mn->sound;
                 return CMD_SOUND;
+            case IT_EFFECTS:
+                mn->effects = (uint8_t)!mn->effects;
+                *arg = mn->effects;
+                return CMD_EFFECTS;
             case IT_SCREEN:
                 mn->screen = (uint8_t)(mn->screen + 1u >= PIX_MODE_COUNT ? 0u : mn->screen + 1u);
                 *arg = mn->screen;
@@ -472,14 +489,17 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
 static void draw_menu(const menu *mn)
 {
     static const char *const items[IT_COUNT] = {
-        "Resume", "Reset game", "Keyboard", "Key map", "LCD speed: ", "Sound: ", "Screen: ", "Back to games",
+        "Resume", "Reset game", "Keyboard", "Key map", "LCD speed: ", "Sound: ", "Effects: ", "Screen: ", "Back to games",
     };
-    unsigned i;
+    unsigned i, row = 0;
     ui_clear(INK, PAPER);
     centred(0, "FM-1 ZX", TITLE_INK, PAPER);
     for (i = 0; i < IT_COUNT; i++) {
         char line[UI_COLS + 1u];
         unsigned n = 0;
+        if (!item_shown(mn, i)) {
+            continue;
+        }
         int sel = i == mn->item;
         line[n++] = ' ';
         put_str(line, &n, items[i]);
@@ -487,11 +507,13 @@ static void draw_menu(const menu *mn)
             n += put_u32(line + n, mn->divider);
         } else if (i == IT_SOUND) {
             put_str(line, &n, sound_names[mn->sound < SND_MODE_COUNT ? mn->sound : 0u]);
+        } else if (i == IT_EFFECTS) {
+            put_str(line, &n, mn->effects ? "FM" : "Beeper");
         } else if (i == IT_SCREEN) {
             put_str(line, &n, screen_names[mn->screen < PIX_MODE_COUNT ? mn->screen : 0u]);
         }
         line[n] = '\0';
-        full_row(4u + 2u * i, line, sel ? BAR_INK : INK, sel ? BAR_PAPER : PAPER);
+        full_row(4u + 2u * row++, line, sel ? BAR_INK : INK, sel ? BAR_PAPER : PAPER);
     }
 }
 

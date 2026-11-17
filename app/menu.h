@@ -11,25 +11,28 @@
 
 enum { EV_NONE, EV_UP, EV_DOWN, EV_LEFT, EV_RIGHT, EV_OK, EV_BACK, EV_HOME, EV_PAUSE, EV_CAPS, EV_SYM };
 enum { VIEW_PICKER, VIEW_GAME, VIEW_MENU, VIEW_KEYS, VIEW_OSK, VIEW_PAUSED, VIEW_MESSAGE };
-enum { CMD_NONE, CMD_START, CMD_RESUME, CMD_RESET, CMD_LEAVE, CMD_DIVIDER, CMD_OSK_KEY, CMD_SOUND, CMD_SCREEN };
+enum { CMD_NONE, CMD_START, CMD_RESUME, CMD_RESET, CMD_LEAVE, CMD_DIVIDER, CMD_OSK_KEY, CMD_SOUND, CMD_SCREEN, CMD_EFFECTS };
 
 typedef struct menu {
     uint8_t view, item, divider, osk_x, osk_y, caps, sym;
     uint8_t sound; /* SND_MODE_* (core/sound/sound.h) */
     uint8_t screen; /* PIX_CROP ... (pixels.h) */
+    uint8_t effects; /* 1 = sound effects as FM (the default), 0 = on the beeper */
     uint32_t count, sel, top, keys_page;
     char msg[UI_COLS + 1u];
 } menu;
 
 /* Starts in VIEW_PICKER with `count` games (from pack_open), LCD speed 4, Sound FM: engines,
- * Screen Fit smooth. */
+ * Effects FM, Screen Fit smooth. */
 void menu_init(menu *mn, uint32_t game_count);
 /* Returns a CMD_*. arg: CMD_START game index (the view stays VIEW_PICKER; the device then calls
  * menu_set_view(VIEW_GAME) or menu_message), CMD_DIVIDER the new divider, CMD_OSK_KEY
  * key | caps << 8 | sym << 9 with key 0-39 = Spectrum row*5+bit (the sticky shifts are cleared),
  * CMD_SOUND the new SND_MODE_* (the Sound item cycles Beeper -> FM: sound -> FM: engines ->
  * Beeper), CMD_SCREEN the new PIX_* screen mode (the Screen item, right after Sound, cycles
- * Crop -> Fit -> Fit smooth -> Border -> Crop). Both choices are kept until power off: no view
+ * Crop -> Fit -> Fit smooth -> Border -> Crop), CMD_EFFECTS the new Effects value (1 FM, 0 Beeper;
+ * the Effects item sits directly under Sound and exists only while Sound is FM: engines, so
+ * UP/DOWN skip it otherwise; its value is kept while it is hidden). All three choices are kept until power off: no view
  * change, reset or game start touches them. */
 int menu_event(menu *mn, int ev, uint32_t *arg);
 int menu_view(const menu *mn);
