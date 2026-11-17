@@ -14,8 +14,8 @@
 //! the zx-sys layout of the fields after them differs from the device's.
 
 use emu_gate::budgets::{
-    choose_screen, choose_sound, screen_mode, sound_mode, SCREEN_BORDER, SCREEN_CROP, SCREEN_FIT, SCREEN_FIT_SMOOTH, SCREEN_ITEM,
-    SOUND_FM, SOUND_FM_B, SOUND_ITEM,
+    choose_screen, choose_sound, screen_item_in, screen_mode, sound_mode, SCREEN_BORDER, SCREEN_CROP, SCREEN_FIT,
+    SCREEN_FIT_SMOOTH, SCREEN_ITEM, SOUND_FM, SOUND_FM_B, SOUND_ITEM,
 };
 use emu_gate::fw::{assert_golden, build_dir, BootOpt, Firmware, Machine};
 use std::path::{Path, PathBuf};
@@ -180,7 +180,9 @@ fn host_menu_at(pack: &[u8], sound: u32, screen: u32, item: u32) -> Vec<u16> {
     assert_eq!(menu.event(zx_sys::ev::OK).0, zx_sys::cmd::START);
     menu.set_view(view::GAME);
     menu.event(zx_sys::ev::HOME);
-    for (cycles, at, cmd) in [(sound, SOUND_ITEM, zx_sys::cmd::SOUND), (screen, SCREEN_ITEM, zx_sys::cmd::SCREEN)] {
+    // the Sound item cycles Beeper -> FM: sound -> FM: engines, whose Effects item moves Screen down
+    let screen_at = screen_item_in(sound % 3);
+    for (cycles, at, cmd) in [(sound, SOUND_ITEM, zx_sys::cmd::SOUND), (screen, screen_at, zx_sys::cmd::SCREEN)] {
         if cycles > 0 {
             for _ in 0..at {
                 menu.event(zx_sys::ev::DOWN);

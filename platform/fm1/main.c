@@ -58,7 +58,8 @@ _Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole 
 /* Boot options from emu-gate (or anything that writes them before a reset): word 0 BOOTOPT_MAGIC,
  * word 1 bit 0 RGB565, bits 8-11 the LCD divider, and with bit 12 the Sound and Screen choices to
  * start with instead of the defaults: bits 16-17 SND_MODE_*, bits 20-22 PIX_* (out of range: the
- * default). First in NOINIT, never cleared by start-up; word 0 is cleared once read. */
+ * default), and bit 24 Effects: Beeper instead of FM. First in NOINIT, never cleared by start-up;
+ * word 0 is cleared once read. */
 uint32_t fmzx_bootopt[2] __attribute__((section(".noinit.bootopt"), aligned(4)));
 
 /* Read by emu-gate (FwStats): keep the layout in step with host/crates/emu-gate/src/fw.rs. */
@@ -114,6 +115,9 @@ uint32_t fmzx_sound_mode;
 /* The Screen item's choice, PIX_CROP ... (CMD_SCREEN; from the menu's default at power on): kept
  * across games until power off. Read by emu-gate. */
 uint32_t fmzx_screen_mode;
+/* The Effects item's choice, 1 FM or 0 Beeper (CMD_EFFECTS; from the menu's default at power on):
+ * kept across games until power off, each game's mixer starting with it. Read by emu-gate. */
+uint32_t fmzx_effects;
 static km_state kms;
 static struct {
     uint8_t loaded;      /* fmzx_machine holds a game */
@@ -413,6 +417,7 @@ static int game_start(uint32_t index)
     zx_beeper_init(&beeper, 750000u, 17u);   /* XIP: core/zx/beeper_init.c */
     /* the decoder's history and the delay ring start empty: nothing of the last game plays */
     snd_mixer_init(&mixer, 750000u, 17u);
+    mixer.effects = (uint8_t)fmzx_effects;
     learned_start(index);
     for (i = 0; i < LCD_ROWS; i++)
         border_sent[i] = line_seen[i] = NO_COLOUR;
@@ -547,6 +552,10 @@ static void handle_event(int ev)
         break;
     case CMD_SOUND: /* the mixer switches (with its crossfades) at the next frame */
         fmzx_sound_mode = arg;
+        break;
+    case CMD_EFFECTS: /* the mixer crossfades the follower in or out at the next frame */
+        fmzx_effects = arg;
+        mixer.effects = (uint8_t)arg;
         break;
     case CMD_SCREEN: { /* the whole panel again, in the new mode */
         unsigned r;
@@ -750,8 +759,11 @@ void fmzx_main(void)
         mn.sound = (uint8_t)((opt >> 16) & 3u);
         mn.screen = (uint8_t)((opt >> 20) & 7u);
     }
+    if ((opt & (1u << 12)) && (opt & (1u << 24)))
+        mn.effects = 0;
     fmzx_sound_mode = mn.sound;
     fmzx_screen_mode = mn.screen;
+    fmzx_effects = mn.effects;
 
     input_init();
     fmzx_master = input_master();

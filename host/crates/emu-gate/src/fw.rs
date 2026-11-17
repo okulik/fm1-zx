@@ -25,6 +25,8 @@ pub const BOOTOPT_MAGIC: u32 = 0x5A58_4F50;
 /// `fmzx_bootopt` word 1: the Sound (bits 16-17) and Screen (bits 20-22) choices to start with are
 /// given.
 pub const BOOTOPT_MODES: u32 = 1 << 12;
+/// `fmzx_bootopt` word 1, with [`BOOTOPT_MODES`]: start with Effects: Beeper instead of FM.
+pub const BOOTOPT_EFFECTS_BEEPER: u32 = 1 << 24;
 /// fm1-emu key id of the OCT- button.
 pub const KEY_OCT_DOWN: u8 = 0;
 /// The stock audio PLL as the FM-1's boot leaves it (felucca-bsp `FM1_AUDIO_PLL_STOCK0/1`;
@@ -200,8 +202,14 @@ impl Machine {
     /// Starts the image as the FM-1's boot loader does: in user mode at [`APP_BASE`], the
     /// stock audio PLL running, `fmzx_bootopt` written.
     pub fn boot(fw: &Firmware, opt: BootOpt) -> Machine {
+        Machine::boot_with(fw, opt, 0)
+    }
+
+    /// As [`Machine::boot`], with `bits` also set in `fmzx_bootopt` word 1 (the Sound choice in
+    /// bits 16-17, the Screen choice in bits 20-22, [`BOOTOPT_EFFECTS_BEEPER`]).
+    pub fn boot_with(fw: &Firmware, opt: BootOpt, bits: u32) -> Machine {
         let soc = Soc::new(RAM_SIZE as usize, fw.xip());
-        Machine::start(fw, soc, APP_BASE, Some(opt), true)
+        Machine::start(fw, soc, APP_BASE, Some((opt, bits)), true)
     }
 
     /// Starts an update package (`.fwsc`) the way fm1-emu's web page boots one
@@ -217,20 +225,20 @@ impl Machine {
         let params = RAM_BASE + 0x7_FC00;
         soc.write32(params, params + 0x40);
         fm1_soc::stock_boot(&mut soc, &st.flash, params, st.board);
-        Machine::start(fw, soc, st.entry, opt, false)
+        Machine::start(fw, soc, st.entry, opt.map(|o| (o, 0)), false)
     }
 
-    fn start(fw: &Firmware, mut soc: Soc, entry: u32, opt: Option<BootOpt>, stock_pll: bool) -> Machine {
+    fn start(fw: &Firmware, mut soc: Soc, entry: u32, opt: Option<(BootOpt, u32)>, stock_pll: bool) -> Machine {
         soc.periph.skip_idle = true;
         if stock_pll {
             for (reg, v) in AUDIO_PLL_STOCK {
                 soc.write32(reg, v);
             }
         }
-        if let Some(opt) = opt {
+        if let Some((opt, bits)) = opt {
             let bo = fw.symbol("fmzx_bootopt");
             soc.write32(bo, BOOTOPT_MAGIC);
-            soc.write32(bo + 4, u32::from(opt.rgb565) | u32::from(opt.divider & 15) << 8 | BOOTOPT_MODES);
+            soc.write32(bo + 4, u32::from(opt.rgb565) | u32::from(opt.divider & 15) << 8 | BOOTOPT_MODES | bits);
         }
         let mut cpu = Cpu::new(entry);
         cpu.user = true;

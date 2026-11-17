@@ -101,12 +101,13 @@ set_source_files_properties(${_ours} PROPERTIES
   COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-Wno-unused-function")
 # The sound library's and the core's start-up functions (core/sound/sound_init.c,
 # core/zx/beeper_init.c: XIP, they call nothing in RAMTEXT; main.c calls them directly), the
-# renamed sound library and core instead of zx_sound and zx_core themselves, then the rest of app/
-# (pixels.c and pixmodes.c come from the renamed objects above, so their archive members are never
-# pulled in).
-target_link_libraries(fmzx_app_image PRIVATE "$<TARGET_FILE:zx_sound_init>" "$<TARGET_FILE:zx_core_init>"
-  "${_ram}/libzx_sound.a" "${_ram}/libzx_core.a" "$<TARGET_FILE:fmzx_app>")
-add_dependencies(fmzx_app_image fmzx_app zx_core zx_core_init zx_sound zx_sound_init)
+# effects follower's reader (core/sound/fx_read.c: XIP, it calls nothing in RAMTEXT; the mixer
+# calls it through the pointer sound_init.c sets), the renamed sound library and core instead of
+# zx_sound and zx_core themselves, then the rest of app/ (pixels.c and pixmodes.c come from the
+# renamed objects above, so their archive members are never pulled in).
+target_link_libraries(fmzx_app_image PRIVATE "$<TARGET_FILE:zx_sound_init>" "$<TARGET_FILE:zx_sound_fx>"
+  "$<TARGET_FILE:zx_core_init>" "${_ram}/libzx_sound.a" "${_ram}/libzx_core.a" "$<TARGET_FILE:fmzx_app>")
+add_dependencies(fmzx_app_image fmzx_app zx_core zx_core_init zx_sound zx_sound_init zx_sound_fx)
 target_link_options(fmzx_app_image PRIVATE
   -T "${CMAKE_CURRENT_SOURCE_DIR}/app.ld" --orphan-handling=error -e _start --gc-sections --emit-relocs
   "-Map=${CMAKE_CURRENT_BINARY_DIR}/fmzx_app.map")

@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The beeper as the FM-1's audio out plays it, captured by fm1-emu (left channel), in the
-//! default Sound choice (Beeper), in FM: sound and in FM: engines. Needs the device build
-//! (`FMZX_FM1_BUILD`).
+//! default Sound choice (Beeper), in FM: sound and in FM: engines (its effects follower on and
+//! off). Needs the device build (`FMZX_FM1_BUILD`).
 //!
 //! Pack: `games/games.toml`; game 1 is `border.sna` (stripes and a 976 Hz tone).
 
-use emu_gate::budgets::{choose_sound, press_to, sound_mode, SOUND_BEEPER, SOUND_FM, SOUND_FM_B, SOUND_ITEM, VIEW_GAME, VIEW_MENU};
-use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
+use emu_gate::budgets::{
+    choose_effects, choose_sound, effects, press_to, sound_mode, EFFECTS_BEEPER, EFFECTS_FM, EFFECTS_ITEM, SOUND_BEEPER, SOUND_FM,
+    SOUND_FM_B, SOUND_ITEM, VIEW_GAME, VIEW_MENU,
+};
+use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine, BOOTOPT_EFFECTS_BEEPER};
 use fmzx_pack::testprogs::{BORDER_TONE_HZ, TUNE_HZ, TUNE_NOTE_FRAMES};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -45,7 +48,12 @@ fn pack() -> &'static [u8] {
 
 /// Boots with MASTER at full, starts the game at `index` and returns once its view is up.
 fn start_game(index: u32) -> Machine {
-    let mut m = Machine::boot(&firmware().with_pack(pack()), BootOpt { rgb565: false, divider: 4 });
+    start_game_with(index, 0)
+}
+
+/// As [`start_game`], with `bits` also in the boot options' word 1 ([`Machine::boot_with`]).
+fn start_game_with(index: u32, bits: u32) -> Machine {
+    let mut m = Machine::boot_with(&firmware().with_pack(pack()), BootOpt { rgb565: false, divider: 4 }, bits);
     m.set_adc(MASTER_ADC, 1023);
     m.run_ms(1500);
     assert_eq!(m.resets(), 0);
@@ -332,6 +340,131 @@ fn sound_menu_cycles_three() {
     assert_eq!(m.stats().frames, frames, "frames ran in the menu");
     press_to(&mut m, HOME, VIEW_GAME);
     assert_eq!(sound_mode(&m), SOUND_BEEPER);
+}
+
+#[test]
+fn effects_row_toggles() {
+    // from HOME in FM: engines, PLAY on the row under Sound: Effects FM -> Beeper -> FM, the menu
+    // staying up and the game's frames stopped
+    let mut m = start_border();
+    choose_sound(&mut m, SOUND_FM_B);
+    m.run_ms(100);
+    press_to(&mut m, HOME, VIEW_MENU);
+    let frames = m.stats().frames;
+    for _ in 0..EFFECTS_ITEM {
+        m.press(OCT_UP, 30);
+        m.run_ms(30);
+    }
+    assert_eq!(effects(&m), EFFECTS_FM, "Effects FM by default");
+    for want in [EFFECTS_BEEPER, EFFECTS_FM] {
+        m.press(PLAY, 30);
+        m.run_ms(30);
+        assert_eq!(effects(&m), want, "the Effects item's next choice");
+        assert_eq!(m.stats().view, VIEW_MENU, "the Effects item left the menu");
+    }
+    assert_eq!(sound_mode(&m), SOUND_FM_B, "the Effects item changed the Sound choice");
+    assert_eq!(m.stats().frames, frames, "frames ran in the menu");
+}
+
+/// The host's `border.sna` through the beeper and the mixer (`SndMixer`, the built-in engines as
+/// on the device) for `frames` frames: Beeper before frame `fm_from`, FM: engines from it, the
+/// effects follower on until frame `off_from` (None: throughout). Returns the mix, each frame's
+/// first sample in it (and the end) and the mixer's effects gate after each frame.
+fn host_border_mix(frames: usize, fm_from: usize, off_from: Option<usize>) -> (Vec<i16>, Vec<usize>, Vec<u8>) {
+    use zx_sys::{SndMixer, SND_MODE_BEEPER, SND_MODE_FM_B};
+    let g = zx_sys::pack_game_at(pack(), BORDER).expect("border entry");
+    let sna = g.extract(zx_sys::PACK_MAX_RAW as usize).expect("extract border");
+    let mut zx = zx_sys::Machine::new();
+    zx.load_sna(&sna).expect("load");
+    let mut b = zx_sys::Beeper::new(750_000, 17);
+    let mut mix = SndMixer::new(750_000, 17);
+    let (mut out, mut starts, mut gates) = (Vec::new(), vec![0usize], Vec::new());
+    for i in 0..frames {
+        zx.run_frame();
+        let level = zx.edges_start_level();
+        b.set_level(level);
+        let beeper = b.render(zx.edges());
+        if off_from == Some(i) {
+            mix.set_effects(false);
+        }
+        let mode = if i >= fm_from { SND_MODE_FM_B } else { SND_MODE_BEEPER };
+        out.extend(mix.frame(mode, Some(&zx), zx.edges(), level, &beeper));
+        starts.push(out.len());
+        gates.push(mix.fx_gate());
+    }
+    (out, starts, gates)
+}
+
+/// `border.sna` in Beeper for 500 ms, then FM: engines chosen from the HOME menu, and with
+/// `effects_off` Effects: Beeper chosen in a second visit 200 ms later: the device's audio equals
+/// the host mixer's ([`host_border_mix`], switched at the same frames) sample for sample over the
+/// 120 frames from the last switch. Returns that switch's frame and the host's effects gates.
+fn border_in_fm_engines(effects_off: bool) -> (usize, Vec<u8>) {
+    const FRAMES: usize = 120;
+    let mut m = start_border();
+    m.run_ms(500);
+    let mut mark = m.audio_left().len();
+    let fm_from = choose_sound(&mut m, SOUND_FM_B) as usize;
+    let mut from = fm_from;
+    let mut off_from = None;
+    if effects_off {
+        m.run_ms(200);
+        mark = m.audio_left().len();
+        from = choose_effects(&mut m, EFFECTS_BEEPER) as usize;
+        off_from = Some(from);
+    }
+    m.run_ms(3000);
+    let dev = m.audio_left();
+    let s = m.stats();
+    assert_eq!((s.underruns, s.overflows), (0, 0), "{s:?}");
+    assert_eq!(effects(&m), if effects_off { EFFECTS_BEEPER } else { EFFECTS_FM });
+    println!("FM: engines from frame {fm_from}, the last switch at frame {from}");
+
+    let (mixed, starts, gates) = host_border_mix(from + FRAMES + 10, fm_from, off_from);
+    // the device's audio after the menu (its silence, then the game again) holds the host's mix
+    let probe = starts[from + 8];
+    let p = mark + find(&dev[mark..], &mixed[probe..probe + 2000]).expect("the host's mix is not in the device audio");
+    let (a, b) = (starts[from], starts[from + FRAMES]);
+    assert!(p + b - probe <= dev.len(), "the device audio ends before {FRAMES} frames after the switch");
+    let first_diff = dev[p + a - probe..p + b - probe].iter().zip(&mixed[a..b]).position(|(x, y)| x != y);
+    assert_eq!(first_diff, None, "the device's audio differs from the host's mix from sample {first_diff:?} after the switch");
+    (from, gates)
+}
+
+#[test]
+fn fm_engines_effects_border() {
+    // border.sna's 976 Hz tone is not a known engine's: the effects follower plays it
+    let (from, gates) = border_in_fm_engines(false);
+    let not_play: Vec<(usize, u8)> =
+        (from..from + 120).filter(|&t| gates[t] != zx_sys::SND_FX_PLAY).map(|t| (t, gates[t])).collect();
+    assert!(not_play.is_empty(), "frames the follower did not play (frame, gate): {not_play:?}");
+}
+
+#[test]
+fn fm_engines_effects_off_border() {
+    let (from, _) = border_in_fm_engines(true);
+    // and the choice matters: with effects on the host's mix differs over those frames
+    let (on, starts, _) = host_border_mix(from + 130, from, None);
+    let (off, _, _) = host_border_mix(from + 130, from, Some(from));
+    assert!(on[starts[from]..starts[from + 120]] != off[starts[from]..starts[from + 120]], "effects on and off sound the same");
+}
+
+#[test]
+fn effects_boot_option() {
+    // boot options with FM: engines and Effects: Beeper: the game starts in them, and the device
+    // plays the host's mix with effects off from its first frame, sample for sample
+    let mut m = start_game_with(BORDER, SOUND_FM_B << 16 | BOOTOPT_EFFECTS_BEEPER);
+    assert_eq!((sound_mode(&m), effects(&m)), (SOUND_FM_B, EFFECTS_BEEPER));
+    m.run_ms(2000);
+    let dev = m.audio_left();
+    let (host, _, _) = host_border_mix(150, 0, Some(0));
+    let (on, _, _) = host_border_mix(150, 0, None);
+    let (d, h) = (first_loud(&dev), first_loud(&host));
+    assert!(dev.len() >= d + 44_100, "only {} samples after the first loud one", dev.len() - d);
+    let first_diff = dev[d..d + 44_100].iter().zip(&host[h..h + 44_100]).position(|(a, b)| a != b);
+    assert_eq!(first_diff, None, "device and host differ from sample {first_diff:?} on");
+    assert!(on[h..h + 44_100] != host[h..h + 44_100], "effects on and off sound the same");
+    assert_eq!(m.stats().underruns, 0);
 }
 
 /// Castaway's title tune in the FM choice `sound` (FM: sound or FM: engines), chosen from the

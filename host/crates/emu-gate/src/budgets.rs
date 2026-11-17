@@ -152,8 +152,30 @@ pub fn sound_mode(m: &Machine) -> u32 {
     m.peek32(m.symbol("fmzx_sound_mode"))
 }
 
-/// The HOME menu's Screen item: directly after Sound.
+/// The HOME menu's Effects item: directly after Sound, shown only while Sound is FM: engines.
+pub const EFFECTS_ITEM: u32 = SOUND_ITEM + 1;
+/// `fmzx_effects` values (`menu.effects`).
+pub const EFFECTS_BEEPER: u32 = 0;
+pub const EFFECTS_FM: u32 = 1;
+
+/// The firmware's Effects choice now (`fmzx_effects`).
+pub fn effects(m: &Machine) -> u32 {
+    m.peek32(m.symbol("fmzx_effects"))
+}
+
+/// The HOME menu's Screen item in Beeper and FM: sound: directly after Sound.
 pub const SCREEN_ITEM: u32 = SOUND_ITEM + 1;
+
+/// The Screen item while the Sound choice is `sound`: in FM: engines one further down, below the
+/// Effects item.
+pub const fn screen_item_in(sound: u32) -> u32 {
+    if sound == SOUND_FM_B {
+        EFFECTS_ITEM + 1
+    } else {
+        SCREEN_ITEM
+    }
+}
+
 /// `fmzx_screen_mode` values (`PIX_*` in `app/pixels.h`).
 pub const SCREEN_CROP: u32 = 0;
 pub const SCREEN_FIT: u32 = 1;
@@ -206,9 +228,16 @@ pub fn choose_sound(m: &mut Machine, mode: u32) -> u32 {
     choose_item(m, SOUND_ITEM, 3, sound_mode, mode, "Sound")
 }
 
-/// As [`choose_sound`], for the Screen item.
+/// As [`choose_sound`], for the Screen item (where it is in the Sound choice now).
 pub fn choose_screen(m: &mut Machine, mode: u32) -> u32 {
-    choose_item(m, SCREEN_ITEM, 4, screen_mode, mode, "Screen")
+    choose_item(m, screen_item_in(sound_mode(m)), 4, screen_mode, mode, "Screen")
+}
+
+/// As [`choose_sound`], for the Effects item (`EFFECTS_FM` or `EFFECTS_BEEPER`): the Sound choice
+/// must be FM: engines.
+pub fn choose_effects(m: &mut Machine, on: u32) -> u32 {
+    assert_eq!(sound_mode(m), SOUND_FM_B, "the Effects item shows only in FM: engines");
+    choose_item(m, EFFECTS_ITEM, 2, effects, on, "Effects")
 }
 
 /// Where a measurement starts, in ms after the game was started: the tapes are loaded by about
