@@ -29,6 +29,9 @@ void ui_art_top_row(unsigned y, uint8_t idx[LCD_W]);
 /* Copies the font (ROM 0x3D00, chars 32-127) and clears the grid to white on black; every row
  * counts as changed afterwards. `rom` is the 16 KiB 48K ROM. */
 void ui_init(const uint8_t *rom);
+/* Turns the menu art on (picker and HOME menu only): the band over LCD rows 0-63 and the corner
+ * stripes over rows 130-239. ui_clear turns it off; a change repaints every LCD row. */
+void ui_set_art(int on);
 /* Fills every cell with a space. Colours are palette indices 0-15 (8-15 bright). */
 void ui_clear(uint8_t ink, uint8_t paper);
 /* Draws `s` from cell (col, row); clipped at the grid edge. Chars outside 32-127 show as '?'. */

@@ -82,10 +82,10 @@ fn picker_lists_and_scrolls() {
     let mut ui = Ui::new();
     let mut m = Menu::new(30);
     ui.draw(&m, Some(&pack));
-    assert!(ui.row_text(0).contains("FM-1 ZX"));
+    assert!(find_row(&ui, "FM-1 ZX").is_none());
     assert!(find_row(&ui, "Game 00").is_some());
-    assert!(find_row(&ui, "Game 23").is_some());
-    assert!(find_row(&ui, "Game 24").is_none());
+    assert!(find_row(&ui, "Game 19").is_some());
+    assert!(find_row(&ui, "Game 20").is_none());
     // the selected row has the bright cyan bar
     let r = find_row(&ui, "Game 00").unwrap();
     assert_eq!(ui.compose_row(r * 8 + 3)[239], 13);
@@ -643,5 +643,162 @@ fn art_band_matches_png() {
             })
             .collect();
         assert_eq!(zx_sys::ui_art_top_row(y as u32).to_vec(), want, "band row {y}");
+    }
+}
+
+// ---- the menu art on the picker and the HOME menu ----
+
+fn names(n: usize) -> Vec<String> {
+    (0..n).map(|i| format!("Game {i:02}")).collect()
+}
+
+fn composed(ui: &Ui) -> Vec<[u8; 240]> {
+    (0..240).map(|r| ui.compose_row(r)).collect()
+}
+
+/// The first x of LCD row y where the stripe rule gives k == 0 (None if no stripe starts on the row).
+fn stripe_start(y: i32) -> Option<usize> {
+    (0..240).find(|&x| 100 * (x as i32 - 171 - 22) - 42 * (239 - y) >= 0)
+}
+
+#[test]
+fn picker_layout_with_art() {
+    let n = names(25);
+    let refs: Vec<&str> = n.iter().map(String::as_str).collect();
+    let pack = build_pack(&refs);
+    let mut ui = Ui::new();
+    let m = Menu::new(25);
+    ui.draw(&m, Some(&pack));
+    assert_eq!(find_row(&ui, "Game 00"), Some(8));
+    assert_eq!(find_row(&ui, "Game 19"), Some(27));
+    assert!((0..8).all(|r| ui.row_text(r).trim().is_empty()));
+    assert_eq!(ui.row_text(29).trim_end(), " 1/25");
+    assert!(find_row(&ui, "FM-1 ZX").is_none());
+}
+
+#[test]
+fn home_layout_with_art() {
+    let mut m = open_menu();
+    let rows = rows_of(&m);
+    assert!(rows[9].contains("Resume"));
+    assert!(rows[11].contains("Reset game"));
+    m.set_view(view::GAME);
+    m.event(ev::HOME);
+    to_sound(&mut m);
+    assert!(rows_of(&m)[25].contains("Back to games"));
+}
+
+#[test]
+fn art_on_picker_and_home() {
+    let mut ui = Ui::new();
+    for v in [view::PICKER, view::MENU] {
+        let mut m = Menu::new(3);
+        m.set_view(v);
+        ui.draw(&m, None);
+        let rows = composed(&ui);
+        for y in 0..64 {
+            assert_eq!(rows[y], zx_sys::ui_art_top_row(y as u32), "view {v} row {y}");
+        }
+        let x0 = stripe_start(239).unwrap();
+        assert_eq!(rows[239][x0], 25);
+        assert!(!(25..=28).contains(&rows[239][x0 - 1]));
+        // all four stripes appear in order on the last row
+        let seen: Vec<u8> = rows[239].iter().copied().filter(|p| (25..=28).contains(p)).fold(vec![], |mut a, p| {
+            if a.last() != Some(&p) {
+                a.push(p);
+            }
+            a
+        });
+        assert_eq!(seen, [25, 26, 27, 28]);
+        // no stripe above row 130
+        assert!(rows[129].iter().all(|p| !(25..=28).contains(p)));
+    }
+}
+
+#[test]
+fn art_only_on_picker_and_home() {
+    let mut ui = Ui::new();
+    let mut m = Menu::new(2);
+    ui.draw(&m, None); // art on first, so a leak would show
+    let check = |ui: &Ui, what: &str| {
+        let rows = composed(ui);
+        assert!(rows[..64].iter().all(|r| r.iter().all(|&p| p <= 15)), "{what}: band");
+        assert!(rows[130..].iter().all(|r| r.iter().all(|&p| !(25..=28).contains(&p))), "{what}: stripes");
+    };
+    m.set_view(view::KEYS);
+    ui.draw(&m, None);
+    check(&ui, "keys");
+    m.set_view(view::OSK);
+    ui.draw(&m, None);
+    check(&ui, "osk");
+    m.set_view(view::PAUSED);
+    ui.draw(&m, None);
+    check(&ui, "paused");
+    m.message("Load failed");
+    ui.draw(&m, None);
+    check(&ui, "message");
+}
+
+#[test]
+fn art_stripes_over_selection() {
+    let n = names(25);
+    let refs: Vec<&str> = n.iter().map(String::as_str).collect();
+    let pack = build_pack(&refs);
+    let mut ui = Ui::new();
+    let mut m = Menu::new(25);
+    for _ in 0..19 {
+        m.event(ev::DOWN); // the 20th game, on grid row 27
+    }
+    ui.draw(&m, Some(&pack));
+    assert_eq!(find_row(&ui, "Game 19"), Some(27));
+    let row = ui.compose_row(220);
+    let x0 = stripe_start(220).unwrap();
+    assert!(row[x0 - 8..x0].iter().all(|&p| p == 13), "bar paper just left of the stripes (past the text)");
+    for x in 0..240 {
+        let u = 100 * (x as i32 - 171 - 22) - 42 * (239 - 220);
+        if (0..2000).contains(&u) {
+            assert_eq!(row[x] as i32, 25 + u / 500, "x={x}");
+        } else if x < x0 {
+            assert!(row[x] == 13 || row[x] == 0, "bar paper or ink at x={x}: {}", row[x]);
+        }
+    }
+}
+
+#[test]
+fn art_with_no_games() {
+    let mut ui = Ui::new();
+    let m = Menu::new(0);
+    ui.draw(&m, None);
+    assert_eq!(find_row(&ui, "No games"), Some(14));
+    assert_eq!(ui.compose_row(10), zx_sys::ui_art_top_row(10));
+    assert!(ui.row_text(29).trim().is_empty());
+}
+
+#[test]
+fn art_redraw_is_not_dirty_but_view_change_is() {
+    let mut ui = Ui::new();
+    let m = Menu::new(3);
+    ui.draw(&m, None);
+    ui.dirty_rows();
+    ui.draw(&m, None);
+    assert_eq!(ui.dirty_rows().0, 0, "the same picker again repaints nothing");
+}
+
+#[test]
+fn ui_pack_row_every_new_colour() {
+    // ui_palette[16..29] as 4-bit channels (RGB888 is each nibble * 17)
+    let pal: [(u32, u32, u32); 13] = [
+        (0xc, 0x9, 0xd), (0x8, 0x7, 0xd), (0x6, 0x6, 0xb), (0x2, 0x2, 0x1), (0x3, 0x3, 0x6), (0x9, 0x8, 0xd), (0x8, 0x7, 0xc),
+        (0x7, 0x6, 0xb), (0xd, 0xe, 0xe), (0xe, 0x2, 0x2), (0xf, 0xa, 0x1), (0x5, 0xb, 0x4), (0x1, 0x9, 0xd),
+    ];
+    for (i, &(r, g, b)) in pal.iter().enumerate() {
+        let mut idx = [0u8; 240];
+        idx[0] = 16 + i as u8;
+        let o = zx_sys::ui_pack_row(PixFormat::Rgb444, &idx);
+        assert_eq!((o[0], o[1] >> 4), (((r << 4) | g) as u8, b as u8), "444 colour {}", 16 + i);
+        let o = zx_sys::ui_pack_row(PixFormat::Rgb565, &idx);
+        let (r8, g8, b8) = (r * 17, g * 17, b * 17);
+        let want = (((r8 >> 3) << 11) | ((g8 >> 2) << 5) | (b8 >> 3)) as u16;
+        assert_eq!(u16::from_be_bytes([o[0], o[1]]), want, "565 colour {}", 16 + i);
     }
 }

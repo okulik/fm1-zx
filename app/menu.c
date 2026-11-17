@@ -16,8 +16,8 @@
 #define KEY_INK 7u
 #define KEY_PAPER 1u     /* blue */
 
-#define PICKER_FIRST 1u  /* grid row of the first game name */
-#define PICKER_ROWS 24u
+#define PICKER_FIRST 8u  /* grid row of the first game name */
+#define PICKER_ROWS 20u
 #define KEYS_FIRST 2u
 #define KEYS_PAGE 24u
 #define KEYS_MAX_PAGE 4u /* 110 mappings at most, 24 per page */
@@ -451,7 +451,7 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
 {
     unsigned r;
     ui_clear(INK, PAPER);
-    centred(0, "FM-1 ZX", TITLE_INK, PAPER);
+    ui_set_art(1);
     if (mn->count == 0) {
         centred(14, "No games", INK, PAPER);
         return;
@@ -482,7 +482,7 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
         foot[n++] = '/';
         n += put_u32(foot + n, mn->count);
         foot[n] = '\0';
-        ui_text(UI_COLS - n - 1u, UI_ROWS - 1u, foot, INK, PAPER);
+        ui_text(1, UI_ROWS - 1u, foot, INK, PAPER);
     }
 }
 
@@ -493,7 +493,7 @@ static void draw_menu(const menu *mn)
     };
     unsigned i, row = 0;
     ui_clear(INK, PAPER);
-    centred(0, "FM-1 ZX", TITLE_INK, PAPER);
+    ui_set_art(1);
     for (i = 0; i < IT_COUNT; i++) {
         char line[UI_COLS + 1u];
         unsigned n = 0;
@@ -513,7 +513,7 @@ static void draw_menu(const menu *mn)
             put_str(line, &n, screen_names[mn->screen < PIX_MODE_COUNT ? mn->screen : 0u]);
         }
         line[n] = '\0';
-        full_row(4u + 2u * row++, line, sel ? BAR_INK : INK, sel ? BAR_PAPER : PAPER);
+        full_row(9u + 2u * row++, line, sel ? BAR_INK : INK, sel ? BAR_PAPER : PAPER);
     }
 }
 

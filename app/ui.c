@@ -11,6 +11,7 @@ static uint8_t cell_ch[UI_ROWS][UI_COLS];
 static uint8_t cell_at[UI_ROWS][UI_COLS];
 static uint8_t shown_ch[UI_ROWS][UI_COLS];
 static uint8_t shown_at[UI_ROWS][UI_COLS];
+static uint8_t art_on, shown_art;
 
 #define PIDX(i) {PIX_R8(i), PIX_G8(i), PIX_B8(i)}
 #define PCOL(r, g, b) {(uint8_t)((r) * 17u), (uint8_t)((g) * 17u), (uint8_t)((b) * 17u)}
@@ -88,8 +89,14 @@ void ui_init(const uint8_t *rom)
     memset(shown_ch, 0, sizeof shown_ch); /* 0 is never drawn: every row differs */
 }
 
+void ui_set_art(int on)
+{
+    art_on = on != 0;
+}
+
 void ui_clear(uint8_t ink, uint8_t paper)
 {
+    art_on = 0;
     memset(cell_ch, ' ', sizeof cell_ch);
     memset(cell_at, attr(ink, paper), sizeof cell_at);
 }
@@ -132,6 +139,26 @@ void ui_compose_row(unsigned lcd_row, uint8_t idx[LCD_W])
             idx[col * 8u + x] = (bits & (0x80u >> x)) ? ink : paper;
         }
     }
+    if (!art_on) {
+        return;
+    }
+    if (lcd_row < UI_ART_TOP_ROWS) {
+        ui_art_top_row(lcd_row, idx);
+    } else if (lcd_row >= 130u) {
+        /* corner stripes: u = 100 * (x - 193) - 42 * (239 - y), k = floor(u / 500), drawn for 0 <= k < 4;
+         * u grows with x, so start at the first x with u >= 0 and step to k = 4 */
+        int base = -19300 - 42 * (int)(239u - lcd_row); /* u at x = 0 */
+        for (x = 0; x < LCD_W; x++) {
+            int u = base + 100 * (int)x;
+            if (u >= 0) {
+                int k = u / 500;
+                if (k >= 4) {
+                    break;
+                }
+                idx[x] = (uint8_t)(25 + k);
+            }
+        }
+    }
 }
 
 void ui_invalidate(void)
@@ -143,6 +170,10 @@ uint32_t ui_dirty_rows(uint8_t rows[LCD_ROWS / 8u])
 {
     uint32_t n = 0;
     unsigned r;
+    if (art_on != shown_art) { /* the art appeared or went: the whole LCD changes */
+        shown_art = art_on;
+        ui_invalidate();
+    }
     for (r = 0; r < UI_ROWS; r++) {
         if (memcmp(cell_ch[r], shown_ch[r], UI_COLS) != 0 || memcmp(cell_at[r], shown_at[r], UI_COLS) != 0) {
             rows[r] = 0xFFu; /* text row r = LCD rows 8r..8r+7 = all bits of byte r */
