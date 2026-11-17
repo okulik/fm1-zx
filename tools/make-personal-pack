@@ -11,7 +11,9 @@
 #   -o DIR       the output folder
 #   --try        then run the browser test bench on these packages (tools/web-demo --packages DIR)
 #   --offline, --cache DIR   as for tools/make-packages
-# Needs the device builds build/fm1 and build/fm1-preview: run tools/make-packages once first.
+# Runs both device builds first (presets fm1 and fm1-preview, in Docker through tools/fm1-docker; a
+# no-op when they are up to date), so one command goes from a clean build/ to the packages.
+# FMZX_SKIP_DEVICE_BUILD=1 skips them (build/fm1 and build/fm1-preview must then exist).
 # Your games are only read; everything is written under DIR.
 set -eu
 
@@ -61,6 +63,12 @@ die() {
     exit 1
 }
 
+if [ "${FMZX_SKIP_DEVICE_BUILD:-0}" != 1 ]; then
+    for preset in fm1 fm1-preview; do
+        "$root/tools/fm1-docker" cmake --preset "$preset" >/dev/null
+        "$root/tools/fm1-docker" cmake --build --preset "$preset"
+    done
+fi
 for f in "$b/platform/fm1/fmzx_app.bin" "$p/platform/fm1/fmzx_app.bin" "$b/third_party/felucca-loader/loader.bin"; do
     [ -f "$f" ] || die "no $f: build the firmware first (tools/make-packages)"
 done

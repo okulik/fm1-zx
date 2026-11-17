@@ -113,6 +113,7 @@ fn fw_personal() {
         .arg("-o")
         .arg(&dir.0)
         .arg("--offline")
+        .env("FMZX_SKIP_DEVICE_BUILD", "1") // the builds under test, as they are
         .output()
         .expect("run tools/make-personal-pack");
     let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));

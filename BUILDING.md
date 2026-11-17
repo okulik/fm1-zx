@@ -145,9 +145,10 @@ a browser, and games cost more than the picker: the page is a preview, not a pro
 
 builds the two update packages with the games of a folder of yours instead of the built-in pack.
 They stay on your computer: everything goes under `build/personal/` (`-o DIR` for another
-folder), which git ignores, and the folder of games is only read. It needs the device builds
-(`build/fm1` and `build/fm1-preview`: run `tools/make-packages` once first); `--offline` and
-`--cache DIR` work as for `tools/make-packages`.
+folder), which git ignores, and the folder of games is only read. It runs both device builds
+first (in Docker, a no-op when they are up to date), so it works from a clean `build/`;
+`FMZX_SKIP_DEVICE_BUILD=1` skips them. `--offline` and `--cache DIR` work as for
+`tools/make-packages`.
 
 **The games file.** Given a folder, the command writes `build/personal/personal-games.toml`, one
 entry per loadable `.sna`, `.z80`, `.tap` or `.tzx` file of the folder (not its subfolders), in the
