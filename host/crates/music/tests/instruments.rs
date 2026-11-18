@@ -54,7 +54,7 @@ fn decisions(mut m: Machine) -> (u64, u64) {
 }
 
 /// Method A's and B's decisions on the corpus fixtures, as they were before the instruments
-/// (measured at 98dbd51, whose sound is main's, by printing `decisions` for each fixture); B's
+/// (measured at d476d2a, whose sound is main's, by printing `decisions` for each fixture); B's
 /// re-measured when its hold took in a tune's rests (SND_B_HOLD 50: it claims more silent frames).
 const DECISIONS_BEFORE: [(&str, u64, u64); 3] = [
     ("tune.sna", 0x537823d177f40da8, 0xb7c0ca46af747ae5),
@@ -103,7 +103,7 @@ fn loudness(s: &[i16]) -> (usize, i32, f64, usize) {
 }
 
 /// The FM output's loudness per fixture and mode before the instruments: (fixture, mode,
-/// samples played as FM, peak, RMS, samples at full scale), measured at 98dbd51 (main's sound)
+/// samples played as FM, peak, RMS, samples at full scale), measured at d476d2a (main's sound)
 /// with `fm_output` and `loudness` as they are here; FM: engines' sample counts re-measured when
 /// B's hold took in a tune's rests (more silent frames play as FM; peak and RMS as measured then).
 const LOUDNESS_BEFORE: [(&str, u8, usize, i32, f64, usize); 6] = [

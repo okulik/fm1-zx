@@ -5,8 +5,7 @@
 
 A ZX Spectrum 48K emulator firmware for the M-VAVE FM-1 synth, written in C for its pi32v2 CPU,
 with a host-side Rust test harness. The Z80 core is the redcode/Z80 library, vendored under
-`third_party/`. [AGENTS.md](AGENTS.md) is the map of the code for anyone (or any coding agent)
-working on it.
+`third_party/`.
 
 ## Status
 
@@ -76,4 +75,3 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
   the update mode, back to the stock firmware
 - [First device test](docs/hardware-test.md)
 - [Licensing](LICENSING.md): every component, its licence and how it is combined
-- [AGENTS.md](AGENTS.md): how the code is laid out and the rules for working on it
