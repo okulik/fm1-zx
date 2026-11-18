@@ -3,7 +3,8 @@
 
 //! The M-UPGRADE host's side of the USB-MIDI update protocol, against a booted firmware in
 //! fm1-emu (`Machine::soc.usb`): a Rust port of felucca-bsp's `tools/fm1_install.py`. Frames are
-//! `F0 pack7(00 59 cmd len24 body chk) F7`.
+//! `F0 pack7(00 59 cmd len24 body chk) F7`. Port of the commit
+//! 2a5af3dfc8bccb92e37d48a3e7e0bf9a5827e51f, step 1 (the running firmware's reads of the package).
 
 use crate::fw::Machine;
 
@@ -12,6 +13,18 @@ pub const HS_QUERY: [u8; 10] = [0xF0, 0x00, 0x32, 0x45, 0x00, 0x00, 0x00, 0x40, 
 /// The handshake with the one-byte body 01: a firmware on felucca-bsp's `chip/ota.c` answers its
 /// whole identity.
 pub const HS_FULL: [u8; 12] = [0xF0, 0x00, 0x32, 0x45, 0x08, 0x00, 0x00, 0x40, 0x00, 0x7E, 0x01, 0xF7];
+
+/// The upgrade command that starts the firmware's update session.
+pub const UPGRADE: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7F, 0xF7];
+/// The command that restarts the device into its boot loader ("soft uboot").
+pub const SOFT_UBOOT: [u8; 6] = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];
+/// The request address that ends step 1 (the package is checked).
+pub const FINISH_CHECK: u32 = 0xE000_0000;
+/// The most data one reply carries.
+pub const MAXDATA: usize = 512;
+const BLOCKS: usize = 20;
+const BLK: usize = 0x30;
+const KEEP: usize = 0x2F;
 
 /// 8-to-7 bit packing, LSB first.
 pub fn pack7(d: &[u8]) -> Vec<u8> {
@@ -88,6 +101,106 @@ pub fn handshake(m: &mut Machine, full: bool, max_ms: u64) -> Option<Identity> {
     None
 }
 
+/// The image the device reads during an update: the package without its 20 marker bytes (one after
+/// each of the first 20 blocks of 0x30 bytes).
+pub fn logical_image(fwsc: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(fwsc.len());
+    for i in 0..BLOCKS {
+        out.extend_from_slice(fwsc.get(i * BLK..i * BLK + KEEP).unwrap_or_default());
+    }
+    out.extend_from_slice(fwsc.get(BLOCKS * BLK..).unwrap_or_default());
+    out
+}
+
+/// A read reply: `00 59 30 len24 flags addr32 len24 data chk`, framed.
+fn response(addr: u32, data: &[u8], flags: u8) -> Vec<u8> {
+    let n = data.len();
+    let mut body = vec![0x00, 0x59, 0x30, ((n + 8) & 0xFF) as u8, (((n + 8) >> 8) & 0xFF) as u8, 0, flags];
+    body.extend_from_slice(&addr.to_le_bytes());
+    body.extend_from_slice(&[(n & 0xFF) as u8, ((n >> 8) & 0xFF) as u8, 0]);
+    body.extend_from_slice(data);
+    let chk = !body[6..].iter().fold(0u8, |s, &b| s.wrapping_add(b));
+    body.push(chk);
+    let mut msg = vec![0xF0];
+    msg.extend(pack7(&body));
+    msg.push(0xF7);
+    msg
+}
+
+/// A read request (`00 59 30`, length 8: flags, address, length): `(flags, addr, len)`.
+fn parse_request(msg: &[u8]) -> Option<(u8, u32, u32)> {
+    if msg.len() < 2 || msg[0] != 0xF0 || msg[msg.len() - 1] != 0xF7 {
+        return None;
+    }
+    let u = unpack7(&msg[1..msg.len() - 1]);
+    if u.len() != 15 || u[..3] != [0x00, 0x59, 0x30] || !u[6..14].iter().fold(0u8, |s, &b| s.wrapping_add(b)) != u[14] {
+        return None;
+    }
+    let addr = u32::from_le_bytes([u[7], u[8], u[9], u[10]]);
+    Some((u[6], addr, u32::from_le_bytes([u[11], u[12], u[13], 0])))
+}
+
+/// How step 1 ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Serve {
+    /// The firmware asked for `FINISH_CHECK` and was answered.
+    Success,
+    /// The host stopped answering (`ServeOpts::stop_after`).
+    Abandoned,
+    /// The device asked for something outside the package, or went quiet.
+    Refused(String),
+}
+
+/// What the host does.
+#[derive(Clone, Debug)]
+pub struct ServeOpts {
+    /// Stop answering after this many requests (the host gone).
+    pub stop_after: Option<u32>,
+    /// Flip one data byte in this reply (1-based).
+    pub corrupt_at: Option<u32>,
+    /// Emulated milliseconds without a request that end the session.
+    pub max_ms: u64,
+}
+
+/// Sends `UPGRADE` and answers the firmware's read requests from the logical image of `fwsc` until
+/// it asks for `FINISH_CHECK`.
+pub fn upgrade_step1(m: &mut Machine, fwsc: &[u8], o: &ServeOpts) -> Serve {
+    let image = logical_image(fwsc);
+    let _ = m.soc.usb.midi_take();
+    m.soc.usb.midi_send(&UPGRADE);
+    let (mut served, mut last) = (0u32, m.ms());
+    while m.ms() < last + o.max_ms {
+        m.run_ms(1);
+        for msg in m.soc.usb.midi_take() {
+            let Some((fl, addr, n)) = parse_request(&msg) else { continue };
+            last = m.ms();
+            if addr == FINISH_CHECK {
+                m.soc.usb.midi_send(&response(addr, b"success\0", 0));
+                return Serve::Success;
+            }
+            let (a, n) = (addr as usize, n as usize);
+            if n > MAXDATA || a.checked_add(n).is_none_or(|e| e > image.len()) {
+                return Serve::Refused(format!("a read of {addr:#x}+{n}, outside the package"));
+            }
+            if o.stop_after.is_some_and(|k| served >= k) {
+                return Serve::Abandoned;
+            }
+            served += 1;
+            let mut data = image[a..a + n].to_vec();
+            if o.corrupt_at == Some(served) && !data.is_empty() {
+                data[0] ^= 0xFF;
+            }
+            m.soc.usb.midi_send(&response(addr, &data, fl));
+        }
+    }
+    Serve::Refused(format!("no request for {} ms", o.max_ms))
+}
+
+/// Sends the soft-uboot command.
+pub fn soft_uboot(m: &mut Machine) {
+    m.soc.usb.midi_send(&SOFT_UBOOT);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +228,37 @@ mod tests {
         msg.extend(pack7(&d));
         msg.push(0xF7);
         msg
+    }
+
+    #[test]
+    fn logical_image_length() {
+        let Ok(raw) = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../build/fm1/fmzx.fwsc")) else {
+            eprintln!("skipped: build/fm1/fmzx.fwsc is absent (tools/make-packages)");
+            return;
+        };
+        let img = logical_image(&raw);
+        // what fm1_install.py's logical_image gives for that package: the 20 marker bytes dropped
+        assert_eq!(img.len(), 616079);
+        assert_eq!(img.len(), raw.len() - BLOCKS);
+        assert_eq!(&img[..KEEP], &raw[..KEEP]);
+        assert_eq!(&img[KEEP..2 * KEEP], &raw[BLK..BLK + KEEP]);
+    }
+
+    #[test]
+    fn request_and_response_frames() {
+        let body = [0x00, 0x59, 0x30, 8, 0, 0, 0x02, 0x00, 0x10, 0x00, 0x00, 0x00, 0x02, 0x00];
+        let mut u = body.to_vec();
+        u.push(!u[6..].iter().fold(0u8, |s, &b| s.wrapping_add(b)));
+        let mut msg = vec![0xF0];
+        msg.extend(pack7(&u));
+        msg.push(0xF7);
+        assert_eq!(parse_request(&msg), Some((2, 0x1000, 512)));
+        let r = response(0x1000, &[1, 2, 3], 2);
+        let d = unpack7(&r[1..r.len() - 1]);
+        assert_eq!(&d[..7], &[0x00, 0x59, 0x30, 11, 0, 0, 2]);
+        assert_eq!(&d[7..11], &0x1000u32.to_le_bytes());
+        assert_eq!(&d[11..17], &[3, 0, 0, 1, 2, 3]);
+        assert_eq!(d[17], !d[6..17].iter().fold(0u8, |s, &b| s.wrapping_add(b)));
     }
 
     #[test]
