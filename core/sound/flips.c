@@ -52,7 +52,7 @@
 /* Short pulses (pulses.c): a step is a whole period, and the engine's work
  * for its other voices can shift a pulse by tens of T, so 28 T or 1/64 of
  * the step (a quarter of a semitone): with 1/256 a generated pin-pulse tune
- * kept 47% of its voice-frames with pulses shifted by up to 20 T but only 14%
+ * keeps 47% of its voice-frames with pulses shifted by up to 20 T but only 14%
  * up to 40 T; with 1/64, 54% and 49%, and none wrong. */
 #define TOL_DIV_P 64u
 

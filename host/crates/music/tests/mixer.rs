@@ -393,10 +393,9 @@ fn mix_live(m: &mut Machine, frames: usize, mode_of: impl Fn(usize) -> u8) -> (V
 
 #[test]
 fn fm_a_unchanged() {
-    // FM: sound (method A) plays sample for sample as it did when the live rule gave its voices
-    // their roles (tests/roles.rs; Colony 8's first 12 s are a lone voice, a lead, as before); its
-    // decisions are pinned apart, unchanged since before (tests/instruments.rs,
-    // decisions_unchanged)
+    // FM: sound (method A)'s output, sample for sample, with the live rule giving its voices
+    // their roles (tests/roles.rs; Colony 8's first 12 s are a lone voice, a lead); its decisions
+    // are pinned apart (tests/instruments.rs, decisions_unchanged)
     for (name, m, want) in [
         ("castaway", castaway(), 0xc579d5b7c8aad978u64),
         ("colony8", music::colony8(), 0xd69dd22c970004b0),
@@ -451,7 +450,7 @@ fn engines_claim_only_known_engines() {
     }
     assert_eq!(b.name(0), "");
     let names: Vec<String> = (1..=7).map(|i| b.name(i)).collect();
-    assert_eq!(names, ["Castaway", "Colony 8", "ROM BEEP", "Cave Runner title", "Cave Runner in game", "Unison", ""]);
+    assert_eq!(names, ["Castaway", "Colony 8", "ROM BEEP", "Two-count tune", "Burst tune", "Unison melody", ""]);
     assert_eq!(t.name(7), "Test burst");
     let frames = castaway_frames(600);
     let mut mixer = SndMixer::new(RATE.0, RATE.1);

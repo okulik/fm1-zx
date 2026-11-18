@@ -12,7 +12,7 @@
 //! it was read with last). A sample spans two of the site's flips, and a channel with `s` sites
 //! flips at each of them in turn, so a sample is `2 s` half periods. The samples are grouped by
 //! their predicted period; a sample is an inlier within 0.6% + 160/n T of its prediction, n its
-//! group's size (the spike's tolerance). A group of at least `MIN_GROUP` samples whose trimmed
+//! group's size. A group of at least `MIN_GROUP` samples whose trimmed
 //! mean is within that of its prediction is a note; one whose trimmed mean is not is a wrong
 //! note ([`FitResult::wrong`]), which the gates refuse however few samples it holds against the
 //! rest: the entry would play that note wrong.
@@ -127,7 +127,7 @@ fn fit_periods(model: &EngineModel, heard: &SiteHeard, played: bool) -> Result<F
     for &(got, pr) in &pairs {
         groups.entry(key(pr)).or_insert((pr, Vec::new())).1.push(got);
     }
-    // a group agrees (the spike's check): at least MIN_GROUP samples, their trimmed mean within
+    // a group agrees: at least MIN_GROUP samples, their trimmed mean within
     // 0.6% + 160/n T of the prediction; its inliers are its samples within that too. A group of
     // MIN_GROUP samples or more whose trimmed mean is not within it is a wrong note.
     let mut inliers = 0usize;
@@ -167,7 +167,7 @@ fn fit_periods(model: &EngineModel, heard: &SiteHeard, played: bool) -> Result<F
     })
 }
 
-/// The mean of the values within 6% of their median (the spike's).
+/// The mean of the values within 6% of their median.
 fn trimmed_mean(v: &[f64]) -> f64 {
     let mut w = v.to_vec();
     w.sort_by(f64::total_cmp);

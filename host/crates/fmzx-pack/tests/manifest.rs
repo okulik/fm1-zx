@@ -9,7 +9,7 @@ const MINIMAL: &str = r#"
 [[game]]
 id = "cave-runner"
 name = "Cave Runner"
-file = "games/mm.sna"
+file = "games/cave-runner.sna"
 "#;
 
 fn keys(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -23,11 +23,11 @@ fn parse_minimal() {
     let g = &m.game[0];
     assert_eq!(g.id, "cave-runner");
     assert_eq!(g.name, "Cave Runner");
-    assert_eq!(g.file, "games/mm.sna");
+    assert_eq!(g.file, "games/cave-runner.sna");
     assert_eq!(g.crop, 8);
     assert!(g.keys.is_empty());
     assert_eq!(g.demo, None);
-    assert_eq!(game_path(Path::new("/x/y"), g), Path::new("/x/y/games/mm.sna"));
+    assert_eq!(game_path(Path::new("/x/y"), g), Path::new("/x/y/games/cave-runner.sna"));
 }
 
 #[test]

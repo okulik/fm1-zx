@@ -383,7 +383,7 @@ fn same_byte_in_one_half_period_is_one_channel() {
     assert!(md.duration.is_none() && !md.table_walk);
 }
 
-// ---- review round 1: three unsound shapes -------------------------------------------------
+// ---- three unsound shapes -------------------------------------------------------------------
 
 #[test]
 fn slots_phase_in_a_register() {
@@ -440,7 +440,7 @@ fn table_walk_needs_the_advanced_pointer() {
     assert!(!md.table_walk);
 }
 
-// ---- Task 10: specific refusals ----------------------------------------------------------------
+// ---- specific refusals ------------------------------------------------------------------------
 
 /// A square loop whose setup path (from the zero test's exit at 800Ah) passes `n` two-way
 /// branches that meet again at once, so 2^n paths lead back into the pass:

@@ -20,7 +20,7 @@
  * The rule gives a role every frame; the synth takes a voice's role only when a note starts on it
  * (fm.c), so a voice never changes instrument inside a note.
  *
- * The values (2.56 s, 3 semitones, 4 s: the starting points kept), checked on the corpus over 3
+ * The values (2.56 s, 3 semitones, 4 s), checked on the corpus over 3
  * minutes each in the mixer (tests/roles.rs): in FM: engines Colony 8's channels 0 and 1 are
  * bass and lead from the start; channel 2, a second bass line, enters at 11.5 s 2 semitones
  * below channel 0 and is the bass by its own pitch (channel 0 the pad), until it lies the margin

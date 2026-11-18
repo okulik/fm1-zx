@@ -14,11 +14,12 @@
 //!   accumulators with steps BC / DE (swapped with the alternate set inside the loop) and SP,
 //!   duty thresholds at 9500h / 950Ah / 9512h (0 = silent). f = step x 3.5 MHz / (loop x 65536).
 //!   The drum routines at 9496h (a tone burst) and 94ADh (ROM noise) stop the loop.
-//! - Cave Runner (for the local corpus tool only; never loaded by committed tests): the title
-//!   tune (loop 92F8h-930Dh, IY pointing at [duration, N1, N2]; a channel's half-period
-//!   [`half_mm_title`] depends on both counts) and the in-game tune (burst loop 8852h, 40 T per pass, note
-//!   index 845Bh into the table at 858Ch, flag 845Ch bit 1 = off, f = 3.5 MHz / (2 x E x 40)).
-//! - Unison (for the local corpus tool only, as Cave Runner): the melody loop 81C6h-81E9h, two
+//! - The two-count and burst tunes, one game's (for the local corpus tool only; never loaded by
+//!   committed tests): the two-count tune (loop 92F8h-930Dh, IY pointing at [duration, N1, N2];
+//!   a channel's half-period [`half_two_count`] depends on both counts) and the burst tune (burst
+//!   loop 8852h, 40 T per pass, note index 845Bh into the table at 858Ch, flag 845Ch bit 1 = off,
+//!   f = 3.5 MHz / (2 x E x 40)).
+//! - The unison melody (for the local corpus tool only, as above): the melody loop 81C6h-81E9h, two
 //!   16-bit counters reloaded from the operands at 81CDh (N) and 81DFh (N - 1), each flipping the
 //!   speaker (a channel's half-period [`half_unison`] depends on both), read while the PC is in
 //!   81B4h-81E9h (the drums run from the interrupt routine and are not read).
@@ -31,18 +32,18 @@ const CPU_HZ: f64 = 3_500_000.0;
 /// included).
 pub const LOOP_CASTAWAY: f64 = 156.6;
 pub const LOOP_COLONY8: f64 = 155.9;
-pub const LOOP_MM_GAME: f64 = 40.0;
+pub const LOOP_BURST: f64 = 40.0;
 
-/// Cave Runner's title tune: the half-period (T) of a channel counting `n` passes while the other
+/// The two-count tune: the half-period (T) of a channel counting `n` passes while the other
 /// counts `other` (0 is 256 for both). A pass is 56 T, 11 more every 256 passes (B wraps), 21 more
 /// for each counter reloaded in it and about 2 T of the OUT's contention after each reload; the
 /// other channel reloads n / other times in the half-period.
-pub fn half_mm_title(n: u32, other: u32) -> f64 {
+pub fn half_two_count(n: u32, other: u32) -> f64 {
     let (n, o) = (f64::from(if n == 0 { 256 } else { n }), f64::from(if other == 0 { 256 } else { other }));
     (56.0 + 11.0 / 256.0) * n + 23.0 * (1.0 + n / o)
 }
 
-/// Unison's melody: the half-period (T) of a channel counting `n` passes while the other counts
+/// The unison melody: the half-period (T) of a channel counting `n` passes while the other counts
 /// `other` (0 is 65,536). A pass is 48 T, 46 more for each counter reloaded in it and about 1.5 T
 /// of the OUT's contention; the other channel reloads n / other times in the half-period.
 pub fn half_unison(n: u32, other: u32) -> f64 {
@@ -55,7 +56,7 @@ pub fn half_unison(n: u32, other: u32) -> f64 {
 pub enum Engine {
     Castaway,
     Colony8,
-    CaveRunner,
+    CountBurst,
     Unison,
 }
 
@@ -66,7 +67,6 @@ impl Engine {
         match n.as_str() {
             "castawy.tap" | "castaway.tap" => Some(Engine::Castaway),
             "colony8.tap" => Some(Engine::Colony8),
-            "mm.tap" | "cave.tap" | "caverunner.tap" | "cave runner.tap" => Some(Engine::CaveRunner),
             _ => None,
         }
     }
@@ -82,7 +82,7 @@ impl Engine {
         match self {
             Engine::Castaway => castaway(m),
             Engine::Colony8 => colony8(m),
-            Engine::CaveRunner => cave_runner(m),
+            Engine::CountBurst => count_burst(m),
             Engine::Unison => unison(m),
         }
     }
@@ -189,24 +189,24 @@ impl Colony8Drums {
     }
 }
 
-/// Cave Runner's title or in-game tune.
-pub fn cave_runner(m: &Machine) -> Option<Vec<(usize, f64)>> {
+/// The two-count tune or the burst tune.
+pub fn count_burst(m: &Machine) -> Option<Vec<(usize, f64)>> {
     let r = m.regs();
     if (0x92dc..=0x932f).contains(&r.pc) {
         let n = [1, 2].map(|k| u32::from(m.peek(r.iy.wrapping_add(k))));
-        return Some((0..2).map(|ch| (ch, CPU_HZ / (2.0 * half_mm_title(n[ch], n[1 - ch])))).collect());
+        return Some((0..2).map(|ch| (ch, CPU_HZ / (2.0 * half_two_count(n[ch], n[1 - ch])))).collect());
     }
     if (0x8000..0x9000).contains(&r.pc) && m.peek(0x845c) & 2 == 0 {
         let idx = m.peek(0x845b);
         let e = m.peek(0x858c + ((idx & 0x7e) >> 1) as u16) as f64;
         if e > 0.0 {
-            return Some(vec![(0, CPU_HZ / (2.0 * e * LOOP_MM_GAME))]);
+            return Some(vec![(0, CPU_HZ / (2.0 * e * LOOP_BURST))]);
         }
     }
     None
 }
 
-/// Unison's melody: one note doubled in detuned unison (channel 0 N, channel 1 N - 1).
+/// The unison melody: one note doubled in detuned unison (channel 0 N, channel 1 N - 1).
 pub fn unison(m: &Machine) -> Option<Vec<(usize, f64)>> {
     if !(0x81b4..=0x81e9).contains(&m.regs().pc) {
         return None;

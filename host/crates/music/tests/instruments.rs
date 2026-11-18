@@ -3,7 +3,7 @@
 
 //! The FM synth's instruments (`core/sound/fm.c`): each tonal voice plays the patch of its role
 //! (bass, lead, pad), latched when a note starts on it, and the drum is noise plus a tone. The
-//! mix stays as loud as before the instruments, and no decoder decision changes.
+//! mix stays as loud as the reference without the instruments, and no decoder decision changes.
 
 use music::{castaway, colony8, period_q8, test_sna, RATE};
 use std::f64::consts::TAU;
@@ -53,9 +53,9 @@ fn decisions(mut m: Machine) -> (u64, u64) {
     (ha, hb)
 }
 
-/// Method A's and B's decisions on the corpus fixtures, as they were before the instruments
-/// (measured at d476d2a, whose sound is main's, by printing `decisions` for each fixture); B's
-/// re-measured when its hold took in a tune's rests (SND_B_HOLD 50: it claims more silent frames).
+/// Method A's and B's decisions on the corpus fixtures, hashed by `decisions` (the test prints
+/// them), B's with its hold over a tune's rests (SND_B_HOLD 50). The instruments leave them as
+/// they are; a change to them must be explained.
 const DECISIONS_BEFORE: [(&str, u64, u64); 3] = [
     ("tune.sna", 0x537823d177f40da8, 0xb7c0ca46af747ae5),
     ("castaway", 0x462b732f90e30155, 0x33a0f4f49c6d1206),
@@ -102,10 +102,10 @@ fn loudness(s: &[i16]) -> (usize, i32, f64, usize) {
     (s.len(), peak, rms, full)
 }
 
-/// The FM output's loudness per fixture and mode before the instruments: (fixture, mode,
-/// samples played as FM, peak, RMS, samples at full scale), measured at d476d2a (main's sound)
-/// with `fm_output` and `loudness` as they are here; FM: engines' sample counts re-measured when
-/// B's hold took in a tune's rests (more silent frames play as FM; peak and RMS as measured then).
+/// The FM output's reference loudness per fixture and mode, without the instruments: (fixture,
+/// mode, samples played as FM, peak, RMS, samples at full scale), with `fm_output` and `loudness`
+/// as they are here. The sample counts are the current code's (FM: engines' with B's hold over a
+/// tune's rests); peak and RMS are the reference the instruments' mix is held to.
 const LOUDNESS_BEFORE: [(&str, u8, usize, i32, f64, usize); 6] = [
     ("tune.sna", SND_MODE_FM_A, 1294983, 6056, 2441.7, 0),
     ("tune.sna", SND_MODE_FM_B, 0, 0, 0.0, 0), // no engine entry knows tune.sna's loop
@@ -138,8 +138,8 @@ fn loudness_matches_today() {
             println!("{name} mode {mode}: peak {peak} ({dp:+.2} dB), RMS {rms:.1} ({dr:+.2} dB), {full} samples at full scale");
             // loudness is the RMS: within 1 dB. The peak may not rise by more than 1 dB nor clip
             // anew; it may fall further, since the lead's 2:1 FM is square-ish (more RMS for its
-            // peak than before: about 3.5 dB of crest factor less, so no gain keeps both within
-            // 1 dB)
+            // peak than the reference: about 3.5 dB of crest factor less, so no gain keeps both
+            // within 1 dB)
             if dp > 1.0 || dr.abs() > 1.0 || full > want_full {
                 bad.push(format!(
                     "{name} mode {mode}: peak {peak} against {want_peak}, RMS {rms:.1} against {want_rms:.1}, \

@@ -148,10 +148,3 @@ reproduced in `third_party/games/oneway/README.md` and copied as `COPYING.beeper
 Spectrum ROM's, addressed in place (`font.SpecCHR` is only in the cartridge build); the title screen is drawn by the
 game's code, and the sprites and levels are the author's own. The ZX0 and aPLib tools in the repository's `utils/`
 are not in the tape. Attribution: A World of One-Way by Serdjuk, <https://github.com/Serdjuk/A-World-of-One-way>.
-
-### Considered and left out
-
-- **Star Field**: its loading screen is "based on Angelo Nero's rainbow wormhole", for which no
-  licence was found.
-- **Mars Base**: its loading screen is Mike Smith's "Astronaut" art, which the game's GPL
-  explicitly excludes.

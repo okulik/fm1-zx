@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The short-pulse decoder (`core/sound/pulses.c`) and the style selector (`decoder.c`): a
-//! generated pin-pulse tune (three voices, a short pulse per period, noise bursts) at the spike's
-//! level, and the style reported in confident frames right on every synthetic style, the test
-//! tune and the pack's music.
+//! generated pin-pulse tune (three voices, a short pulse per period, noise bursts) decoded with at
+//! least 94% precision, 45% recall and at most one wrong note, and the style reported in
+//! confident frames right on every synthetic style, the test tune and the pack's music.
 
 use music::score::score;
 use music::synthetic::{frame_loop, frame_tune, pin_pulse, pin_tune, slots_loop, slots_tune, xor_loop, xor_tune, PIN_ROW_T};

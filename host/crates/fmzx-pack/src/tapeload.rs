@@ -57,8 +57,8 @@
 //!   screen, the editor). The message names the state of the most samples.
 //!
 //! A program that runs in the ROM passes: a BASIC part playing `BEEP`, a menu printed through
-//! `RST 10h`, a `PAUSE 0`. (The design asked for code in RAM in half of the samples; that refuses
-//! such games, so the test names the one ROM state that means the program has ended.)
+//! `RST 10h`, a `PAUSE 0`. (A test for code in RAM in half of the samples would refuse such
+//! games, so the test names the one ROM state that means the program has ended.)
 //!
 //! # The snapshot ([`save_z80`])
 //!
@@ -457,7 +457,7 @@ pub fn save_z80(m: &Machine) -> Vec<u8> {
     h
 }
 
-/// A game file ready for the pack (the routing of the design's goal 4):
+/// A game file ready for the pack, routed by its kind:
 ///
 /// - `.sna` and 48K `.z80`: as they are ("as is");
 /// - `.tap`, and `.tzx` with only standard blocks: as a tape ("tape") when the trap trial

@@ -41,7 +41,7 @@
 
 enum snd_style { SND_STYLE_NONE, SND_STYLE_SLOTS, SND_STYLE_FLIPS, SND_STYLE_PULSES, SND_STYLE_ENGINE };
 /* The Sound choices: the beeper itself; FM from the decoder (method A, "FM: sound"); FM from the
- * known music engines (method B, "FM: engines"). Plan 7 adds FM_C before COUNT. */
+ * known music engines (method B, "FM: engines"). */
 enum snd_mode { SND_MODE_BEEPER, SND_MODE_FM_A, SND_MODE_FM_B, SND_MODE_COUNT };
 
 /* What a tonal voice plays in the tune, and so the FM instrument it gets (fm.c): AUTO is no role

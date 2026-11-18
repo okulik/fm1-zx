@@ -263,18 +263,18 @@ fn engines_recognised_by_content() {
 
 #[test]
 fn engine_not_taken_from_the_name() {
-    // Castaway under another name is still Castaway and scored; tune.sna named like Cave Runner
-    // is not, and gets no truth
+    // Castaway under another name is still Castaway and scored; tune.sna named like Castaway or
+    // Colony 8 is not, and gets no truth
     let dir = temp("names");
     std::fs::copy(repo().join("third_party/games/castaway/castawy.tap"), dir.join("renamed_game.tap")).unwrap();
-    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("cave_runner_x.sna")).unwrap();
-    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("cave.tap.sna")).unwrap();
+    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("castaway_x.sna")).unwrap();
+    std::fs::copy(repo().join("games/test/tune.sna"), dir.join("colony8.tap.sna")).unwrap();
     let out = temp("namesout");
     let rows = run_folder(&dir, &Options { seconds: 20, wav: false, out: out.clone(), learn: false }).unwrap();
     let r = rows.iter().find(|r| r.file == "renamed_game.tap").unwrap();
     assert_eq!(r.engine, Some(Engine::Castaway));
     assert!(r.truth.is_some());
-    for f in ["cave_runner_x.sna", "cave.tap.sna"] {
+    for f in ["castaway_x.sna", "colony8.tap.sna"] {
         let r = rows.iter().find(|r| r.file == f).unwrap();
         assert!(r.engine.is_none() && r.truth.is_none(), "{f}");
     }
@@ -284,9 +284,9 @@ fn engine_not_taken_from_the_name() {
 
 #[test]
 fn unison_truth_digest() {
-    // Unison's melody loop joins the truth by its digest, not by the file name: tune.sna named
-    // like Unison is not Unison; a test-built image with the PC in the loop and the operands set
-    // reads N and N - 1 (no byte of Unison here), and is not recognised either
+    // the unison melody's loop joins the truth by its digest, not by the file name: tune.sna
+    // named after it is not it; a test-built image with the PC in the loop and the operands set
+    // reads N and N - 1 (no byte of the game here), and is not recognised either
     use music::corpus::detect_engine;
     use music::truth::Engine::Unison;
     let dir = temp("unison");
@@ -396,11 +396,11 @@ fn schedule_keys_match_parse_action() {
 }
 
 /// The learner with the built-in table disabled, on the repo's two games that have built-in
-/// entries (the spec's built-in agreement): neither tune routine is learned. The code reader
+/// entries: neither tune routine is learned. The code reader
 /// leaves Castaway's out at a zero test of flags that are not a counter's (its channel
 /// counters), and Colony 8's at a stack operation (`ADD HL,SP`: SP holds a phase step), so no
-/// learned entry exists to set against the built-in one. (A reader that learns either must add
-/// that agreement here: the learned periods within 0.2% of the built-in reader's on every frame
+/// learned entry exists to set against the built-in one. (A reader that learns either must check
+/// here that the two agree: the learned periods within 0.2% of the built-in reader's on every frame
 /// both claim.)
 #[test]
 fn builtins_agree() {

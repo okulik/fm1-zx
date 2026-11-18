@@ -5,15 +5,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # First device test
 
-The checklist for an FM-1. Before 2026-11-17 everything was proven in the host tests and fm1-emu
-only; the results so far are at the end.
+The checklist for an FM-1. What is verified on the device so far is at the end.
 
 **The device rule.** Every step that flashes the FM-1, sends it SysEx or opens its MIDI ports
 is marked **[owner's yes]** and is done only with the owner's explicit yes for that step, given
 at that moment. A yes for one step is not a yes for the next. Nothing here is automated.
 
-Write down the results (date, firmware build, the FM-1's stock firmware version) in
-`BUILDING.md`'s measured budgets, and keep the packages that were installed.
+Record what passes in "Verified on the device" at the end, and keep the packages that were
+installed.
 
 ## 0. Before anything is written
 
@@ -30,11 +29,11 @@ Write down the results (date, firmware build, the FM-1's stock firmware version)
 - [ ] Run `tools/make-packages` and `fmzx-pack verify` on both packages; run the whole test
       suite (`BUILDING.md`). Record the package SHA-256s.
 
-## 1. SPI pattern test (milestone 6; firmware not in this plan)
+## 1. SPI pattern test
 
-A small test firmware that only draws known patterns (stripes, a grid, colour bars, single-pixel
-lines) on the LCD at SPI dividers 4, 2, 1 and 0, a few seconds each, with the divider shown on
-screen. It is not part of this plan and is written first when the device arrives.
+A small test firmware, not in this repository, that only draws known patterns (stripes, a grid,
+colour bars, single-pixel lines) on the LCD at SPI dividers 4, 2, 1 and 0, a few seconds each,
+with the divider shown on screen.
 
 - [ ] Install the pattern test **[owner's yes]**.
 - [ ] For each divider (4, 2, 1, 0: 12, 20, 30, 60 MHz) the owner checks by eye: no torn or
@@ -82,7 +81,7 @@ screen. It is not part of this plan and is written first when the device arrives
 - [ ] In FM: sound, the effects in ZX Dino and ZX Sopwith stay on the beeper (their usual sound, only delayed), with no crackle.
 - [ ] FM: engines: set Sound to "FM: engines" and start Castaway: its title tune plays as FM with two voices, in tune.
 - [ ] The Sound choice survives Reset game and starting another game from the picker (it is back to Beeper after power-off).
-- [ ] Screen modes: in Castaway, set Screen to each choice in turn and resume. Crop looks as before. Fit shows the whole width, sharp, with no colour other than the Spectrum's. Fit smooth shows the whole width with soft column edges. Border shows the whole picture smaller with a thin border at the sides, the border colour above and below, and no stretched or squashed shapes. In every choice the picture is complete at once after leaving the menu, with no leftover rows from the previous choice.
+- [ ] Screen modes: in Castaway, set Screen to each choice in turn and resume. Crop shows 240 of the 256 columns with no side border. Fit shows the whole width, sharp, with no colour other than the Spectrum's. Fit smooth shows the whole width with soft column edges. Border shows the whole picture smaller with a thin border at the sides, the border colour above and below, and no stretched or squashed shapes. In every choice the picture is complete at once after leaving the menu, with no leftover rows from the previous choice.
 - [ ] Border with a changing border: set Screen to Border and start the Border and tone test ("Border and tone test"). Its stripes cover many lines and blend into the side columns: check that the stripes look right, including the blended side columns, and that no row is left over from an earlier frame.
 - [ ] Device speed of the flash-run modes: Scroll test and ZX Sopwith in Screen: Border and in Screen: Fit smooth, at LCD speed 4, then 1, then 0: the picture keeps up as in Crop, and the sound has no crackle. (`fw_budget` counts instructions and cannot see flash wait states on the real silicon; this is where they show.)
 - [ ] The HOME menu, the on-screen keyboard and PAUSED look the same in Border and Fit smooth as in Crop, and the game rows around the keyboard keep the chosen mode.
@@ -97,7 +96,7 @@ ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the
 - [ ] In a game: the notes and buttons act as the game's key map says (`docs/controls.md`,
       `games/games.toml`); PLAY pauses and resumes; HOME opens the menu; Reset game, Keyboard,
       Key map and Back to games work.
-- [ ] On-screen keyboard: the cursor moves, PLAY types, SAVE and REC give CAPS and SYMBOL SHIFT, OCT- moves it to the top of the screen and OCT+ back (the text adventure: what you type shows on its bottom line with the keyboard at the top).
+- [ ] On-screen keyboard: the cursor moves, PLAY types, SAVE and REC give CAPS and SYMBOL SHIFT, OCT- moves it to the top of the screen and OCT+ back (in a text adventure, what you type shows on its bottom line with the keyboard at the top).
 - [ ] Encoders: no skipped or doubled detents when turned slowly and quickly.
 - [ ] ZX Sopwith: F4 (N) starts a game; F#3/G#3 and G3 pull the plane up and down, A3 and F3 raise and lower the throttle, C5 fires; the status bar and the plane move without tearing.
 - [ ] Escape from Colony 8: OCT- chooses keyboard control at the title; F3/A3 walk left and right, F#3 and G3 go up and down, C5 shoots, and a held C5 charges a missile that leaves when released; the room scrolls without shifted rows.
@@ -120,8 +119,9 @@ or click.
 ### The way back
 
 - [ ] UBOOT gesture: switch off; hold OCT- while switching on and for one second, with the FM-1
-      connected by USB **[owner's yes]** (it opens the USB connection, as in section 0). Expected,
-      untested: the screen shows no picture and the computer sees the boot loader on USB.
+      connected by USB **[owner's yes]** (it opens the USB connection, as in section 0). Expected:
+      the screen shows no picture and the computer sees the boot loader on USB (verified behind
+      M-VAVE's stock bootloader, below).
 - [ ] A short OCT- tap at power-on: FM-1 ZX starts normally.
 - [ ] From the update mode, back to stock with M-VAVE's workbench (or a community recovery
       tool) **[owner's yes]**. The stock firmware starts and plays its patches.
@@ -132,25 +132,21 @@ or click.
 Only when all of section 2 has passed may `docs/install.md` drop its warning and a package be
 offered to anyone else.
 
-## Results
+## Verified on the device
 
-### 2026-11-17: first run
+The unit: stock firmware 015, flash chip 0x856014 (Puya). FM-1 ZX is installed with M-Flasher
+0.12.1 (`docs/install.md`), which backs up the whole flash before each write; it runs behind
+m-bootloader 2.4 and behind M-VAVE's stock bootloader.
 
-The unit: stock firmware 015, flash chip 0x856014 (Puya). M-Flasher 0.12.1 backed up the whole
-flash before each write. Installed with M-Flasher (`docs/install.md`), first behind m-bootloader 2.4,
-then behind M-VAVE's stock bootloader.
+- **Boots to the game picker** (the release package `fmzx.fwsc`).
+- **The UBOOT gesture works** behind the stock bootloader: with OCT- held at power-on the computer
+  sees the boot loader on USB, and M-Flasher installs from there.
+- Behind m-bootloader its own keys work whatever the firmware: PLAY at power-on opens its menu
+  (it shows APP OK for FM-1 ZX), REC at power-on enters download mode.
 
-- **Black screen, backlight on**, behind both bootloaders. The cause: the LCD start-up kept CS low
-  from SWRESET to DISPON, and the panel ignored every command after SWRESET. fm1-emu's panel ignores
-  CS, so no test saw it. Fixed: CS goes high after each command and its arguments; emu-gate
-  `lcd_deselects_between_start_up_commands` fails without the fix. Found with the boot probe
-  (preset `fm1-probe`): blink codes showed the start-up running, full-screen fills drawn the way
-  other FM-1 firmware draws them stayed dark until CS was raised.
-- **Boots to the game picker** with the fix (the release package `fmzx.fwsc`).
-- **The UBOOT gesture works** behind the stock bootloader: OCT- held at power-on, the computer saw
-  the boot loader on USB and M-Flasher installed from there.
-- Behind m-bootloader its own keys work regardless of the firmware: PLAY at power-on opens its menu
-  (it showed APP OK for FM-1 ZX), REC at power-on enters download mode.
+The panel needs CS high after each command and its arguments: with CS held low from SWRESET to
+DISPON it ignores every command after SWRESET and the screen stays black. fm1-emu's panel ignores
+CS; emu-gate's `lcd_deselects_between_start_up_commands` checks it. For a unit whose screen stays
+dark, the boot probe (preset `fm1-probe`) shows the start-up stages and faults on the LCD.
 
 Still open: everything in section 2 from the picker's colours on.
-

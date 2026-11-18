@@ -266,7 +266,7 @@ pub fn toggler_ambiguous() -> Fixture {
     }
 }
 
-/// Two channels flipping one level byte (9000h) in unison, Unison style but balanced: each pass
+/// Two channels flipping one level byte (9000h) in unison, unison-melody style but balanced: each pass
 /// D and E count down, and the one that reaches 0 is reloaded (from 9001h, 9002h: n1, n2) and
 /// XORs 10h into the level and OUTs it; the other path pads to the same time (73 T). A pass is
 /// 180 T, so channel c flips every `180 n_c` T. BC counts the note's passes. The table's notes

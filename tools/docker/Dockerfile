@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# The base image by digest (the multi-platform index of ubuntu:24.04 on 2026-11-12; the build
-# selects linux/amd64 from it).
+# The base image by digest (the multi-platform index of ubuntu:24.04; the build selects
+# linux/amd64 from it).
 FROM ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5
 
 ARG TOOLCHAIN_SHA256

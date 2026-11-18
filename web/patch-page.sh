@@ -27,8 +27,8 @@ edit 'addEventListener("keyup", (e) => {
   if (window.fmzxKey?.(e, false)) return;
 '
 edit 'const kept = await keptEntry(f.id);' 'const kept = f.fresh ? null : await keptEntry(f.id);'
-# the draw loop read the memory buffer before asking for the panel pointer, and the call can grow
-# (detach) the memory: take the pointer first
+# upstream's draw loop reads the memory buffer before asking for the panel pointer, and that call
+# can grow (detach) the memory: take the pointer first
 edit '  const mem = () => ui.memory.buffer;
 ' '  const mem = () => ui.memory.buffer;
   const view = (T, ptr, n) => new T(mem(), ptr, n);

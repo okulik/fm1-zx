@@ -228,7 +228,7 @@ fn decode_accepts_good_lists() {
 #[test]
 fn builtin_then_learned_table() {
     let names: Vec<String> = SndEngines::with_learned(&encode_list(&[base()])).expect("decodes").entries().into_iter().map(|e| e.name).collect();
-    assert_eq!(names, ["Castaway", "Colony 8", "ROM BEEP", "Cave Runner title", "Cave Runner in game", "Unison", "learned"]);
+    assert_eq!(names, ["Castaway", "Colony 8", "ROM BEEP", "Two-count tune", "Burst tune", "Unison melody", "learned"]);
 }
 
 #[test]

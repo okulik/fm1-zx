@@ -189,8 +189,8 @@ fn z80test_full_passes() {
     m.tape_autostart();
 
     // Run until z80test prints its "Result:" line, checked every 50 frames, or
-    // 60,000 frames pass. (The brief's "screen still for 50 frames" stop does
-    // not work: one test runs for longer than that without printing.)
+    // 60,000 frames pass. (A "screen still for 50 frames" stop does not
+    // work: one test runs for longer than that without printing.)
     let start = std::time::Instant::now();
     // The output outgrows the screen, so the ROM asks "scroll?" and waits
     // for a key: press ENTER (row 6, bit 0) whenever that shows.

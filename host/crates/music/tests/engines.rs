@@ -783,14 +783,14 @@ fn engine_tables_consistent() {
 
 #[test]
 fn readers_follow_the_loops() {
-    // Unison's and Cave Runner's title readers (their operands written into blank memory, no byte
+    // The unison melody's and the two-count tune's readers (their operands written into blank memory, no byte
     // of the games') against the loops' half-periods as the truth readers state them: each
     // channel's depends on both counts (the other channel's reloads fall in its half-period)
-    use music::truth::{half_unison, half_mm_title};
+    use music::truth::{half_two_count, half_unison};
     let b = SndEngines::new();
     let idx = |name: &str| b.entries().iter().position(|e| e.name == name).unwrap_or_else(|| panic!("{name}"));
     let near = |got: u32, half: f64| (f64::from(got) - 512.0 * half).abs() <= 1.0;
-    let (unison, title) = (idx("Unison"), idx("Cave Runner title"));
+    let (unison, title) = (idx("Unison melody"), idx("Two-count tune"));
     let regs = Machine::new().regs();
     for n in [70u32, 184, 633, 4000] {
         let mut m = Machine::new();
@@ -817,9 +817,9 @@ fn readers_follow_the_loops() {
             m.poke(0x9000 + k as u16, x);
         }
         let v = b.read(&m, title, 0x8000, 0, &r);
-        let (h1, h2) = (half_mm_title(n1.into(), n2.into()), half_mm_title(n2.into(), n1.into()));
-        println!("Cave Runner title {n1}, {n2}: periods {} {} (half-periods {h1:.1} {h2:.1})", v[0].period_q8, v[1].period_q8);
-        assert!(near(v[0].period_q8, h1) && near(v[1].period_q8, h2), "Cave Runner title {n1}, {n2}: {v:?}");
+        let (h1, h2) = (half_two_count(n1.into(), n2.into()), half_two_count(n2.into(), n1.into()));
+        println!("Two-count {n1}, {n2}: periods {} {} (half-periods {h1:.1} {h2:.1})", v[0].period_q8, v[1].period_q8);
+        assert!(near(v[0].period_q8, h1) && near(v[1].period_q8, h2), "Two-count {n1}, {n2}: {v:?}");
     }
 }
 

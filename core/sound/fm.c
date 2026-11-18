@@ -32,7 +32,7 @@
  * per radian), so the phase offset is depth * sin(r p) [Q15] * 2. Envelope, index, vibrato and
  * level change on an 8 kHz tick (0.125 ms, whatever the sample rate), so the decay factors below
  * are constants: exp(-0.125 / tau) in Q16. A voice of gain 1 at level 255 peaks at 8160 * GAIN
- * / 256 (GAIN the overall gain, matching the mix's loudness before the instruments). */
+ * / 256 (GAIN the overall gain, matching the loudness of the reference without the instruments). */
 
 #include "sound_internal.h"
 
@@ -43,11 +43,11 @@ _Static_assert((-1 >> 1) == -1, "signed right shift must be arithmetic");
 #define RELEASE_TICKS 400             /* the drum's release: 50 ms */
 #define LVL_STEP (65280 / 32)         /* a level change glides over 4 ms */
 
-/* Overall gain, Q8 (256: a gain-1 voice at level 255 peaks at 8160, as every voice did before the
- * instruments); calibrated so the corpus' FM mix keeps its RMS loudness (tests/instruments.rs,
- * each voice with the live rule's role): RMS within +0.64 dB of before at worst (Colony 8 in FM:
- * engines), the mix's peaks 0-2.7 dB below before (the lead's 2:1 FM is square-ish, more RMS for
- * its peak). */
+/* Overall gain, Q8 (256: a gain-1 voice at level 255 peaks at 8160, as every voice does in the
+ * reference without the instruments); calibrated so the corpus' FM mix keeps the reference's RMS
+ * loudness (tests/instruments.rs, each voice with the live rule's role): RMS within +0.64 dB of it
+ * at worst (Colony 8 in FM: engines), the mix's peaks 0-2.7 dB below it (the lead's 2:1 FM is
+ * square-ish, more RMS for its peak). */
 #define GAIN 210
 /* A patch gain given in thousandths, as Q8 with GAIN in (at most 512, so amp stays below 2^16). */
 #define G(milli) (((milli) * GAIN + 500) / 1000)

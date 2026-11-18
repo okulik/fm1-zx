@@ -9,10 +9,10 @@ with a host-side Rust test harness. The Z80 core is the redcode/Z80 library, ven
 
 ## Status
 
-**First run on a real FM-1: 2026-11-17.** The firmware boots to the game picker on the device; the
-rest of the [first device test](docs/hardware-test.md) is still to do, and everything else is
-proven in the host tests and in the FM-1 emulator [fm1-emu](https://github.com/joakimeriksson/fm1-emu)
-only. Do not install it on a unit of your own before that test has passed.
+**FM-1 ZX runs on a real FM-1: it boots to the game picker.** The rest of the
+[first device test](docs/hardware-test.md) is still open, and everything else is proven in the host
+tests and in the FM-1 emulator [fm1-emu](https://github.com/joakimeriksson/fm1-emu) only. Do not
+install it on a unit of your own before that test has passed.
 
 What works, in fm1-emu:
 
@@ -27,7 +27,7 @@ What works, in fm1-emu:
 - FM music from the beeper, chosen in the HOME menu's Sound item (both with a 60 ms delay):
   - FM: engines (the default) recognises a game's music routine by its code, reads the notes from
     the game's memory and registers, checks them against the beeper's edges and plays them as FM.
-    It knows some routines built in (Castaway, Colony 8, BASIC `BEEP`, Cave Runner, Unison); for
+    It knows some routines built in (Castaway, Colony 8, BASIC `BEEP` and three routines of games outside the repository); for
     your own games the pack builder learns each game's routine from its code
     ([the music](BUILDING.md#your-own-games));
   - FM: sound guesses the notes from the beeper's edges alone, where it can be sure of them;
@@ -49,7 +49,8 @@ What works, in fm1-emu:
   turbo and custom-loader tapes included (loaded through the tape signal on the host), and learns
   each game's music ([your own games](BUILDING.md#your-own-games));
 - the UBOOT gesture: OCT- held at power-on calls the boot loader's update-mode entry
-  (`fmzx_enter_uboot`); what the FM-1 does then is untested.
+  (`fmzx_enter_uboot`); behind M-VAVE's stock bootloader the computer then sees the boot loader on
+  USB ([install and recovery](docs/install.md)).
 
 Not in v1: USB (so no in-app updates yet, and no adding games without a new package), tapes
 played on the device itself.

@@ -167,17 +167,17 @@ struct Sig {
 
 const DIGEST_CASTAWAY: u64 = 0xd9ca_bc62_66a8_0034;
 const DIGEST_COLONY8: u64 = 0x46ee_814f_9cab_12d7;
-const DIGEST_MM_TITLE: u64 = 0xe6cf_0316_1ab2_4a00;
-const DIGEST_MM_GAME: u64 = 0x5b1e_e7bd_a322_b262;
+const DIGEST_TWO_COUNT: u64 = 0xe6cf_0316_1ab2_4a00;
+const DIGEST_BURST: u64 = 0x5b1e_e7bd_a322_b262;
 const DIGEST_UNISON: u64 = 0x6267_40fe_f731_1d91;
 
 const SIGS: [Sig; 5] = [
     Sig { engine: Engine::Castaway, base: 0xc868, len: 36, wild: &[5, 9, 13, 18, 29], digest: DIGEST_CASTAWAY },
     Sig { engine: Engine::Colony8, base: 0x94fc, len: 36, wild: &[4, 14, 22], digest: DIGEST_COLONY8 },
-    // Cave Runner's title tune loop and its in-game burst loop (no operands change)
-    Sig { engine: Engine::CaveRunner, base: 0x92f8, len: 22, wild: &[], digest: DIGEST_MM_TITLE },
-    Sig { engine: Engine::CaveRunner, base: 0x8852, len: 40, wild: &[], digest: DIGEST_MM_GAME },
-    // Unison's melody loop, its two reload operands left out
+    // the two-count tune's loop and the burst tune's loop (no operands change)
+    Sig { engine: Engine::CountBurst, base: 0x92f8, len: 22, wild: &[], digest: DIGEST_TWO_COUNT },
+    Sig { engine: Engine::CountBurst, base: 0x8852, len: 40, wild: &[], digest: DIGEST_BURST },
+    // the unison melody's loop, its two reload operands left out
     Sig { engine: Engine::Unison, base: 0x81c6, len: 36, wild: &[7, 8, 25, 26], digest: DIGEST_UNISON },
 ];
 
@@ -433,7 +433,7 @@ fn engine_name(e: Option<Engine>) -> &'static str {
     match e {
         Some(Engine::Castaway) => "castaway",
         Some(Engine::Colony8) => "colony8",
-        Some(Engine::CaveRunner) => "cave-runner",
+        Some(Engine::CountBurst) => "count-burst",
         Some(Engine::Unison) => "unison",
         None => "",
     }

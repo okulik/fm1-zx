@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! No FM on sound that is not music (Review Focus 3): zero confident decisions on the test
+//! No FM on sound that is not music: zero confident decisions on the test
 //! programs (the border tone for 60 s, the scroll test, the tape test), on the pack's games with
 //! effects and no music (ZX Dino, A World of One-Way, ZX Sopwith) driven by their `games.toml`
 //! demos for 36 s (with presses that make sound added, and a minimum of frames with sound), on

@@ -70,17 +70,17 @@
  *
  * Notes and pitch changes. A note is a clean, full frame: a beep filling
  * less of its frame is no note (ZX Sopwith's 15 ms beeps 10 frames apart,
- * at two pitches, made a "tune"; every frame of the pack's music fills 60%
- * and more, but Cave Runner's in-game 9 ms bursts no longer count either).
+ * at two pitches, would make a "tune"; every frame of the pack's music fills
+ * 60% and more, and a burst tune's 9 ms bursts do not count either).
  * A frame whose voice drifts within it (any frame with voices of its own),
  * or a note that is the reference's voice moved by more than 1/128 (about
  * 0.14 semitone) but less than 1/32, is a glide: it drops the reference
- * (pitch sweeps of 50-300 ms made a pitch "change" every frame or two), and
+ * (pitch sweeps of 50-300 ms would make a pitch "change" every frame or two), and
  * it and the frames of the same sweep before it not decided yet (back while
  * each sounds and shares a voice with the next or drifts) are no notes: a
  * change among them is withdrawn, and each, decided, ends the music context
- * like other sound (after speaker-flip music a 300 ms sweep played as 10-15
- * stepped notes). Against the reference (the last note,
+ * like other sound (else, after speaker-flip music, a 300 ms sweep would play
+ * as 10-15 stepped notes). Against the reference (the last note,
  * within 10 frames: 200 ms) a note is:
  *   - the same note if it shares a voice with it within 1/32 (about half a
  *     semitone): the same note, a voice more or less, or the next note
@@ -138,8 +138,8 @@
  *     2 s is a test tone or an effect, not music; so the first note of a
  *     tune plays on the beeper until the second begins (a lone tone cannot
  *     be told from a test tone within 60 ms of look-ahead), and the mixer
- *     starts FM a frame into the second (the change in F+1 no longer counts
- *     for F: it played the last frame of a siren's first tone in FM).
+ *     starts FM a frame into the second (the change in F+1 does not count
+ *     for F: it would play the last frame of a siren's first tone in FM).
  *   - voices reported and fit >= 85%: confident in music context.
  *   - fewer than 4 edges (a rest), fewer than 8 (speaker flips), or no
  *     voice reported with 85% of F's edges explained by the voices of the
@@ -159,7 +159,7 @@
  *
  * Why these numbers:
  *   - 90 / 85 / 50%: clean decoded music explains 95-100% of its edges
- *     (Cave Runner's title leaves 0-2 strays a frame); drum frames 0-30%.
+ *     (a two-count tune leaves 0-2 strays a frame); drum frames 0-30%.
  *   - 2 s of context: the 3 s constant test tone and the border tone must
  *     stay on the beeper; 50 frames of rest: a rest of 1 s inside music
  *     stays FM (silent either way).
@@ -167,11 +167,11 @@
  *     a sweep of 0.1 semitone a frame moving past 0.14 semitone in 2 frames
  *     while music measures a held note within 0.05%.
  *   - 60% for a note: the pack's music fills 70-100% of its frames.
- *   - 2 returns in a row: a melody's single return (A B A C, Cave Runner's
- *     B G B D) keeps the music; a trill of A B A B drops to the beeper.
- *   - 20% high and one width for short pulses: the spike's selector, with
- *     the width test for XOR unison; 2 busy frames for a pulse drum: the
- *     generated tune's 30 ms noise bursts.
+ *   - 2 returns in a row: a melody's single return (A B A C) keeps the
+ *     music; a trill of A B A B drops to the beeper.
+ *   - 20% high and one width for short pulses, with the width test for XOR
+ *     unison; 2 busy frames for a pulse drum: the generated tune's 30 ms
+ *     noise bursts.
  * Voices keep their tone slot from one decision to the next, so the synth
  * hears a held note as one note. */
 

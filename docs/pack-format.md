@@ -106,7 +106,7 @@ The reserved bytes (the 2 after the list's `count`, the padding) are ignored.
 
 A game whose list is rejected plays as if it had no learned entries. A bad sound section never affects the games; a bad section (or list) is the same as none.
 
-The `instrument` bytes (reserved and 0 before) and kind-1 records came without a pack version change: the pack is always installed together with the firmware that reads it (both are in one `.fwsc` package), so no firmware ever meets a pack newer than itself.
+The `instrument` bytes and kind-1 records do not change the pack version: the pack is always installed together with the firmware that reads it (both are in one `.fwsc` package), so no firmware ever meets a pack newer than itself.
 
 ### Program
 

@@ -7,7 +7,7 @@
 //! [[game]]
 //! id = "cave-runner"
 //! name = "Cave Runner"
-//! file = "games/mm.sna"
+//! file = "games/cave-runner.sna"
 //! [game.keys]
 //! "note.F3" = "key.O"
 //! ```

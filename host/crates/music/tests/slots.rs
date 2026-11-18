@@ -337,7 +337,7 @@ fn synthetic_slots_adjacent_semitones() {
 #[test]
 fn flips_still_pass() {
     // the speaker-flip streams have no loop carrier: the selector never picks SLOTS for them, so
-    // Task 2's decisions (tests/flips.rs) stand
+    // the decisions tests/flips.rs checks stand
     let sna = |name: &str, n: usize| {
         let fr = capture(&mut test_sna(name), &mut Beeper::new(RATE.0, RATE.1), n);
         decode(fr.iter().map(|f| (f.edges.as_slice(), f.start_level)))

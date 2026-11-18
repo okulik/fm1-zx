@@ -28,12 +28,13 @@
  * the tune's, and other code's edges within them do not end the hold).
  *
  * An entry whose notes are calls of a routine (min_len: ROM BEEP) is checked its own way
- * (observe_calls); one whose channels each flip the speaker (flips: Cave Runner, Unison) has its
- * flips checked (flip).
+ * (observe_calls); one whose channels each flip the speaker (flips: the two-count tune, the
+ * unison melody) has its flips checked (flip).
  *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
- * games), the 48K ROM's BEEPER, and Cave Runner's two tunes and Unison's music (the owner's local
- * games: their digests, offsets and formulas only), in engines_builtin.c; engines_test.c adds
+ * games), the 48K ROM's BEEPER, and the two-count tune, the burst tune and the unison melody
+ * (games outside the repository: their digests, offsets and formulas only), in engines_builtin.c;
+ * engines_test.c adds
  * the test fixtures' engines for host tests. */
 
 #include "sound_internal.h"

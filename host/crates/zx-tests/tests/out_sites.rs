@@ -178,7 +178,7 @@ fn fnv(frames: &[music::Frame]) -> u64 {
 
 #[test]
 fn beeper_unchanged() {
-    // Hashes computed at the commit before this change.
+    // The beeper's samples, hashed: recording the OUT sites leaves them as they are without it.
     let c = capture(&mut castaway(), &mut Beeper::new(RATE.0, RATE.1), 600);
     assert_eq!(fnv(&c), 0x16a3e06b31137849, "castaway title");
     let b = capture(&mut test_sna("border.sna"), &mut Beeper::new(RATE.0, RATE.1), 300);

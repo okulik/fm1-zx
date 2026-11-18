@@ -34,7 +34,7 @@
 //! - **Slots**: no diamonds, each `OUT`'s bit 4 the top bit of its own 16-bit phase accumulator
 //!   (`ADD HL,rr`, kept in memory or in HL): half period `32768 x pass / step`.
 //! - **Flips**: every speaker `OUT` in a diamond's reload arm, each flipping one level all
-//!   channels share (Unison style, but only balanced: both arms of every diamond the same time):
+//!   channels share (unison-melody style, but only balanced: both arms of every diamond the same time):
 //!   half period `n x pass`, `n` the counter's reload. One channel alone may have a longer reload
 //!   arm: `n x pass + extra`.
 //!

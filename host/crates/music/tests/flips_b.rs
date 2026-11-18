@@ -234,8 +234,8 @@ fn flips_misread_low_octave_refused() {
     // channel 1 read an octave down: no frame of the melody is B's, but for the note whose
     // channel 1 is slow. There every other flip of channel 1 fits its misread period, and each one
     // between fits no channel and is charged to the nearest, channel 0, whose many good pairs keep
-    // it under the one-in-eight share: the check has let that through since before the flips
-    // rules of this file (a slow channel's misread hides behind a busy one)
+    // it under the one-in-eight share: the check lets that through, and the flips rules of this
+    // file do not catch it (a slow channel's misread hides behind a busy one)
     let (r, claimed) = claimed_misread(MISREAD_FLIPS_1_DOUBLE);
     let slow = r.frames_of(SLOW_1);
     let wrong: Vec<usize> = claimed.iter().copied().filter(|f| !slow.contains(f)).collect();

@@ -210,7 +210,7 @@ static uint32_t peek16(const zx_machine *m, uint32_t a)
 	return zx_peek(m, (uint16_t)a) | (uint32_t)zx_peek(m, (uint16_t)(a + 1u)) << 8;
 }
 
-/* Cave Runner's title tune (anchor 92DCh, the note's setup and its loop to 930Eh). IY points at
+/* The two-count tune (anchor 92DCh, the note's setup and its loop to 930Eh). IY points at
  * the note [length, N1, N2]; each pass OUTs A from +1Ch, D and E count down from N1 and N2 (0:
  * 256) and each that reaches 0 is reloaded and flips the speaker (XOR A, 18h): two channels
  * flipping the one OUT. A pass is 56 T, 11 more every 256 passes (B wraps), and 21 more for each
@@ -220,7 +220,7 @@ static uint32_t peek16(const zx_machine *m, uint32_t a)
  * average: half = (56 + 11/256) n + 23 (1 + n / n') T, f = 3.5 MHz / (2 x half) (within 0.03% of
  * the spacing of its flips). B (from 0) and C (from the length) count the note's passes; the
  * CALLs at +0Eh and +17h move with the code. */
-static void read_mm_title(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_two_count(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	const uint32_t k = 256u * ((zx_peek(m, r->iy) - r->bc) & 0xFFu) + ((0u - (r->bc >> 8)) & 0xFFu);   /* passes */
 	uint32_t c, n[2], q = 14336u * k;   /* 56 x 256 per pass */
@@ -240,20 +240,20 @@ static void read_mm_title(const zx_machine *m, const snd_engine *en, uint16_t a,
 	out->since = out->row = (q + 154u * k) >> 8;   /* (0.6 T of contention a pass) */
 }
 
-static const uint16_t mmt_reloc[] = { 0x0F, 0x18 };
-static const snd_engine_site mmt_sites[] = { { 0x1C, SND_SITE_TONAL, SND_CHAN_ANY } };
+static const uint16_t twc_reloc[] = { 0x0F, 0x18 };
+static const snd_engine_site twc_sites[] = { { 0x1C, SND_SITE_TONAL, SND_CHAN_ANY } };
 
-#define SND_ENGINE_MM_TITLE {                                                                          \
-	"Cave Runner title", 0x21ad39e14d5cbeddull, 0x33, 0, 2, 1, 2, 0, 0, mmt_reloc, mmt_sites, beep_pos, read_mm_title, 0, 1, 0, 0, 0, { 0 }, \
+#define SND_ENGINE_TWO_COUNT {                                                                          \
+	"Two-count tune", 0x21ad39e14d5cbeddull, 0x33, 0, 2, 1, 2, 0, 0, twc_reloc, twc_sites, beep_pos, read_two_count, 0, 1, 0, 0, 0, { 0 }, \
 }
 
-/* Cave Runner's in-game tune (anchor 881Fh, the music flag test to the burst loop's end at 885Eh).
+/* The burst tune (anchor 881Fh, the music flag test to the burst loop's end at 885Eh).
  * Once a pass of the game's main loop, unless bit 1 of the flag (the operand at +01h) is set
  * (music off), the note index (the operand at +1Ch) steps and one burst of 768 passes of 40 T
  * plays its note E, the tune table's (the operand at +29h) byte (index & 7Eh) / 2: one channel
  * flipping the OUT at +33h every E passes, f = 3.5 MHz / (2 x E x 40). Music off: no voice, so
  * its edges fail the check (the game's sounds are the beeper's). */
-static void read_mm_game(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
+static void read_burst_tune(const zx_machine *m, const snd_engine *en, uint16_t a, uint32_t site, const zx_regs *r, snd_b_read *out)
 {
 	uint32_t e;
 
@@ -266,14 +266,14 @@ static void read_mm_game(const zx_machine *m, const snd_engine *en, uint16_t a, 
 	out->v[0].level = e ? 200 : 0;
 }
 
-static const uint16_t mmg_reloc[] = { 0x01, 0x1C, 0x20, 0x29, 0x2D };
-static const snd_engine_site mmg_sites[] = { { 0x33, SND_SITE_TONAL, 0 } };
+static const uint16_t bst_reloc[] = { 0x01, 0x1C, 0x20, 0x29, 0x2D };
+static const snd_engine_site bst_sites[] = { { 0x33, SND_SITE_TONAL, 0 } };
 
-#define SND_ENGINE_MM_GAME {                                                                           \
-	"Cave Runner in game", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, mmg_reloc, mmg_sites, beep_pos, read_mm_game, 0, 1, 0, 0, 0, { 0 }, \
+#define SND_ENGINE_BURST {                                                                           \
+	"Burst tune", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, bst_reloc, bst_sites, beep_pos, read_burst_tune, 0, 1, 0, 0, 0, { 0 }, \
 }
 
-/* Unison's music (anchor 81B4h, the melody to the last drum's end at 82A6h). The melody (+12h):
+/* The unison melody with drums (anchor 81B4h, the melody to the last drum's end at 82A6h). The melody (+12h):
  * BC counts down from N (the operand at +19h) and DE from N - 1 (+2Bh), each reload ADDs 10h to
  * A' and OUTs it (+1Eh, +30h), so each flips the speaker: one note doubled a step apart. A pass
  * is 48 T, and 46 more for each counter reloaded in it, plus about 1.5 T of the OUT's contention
@@ -299,21 +299,21 @@ static void read_unison(const zx_machine *m, const snd_engine *en, uint16_t a, u
 	}
 }
 
-static const uint16_t unison_wild[] = { 0x19, 0x1A, 0x2B, 0x2C };
-static const uint16_t unison_reloc[] = { 0x08, 0x0C, 0x16, 0x22, 0x28, 0x34, 0x38, 0x3E, 0x42,
+static const uint16_t uni_wild[] = { 0x19, 0x1A, 0x2B, 0x2C };
+static const uint16_t uni_reloc[] = { 0x08, 0x0C, 0x16, 0x22, 0x28, 0x34, 0x38, 0x3E, 0x42,
                                         0x49, 0x61, 0x68, 0x6E, 0x76, 0x7F, 0x89, 0x96, 0xA1 };
-static const snd_engine_site unison_sites[] = {
+static const snd_engine_site uni_sites[] = {
 	{ 0x1E, SND_SITE_TONAL, 0 }, { 0x30, SND_SITE_TONAL, 1 }, { 0xAA, SND_SITE_DRUM, 0 }, { 0xB2, SND_SITE_DRUM, 0 },
 	{ 0xBD, SND_SITE_DRUM, 0 },  { 0xC6, SND_SITE_DRUM, 0 },  { 0xD2, SND_SITE_DRUM, 0 }, { 0xD9, SND_SITE_DRUM, 0 },
 	{ 0xE5, SND_SITE_DRUM, 0 },  { 0xEF, SND_SITE_DRUM, 0 },
 };
 
 #define SND_ENGINE_UNISON {                                                                             \
-	"Unison", 0xf45d15034e0cc08dull, 0xF3, 4, sizeof unison_reloc / sizeof unison_reloc[0], sizeof unison_sites / sizeof unison_sites[0], 2, 0, \
-	unison_wild, unison_reloc, unison_sites, beep_pos, read_unison, 200, 1, 0, 0, 0, { 0 }, \
+	"Unison melody", 0xf45d15034e0cc08dull, 0xF3, 4, sizeof uni_reloc / sizeof uni_reloc[0], sizeof uni_sites / sizeof uni_sites[0], 2, 0, \
+	uni_wild, uni_reloc, uni_sites, beep_pos, read_unison, 200, 1, 0, 0, 0, { 0 }, \
 }
 
-#define SND_ENGINES_BUILTIN SND_ENGINE_CASTAWAY, SND_ENGINE_COLONY8, SND_ENGINE_ROM_BEEP, SND_ENGINE_MM_TITLE, \
-	SND_ENGINE_MM_GAME, SND_ENGINE_UNISON
+#define SND_ENGINES_BUILTIN SND_ENGINE_CASTAWAY, SND_ENGINE_COLONY8, SND_ENGINE_ROM_BEEP, SND_ENGINE_TWO_COUNT, \
+	SND_ENGINE_BURST, SND_ENGINE_UNISON
 
 #endif

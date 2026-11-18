@@ -3,7 +3,7 @@
 
 //! Runs bare-metal pi32v2 images in fm1-emu and counts instructions.
 //!
-//! [`fw`] boots the real firmware image; the functions here run the Plan 1 bench image.
+//! [`fw`] boots the real firmware image; the functions here run the bench images (`bench/fm1`).
 
 pub mod budgets;
 pub mod fw;

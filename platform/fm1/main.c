@@ -165,7 +165,7 @@ static uint32_t budget;    /* LCD bytes per frame */
 static uint32_t lcd_frame; /* the LCD scheduler's frame count */
 static int audio_on;       /* the audio DMA runs (it needs the stock audio PLL) */
 
-/* The MASTER pot, 0-1023, refreshed every MASTER_MS (read by emu-gate and, later, the mixer). */
+/* The MASTER pot, 0-1023, refreshed every MASTER_MS (read by emu-gate, and for the audio gain). */
 volatile uint32_t fmzx_master;
 
 static void fm1_fault(const fm1_crash_t *c)
@@ -450,7 +450,7 @@ static int game_start(uint32_t index)
 
 /* Whether the game's row r in screen mode `mode` comes from pix_compose_rows (pixmodes.c, XIP):
  * Border's rows, and the paper rows of Fit and Fit smooth. Crop, and the border rows of Fit and
- * Fit smooth (the same bytes as Crop's), take today's path: pix_compose_zx in RAMTEXT, pix_pack. */
+ * Fit smooth (the same bytes as Crop's), take Crop's path: pix_compose_zx in RAMTEXT, pix_pack. */
 static int mode_row(unsigned mode, unsigned r)
 {
     return mode == PIX_BORDER ||

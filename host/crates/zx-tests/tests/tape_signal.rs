@@ -348,7 +348,7 @@ fn standard_tape_via_signal_matches_trap() {
 }
 
 
-// Signal timing (the design's test 1). `ear_echo_code` copies the EAR bit to the speaker in a
+// Signal timing. `ear_echo_code` copies the EAR bit to the speaker in a
 // loop of EAR_ECHO_PERIOD T, so each level change the program reads becomes a speaker edge, whose
 // T-state the core records. A change at absolute T `e` is first read by the `IN` whose I/O
 // cycle is at or after it, so the edge it makes is at `e + EAR_ECHO_DELAY + lag`, the lag in

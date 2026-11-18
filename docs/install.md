@@ -5,8 +5,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Installing FM-1 ZX, and the way back
 
-> **FM-1 ZX has run on a real FM-1 once (2026-11-17), and most of the first device test is still
-> open.** "Installing with M-Flasher" and the UBOOT gesture below have been done on hardware; the
+> **FM-1 ZX runs on a real FM-1 and boots to the game picker, but most of the first device test is
+> still open.** "Installing with M-Flasher" and the UBOOT gesture below work on hardware; the
 > other routes are the plan, marked *unverified*. Do not publish the package until the first
 > device test (`docs/hardware-test.md`) has passed, including the way back to the stock firmware.
 > Installing any custom firmware is at your own risk.
@@ -84,8 +84,8 @@ correct colours (see BUILDING.md, "Browser demo"). The rest of this section is t
 with fm1-emu's public page and the preview package.
 
 fm1-emu's web page (<https://joakimeriksson.github.io/fm1-emu/>) can open a local package: use
-its control for opening your own `.fwsc` file (at the time of writing something like "open a
-local package"; the label may differ) and pick `build/fm1/fmzx-preview.fwsc`. The file is read in your browser;
+its control for opening your own `.fwsc` file (something like "open a local package"; the
+label may differ) and pick `build/fm1/fmzx-preview.fwsc`. The file is read in your browser;
 nothing is uploaded. The FM-1's keys are on the computer keyboard (the page shows the layout):
 the picker, the HOME menu and the games work as in `docs/controls.md`.
 
@@ -102,13 +102,12 @@ checks the game picker. Two things to know:
   revision the tests pin, `93cb7ee`) boots the package; if it does not, run fm1-emu's web build
   at that revision locally.
 
-## Installing with M-Flasher (done on hardware)
+## Installing with M-Flasher (verified on hardware)
 
 [M-Flasher](https://github.com/jvitkauskas/m-flasher) (a community tool, not M-VAVE's) writes a
 package over the chip's own USB download mode, whatever firmware is installed. It saves a backup
 of the whole flash before every write (`~/Documents/M-Flasher/backups`), writes the package's app
-area only (from 0x4000: the unit's bootloader stays as it is) and checks what it wrote. This is how
-FM-1 ZX was first installed.
+area only (from 0x4000: the unit's bootloader stays as it is) and checks what it wrote.
 
 1. Get the unit into download mode (the computer sees a USB disk named `WL82 UBOOT1.00`, which is
    not opened):
@@ -149,9 +148,9 @@ Hold **OCT-** while switching the FM-1 on, and keep holding it for one second. F
 the boot loader's update-mode entry (`fmzx_enter_uboot`, which calls felucca-bsp's
 `fm1_enter_uboot`: it sets `usb_update_mode` and resets the chip) instead of starting. What is
 proven: in fm1-emu, `fmzx_enter_uboot` is reached just after one second with OCT- held, and a
-short tap of OCT- at power-on does not reach it (FM-1 ZX starts normally). Done on hardware
-(2026-11-17, behind M-VAVE's stock bootloader): the computer saw the boot loader on USB and
-M-Flasher installed a package from there. *Unverified:* the other recovery tools (for example
+short tap of OCT- at power-on does not reach it (FM-1 ZX starts normally). On hardware, behind
+M-VAVE's stock bootloader, the computer sees the boot loader on USB and M-Flasher installs a
+package from there. *Unverified:* the other recovery tools (for example
 FM-1-transporter, <https://github.com/kurogedelic/FM-1-transporter>) from there.
 
 If the FM-1 ZX image itself does not start at all, the gesture cannot run either. The chip's own
@@ -169,5 +168,5 @@ With FM-1 ZX installed:
    community recovery tool (unverified: whether the workbench works from this update mode).
 3. Switch the FM-1 off and on: the stock firmware starts.
 
-These steps are part of the first device test (`docs/hardware-test.md`) and are not verified
-until it has run; until then, treat them as the plan, not as tested instructions.
+These steps are part of the first device test (`docs/hardware-test.md`) and are not verified:
+treat them as the plan, not as tested instructions.

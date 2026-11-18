@@ -134,7 +134,7 @@ the `wasm32-unknown-unknown` target. The script stops if it is missing and never
 anything; add it with `rustup target add wasm32-unknown-unknown`.
 
 Speed: the smoke test prints emulated seconds per wall second (about 1.7 in node on the picker
-and the tone test, 2026-11-12). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
+and the tone test). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
 a browser, and games cost more than the picker: the page is a preview, not a promise of real time.
 
 ## Your own games
@@ -156,8 +156,8 @@ games file.
 **The games file.** Given a folder, the command writes `build/personal/personal-games.toml`, one
 entry per loadable `.sna`, `.z80`, `.tap` or `.tzx` file of the folder (not its subfolders), in the
 syntax of `games/games.toml` with `file` an absolute path. The name is the file name without its
-extension, its `(...)` and `[...]` tags and anything from a ` - ` on (`Night Raid II - Avenging
-Angel - 48k.tzx` is "Night Raid II"); the id is made from the name; there is no `[game.keys]` table,
+extension, its `(...)` and `[...]` tags and anything from a ` - ` on (`Night Raid II - The
+Return - 48k.tzx` is "Night Raid II"); the id is made from the name; there is no `[game.keys]` table,
 so the game gets the default key map. Edit it: a name (at most 28 characters), a `[game.keys]`
 table (docs/controls.md), a `crop`. On the next run from the folder your edits stay byte for byte,
 new files are added at the end, and a game whose file is gone stays, marked with a `# missing:`
@@ -263,7 +263,7 @@ run clears those files first. The packages are made and verified by
 **Trying and installing.** `--try` serves the browser demo with `DIR/fmzx.fwsc` and the games'
 key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware). Install
 `build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`, with the same
-warnings: FM-1 ZX has run on a real FM-1 only once so far (`docs/hardware-test.md`, "Results").
+warnings: most of the first device test is still open (`docs/hardware-test.md`).
 
 The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
 (the games file, the converted games in `DIR/converted/` with a manifest of their own,
@@ -275,8 +275,8 @@ test programs and boots the result in fm1-emu.
 ## Music corpus
 
 `music-corpus` measures the FM music decoder (`core/sound`, the same C code as the firmware) over a
-local folder of games. It is for games that must not enter the repository (Cave Runner, Unison, any
-file of yours): it reads the folder you give it and writes only under the output directory, never
+local folder of games. It is for games that must not enter the repository (any file of
+yours): it reads the folder you give it and writes only under the output directory, never
 beside the games.
 
     cd host
@@ -299,11 +299,11 @@ or line breaks (`#` starts a comment line), in the syntax of the `demo` strings 
 but with Spectrum inputs: `key.ENTER@8000`, `key.SPACE@9000+200`, `kempston.fire@12000`. Hold is
 100 ms if omitted; times count from the start of the run.
 
-    # cave.keys
+    # cave-runner.keys
     key.ENTER@8000+500, key.SPACE@9000+200
 
-Some games read the keyboard only now and then (Cave Runner only between title-tune notes), so a
-press may need a longer hold.
+Some games read the keyboard only now and then (some only between the notes of their title tune),
+so a press may need a longer hold.
 
 What the report says, one row per game:
 
@@ -324,17 +324,17 @@ What the report says, one row per game:
 - `styles s/f/p %`: of those frames, the share decoded as time-slot music, speaker-flip music and
   short-pulse music; the remainder is sound with no music in it.
 - truth, for games whose music engine is recognised (by the code of its sound loop in memory:
-  Castaway, Colony 8, Cave Runner's title tune and in-game loop, Unison's melody): the engine's own
+  Castaway, Colony 8, the two-count, burst and unison tunes): the engine's own
   notes are read from RAM and compared with what the decoder found: frame precision and recall,
   notes found of the true notes, and decoded notes that match no true note (`wrong`). After `B:`,
   the engines method B recognised and the same numbers for its notes (per voice, the last pitch it
   sounded in each frame it is confident about). After `learned:`, the frames with sound a learned
   entry claims and the same numbers with the learned entries. The CSV has the same columns.
 
-The run is fast: the games run in parallel, and the owner's folder of 29 games takes about 10 s on an
-Apple Silicon Mac when it learns, under 5 s from the cache. The Cave Runner and Unison entries of
-method B were made from the owner's local copies of those games, which are not in the repository;
-they are tested only locally, with this tool.
+The run is fast: the games run in parallel, and a folder of 29 games takes about 10 s on an
+Apple Silicon Mac when it learns, under 5 s from the cache. The two-count, burst and unison
+entries of method B come from local copies of games that are not in the repository; they are
+tested only locally, with this tool.
 
 ### Drops and clicks
 
@@ -382,11 +382,9 @@ the test suite.
 
 ## Measured budgets
 
-| Date | Commit | Measurement | Figure |
-| --- | --- | --- | --- |
-| 2026-11-12 | bc56cf6 | Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.81 instructions per T-state |
-| 2026-11-12 | n/a | same, after the final-review fix wave | 13.90 instructions per T-state |
-| 2026-11-17 | b05e2ef | first run on a real FM-1 (stock firmware 015, flash 0x856014), installed with M-Flasher 0.12.1 | boots to the picker |
+| Measurement | Figure |
+| --- | --- |
+| Z80 core on pi32v2 in fm1-emu (`emu-gate`, 150 frames of the bench; limit 30) | 13.90 instructions per T-state |
 
 Re-run with `cd host && FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate -- --ignored --nocapture`.
 
@@ -408,14 +406,14 @@ at LCD dividers 4, 2 and 1 in RGB444, plays the manifest's `demo` (`demo = "<key
 keys as in the key syntax plus `PLAY`/`HOME`, ms after the game started), measures 20 s from
 second 16 on and prints the table below. It also checks that each game with a demo is being
 played: rows must go out in at least 90% of the 1-second sub-windows (at least 8 rows each; gameplay
-sends 45-90 rows a second, a title, menu or game-over screen sends none, though a blinking menu can still pass the share check, so the four new games' demos were also checked by eye on the frames, Task 8), and a second test
+sends 45-90 rows a second, a title, menu or game-over screen sends none, though a blinking menu can still pass the share check, so the games' demos have also been checked by eye on the frames), and a second test
 (`title_screens_are_not_gameplay`) shows that Castaway at its title menu fails it. It writes `build/fm1/fmzx-report.json` and asserts:
 scroll 20-23 fps at divider 4 and >= 49 at divider 1; every game with a changing screen >= 45
 fps at divider 1. fps is `50 * row_sends / pending_frames_sum` (how often a changed row reaches
 the panel; 50 = every changed row goes out in the frame that changed it); a static screen
 (`border`) sends nothing and has no rate.
 
-Latest report (2026-11-14, 20 s windows; CPU at divider 1; the instruction counts are what the
+The report (20 s windows; CPU at divider 1; the instruction counts are what the
 emulator counts, one per instruction, interrupts excluded):
 
 | game | divider | fps | LCD bytes per frame | worst row age (frames) |
@@ -447,7 +445,7 @@ emulator counts, one per instruction, interrupts excluded):
 | sites (4 unknown OUT sites, code unchanged) | 201,725 | 195,901 | 313,784 | 307,932 | 313,783 | 307,931 |
 | sites-var (4 unknown OUT sites, code changing every frame) | 807,569 | 801,771 | 919,628 | 913,803 | 919,627 | 913,802 |
 
-(Crop, 2026-11-15.) The other screen modes, with FM: engines:
+(Crop.) The other screen modes, with FM: engines:
 
 | game | Fit max | Fit avg | Fit smooth max | Fit smooth avg | Border max | Border avg |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -483,7 +481,7 @@ frame, about 2.9M estimated, under the cap.)
 
 The LCD compose path uses about 3 KB of the 8 KB user stack, measured from the disassembly: `pix_compose_rows` has a frame of 2,524 bytes plus its callees, and is called only from the main loop.
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 48,396 of 49,152 bytes (2026-11-15). Image
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,012 of 49,152 bytes. Image
 + pack 179,904 of 581,564 (0x8DFBC) bytes. POOL 272,076 bytes, 96,564 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.
