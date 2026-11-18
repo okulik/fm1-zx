@@ -152,6 +152,17 @@ cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
 mkdir -p "$out/licenses"
 cp "$root/LICENSE" "$out/licenses/GPL-3.0-or-later.txt"
 cp "$emu/LICENSE" "$out/licenses/fm1-emu-MIT.txt"
+# what the package carries (LICENSING.md lists each part, its licence and attribution): the SDK
+# files' licence, then every component's own licence files at their repository paths
+cp "$root/LICENSING.md" "$out/licenses/LICENSING.md"
+cp "$root/docs/third-party/AC79-SDK-Apache-2.0.txt" "$out/licenses/"
+(cd "$root" && for f in third_party/Z80/COPYING third_party/Z80/COPYING.LESSER \
+    third_party/Z80InsnClock/LICENSE-0BSD third_party/felucca-loader/LICENSE platform/fm1/bsp/LICENSE \
+    platform/fm1/bsp/NOTICE third_party/zx-rom/README.md third_party/games/*/LICENSE* \
+    third_party/games/*/COPYING* third_party/games/*/gpl-3.0.txt third_party/games/*/README*; do
+    mkdir -p "$out/licenses/$(dirname "$f")"
+    cp "$f" "$out/licenses/$f"
+done)
 echo "$out: fm1-emu $rev with FM-1 ZX $short"
 
 # 5. check or serve

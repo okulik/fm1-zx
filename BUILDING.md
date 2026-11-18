@@ -98,10 +98,13 @@ downloaded; on Apple silicon the image runs under amd64 emulation).
     tools/web-demo --skip-firmware  # no Docker: repack build/fm1's device build offline
     tools/web-demo --port N         # serve on another port
     tools/web-demo --packages DIR   # DIR's packages instead (tools/make-personal-pack's, below)
+    tools/publish-page              # the public page: build, commit to gh-pages, push
+    tools/publish-page --no-push    # build and commit to gh-pages only
 
 puts the release package (`build/fm1/fmzx.fwsc`, as `tools/make-packages` makes it) into
 fm1-emu's own web page: the emulator compiled to WebAssembly, with our one-entry catalog
-(`web/firmwares.json`), the key maps (`fmzx-pack keymaps`) and the licences beside it. It fetches
+(`web/firmwares.json`), the key maps (`fmzx-pack keymaps`) and the licences beside it
+(`licenses/`: ours, fm1-emu's, `LICENSING.md` and every component's own licence files). It fetches
 fm1-emu from `https://github.com/joakimeriksson/fm1-emu`, at the revision
 `host/crates/emu-gate/Cargo.toml` pins, into `build/fm1-emu` (a shallow fetch, repeated only when
 that revision changes), patches the fetched copy and builds it with upstream's `web/build.sh` into
@@ -136,6 +139,12 @@ anything; add it with `rustup target add wasm32-unknown-unknown`.
 Speed: the smoke test prints emulated seconds per wall second (about 1.7 in node on the picker
 and the tone test). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
 a browser, and games cost more than the picker: the page is a preview, not a promise of real time.
+
+**The public page.** `tools/publish-page` publishes the page on GitHub Pages: always the
+built-in pack (`games/games.toml`), never a personal one. From a clean working tree it runs
+`tools/web-demo --no-serve` and makes one commit on the `gh-pages` branch whose files are exactly
+`build/web`'s (signed when `commit.gpgsign` is set), then pushes it. The repository serves Pages from
+`gh-pages`' root.
 
 ## Your own games
 

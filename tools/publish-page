@@ -1,0 +1,57 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Publish the browser demo on GitHub Pages: the release package with the built-in pack
+# (games/games.toml: freely licensed games and our test programs, never a personal pack) in
+# fm1-emu's page, with every component's licence under licenses/.
+#   tools/publish-page             build, commit to the gh-pages branch and push it
+#   tools/publish-page --no-push   build and commit only (look first: git show --stat gh-pages)
+# Builds build/web (tools/web-demo --no-serve, which runs the device builds), then makes one commit
+# on gh-pages whose files are exactly build/web's (signed when commit.gpgsign is set), and pushes
+# it to origin. The site is served from gh-pages' root (the repository's Pages settings).
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+push=1
+case "${1:-}" in
+"") ;;
+--no-push) push=0 ;;
+*)
+    echo "usage: tools/publish-page [--no-push]" >&2
+    exit 2
+    ;;
+esac
+
+if [ -n "$(git -C "$root" status --porcelain)" ]; then
+    echo "tools/publish-page: commit your changes first: the page names the commit it is built from" >&2
+    exit 1
+fi
+"$root/tools/web-demo" --no-serve
+web="$root/build/web"
+[ -f "$web/index.html" ] && [ -f "$web/fmzx.fwsc" ] || {
+    echo "tools/publish-page: no page in $web" >&2
+    exit 1
+}
+touch "$web/.nojekyll" # served as they are, no Jekyll
+
+cd "$root"
+index=$(mktemp)
+trap 'rm -f "$index"' EXIT
+rm -f "$index"
+GIT_INDEX_FILE="$index" git --work-tree="$web" add -f -A .
+tree=$(GIT_INDEX_FILE="$index" git write-tree)
+parent=$(git rev-parse -q --verify refs/heads/gh-pages || git rev-parse -q --verify refs/remotes/origin/gh-pages || true)
+if [ -n "$parent" ] && [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
+    echo "tools/publish-page: gh-pages already has this page"
+else
+    sign=
+    [ "$(git config --bool commit.gpgsign || echo false)" = true ] && sign=-S
+    msg=$(python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1])); print("Page: FM-1 ZX %s in fm1-emu %s" % (v["short"], v["fm1_emu"][:7]))' "$web/version.json")
+    commit=$(git commit-tree $sign "$tree" ${parent:+-p "$parent"} -m "$msg")
+    git update-ref refs/heads/gh-pages "$commit"
+    echo "tools/publish-page: gh-pages at $(git rev-parse --short gh-pages): $msg"
+fi
+if [ "$push" = 1 ]; then
+    git push origin gh-pages
+fi
