@@ -3,6 +3,8 @@
 
 # FM-1 ZX
 
+<p align="center"><img src="docs/images/fm1-zx.jpg" width="800" alt="The pink M-VAVE FM-1 synth running FM-1 ZX, a ZX Spectrum game on its screen"></p>
+
 Something crazy and impractical: an open-source ZX Spectrum 48K emulator that runs as the firmware
 of the M-VAVE FM-1 synth.
 
