@@ -7,10 +7,15 @@
 # fm1-emu's page, with every component's licence under licenses/.
 #   tools/publish-page             build, commit to the gh-pages branch and push it
 #   tools/publish-page --no-push   build and commit only (look first: git show --stat gh-pages)
-# Builds build/web (tools/web-demo --no-serve, which runs the device builds), then makes one commit
-# on gh-pages whose files are exactly build/web's (signed when commit.gpgsign is set), and pushes
-# it to origin. The site is served from gh-pages' root (the repository's Pages settings).
+# Builds build/web (tools/web-demo --no-serve, which runs the device builds), lays out the site in
+# build/pages and makes one commit on gh-pages whose files are exactly that (signed when
+# commit.gpgsign is set), then pushes it to origin. The repository serves Pages from gh-pages' root
+# on its own custom domain (DOMAIN, the CNAME file): the page is at https://DOMAIN/DIR/, and the
+# domain's root forwards there.
 set -eu
+
+DOMAIN=dev-gh.nisdom.com
+DIR=fm1-zx
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 push=1
@@ -33,13 +38,26 @@ web="$root/build/web"
     echo "tools/publish-page: no page in $web" >&2
     exit 1
 }
-touch "$web/.nojekyll" # served as they are, no Jekyll
+site="$root/build/pages"
+rm -rf "$site"
+mkdir -p "$site/$DIR"
+cp -R "$web/." "$site/$DIR/"
+printf '%s\n' "$DOMAIN" >"$site/CNAME"
+touch "$site/.nojekyll" # served as they are, no Jekyll
+cat >"$site/index.html" <<HTML
+<!doctype html>
+<meta charset="utf-8">
+<title>FM-1 ZX</title>
+<meta http-equiv="refresh" content="0; url=$DIR/">
+<link rel="canonical" href="https://$DOMAIN/$DIR/">
+<p><a href="$DIR/">FM-1 ZX</a></p>
+HTML
 
 cd "$root"
 index=$(mktemp)
 trap 'rm -f "$index"' EXIT
 rm -f "$index"
-GIT_INDEX_FILE="$index" git --work-tree="$web" add -f -A .
+GIT_INDEX_FILE="$index" git --work-tree="$site" add -f -A .
 tree=$(GIT_INDEX_FILE="$index" git write-tree)
 parent=$(git rev-parse -q --verify refs/heads/gh-pages || git rev-parse -q --verify refs/remotes/origin/gh-pages || true)
 if [ -n "$parent" ] && [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then

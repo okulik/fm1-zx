@@ -140,11 +140,13 @@ Speed: the smoke test prints emulated seconds per wall second (about 1.7 in node
 and the tone test). A Spectrum inside an emulated FM-1 inside wasm may not keep up in
 a browser, and games cost more than the picker: the page is a preview, not a promise of real time.
 
-**The public page.** `tools/publish-page` publishes the page on GitHub Pages: always the
-built-in pack (`games/games.toml`), never a personal one. From a clean working tree it runs
-`tools/web-demo --no-serve` and makes one commit on the `gh-pages` branch whose files are exactly
-`build/web`'s (signed when `commit.gpgsign` is set), then pushes it. The repository serves Pages from
-`gh-pages`' root.
+**The public page.** `tools/publish-page` publishes the page on GitHub Pages, at
+<https://dev-gh.nisdom.com/fm1-zx/>: always the built-in pack (`games/games.toml`), never a personal
+one. From a clean working tree it runs `tools/web-demo --no-serve`, lays the site out in
+`build/pages` (the page under `fm1-zx/`, the domain's `CNAME`, a root page forwarding to the page)
+and makes one commit on the `gh-pages` branch whose files are exactly that (signed when
+`commit.gpgsign` is set), then pushes it. The repository serves Pages from `gh-pages`' root on its
+own custom domain, `dev-gh.nisdom.com`, whose DNS name points at `okulik.github.io`.
 
 ## Your own games
 
