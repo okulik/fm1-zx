@@ -3,13 +3,44 @@
 
 # FM-1 ZX
 
-A ZX Spectrum 48K emulator firmware for the M-VAVE FM-1 synth, written in C for its pi32v2 CPU,
-with a host-side Rust test harness. The Z80 core is the redcode/Z80 library, vendored under
-`third_party/`.
+Something crazy and impractical: an open-source ZX Spectrum 48K emulator that runs as the firmware
+of the M-VAVE FM-1 synth.
 
-**Try it in your browser: <https://okulik.github.io/fm1-zx/>**: the firmware with its built-in,
-freely licensed games, in [fm1-emu](https://github.com/joakimeriksson/fm1-emu)'s FM-1 emulator. The
-computer keyboard plays the FM-1's keys (the page lists them).
+You play games with the synth's keys and knobs. The emulator also goes a step beyond the original
+machine: it spots the instructions that drive the Spectrum's beeper and replaces those sounds, in
+real time, with FM-synthesised instruments. It boots on the real hardware.
+
+**Try it in your browser: <https://prototip-orest.hr/fm1-zx/>**, with a set of freely licensed
+Spectrum games (the computer keyboard plays the FM-1's keys; the page lists them). Or build a
+package of your own games with `tools/make-personal-pack` ([your own games](BUILDING.md#your-own-games)),
+to run on the FM-1 or in a local copy of the browser page; it stays on your computer.
+
+The firmware is C for the FM-1's pi32v2 CPU; the tests, the pack builder and every host tool are
+Rust.
+
+## Why
+
+The FM-1 is a small, inexpensive FM synth that quickly became a favourite to reprogram, with a
+lively scene of community firmwares. Its look and feel took me straight back to the ZX Spectrum 48K
+I had as a kid: rubbery, wobbly keys and all. Its screen is so tiny you'll need a magnifying glass,
+but it puts the beloved home computer on a pocket-sized synth, so who's complaining?
+
+## How it was made
+
+I built it with a little help from AI coding assistants, standing on the shoulders of existing
+open-source work:
+
+- [redcode/Z80](https://github.com/redcode/Z80), Manuel Sainz de Baranda y Goñi's emulator of
+  Zilog's Z80 CPU, with Sofía Ortega Sosa's Z80InsnClock for its instruction timing;
+- [Felucca](https://github.com/hugelton/Felucca) by Leo Kuroshita (Hügelton Instruments): the
+  FM-1 hardware headers, the update loader and the package tools the firmware and its packages
+  build on;
+- Joakim Eriksson's [fm1-emu](https://github.com/joakimeriksson/fm1-emu), the FM-1 emulator every
+  firmware test and the browser demo run in;
+- three files of JieLi's AC79 SDK, the Spectrum 48K ROM (with Amstrad's permission) and freely
+  licensed games by their authors.
+
+[LICENSING.md](LICENSING.md) lists every component with its licence.
 
 ## Status
 
