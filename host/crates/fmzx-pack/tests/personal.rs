@@ -165,11 +165,11 @@ fn personal_rerun_keeps_edits() {
     assert_eq!(second.matches("# missing:").count(), 1, "{second}");
     assert!(row(&r, "tune.sna").reason.as_deref().is_some_and(|w| w.contains("missing")), "{:?}", r.rows);
 
-    // the pack: the loadable games, the edited name and keys
+    // the pack: the loadable games by name, the edited name and keys
     let names: Vec<String> = pack_games(&out.0.join("games.bin")).into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, ["tape", "Turbo  Loader", "border"]);
+    assert_eq!(names, ["border", "tape", "Turbo  Loader"]);
     let pack = std::fs::read(out.0.join("games.bin")).unwrap();
-    let keys = pack_game_at(&pack, 1).unwrap().keys();
+    let keys = pack_game_at(&pack, 2).unwrap().keys();
     assert_eq!(keys[14][0], 26, "note.F3 is key.O");
 
     // a third run changes nothing; with tune back, its marker goes
@@ -291,6 +291,26 @@ fn personal_from_toml() {
 }
 
 #[test]
+fn personal_pack_is_alphabetical() {
+    // the picker shows the pack's order: games by name, whatever order the games file has (a
+    // re-run adds new files at the end); the games file and the table keep their own order
+    let games = Tmp::new("abc");
+    games.file("tune.sna", &tune_sna());
+    games.file("border.sna", &border_sna());
+    games.file("tape.tap", &tape_tap());
+    let text = "[[game]]\nid = \"z\"\nname = \"Zeta\"\nfile = \"tune.sna\"\n\n\
+                [[game]]\nid = \"a\"\nname = \"alpha\"\nfile = \"border.sna\"\n\n\
+                [[game]]\nid = \"b\"\nname = \"Beta\"\nfile = \"tape.tap\"\n";
+    games.file("mine.toml", text.as_bytes());
+    let out = Tmp::new("abc-out");
+    let r = run(&games.0.join("mine.toml"), &out.0).expect("builds");
+    let names: Vec<String> = pack_games(&out.0.join("games.bin")).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["alpha", "Beta", "Zeta"]);
+    let table: Vec<&str> = r.rows.iter().map(|w| w.name.as_str()).collect();
+    assert_eq!(table, ["Zeta", "alpha", "Beta"]);
+}
+
+#[test]
 fn personal_too_big_fails() {
     let games = Tmp::new("big");
     games.file("turbo.tzx", &turbo_tzx());
@@ -366,7 +386,7 @@ fn personal_rerun_keeps_commented_out() {
     assert!(second.trim_end().ends_with(&format!("file = \"{}\"", games.0.canonicalize().unwrap().join("border.sna").display())));
     assert!(r.rows.iter().all(|w| !w.file.ends_with("tune.sna")), "tune is not a game of the run: {:?}", r.rows);
     let names: Vec<String> = pack_games(&out.0.join("games.bin")).into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, ["tape", "turbo", "border"]);
+    assert_eq!(names, ["border", "tape", "turbo"]);
 }
 
 #[test]

@@ -241,6 +241,12 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
         return Err(format!("no game could be loaded:\n{}", left_out_list(&rows)));
     }
 
+    // the picker shows the pack's order: by name, case-insensitively (the games file and the
+    // table keep the file's order; a re-run adds new files at the end)
+    let mut both: Vec<_> = packed.into_iter().zip(jobs).collect();
+    both.sort_by_cached_key(|(p, _)| p.0.name.to_lowercase());
+    let (packed, jobs): (Vec<_>, Vec<_>) = both.into_iter().unzip();
+
     // each game's music, then the pack from the converted files' own manifest, with the sound
     // section
     let sounds = learn_all(&jobs, &out.join(SOUND_CACHE));

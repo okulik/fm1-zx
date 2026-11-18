@@ -150,6 +150,9 @@ first (in Docker, a no-op when they are up to date), so it works from a clean `b
 `FMZX_SKIP_DEVICE_BUILD=1` skips them. `--offline` and `--cache DIR` work as for
 `tools/make-packages`.
 
+The picker lists your games by name, A to Z (case does not count), whatever their order in the
+games file.
+
 **The games file.** Given a folder, the command writes `build/personal/personal-games.toml`, one
 entry per loadable `.sna`, `.z80`, `.tap` or `.tzx` file of the folder (not its subfolders), in the
 syntax of `games/games.toml` with `file` an absolute path. The name is the file name without its
