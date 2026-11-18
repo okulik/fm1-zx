@@ -7,6 +7,10 @@ A ZX Spectrum 48K emulator firmware for the M-VAVE FM-1 synth, written in C for 
 with a host-side Rust test harness. The Z80 core is the redcode/Z80 library, vendored under
 `third_party/`.
 
+**Try it in your browser: <https://okulik.github.io/fm1-zx/>**: the firmware with its built-in,
+freely licensed games, in [fm1-emu](https://github.com/joakimeriksson/fm1-emu)'s FM-1 emulator. The
+computer keyboard plays the FM-1's keys (the page lists them).
+
 ## Status
 
 **FM-1 ZX runs on a real FM-1: it boots to the game picker.** The rest of the
