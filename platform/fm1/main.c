@@ -27,6 +27,7 @@
 #include "ramcalls.h"
 #include "sound.h"
 #include "ui.h"
+#include "usbota.h"
 #include "zx.h"
 
 #ifndef FMZX_LCD_DIVIDER
@@ -50,6 +51,11 @@
 #define WDT_8S 0x0Du
 #define MASTER_MS 200u
 #define TIMER5_PRIO 4u
+#define USB_POLL_TICKS 5u   /* TIMER5 ticks (10 kHz) per USB poll: 2 kHz */
+#define USB_WAIT_SAMPLES 1200u /* usbota_retry's wait (about 27 ms) at 44,117 Hz: 1,191 samples */
+/* the FIFO a retry needs in a running game: its wait, then the next frame up to its samples
+ * (2.5M instructions, about 10.5 ms: 463 samples), with room to spare */
+#define USB_RETRY_SAMPLES (USB_WAIT_SAMPLES + 600u)
 #define AUDIO_LOW 1024u     /* run a Spectrum frame while fewer samples than this are queued */
 #define FRAME_SAMPLES 1024u /* room for one frame's samples: 750000/17 Hz * 69888 / 3.5 MHz < 882 */
 _Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole frame");
@@ -85,6 +91,7 @@ extern const uint8_t zx_rom_data[];
 extern const uint8_t _app_image_end[], _app_slot_end[];
 extern uint32_t _bss_start[], _bss_end[], _pool_start[], _pool_end[];
 extern uint32_t _data_start[], _data_end[], _data_load[];
+extern uint32_t _ram_flash_start[], _ram_flash_end[], _ram_flash_load[];
 extern uint32_t _ram_text_start[], _ram_text_end[], _ram_text_load[];
 extern void (*__init_array_start[])(void), (*__init_array_end[])(void);
 
@@ -186,8 +193,13 @@ void fm1_timer5_irq(void);
 
 void fm1_timer5_irq(void)
 {
+    static uint32_t usb_ticks;
     fm1_timer5_ack();
     input_tick_isr();
+    if (++usb_ticks == USB_POLL_TICKS) {
+        usb_ticks = 0;
+        usbota_poll_isr();
+    }
 }
 
 /* A separate function so emu-gate can see the UBOOT entry (felucca-bsp's is static). */
@@ -259,6 +271,8 @@ void fmzx_cstart(void)
     for (p = _pool_start; p < _pool_end; p++)
         *p = 0;
     for (p = _data_start, s = _data_load; p < _data_end; p++, s++)
+        *p = *s;
+    for (p = _ram_flash_start, s = _ram_flash_load; p < _ram_flash_end; p++, s++)
         *p = *s;
     for (p = _ram_text_start, s = _ram_text_load; p < _ram_text_end; p++, s++)
         *p = *s;
@@ -749,6 +763,22 @@ static __attribute__((noinline)) void game_frame(void)
     lcd_frame_end();
 }
 
+/* USB between frames (usbota_service): the soft UBOOT key enters UBOOT; the upgrade message is
+ * not acted on. */
+static void usb_service(void)
+{
+    if (usbota_service() == USBOTA_UBOOT)
+        fmzx_enter_uboot();
+}
+
+/* A running game's FIFO level below which the next Spectrum frame runs: AUDIO_LOW, and while a USB
+ * retry is due (no host seen) higher, so that the frame leaves the FIFO full enough for the retry's
+ * wait (USB_RETRY_SAMPLES; a frame adds about 880 samples). */
+static uint32_t audio_low(void)
+{
+    return usbota_retry_due() ? AUDIO_LOW + USB_WAIT_SAMPLES : AUDIO_LOW;
+}
+
 /* Every FRAME_TICKS of TIMER4 (no catching up after falling behind). */
 static int frame_due(uint32_t *next)
 {
@@ -802,6 +832,7 @@ void fmzx_main(void)
     input_init();
     fmzx_master = input_master();
     probe_stage(4, PROBE_GREEN);
+    usbota_init(); /* its flash accesses hold the interrupts off: before the audio starts */
     audio_init();
     probe_stage(5, PROBE_GREEN);
     audio_on = audio_start() == 0;
@@ -839,17 +870,22 @@ void fmzx_main(void)
             if (game.frames)
                 audio_mute(0);
             /* paced by the audio out; by TIMER4 if it did not start */
-            if (audio_on ? audio_fifo_level() < AUDIO_LOW : frame_due(&next)) {
+            if (audio_on ? audio_fifo_level() < audio_low() : frame_due(&next)) {
                 game_frame();
                 if (!audio_on)
                     audio_flush();
                 else
                     next = fm1_ticks() + 2u * FRAME_TICKS;
+                /* right after the frame, its samples just queued: the FIFO rides out the wait */
+                if (usbota_retry_due() && (!audio_on || audio_fifo_level() >= USB_RETRY_SAMPLES))
+                    usbota_retry();
+                usb_service();
             } else if (audio_on && frame_due(&next)) {
                 /* no Spectrum frame for 40 ms (a stalled audio out): the LCD and the UI still
                  * get a frame every 20 ms */
                 fmzx_stats.pending = lcd_unsent();
                 lcd_frame_end();
+                usb_service();
             }
         } else {
             /* state-based: whatever the way out of the game was, it is silent and released */
@@ -864,6 +900,8 @@ void fmzx_main(void)
                 fmzx_stats.pending = lcd_unsent();
                 lcd_frame_end();
             }
+            usbota_retry();
+            usb_service();
         }
         lcd_pump();
         fm1_wdt_feed();

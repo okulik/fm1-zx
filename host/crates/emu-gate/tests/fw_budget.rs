@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The firmware's budgets: RAMTEXT, image and pack in the app slot, POOL below the stack, the
-//! CPU per Spectrum frame and the audio interrupt. Needs the device build (`FMZX_FM1_BUILD`).
+//! The firmware's budgets: RAMTEXT, the flash driver in the RAM region, image and pack in the app
+//! slot, POOL below the stack, the CPU per Spectrum frame and the audio interrupt (and no audio
+//! underruns while the games run). Needs the device build (`FMZX_FM1_BUILD`).
+//!
+//! The CPU per frame is measured with the USB cable out and again with it in (a host enumerates
+//! the firmware and polls it while the game runs).
 //!
 //! By default the CPU per frame is measured in the two heaviest Sound and Screen pairs only
 //! (`QUICK_RUNS`: FM: sound in Crop, FM: engines in Border; the learned-entries test in Border),
-//! a few minutes; `FMZX_BUDGET_FULL=1` measures every pair below (`RUNS`), about 12 minutes,
+//! about 8 minutes; `FMZX_BUDGET_FULL=1` measures every pair below (`RUNS`), about 25 minutes,
 //! before a release or after a change to per-frame code that one mode alone runs.
 //!
 //! CPU per frame is `game_frame` plus every `lcd_compose_band` call before the next frame, at
@@ -104,6 +108,22 @@ fn ram_text_fits() {
     assert!(n <= RAMTEXT_MAX, "RAMTEXT is {n} bytes, over {RAMTEXT_MAX}");
 }
 
+/// felucca-bsp's flash driver (fm1_flash.h's RAM functions, usbota.c) runs from its own section in
+/// the RAM region, beside `.data` and `.bss`, not from RAMTEXT.
+#[test]
+fn flash_driver_in_ram() {
+    let fw = firmware();
+    let (addr, size) = section(&fw, ".ram_flash").expect("no .ram_flash section: the flash driver is not linked");
+    let used = ram_use(&fw);
+    println!("flash driver {size} bytes at {addr:#x}; RAM {used} of {RAM_MAX} bytes");
+    assert!(size > 0, "the .ram_flash section is empty");
+    assert!(
+        addr >= RAM_START && addr + size <= RAM_START + RAM_MAX,
+        "the flash driver ({addr:#x}, {size} bytes) is outside the RAM region"
+    );
+    assert!(used <= RAM_MAX, "the RAM region holds {used} bytes, over {RAM_MAX}");
+}
+
 #[test]
 fn image_and_pack_fit_the_slot() {
     let (fw, pack) = (firmware(), pack());
@@ -165,6 +185,19 @@ fn run_name((sound, screen): (u32, u32)) -> String {
     format!("{}, {}", mode_name(sound), screen_name(screen))
 }
 
+/// A CPU-per-frame case: the (Sound, Screen) pair and whether the USB cable is in.
+type Case = ((u32, u32), bool);
+
+/// The CPU-per-frame cases: each pair with the USB cable out, then in (a host enumerates the firmware
+/// and polls it while the game runs).
+fn cases() -> Vec<Case> {
+    [false, true].iter().flat_map(|&cable| pairs().iter().map(move |&p| (p, cable))).collect()
+}
+
+fn case_name((run, cable): Case) -> String {
+    format!("{}, cable {}", run_name(run), if cable { "in" } else { "out" })
+}
+
 #[test]
 fn cpu_per_frame_and_audio_isr() {
     let (fw, pack, (fixtures, fixture_ids)) = (firmware(), pack(), fixture_pack());
@@ -173,24 +206,27 @@ fn cpu_per_frame_and_audio_isr() {
         games().into_iter().enumerate().map(|(i, (id, demo))| (id, demo, &fw, i as u32)).collect();
     games.extend(fixture_ids.iter().enumerate().map(|(i, id)| (id.to_string(), Vec::new(), &fw_fix, i as u32)));
     let opt = BootOpt { rgb565: false, divider: 1 };
-    let runs: Vec<((u32, u32), Measure)> = std::thread::scope(|s| {
-        let hs: Vec<_> = pairs()
+    let cases = cases();
+    let runs: Vec<(Case, Measure)> = std::thread::scope(|s| {
+        let hs: Vec<_> = cases
             .iter()
-            .flat_map(|&run| games.iter().map(move |g| (run, g)))
-            .map(|(run, (_, demo, fw, index))| {
-                s.spawn(move || (run, measure_in(fw, opt, *index, demo, SETTLE_MS, 10_000, run.0, run.1)))
+            .flat_map(|&case| games.iter().map(move |g| (case, g)))
+            .map(|(case, (_, demo, fw, index))| {
+                let ((sound, screen), cable) = case;
+                s.spawn(move || (case, measure_with(fw, opt, *index, demo, SETTLE_MS, 10_000, sound, screen, cable)))
             })
             .collect();
         hs.into_iter().map(|h| h.join().expect("game run")).collect()
     });
     let mut isr_max = 0;
     let mut bad = Vec::new();
-    let mut worst = vec![(0u64, String::new()); pairs().len()];
-    let mut snd_worst = vec![(0u64, String::new()); pairs().len()];
-    // per run: the mixer's most in sites.sna and sites-var.sna
-    let mut sites = vec![(0u64, 0u64); pairs().len()];
-    for ((id, ..), (run, r)) in games.iter().cycle().zip(&runs) {
-        let mode = run_name(*run);
+    let mut worst = vec![(0u64, String::new()); cases.len()];
+    let mut snd_worst = vec![(0u64, String::new()); cases.len()];
+    // per case: the mixer's most in sites.sna and sites-var.sna
+    let mut sites = vec![(0u64, 0u64); cases.len()];
+    for ((id, ..), (case, r)) in games.iter().cycle().zip(&runs) {
+        let (run, cable) = case;
+        let mode = case_name(*case);
         let (max, avg) = (*r.cpu.iter().max().unwrap_or(&0), r.cpu.iter().sum::<u64>() / r.cpu.len().max(1) as u64);
         let (snd_max, snd_avg) = (*r.snd.iter().max().unwrap_or(&0), r.snd.iter().sum::<u64>() / r.snd.len().max(1) as u64);
         let isr = *r.isr.iter().max().unwrap_or(&0);
@@ -200,7 +236,7 @@ fn cpu_per_frame_and_audio_isr() {
             r.frames,
             r.isr.len()
         );
-        let k = pairs().iter().position(|m| m == run).expect("a measured run");
+        let k = cases.iter().position(|c| c == case).expect("a measured case");
         if max > worst[k].0 {
             worst[k] = (max, id.clone());
         }
@@ -213,6 +249,10 @@ fn cpu_per_frame_and_audio_isr() {
             _ => {}
         }
         assert_eq!(r.resets, 0, "{id} ({mode}): the firmware reset");
+        assert_eq!(r.usb_configured, *cable, "{id} ({mode}): configured by the USB host");
+        if r.underruns != 0 {
+            bad.push(format!("{id} ({mode}): {} audio underruns", r.underruns));
+        }
         assert_eq!((r.sound, r.screen), *run, "{id} ({mode}): the Sound and Screen choices");
         assert!(r.frames.abs_diff(500) <= 2, "{id} ({mode}): {} frames in 10 s", r.frames);
         assert!(
@@ -233,10 +273,10 @@ fn cpu_per_frame_and_audio_isr() {
             bad.push(format!("{id} ({mode}): {max} > {CPU_PER_FRAME}"));
         }
     }
-    for (k, run) in pairs().iter().enumerate() {
+    for (k, case) in cases.iter().enumerate() {
         println!(
             "{}: worst frame {} ({}), the mixer at most {} ({}); with four unknown OUT sites the mixer at most {} (code unchanged), {} (changing)",
-            run_name(*run),
+            case_name(*case),
             worst[k].0,
             worst[k].1,
             snd_worst[k].0,
@@ -247,11 +287,11 @@ fn cpu_per_frame_and_audio_isr() {
     }
     println!("audio ISR at most {isr_max}");
     assert!(isr_max <= ISR_PER_BLOCK, "audio ISR {isr_max} instructions, over {ISR_PER_BLOCK}");
-    assert!(bad.is_empty(), "CPU per frame over budget: {bad:?}");
+    assert!(bad.is_empty(), "CPU per frame over budget, or audio underruns: {bad:?}");
     // method B remembers addresses that match no engine: unchanged code around four unknown OUT
     // sites costs the mixer less than half what looking them up every frame does
     for (k, &(same, var)) in sites.iter().enumerate() {
-        assert!(same * 2 < var, "{}: four unknown OUT sites cost the mixer {same} with the code unchanged, {var} changing", run_name(pairs()[k]));
+        assert!(same * 2 < var, "{}: four unknown OUT sites cost the mixer {same} with the code unchanged, {var} changing", case_name(cases[k]));
     }
 }
 

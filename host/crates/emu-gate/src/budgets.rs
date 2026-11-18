@@ -14,6 +14,9 @@ pub const CPU_PER_FRAME: u64 = 3_600_000;
 pub const ISR_PER_BLOCK: u64 = 8_000;
 /// RAMTEXT, the SRAM code region (`.ram_text`).
 pub const RAMTEXT_MAX: u32 = 49_152;
+/// The RAM region (`app.ld`): `.data`, `.ram_flash` (felucca-bsp's flash driver) and `.bss`.
+pub const RAM_START: u32 = 0x01C0_E000;
+pub const RAM_MAX: u32 = 65_536;
 /// The user stack's bottom: POOL must end below it (`app.ld`).
 pub const STACK_GUARD: u32 = 0x01C7_8000;
 /// Where POOL starts (`app.ld`).
@@ -25,6 +28,24 @@ pub const FRAMES_PER_SECOND: u64 = 50;
 pub fn ram_text_size(fw: &Firmware) -> u32 {
     let f = object::File::parse(&*fw.elf).expect("parse the firmware ELF");
     f.section_by_name(".ram_text").expect("no .ram_text section").size() as u32
+}
+
+/// Address and size of the ELF section `name`, if the image has it.
+pub fn section(fw: &Firmware, name: &str) -> Option<(u32, u32)> {
+    let f = object::File::parse(&*fw.elf).expect("parse the firmware ELF");
+    f.section_by_name(name).map(|s| (s.address() as u32, s.size() as u32))
+}
+
+/// Bytes of the RAM region in use: from [`RAM_START`] to the end of the last of `.data`,
+/// `.ram_flash` and `.bss`.
+pub fn ram_use(fw: &Firmware) -> u32 {
+    [".data", ".ram_flash", ".bss"]
+        .iter()
+        .filter_map(|n| section(fw, n))
+        .map(|(a, n)| a + n)
+        .max()
+        .expect("no .data or .bss section")
+        - RAM_START
 }
 
 /// Bytes the app slot holds: from the image's start to the end of the pack, which starts at
@@ -264,10 +285,14 @@ pub struct Measure {
     pub screen: u32,
     /// LCD rows sent in each 1-second sub-window of the window (a static screen sends none).
     pub rows_per_second: Vec<u32>,
+    /// Audio underruns from the game's start (the cable plugged in, with `cable`) to the window's end.
+    pub underruns: u32,
     /// Chip resets during the run.
     pub resets: u32,
     /// The game was still running (`fmzx_stats.view` = game) at the end.
     pub in_game: bool,
+    /// A USB host had the firmware configured at the end (only with the cable in).
+    pub usb_configured: bool,
 }
 
 /// Boots `fw` (with its pack) in `opt`, selects game `index` in the picker and starts it with
@@ -378,12 +403,33 @@ pub fn measure_in(
     sound: u32,
     screen: u32,
 ) -> Measure {
+    measure_with(fw, opt, index, demo, settle_ms, window_ms, sound, screen, false)
+}
+
+/// As [`measure_in`]; with `cable`, a USB cable to a host plugged in when the game has started
+/// (the host has enumerated the firmware well before the window).
+#[allow(clippy::too_many_arguments)]
+pub fn measure_with(
+    fw: &Firmware,
+    opt: BootOpt,
+    index: u32,
+    demo: &[DemoStep],
+    settle_ms: u64,
+    window_ms: u64,
+    sound: u32,
+    screen: u32,
+    cable: bool,
+) -> Measure {
     let mut m = if sound == SOUND_BEEPER && screen == SCREEN_CROP {
         start_game(fw, opt, index)
     } else {
         start_game_in(fw, opt, index, sound, screen)
     };
+    if cable {
+        m.soc.usb_plug();
+    }
     let t0 = m.ms();
+    let underruns0 = m.stats().underruns;
     let mut d = Demo::new(demo);
     d.run_to(&mut m, t0, settle_ms);
     for sym in ["game_frame", "lcd_compose_band", "fm1_alnk0_irq", "snd_mixer_frame"] {
@@ -410,8 +456,10 @@ pub fn measure_in(
         sound: sound_mode(&m),
         screen: screen_mode(&m),
         rows_per_second,
+        underruns: s1.underruns - underruns0,
         resets: m.resets() - resets0,
         in_game: s1.view == VIEW_GAME,
+        usb_configured: m.soc.usb.product().is_some(),
     }
 }
 

@@ -7,6 +7,7 @@
 
 pub mod budgets;
 pub mod fw;
+pub mod upgrade;
 
 use fm1_core::{Bus, Cpu, JitMem};
 use fm1_soc::{Soc, RAM_BASE, XIP_BASE};

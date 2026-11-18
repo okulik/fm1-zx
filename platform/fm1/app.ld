@@ -1,15 +1,16 @@
 /* SPDX-FileCopyrightText: 2026 FM-1 ZX contributors */
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* The firmware image: .entry, .ram_text (load copy), .text/.rodata and .data (load copy),
- * back to back in XIP from 0x02000120, the boot loader's entry point. fmzx_cstart (main.c)
- * copies .ram_text and .data to SRAM and zeroes .bss and .pool; .noinit is left as it was.
+/* The firmware image: .entry, .ram_text (load copy), .text/.rodata, .data and .ram_flash (load
+ * copies), back to back in XIP from 0x02000120, the boot loader's entry point. fmzx_cstart (main.c)
+ * copies .ram_text, .data and .ram_flash to SRAM and zeroes .bss and .pool; .noinit is left as it was.
  * The game pack is not linked: it sits in the app slot at ALIGN(_app_image_end, 4096).
  *
  * SRAM code (RAMTEXT) and XIP code are out of each other's branch reach (+-4 MiB): calls
  * between them go through function pointers. check_reach.py (run after the link) fails the
  * build on any direct call or jump between the two, and on RAMTEXT code taking an address in
- * XIP (where some calls would still be in reach, the linker does not catch them). */
+ * XIP (where some calls would still be in reach, the linker does not catch them). The flash
+ * driver's SRAM code (.ram_flash, in RAM) is held to the same rules. */
 
 ENTRY(_start)
 
@@ -18,7 +19,7 @@ MEMORY
     XIP     (rx)  : ORIGIN = 0x02000120, LENGTH = 0x8DFBC   /* the app slot */
     RAMTEXT (rwx) : ORIGIN = 0x01C00000, LENGTH = 48K
     /* 0x01C0C000 - 0x01C0E000: reserved, nothing linked */
-    RAM     (rw)  : ORIGIN = 0x01C0E000, LENGTH = 64K
+    RAM     (rwx) : ORIGIN = 0x01C0E000, LENGTH = 64K   /* .data, .ram_flash, .bss */
     POOL    (rw)  : ORIGIN = 0x01C1E000, LENGTH = 0x01C78000 - 0x01C1E000
     /* the stacks: _user_stack_top, _sup_stack_top below (crt0.S) */
     NOINIT  (rw)  : ORIGIN = 0x01C7C000, LENGTH = 0x3D50
@@ -81,7 +82,18 @@ SECTIONS
         _data_end = .;
     } > RAM AT > XIP
     _data_load = LOADADDR(.data);
-    _app_image_end = LOADADDR(.data) + SIZEOF(.data);
+
+    /* felucca-bsp's flash driver (usbota.c: fm1_flash.h's RAM functions), which runs while the
+     * flash is switched off, so from SRAM: in RAM after .data, copied there as .data is. */
+    .ram_flash : ALIGN(4)
+    {
+        _ram_flash_start = .;
+        *(.ram_flash .ram_flash.*)
+        . = ALIGN(4);
+        _ram_flash_end = .;
+    } > RAM AT > XIP
+    _ram_flash_load = LOADADDR(.ram_flash);
+    _app_image_end = LOADADDR(.ram_flash) + SIZEOF(.ram_flash);
 
     .bss (NOLOAD) : ALIGN(4)
     {
@@ -120,5 +132,8 @@ ASSERT(_app_image_end <= _app_slot_end, "image larger than the app slot")
 ASSERT(LOADADDR(.ram_text) == ADDR(.entry) + SIZEOF(.entry), ".ram_text must load right after .entry")
 ASSERT(ADDR(.text) == LOADADDR(.ram_text) + SIZEOF(.ram_text), ".text must follow .ram_text's load copy")
 ASSERT(LOADADDR(.data) == ADDR(.text) + SIZEOF(.text), ".data must load right after .text")
+ASSERT(LOADADDR(.ram_flash) == LOADADDR(.data) + SIZEOF(.data), ".ram_flash must load right after .data")
+ASSERT(ADDR(.ram_flash) >= ORIGIN(RAM) && _ram_flash_end <= ORIGIN(RAM) + LENGTH(RAM), ".ram_flash outside RAM")
+ASSERT(_bss_end <= ORIGIN(RAM) + LENGTH(RAM), ".data, .ram_flash and .bss over the RAM region")
 ASSERT(fmzx_bootopt == ORIGIN(NOINIT), "fmzx_bootopt must be first in NOINIT")
 ASSERT(_pool_end <= 0x01C78000, "POOL runs into the user stack")

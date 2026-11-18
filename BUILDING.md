@@ -406,8 +406,9 @@ Both need the device build (see Firmware above) and run in fm1-emu:
     FMZX_FM1_BUILD=$PWD/../build/fm1 cargo test --release -p emu-gate --test fw_budget --test fw_report -- --nocapture
 
 `fw_budget` measures the CPU per frame in the two heaviest Sound and Screen pairs by default (FM: sound in
-Crop, FM: engines in Border; a few minutes). `FMZX_BUDGET_FULL=1` runs the full matrix (about 12
-minutes): before a release, or after a change to per-frame code that only one mode runs. In full it runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with ZX Sopwith under FM: sound at about 2.37M, or Border scroll at about 2.50M, both well under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), image + game pack
+Crop, FM: engines in Border; about 8 minutes), each with the USB cable out and in (a host enumerates the
+firmware and polls it while the game runs). `FMZX_BUDGET_FULL=1` runs the full matrix (about 25
+minutes, estimated): before a release, or after a change to per-frame code that only one mode runs. In full it runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with ZX Sopwith under FM: sound at about 2.37M, or Border scroll at about 2.50M, both well under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), the flash driver's SRAM code (`.ram_flash`) in the RAM region with `.data` and `.bss` (<= 65,536 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
@@ -491,7 +492,8 @@ frame, about 2.9M estimated, under the cap.)
 
 The LCD compose path uses about 3 KB of the 8 KB user stack, measured from the disassembly: `pix_compose_rows` has a frame of 2,524 bytes plus its callees, and is called only from the main loop.
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,012 of 49,152 bytes. Image
-+ pack 179,904 of 581,564 (0x8DFBC) bytes. POOL 272,076 bytes, 96,564 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,012 of 49,152 bytes. The flash
+driver 1,852 bytes in the RAM region, which holds 26,964 of 65,536 bytes. Image
++ pack 208,576 of 581,564 (0x8DFBC) bytes. POOL 275,800 bytes, 92,840 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.
