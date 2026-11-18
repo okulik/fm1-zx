@@ -12,7 +12,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 ## The packages
 
 `tools/make-packages` builds two update packages (`.fwsc`), both with the product identity
-`FM-1_948`:
+`FM-1_048`:
 
 | Package | For | Colour mode without boot options |
 | --- | --- | --- |
@@ -63,11 +63,11 @@ By hand, the same steps:
     cargo run --release -p fmzx-pack -- games ../games/games.toml -o ../build/fm1/games.bin
     cargo run --release -p fmzx-pack -- fwsc --app ../build/fm1/platform/fm1/fmzx_app.bin \
         --pack ../build/fm1/games.bin --loader ../build/fm1/third_party/felucca-loader/loader.bin \
-        -o ../build/fm1/fmzx.fwsc [--product FM-1_948] [--cache DIR] [--offline]
+        -o ../build/fm1/fmzx.fwsc [--product FM-1_048] [--cache DIR] [--offline]
     cargo run --release -p fmzx-pack -- verify ../build/fm1/fmzx.fwsc
 
 `--product` must match the image's identity (the CMake cache variable `FMZX_PRODUCT`, default
-`FM-1_948`). The loader must be the pinned Felucca 1.6.1 loader that the `felucca_loader`
+`FM-1_048`). The loader must be the pinned Felucca 1.6.1 loader that the `felucca_loader`
 target builds (8,216 bytes, `third_party/felucca-loader/VENDORED.md`).
 
 With your own games: `tools/make-personal-pack <folder>` builds the same two packages with the
@@ -125,7 +125,7 @@ FM-1 firmware is updated through the firmware that is running: the community ins
 example Felucca's web installer, or the FM-1 Firmware Hub) send a `.fwsc` over USB-MIDI to the
 running firmware, which hands it to the update loader in the package (`ota.bin`), which writes
 the app area. *Unverified:* that the stock firmware or Felucca accepts this package (identity
-`FM-1_948`, with Felucca's loader, which presents itself to update hosts as `ota-FM-1_900`), and
+`FM-1_048`, with Felucca's loader, which presents itself to update hosts as `ota-FM-1_900`), and
 that a given installer takes it. The first device test checks this.
 
 1. Start the FM-1 with its current firmware (stock or another community firmware) and connect

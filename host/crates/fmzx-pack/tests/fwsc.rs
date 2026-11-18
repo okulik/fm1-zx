@@ -30,7 +30,7 @@ fn sdk() -> Sdk {
 /// An image that carries the identity.
 fn image(n: usize) -> Vec<u8> {
     let mut a = noise(n, 4);
-    a[100..109].copy_from_slice(b"FM-1_948\0");
+    a[100..109].copy_from_slice(b"FM-1_048\0");
     a
 }
 
@@ -108,9 +108,9 @@ fn roundtrip_with_fm1_soc() {
 #[test]
 fn identity_in_markers() {
     let (pkg, _, _) = package();
-    assert_eq!(fm1_soc::fwsc::container(&pkg), (20, "FM-1_948".to_string()));
+    assert_eq!(fm1_soc::fwsc::container(&pkg), (20, "FM-1_048".to_string()));
     for i in 0..20 {
-        let want = b"FM-1_948".get(i).map_or(0x7D, |&c| c + i as u8 + 1);
+        let want = b"FM-1_048".get(i).map_or(0x7D, |&c| c + i as u8 + 1);
         assert_eq!(pkg[i * 0x30 + 0x2F], want, "marker {i}");
     }
     // another identity, when the image carries it
@@ -198,7 +198,7 @@ fn verify_flags_problems() {
     assert_eq!(r.loader_sha256, sha256_hex(&loader()));
 
     // the identity asked for
-    assert!(problems(&pkg, Some("FM-1_123")).iter().any(|s| s.contains("identity FM-1_948, expected FM-1_123")));
+    assert!(problems(&pkg, Some("FM-1_123")).iter().any(|s| s.contains("identity FM-1_048, expected FM-1_123")));
     // the SDK files and the loader are not the pinned ones
     let p = verify(&pkg, &Pins::builtin(), None).problems;
     for f in ["uboot.boot", "cfg_tool.bin", "eq_cfg_hw.bin", "not the pinned one"] {
@@ -209,7 +209,7 @@ fn verify_flags_problems() {
     // an image without the identity
     let mut other = slot.clone();
     other[100..109].copy_from_slice(b"FM-1_000\0");
-    assert_flags(&raw_package(&other, &ota, PRODUCT), "does not carry the identity FM-1_948");
+    assert_flags(&raw_package(&other, &ota, PRODUCT), "does not carry the identity FM-1_048");
     // a loader without its marker
     let mut l = loader();
     l[2] = b'X';
@@ -251,7 +251,7 @@ fn golden_package() {
     pk.extend(noise(3000, 5));
     let pkg = build(&image(5000), &pk, &loader(), PRODUCT, &sdk()).unwrap();
     assert_eq!(pkg.len(), 0x400 + fwsc::FLASH_SIZE + lz4blk::wrap_loader(&loader()).unwrap().len() + 20);
-    assert_eq!(sha256_hex(&pkg), "bde07cc0e2d58b6f25ed89227747c0e888efa263c2b2fe773c4fe944f1963aa4");
+    assert_eq!(sha256_hex(&pkg), "23d4caa9cf4aa2cf0daf4e9cb26513bf4b21cbbb5d8629ec5b818e9bf71cf5b9");
 }
 
 #[test]

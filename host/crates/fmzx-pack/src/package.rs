@@ -12,7 +12,7 @@ use crate::layout::{self, APP_OFFSET, APP_SLOT, PACK_ALIGN, PACK_MAGIC};
 use crate::lz4blk::{self, LOADER_LOAD, LOADER_NAME};
 
 /// The product identity FM-1 ZX packages carry by default.
-pub const PRODUCT: &str = "FM-1_948";
+pub const PRODUCT: &str = "FM-1_048";
 /// The marker at the start of Felucca's update loader.
 pub const LOADER_MARKER: &[u8; 16] = b"FELUCCA-LOADER-1";
 

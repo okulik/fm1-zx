@@ -7,7 +7,7 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/fm1",
       "toolchainFile": "${sourceDir}/cmake/pi32v2.cmake",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "FMZX_LCD_RGB565": "OFF", "FMZX_PRODUCT": "FM-1_948" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "FMZX_LCD_RGB565": "OFF", "FMZX_PRODUCT": "FM-1_048" }
     },
     {
       "name": "fm1-preview",

@@ -6,7 +6,7 @@
 set(FMZX_LCD_DIVIDER 4 CACHE STRING "LCD SPI clock divider at boot, 0-15: 60 MHz / (divider + 1)")
 option(FMZX_LCD_RGB565 "RGB565 instead of RGB444 when no boot option is set (the fm1-emu preview package)" OFF)
 option(FMZX_BOOT_PROBE "The boot probe (probe.h): start-up stages and faults drawn on the LCD, a diagnostic build" OFF)
-set(FMZX_PRODUCT "FM-1_948" CACHE STRING "Product identity in the image and the update package: FM-1_ and three digits")
+set(FMZX_PRODUCT "FM-1_048" CACHE STRING "Product identity in the image and the update package: FM-1_ and three digits")
 if(NOT FMZX_PRODUCT MATCHES "^FM-1_[0-9][0-9][0-9]$")
   message(FATAL_ERROR "FMZX_PRODUCT must be FM-1_ and three digits (got '${FMZX_PRODUCT}')")
 endif()

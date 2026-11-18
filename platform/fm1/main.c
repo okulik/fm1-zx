@@ -38,7 +38,7 @@
 #define FMZX_LCD_RGB565 0
 #endif
 #ifndef FMZX_PRODUCT
-#define FMZX_PRODUCT "FM-1_948"
+#define FMZX_PRODUCT "FM-1_048"
 #endif
 
 #define POOL(tag) __attribute__((section(".pool." tag), aligned(4)))

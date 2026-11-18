@@ -6,8 +6,8 @@
 //! `fmzx-pack testprogs <dir>` (writes `scroll.sna`, `border.sna`, `tape.tap` and `tune.sna`)
 //! `fmzx-pack menu-art <png> -o <c file>` (the menu art's top band as C: `app/menu_art.c`)
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
-//!     [--product FM-1_948] [--cache DIR] [--offline]`
-//! `fmzx-pack verify <pkg.fwsc> [--product FM-1_948]`
+//!     [--product FM-1_048] [--cache DIR] [--offline]`
+//! `fmzx-pack verify <pkg.fwsc> [--product FM-1_048]`
 //! `fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...` (the
 //!     personal pack, `tools/make-personal-pack`; `--app`: the images it goes with, at least one,
 //!     which set the room for it)
@@ -27,8 +27,8 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack testprogs <dir>
        fmzx-pack menu-art <png> -o <c file>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
-                      [--product FM-1_948] [--cache DIR] [--offline]
-       fmzx-pack verify <pkg.fwsc> [--product FM-1_948]
+                      [--product FM-1_048] [--cache DIR] [--offline]
+       fmzx-pack verify <pkg.fwsc> [--product FM-1_048]
        fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...";
 
 fn read(path: &str) -> Result<Vec<u8>, String> {

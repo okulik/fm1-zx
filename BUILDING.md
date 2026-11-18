@@ -59,7 +59,7 @@ Outputs are under `build/fm1`:
   is the bytes from `0x02000120`, the app slot's start). The game pack goes at the
   first 4 KiB boundary after it. `-DFMZX_LCD_DIVIDER=<0-15>` sets the LCD clock at
   boot (default 4); `-DFMZX_PRODUCT=FM-1_<3 digits>` the product identity the image
-  carries (default `FM-1_948`, `fmzx_product`); `-DFMZX_LCD_RGB565=ON` makes RGB565
+  carries (default `FM-1_048`, `fmzx_product`); `-DFMZX_LCD_RGB565=ON` makes RGB565
   the colour mode when no boot option is set (default OFF: RGB444).
 - `third_party/felucca-loader/loader.bin`: Felucca 1.6.1's update loader (target
   `felucca_loader`), built from `third_party/felucca-loader/` with Felucca's own commands;
