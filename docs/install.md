@@ -25,7 +25,7 @@ Each is a JieLi UFW container (chip `AC791N`, about 610 KB) with
   `isd_config` blob that gives the chip key), then the app area: the FM-1 ZX image at offset
   0x120, the game pack at the next 4 KiB boundary after it (both in the 581,564-byte app slot),
   then the SDK's `cfg_tool.bin` and `eq_cfg_hw.bin`;
-- `ota.bin`: Felucca 1.6.1's update loader (`third_party/felucca-loader`), a separate program
+- `ota.bin`: felucca-bsp's update loader (`platform/fm1/bsp/loader`), a separate program
   that the FM-1 runs from RAM to write the update.
 
 `fmzx-pack verify <package>` checks a package: the identity, every CRC, the sizes, the SDK files'
@@ -67,8 +67,8 @@ By hand, the same steps:
     cargo run --release -p fmzx-pack -- verify ../build/fm1/fmzx.fwsc
 
 `--product` must match the image's identity (the CMake cache variable `FMZX_PRODUCT`, default
-`FM-1_048`). The loader must be the pinned Felucca 1.6.1 loader that the `felucca_loader`
-target builds (8,216 bytes, `third_party/felucca-loader/VENDORED.md`).
+`FM-1_048`). The loader must be the pinned felucca-bsp loader that the `felucca_loader`
+target builds (15,060 bytes, `cmake/check_loader.cmake`).
 
 With your own games: `tools/make-personal-pack <folder>` builds the same two packages with the
 games of a folder of yours, as `build/personal/fmzx.fwsc` and `build/personal/fmzx-preview.fwsc`
@@ -125,7 +125,7 @@ FM-1 firmware is updated through the firmware that is running: the community ins
 example Felucca's web installer, or the FM-1 Firmware Hub) send a `.fwsc` over USB-MIDI to the
 running firmware, which hands it to the update loader in the package (`ota.bin`), which writes
 the app area. *Unverified:* that the stock firmware or Felucca accepts this package (identity
-`FM-1_048`, with Felucca's loader, which presents itself to update hosts as `ota-FM-1_900`), and
+`FM-1_048`, with felucca-bsp's loader, which presents itself to update hosts as `ota-FM-1_900`), and
 that a given installer takes it. The first device test checks this.
 
 1. Start the FM-1 with its current firmware (stock or another community firmware) and connect

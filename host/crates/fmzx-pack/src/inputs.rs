@@ -3,7 +3,7 @@
 
 //! The package inputs that are not built here, pinned by SHA-256 in `inputs.toml`: three files
 //! from JieLi's AC79 SDK, fetched with curl into a cache directory (`build/ac79/` by default),
-//! and Felucca's update loader (built by the `felucca_loader` target).
+//! and felucca-bsp's update loader (built by the `felucca_loader` target).
 
 use crate::fwsc::Sdk;
 use serde::Deserialize;
@@ -134,8 +134,8 @@ pub fn check_loader(pins: &Pins, loader: &[u8]) -> Result<(), String> {
     let got = sha256_hex(loader);
     if loader.len() != pins.loader.size || got != pins.loader.sha256 {
         return Err(format!(
-            "the loader is {} bytes, SHA-256 {got}; expected Felucca 1.6.1's, {} bytes, {} \
-             (third_party/felucca-loader/VENDORED.md)",
+            "the loader is {} bytes, SHA-256 {got}; expected the pinned felucca-bsp loader, {} bytes, {} \
+             (platform/fm1/VENDORED.md)",
             loader.len(),
             pins.loader.size,
             pins.loader.sha256
@@ -155,7 +155,7 @@ mod tests {
         for f in SDK_FILES {
             assert_eq!(p.sdk_sha256(f).map(str::len), Some(64), "{f}");
         }
-        assert_eq!(p.loader.size, 8216);
+        assert_eq!(p.loader.size, 15060);
     }
 
     #[test]

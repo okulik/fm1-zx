@@ -17,9 +17,9 @@ use fmzx_pack::package::{verify, PRODUCT};
 use std::path::{Path, PathBuf};
 
 const BOOT_MS: u64 = 1500;
-/// Felucca 1.6.1's loader wrapped as `ota.bin`, as Felucca's own tools/build.py `ldr_wrap`
-/// wraps it (computed with those functions from the pinned `loader.bin`): 6,934 bytes.
-const OTA_SHA256: &str = "d578658e22250ad9c1616fe082671c2fec115e84f249b9e75973895270746203";
+/// The pinned felucca-bsp loader wrapped as `ota.bin`, as Felucca's tools/build.py `ldr_wrap`
+/// wraps it (computed with those functions from the pinned `loader.bin`): 12,943 bytes.
+const OTA_SHA256: &str = "4314438cd9cbdeed3f2565a5baaedada6060728f03f1b653acb62ba855eacfb5";
 
 fn golden(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name)
@@ -120,5 +120,5 @@ fn loader_wraps_like_felucca() {
     let loader = std::fs::read(build_dir().join("third_party/felucca-loader/loader.bin")).expect("read loader.bin");
     fmzx_pack::inputs::check_loader(&Pins::builtin(), &loader).expect("the pinned loader");
     let ota = fmzx_pack::lz4blk::wrap_loader(&loader).unwrap();
-    assert_eq!((ota.len(), sha256_hex(&ota).as_str()), (6934, OTA_SHA256));
+    assert_eq!((ota.len(), sha256_hex(&ota).as_str()), (12943, OTA_SHA256));
 }

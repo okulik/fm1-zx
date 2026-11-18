@@ -61,10 +61,10 @@ Outputs are under `build/fm1`:
   boot (default 4); `-DFMZX_PRODUCT=FM-1_<3 digits>` the product identity the image
   carries (default `FM-1_048`, `fmzx_product`); `-DFMZX_LCD_RGB565=ON` makes RGB565
   the colour mode when no boot option is set (default OFF: RGB444).
-- `third_party/felucca-loader/loader.bin`: Felucca 1.6.1's update loader (target
-  `felucca_loader`), built from `third_party/felucca-loader/` with Felucca's own commands;
-  the build fails unless it is 8,216 bytes with the pinned SHA-256
-  (`third_party/felucca-loader/VENDORED.md`).
+- `third_party/felucca-loader/loader.bin`: felucca-bsp's update loader (target
+  `felucca_loader`), built from `platform/fm1/bsp/loader/` with felucca-bsp's own commands;
+  the build fails unless it is 15,060 bytes with the pinned SHA-256
+  (`cmake/check_loader.cmake`).
 
 The preset `fm1-preview` builds the same firmware with `FMZX_LCD_RGB565=ON` into
 `build/fm1-preview` (for the fm1-emu preview package):

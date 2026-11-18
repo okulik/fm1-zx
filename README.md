@@ -78,7 +78,7 @@ What works:
     FM noise), or a brief 1-2 frame rejection inside a known tune) stay on the beeper;
 - the Spectrum at its own speed (50 frames a second) with beeper sound, paced by the audio, and
   the screen sent to the LCD by changed rows: 50 display frames a second at LCD divider 1;
-- an update package (`.fwsc`) with Felucca's update loader, and a preview package to try in
+- an update package (`.fwsc`) with felucca-bsp's update loader, and a preview package to try in
   fm1-emu's web page ([install and recovery](docs/install.md)); the page (`tools/web-demo`) adds a
   guide, labels on the FM-1 drawing and computer keys that follow the running game's key map
   ([computer keyboard](docs/controls.md#computer-keyboard-browser-page));

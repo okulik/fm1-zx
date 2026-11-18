@@ -157,7 +157,7 @@ cp "$emu/LICENSE" "$out/licenses/fm1-emu-MIT.txt"
 cp "$root/LICENSING.md" "$out/licenses/LICENSING.md"
 cp "$root/docs/third-party/AC79-SDK-Apache-2.0.txt" "$out/licenses/"
 (cd "$root" && for f in third_party/Z80/COPYING third_party/Z80/COPYING.LESSER \
-    third_party/Z80InsnClock/LICENSE-0BSD third_party/felucca-loader/LICENSE platform/fm1/bsp/LICENSE \
+    third_party/Z80InsnClock/LICENSE-0BSD platform/fm1/bsp/LICENSE \
     platform/fm1/bsp/NOTICE third_party/zx-rom/README.md third_party/games/*/LICENSE* \
     third_party/games/*/COPYING* third_party/games/*/gpl-3.0.txt third_party/games/*/README*; do
     mkdir -p "$out/licenses/$(dirname "$f")"

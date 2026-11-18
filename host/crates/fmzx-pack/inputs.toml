@@ -21,8 +21,8 @@ sha256 = "276579954f076886a6a7694f65dc71c034a63a2c204b76749065c0ac7b010d1b"
 path = "cfg/eq_cfg_hw.bin"
 sha256 = "41167491bffed4651750719c973d2758adeb9021a5670d02d6a53c85ed80ea7d"
 
-# Felucca 1.6.1's update loader, built from third_party/felucca-loader (target felucca_loader;
+# felucca-bsp's update loader, built from platform/fm1/bsp/loader (target felucca_loader;
 # the same pin is checked by the build, platform/fm1/CMakeLists.txt).
 [loader]
-size = 8216
-sha256 = "2cde42b729d787a3e591ed4eaaffbbf33cebee7d58421d33bf6b6d27cc03f1aa"
+size = 15060
+sha256 = "339e2334e0471dfc3569df5f7b9556363d5f45c0574ff7259921cfa8f9014c16"

@@ -129,26 +129,21 @@ add_custom_command(TARGET fmzx_app_image POST_BUILD
   COMMAND ${FMZX_PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/check_reach.py" ${_out}/fmzx_app.dis ${_out}/fmzx_app.map
   VERBATIM)
 
-# Felucca's update loader (third_party/felucca-loader, GPL-3.0-only): a separate program that the
-# update package carries as ota.bin, never linked into the image. Built with exactly the commands
-# of Felucca 1.6.1's tools/build.py build_loader(), from the vendored tree as working directory,
-# and none of our flags; the result must be Felucca's loader.bin byte for byte.
-set(_ldr_src "${PROJECT_SOURCE_DIR}/third_party/felucca-loader")
+# felucca-bsp's update loader (platform/fm1/bsp/loader, MPL-2.0): a separate program that the
+# update package carries as ota.bin, never linked into the image. Built with the commands of
+# felucca-bsp's tests/check_flash_target.py, from the vendored tree as working directory, and none
+# of our flags; the result is pinned by size and SHA-256.
+set(_ldr_src "${PROJECT_SOURCE_DIR}/platform/fm1/bsp")
 set(_ldr "${PROJECT_BINARY_DIR}/third_party/felucca-loader")
-set(_ldr_sources
-  firmware/loader/crt0_ldr.S firmware/loader/ldr_core.c firmware/loader/loader.c firmware/loader/loader.ld
-  firmware/src/usb.c firmware/src/ota.c firmware/src/libc.c
-  firmware/hal/fm1_cc.h firmware/hal/fm1_flash.h firmware/hal/fm1_sys.h firmware/hal/fm1_time.h
-  firmware/hal/fm1_usb.h firmware/hal/fm1_xip.h)
-list(TRANSFORM _ldr_sources PREPEND "${_ldr_src}/" OUTPUT_VARIABLE _ldr_deps)
-set(FMZX_LOADER_SIZE 8216)
-set(FMZX_LOADER_SHA256 2cde42b729d787a3e591ed4eaaffbbf33cebee7d58421d33bf6b6d27cc03f1aa)
+file(GLOB_RECURSE _ldr_deps CONFIGURE_DEPENDS "${_ldr_src}/loader/*" "${_ldr_src}/chip/*" "${_ldr_src}/boards/*")
+set(FMZX_LOADER_SIZE 15060)
+set(FMZX_LOADER_SHA256 339e2334e0471dfc3569df5f7b9556363d5f45c0574ff7259921cfa8f9014c16)
 add_custom_command(OUTPUT "${_ldr}/loader.bin"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${_ldr}"
-  COMMAND "${CMAKE_C_COMPILER}" -target pi32v2 -c firmware/loader/crt0_ldr.S -o "${_ldr}/crt0_ldr.o"
-  COMMAND "${CMAKE_C_COMPILER}" -target pi32v2 -Os -ffunction-sections -fno-builtin -Wall -Wno-unused-function
-          -Ifirmware/hal -Ifirmware/src -c firmware/loader/loader.c -o "${_ldr}/loader.o"
-  COMMAND "${CMAKE_LINKER}" --gc-sections -e _start -T firmware/loader/loader.ld
+  COMMAND "${CMAKE_C_COMPILER}" -target pi32v2 -c loader/crt0_ldr.S -o "${_ldr}/crt0_ldr.o"
+  COMMAND "${CMAKE_C_COMPILER}" -target pi32v2 -Os -ffunction-sections -fno-builtin -Wall -Werror
+          -Wno-unused-function -Ichip -Iboards/fm1 -c loader/loader.c -o "${_ldr}/loader.o"
+  COMMAND "${CMAKE_LINKER}" --gc-sections -e _start -T loader/loader.ld
           "${_ldr}/crt0_ldr.o" "${_ldr}/loader.o" -o "${_ldr}/loader.elf"
   COMMAND "${CMAKE_OBJCOPY}" -O binary -j .text "${_ldr}/loader.elf" "${_ldr}/loader.bin"
   COMMAND ${CMAKE_COMMAND} -DBIN=${_ldr}/loader.bin -DSIZE=${FMZX_LOADER_SIZE} -DSHA256=${FMZX_LOADER_SHA256}
