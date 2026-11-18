@@ -493,7 +493,7 @@ frame, about 2.9M estimated, under the cap.)
 The LCD compose path uses about 3 KB of the 8 KB user stack, measured from the disassembly: `pix_compose_rows` has a frame of 2,524 bytes plus its callees, and is called only from the main loop.
 
 Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,012 of 49,152 bytes. The flash
-driver 1,852 bytes in the RAM region, which holds 26,964 of 65,536 bytes. Image
-+ pack 208,576 of 581,564 (0x8DFBC) bytes. POOL 275,800 bytes, 92,840 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+driver 2,932 bytes in the RAM region, which holds 30,708 of 65,536 bytes. Image
++ pack 216,768 of 581,564 (0x8DFBC) bytes. POOL 275,800 bytes, 92,840 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
 crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.

@@ -61,6 +61,9 @@
 _Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole frame");
 #define GAIN_FRAMES 10u     /* MASTER -> gain every 10 frames */
 #define NO_COLOUR 0xFFu
+#define UI_BLACK 0u   /* UI palette indices: the menus' paper, */
+#define UI_WHITE 7u   /* ink */
+#define UI_YELLOW 14u /* and titles (bright yellow) */
 
 /* Boot options from emu-gate (or anything that writes them before a reset): word 0 BOOTOPT_MAGIC,
  * word 1 bit 0 RGB565, bits 8-11 the LCD divider, and with bit 12 the Sound and Screen choices to
@@ -97,6 +100,7 @@ extern void (*__init_array_start[])(void), (*__init_array_end[])(void);
 
 void fmzx_cstart(void);
 void fmzx_enter_uboot(void);
+void fmzx_enter_update(const uint8_t *parm);
 void fmzx_main(void);
 
 static uint8_t rom_copy[ZX_ROM_SIZE] POOL("rom");
@@ -171,6 +175,7 @@ static unsigned divider = FMZX_LCD_DIVIDER;
 static uint32_t budget;    /* LCD bytes per frame */
 static uint32_t lcd_frame; /* the LCD scheduler's frame count */
 static int audio_on;       /* the audio DMA runs (it needs the stock audio PLL) */
+static int update_screen;  /* the update session's screen: every LCD row from the UI grid */
 
 /* The MASTER pot, 0-1023, refreshed every MASTER_MS (read by emu-gate, and for the audio gain). */
 volatile uint32_t fmzx_master;
@@ -207,6 +212,12 @@ __attribute__((noinline)) void fmzx_enter_uboot(void)
 {
     fm1_wdt_stop();
     fm1_enter_uboot();
+}
+
+/* The update's commit (usbota.h), a separate function for emu-gate as fmzx_enter_uboot. */
+__attribute__((noinline)) void fmzx_enter_update(const uint8_t *parm)
+{
+    fm1_enter_update(parm);
 }
 
 /* ------------------------------------------------------------------ start-up --- */
@@ -480,7 +491,7 @@ void lcd_compose_band(unsigned row0, unsigned rows)
     for (i = 0; i < rows; i += n) {
         unsigned r = row0 + i;
         n = 1;
-        if (menu_row_is_ui(&mn, r)) {
+        if (update_screen || menu_row_is_ui(&mn, r)) {
             ui_compose_row(r, row_idx);
             border_sent[r] = NO_COLOUR;
             /* the UI palette: the 16 colours and the art's and stripes' (16-28), from flash */
@@ -763,12 +774,61 @@ static __attribute__((noinline)) void game_frame(void)
     lcd_frame_end();
 }
 
-/* USB between frames (usbota_service): the soft UBOOT key enters UBOOT; the upgrade message is
- * not acted on. */
+/* `s` centred on grid row `row`, on black. */
+static void ui_centred(unsigned row, const char *s, uint8_t ink)
+{
+    unsigned n = 0;
+    while (s[n])
+        n++;
+    ui_text(n >= UI_COLS ? 0u : (UI_COLS - n) / 2u, row, s, ink, UI_BLACK);
+}
+
+/* The update screen (usbota.h): the menus' colours, "UPDATE" as their titles, the line under it;
+ * the whole panel sent at the LCD's pace, a frame's budget each 20 ms. */
+void usbota_screen(const char *line)
+{
+    uint32_t t;
+    update_screen = 1;
+    ui_clear(UI_WHITE, UI_BLACK);
+    ui_centred(13, "UPDATE", UI_YELLOW);
+    ui_centred(15, line, UI_WHITE);
+    lcd_mark_all(lcd_frame);
+    while (lcd_unsent()) {
+        lcd_begin_frame(++lcd_frame, budget);
+        for (t = fm1_ticks(); lcd_unsent() && (uint32_t)(fm1_ticks() - t) < FRAME_TICKS;)
+            lcd_pump();
+        fm1_wdt_feed();
+    }
+}
+
+/* The upgrade message: a running game left as PAUSED leaves it (silent, every key released), the
+ * update session run, and when it comes back (nothing committed) the view it left repainted whole:
+ * the picker, the HOME menu, or the game paused. */
+static void usb_update(void)
+{
+    if (menu_runs_game(&mn))
+        menu_set_view(&mn, VIEW_PAUSED);
+    audio_mute(1);
+    if (game.loaded)
+        fmzx_ram.game_release();
+    km_reset(&kms);
+    memset(held_in.enc, 0, sizeof held_in.enc);
+    osk_down = 0;
+    usbota_run_update();
+    update_screen = 0;
+    ui_invalidate();
+    lcd_mark_all(lcd_frame);
+}
+
+/* USB between frames (usbota_service): the soft UBOOT key enters UBOOT; the upgrade message runs
+ * the update session. */
 static void usb_service(void)
 {
-    if (usbota_service() == USBOTA_UBOOT)
+    int r = usbota_service();
+    if (r == USBOTA_UBOOT)
         fmzx_enter_uboot();
+    else if (r == USBOTA_UPDATE)
+        usb_update();
 }
 
 /* A running game's FIFO level below which the next Spectrum frame runs: AUDIO_LOW, and while a USB

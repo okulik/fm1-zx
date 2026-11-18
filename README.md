@@ -85,12 +85,13 @@ What works:
 - your own 48K games: `tools/make-personal-pack` builds the packages from a folder of them,
   turbo and custom-loader tapes included (loaded through the tape signal on the host), and learns
   each game's music ([your own games](BUILDING.md#your-own-games));
+- installing and updating from the FM-1 Firmware Hub over USB, from FM-1 ZX itself (a USB-MIDI
+  device whenever the cable is in; [install and recovery](docs/install.md));
 - the UBOOT gesture: OCT- held at power-on calls the boot loader's update-mode entry
   (`fmzx_enter_uboot`); behind M-VAVE's stock bootloader the computer then sees the boot loader on
   USB ([install and recovery](docs/install.md)).
 
-Not in v1: USB (so no in-app updates yet, and no adding games without a new package), tapes
-played on the device itself.
+Not supported: adding games without a new package, tapes played on the device itself.
 
 ## Build and test
 

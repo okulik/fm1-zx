@@ -107,8 +107,8 @@ ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the
 ### Underruns
 
 `fmzx_stats.underruns` counts the audio FIFO running dry while a game runs. On the device it
-cannot be read without a debugger: FM-1 ZX has no USB stack and no screen for it yet. What to
-observe instead is its effect: an underrun is a short gap in the sound, heard as a **crackle**
+cannot be read without a debugger: no screen shows it, and FM-1 ZX's USB link carries only the
+installers' messages. What to observe instead is its effect: an underrun is a short gap in the sound, heard as a **crackle**
 or click.
 
 - [ ] Play each game for a few minutes at the fastest clean LCD speed with the volume up,

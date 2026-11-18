@@ -41,8 +41,9 @@ How a part is combined decides what it means for the whole:
 
 ### The image
 
-`fmzx_app.bin` combines our GPL-3.0-or-later code with LGPL-3.0-or-later, 0BSD and MPL-2.0 code,
-all compatible with it; the image as a whole is under GPL-3.0-or-later. The source of every part
+`fmzx_app.bin` combines our GPL-3.0-or-later code with LGPL-3.0-or-later, 0BSD and MPL-2.0 code
+(felucca-bsp's hardware headers and its USB-MIDI device, update and flash code, linked), all
+compatible with it; the image as a whole is under GPL-3.0-or-later. The source of every part
 is this repository, so anyone given the image can rebuild it, also with a changed Z80 library
 (LGPL-3.0 section 4). The ROM stays under Amstrad's permission, which covers it only unmodified.
 

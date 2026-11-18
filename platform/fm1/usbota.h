@@ -2,7 +2,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 /* USB: a class-compliant USB-MIDI device whenever the cable is in, which answers the FM-1 Firmware
- * Hub's handshake and takes the soft UBOOT key (felucca-bsp's chip/usb.c and chip/ota.c, usbota.c). */
+ * Hub's handshake, runs its update session and takes the soft UBOOT key (felucca-bsp's chip/usb.c
+ * and chip/ota.c, usbota.c). */
 #ifndef FMZX_USBOTA_H
 #define FMZX_USBOTA_H
 
@@ -32,5 +33,21 @@ int usbota_service(void);
 
 /* The flash's JEDEC ID read at boot (0x856014: the Puya part). */
 uint32_t usbota_flash_id(void);
+
+/* The main loop, after USBOTA_UPDATE, the game stopped and silent: the update session (ota.c's
+ * ota_session), its steps on the panel (usbota_screen). The package is read from the host, checked,
+ * its update loader staged in the OTA area; on the host's "success" the update record is written
+ * and the chip resets into the loader (fmzx_enter_update), never returning. A package with
+ * felucca-bsp's update loader and a flash.bin that loader would refuse after the restart (none,
+ * shorter than the app area's end, longer than the flash) is refused before anything is erased. Returns only when
+ * nothing was committed (the OTA area left erased), the failure shown for 1.5 s. */
+void usbota_run_update(void);
+
+/* Supplied by the application: the update screen, "UPDATE" and `line` (the step, or the failure),
+ * the whole panel sent before it returns. */
+void usbota_screen(const char *line);
+/* Supplied by the application: the update record written to RAM, the core reset (the SPL runs the
+ * staged loader). Never returns. */
+void fmzx_enter_update(const uint8_t *parm);
 
 #endif

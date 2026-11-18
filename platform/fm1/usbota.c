@@ -83,18 +83,33 @@ static int ota_fread(uint32_t off, void *p, uint32_t n)
     return fl_read(off, p, n);
 }
 
-/* ota_session's progress: not shown (the session is not run) */
+/* ota_session's steps 1-5, as usbota_screen shows them */
+static const char *const OTA_STEPS[] = {"", "PACKAGE", "CHECK HEAD", "LOADER", "CONFIRM", "RESTART"};
+#define OTA_FAIL_MS 1500u /* a failure stays on the panel this long */
+
 static void ota_show(uint32_t step, int32_t code)
 {
-    (void)step;
-    (void)code;
+    char line[16] = "FAILED -";
+    uint32_t i = 8, v, t;
+    if (step < sizeof OTA_STEPS / sizeof OTA_STEPS[0]) {
+        usbota_screen(OTA_STEPS[step]);
+        return;
+    }
+    v = code < 0 ? (uint32_t)-code : (uint32_t)code;
+    if (v >= 10u)
+        line[i++] = (char)('0' + v / 10u % 10u);
+    line[i++] = (char)('0' + v % 10u);
+    line[i] = 0;
+    usbota_screen(line);
+    for (t = fm1_ms; fm1_ms - t < OTA_FAIL_MS;)
+        fm1_wdt_feed();
 }
 
 static void ota_commit(const uint8_t *parm)
 {
-    usb_detach();
+    usb_detach(); /* the host sees the device leave before the chip resets */
     fm1_delay_ms(30);
-    fm1_enter_update(parm);
+    fmzx_enter_update(parm);
 }
 
 /* ---- usbota.h ---- */
@@ -151,4 +166,46 @@ int usbota_service(void)
 uint32_t usbota_flash_id(void)
 {
     return flash_id;
+}
+
+/* the flash.bin felucca-bsp's update loader takes (loader/ldr_core.c, ldr_head: an entry of type 0,
+ * from LDR_APP_HI to LDR_FL_MAX long): up to the app area's end at least, the 1 MiB flash at most */
+#define FLASH_BIN_MIN 0x93000u
+#define FLASH_BIN_MAX 0x100000u
+#define OTA_ERR_LAYOUT (-15) /* a flash.bin it refuses (ota.c's codes end at -14) */
+
+/* The package's loader felucca-bsp's: ota.c's test in ota_stage (its marker in the first LZ4
+ * literals, a size it can stage), on the loader's first 512 bytes. */
+static int ota_loader_own(const uint8_t *b)
+{
+    uint32_t i;
+    for (i = 0x48; i + 16u <= 0x48u + 64u; i++)
+        if (ota_memeq(b + i, (const uint8_t *)"FELUCCA-LOADER-1", 16) && ota_rd32(b + 0x20 + 4) <= 0x14000u)
+            return 1;
+    return 0;
+}
+
+void usbota_run_update(void)
+{
+    static uint8_t b[0x400];
+    uint32_t fl_off, fl_len, ota_off, ota_len;
+    int rc;
+    /* the package's entry list and its loader's head read first, as ota_session reads them again:
+     * with felucca-bsp's loader, ota_session does not check flash.bin, and a flash.bin that loader
+     * refuses after the restart is refused here, before ota_session erases the OTA area. Another
+     * writer's package goes on to ota_session's own checks */
+    ota_deadline = 0; /* no time limit on these reads (a failed session leaves its limit set) */
+    ota_show(1, 0);
+    rc = ota_ufw(b, &fl_off, &fl_len, &ota_off, &ota_len);
+    if (!rc && ota_off) {
+        if (ota_read(ota_off, b, 512))
+            rc = -6;
+        else if (ota_loader_own(b) && (!fl_off || fl_len < FLASH_BIN_MIN || fl_len > FLASH_BIN_MAX))
+            rc = OTA_ERR_LAYOUT;
+    }
+    if (rc) {
+        ota_show(9, rc);
+        return;
+    }
+    ota_session();
 }

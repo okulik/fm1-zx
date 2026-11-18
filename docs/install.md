@@ -135,10 +135,52 @@ that a given installer takes it. The first device test checks this.
 3. Wait until the installer reports success and the FM-1 restarts into the game picker
    (expected, unverified).
 
-**FM-1 ZX itself has no USB stack in this version.** Once it runs, the computer does not see
-the FM-1 as a MIDI device, so no installer can reach it while FM-1 ZX is running. To replace it
-(with a newer FM-1 ZX, another firmware or the stock firmware), use the update mode below. The
-in-app update over USB comes with a later version.
+## Installing and updating over USB from FM-1 ZX (unverified on hardware)
+
+Whenever the USB cable is in (in the picker, the HOME menu, a game running or paused), FM-1 ZX is
+a class-compliant USB-MIDI device named `FM-1 ZX`. It answers the installers' handshake with its
+identity `FM-1_048` (and the flash chip's JEDEC ID) and runs their update session, with
+felucca-bsp's USB-MIDI device and update code (`platform/fm1/usbota.c`). So the same installers
+that reach the stock firmware and Felucca reach FM-1 ZX, for a newer FM-1 ZX, another firmware or
+the stock firmware:
+
+- the FM-1 Firmware Hub (<https://thefirmwarehub.com>): **Connect FM-1** marks FM-1 ZX's card as
+  the firmware on your FM-1; **Install** on any card installs that firmware from FM-1 ZX;
+- a local installer for a local package, for example felucca-bsp's `tools/fm1_install.py`
+  (<https://github.com/hugelton/felucca-bsp>) with a `.fwsc` file.
+
+What the FM-1 does: a running game pauses and goes silent, and the panel shows `UPDATE` and the
+step: `PACKAGE` (the package's header read and checked), `CHECK HEAD` (another writer's flash head
+checked), `LOADER` (the package's update loader written to the flash's OTA area,
+0xE0000-0xE4FFF, and read back), `CONFIRM` (the installer's go-ahead), `RESTART`. Then the FM-1
+restarts into the package's update loader (felucca-bsp's presents itself to the installer as
+`ota-FM-1_900`), which writes the app area, and the new firmware starts. Until the installer's
+go-ahead nothing is committed: a failure (the installer gone, a damaged read, a refused package)
+shows `FAILED -<n>` for 1.5 s, erases the OTA area and returns to where you were, the picker or
+the game paused. While FM-1 ZX runs it writes the flash only in the OTA area. It refuses, before
+anything is erased:
+
+- a package with felucca-bsp's update loader whose `flash.bin` that loader would refuse after the
+  restart (none, shorter than 0x93000 bytes, the flash up to the app area's end, or longer than
+  the 1 MiB flash): `FAILED -15` (a package with another loader goes on to the session's own
+  checks);
+- any session on a flash chip other than the two FM-1s ship with (JEDEC `85 60 14`, Puya, and
+  `B3 60 14`, UC25HQ80): the handshake is answered, the update message ignored.
+
+If an install stops while the loader writes (the cable pulled, the power gone), the FM-1 starts
+into the loader again at the next power-on; **Install** again on the hub (or the local installer
+again) resumes it. The hub's rescue key (the soft UBOOT key, `F0 22 24 35 7D F7`) puts FM-1 ZX
+into the chip's update mode, as the UBOOT gesture below does. When nothing over USB works, the
+gesture (OCT- held at power-on) and M-Flasher remain.
+
+What is proven: in fm1-emu (`host/crates/emu-gate/tests/fw_usb.rs`), against the release package,
+the session stages the loader and reaches the restart on both flash chips with no flash write
+outside the OTA area; an abandoned session, corrupted reads (of the loader's head and of its
+body) and a `flash.bin` the loader refuses (missing, too short, past the flash) leave the OTA
+area erased and FM-1 ZX where it was, the panel as it was before the session, while a `flash.bin`
+with a longer app area (0xA9000) passes the check; the soft UBOOT key enters the update mode. *Unverified:* all of it
+on hardware, and the loader's install after the restart (fm1-emu does not run the boot loader's
+update mode); the first USB device test checks them.
 
 ## The update mode (UBOOT gesture)
 

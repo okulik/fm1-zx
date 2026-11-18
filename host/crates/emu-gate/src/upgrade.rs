@@ -163,17 +163,23 @@ pub struct ServeOpts {
 }
 
 /// Sends `UPGRADE` and answers the firmware's read requests from the logical image of `fwsc` until
-/// it asks for `FINISH_CHECK`.
+/// it asks for `FINISH_CHECK`. Step 1 reads parts of the package, each once: a device that asks
+/// for more reads than the package has [`MAXDATA`]-byte blocks (and 64) ends it as `Refused`.
 pub fn upgrade_step1(m: &mut Machine, fwsc: &[u8], o: &ServeOpts) -> Serve {
     let image = logical_image(fwsc);
+    let cap = (image.len() / MAXDATA) as u32 + 64;
     let _ = m.soc.usb.midi_take();
     m.soc.usb.midi_send(&UPGRADE);
-    let (mut served, mut last) = (0u32, m.ms());
+    let (mut served, mut asked, mut last) = (0u32, 0u32, m.ms());
     while m.ms() < last + o.max_ms {
         m.run_ms(1);
         for msg in m.soc.usb.midi_take() {
             let Some((fl, addr, n)) = parse_request(&msg) else { continue };
             last = m.ms();
+            asked += 1;
+            if asked > cap {
+                return Serve::Refused(format!("more than {cap} requests"));
+            }
             if addr == FINISH_CHECK {
                 m.soc.usb.midi_send(&response(addr, b"success\0", 0));
                 return Serve::Success;
