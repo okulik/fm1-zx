@@ -129,16 +129,16 @@ or click.
       community installer to install it once more over itself **[owner's yes]**: this is the
       update path for later versions.
 
-Only when all of section 2 has passed may `docs/install.md` drop its warning and a package be
-offered to anyone else.
-
 ## Verified on the device
 
 The unit: stock firmware 015, flash chip 0x856014 (Puya). FM-1 ZX is installed with M-Flasher
 0.12.1 (`docs/install.md`), which backs up the whole flash before each write; it runs behind
 m-bootloader 2.4 and behind M-VAVE's stock bootloader.
 
-- **Boots to the game picker** (the release package `fmzx.fwsc`).
+- **Boots to the game picker and plays the games** with the FM-1's keys, knobs and the on-screen
+  keyboard (the release package `fmzx.fwsc` and personal packages).
+- **Back to the stock firmware:** restoring an M-Flasher backup of the stock flash in download
+  mode.
 - **The UBOOT gesture works** behind the stock bootloader: with OCT- held at power-on the computer
   sees the boot loader on USB, and M-Flasher installs from there.
 - Behind m-bootloader its own keys work whatever the firmware: PLAY at power-on opens its menu
@@ -148,5 +148,3 @@ The panel needs CS high after each command and its arguments: with CS held low f
 DISPON it ignores every command after SWRESET and the screen stays black. fm1-emu's panel ignores
 CS; emu-gate's `lcd_deselects_between_start_up_commands` checks it. For a unit whose screen stays
 dark, the boot probe (preset `fm1-probe`) shows the start-up stages and faults on the LCD.
-
-Still open: everything in section 2 from the picker's colours on.

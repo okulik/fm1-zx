@@ -273,8 +273,7 @@ run clears those files first. The packages are made and verified by
 
 **Trying and installing.** `--try` serves the browser demo with `DIR/fmzx.fwsc` and the games'
 key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware). Install
-`build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`, with the same
-warnings: most of the first device test is still open (`docs/hardware-test.md`).
+`build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`.
 
 The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
 (the games file, the converted games in `DIR/converted/` with a manifest of their own,

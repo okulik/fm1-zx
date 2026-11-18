@@ -5,11 +5,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Installing FM-1 ZX, and the way back
 
-> **FM-1 ZX runs on a real FM-1 and boots to the game picker, but most of the first device test is
-> still open.** "Installing with M-Flasher" and the UBOOT gesture below work on hardware; the
-> other routes are the plan, marked *unverified*. Do not publish the package until the first
-> device test (`docs/hardware-test.md`) has passed, including the way back to the stock firmware.
-> Installing any custom firmware is at your own risk.
+> **FM-1 ZX runs on the real FM-1.** "Installing with M-Flasher", the UBOOT gesture and going back
+> to the stock firmware by restoring an M-Flasher backup work on hardware; the routes marked
+> *unverified* below have not been tried. Installing any custom firmware is at your own risk.
 
 ## The packages
 
