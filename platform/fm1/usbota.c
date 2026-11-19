@@ -17,8 +17,8 @@
 
 #define FELUCCA_OTA 1
 #define FELUCCA_CDC 0
-/* the identity reply's bytes 24..26: the ID read at boot */
-#define OTA_FLASH_ID() flash_id
+/* OTA_FLASH_ID stays ota.c's default (0): the identity field is the text and zeros, which the FM-1
+ * Firmware Hub's page needs (it reads everything before the trailing zeros as the identity) */
 /* the only flash this firmware writes while it runs: the OTA area (ota.c's OTA_AREA, OTA_AREA_LEN) */
 #define FM1_FLASH_WRITE_REGIONS(X) X(0xE0000u, 0xE5000u)
 /* the rings are shared with the TIMER5 interrupt on the one core: a compiler barrier */

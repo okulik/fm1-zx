@@ -92,19 +92,22 @@ fn handshake_reports_identity() {
     assert_identity(handshake(&mut m, false, 500), "the picker");
 }
 
+/// The identity field holds the text and zeros only: the FM-1 Firmware Hub's page strips trailing
+/// zeros and reads what is left as NAME_digits, so any byte after the padding (felucca-bsp's optional
+/// JEDEC ID at bytes 24..26) makes it see no FM-1. Both handshakes, both flash parts.
 #[test]
-fn full_handshake_reports_flash() {
-    let mut m = boot_plugged();
-    let id = handshake(&mut m, true, 500).expect("no answer to the full handshake");
-    assert_eq!(id.text, "FM-1_048");
-    assert_eq!(id.jedec, Some([0x85, 0x60, 0x14]), "the Puya part");
-
-    let mut m = Machine::boot(firmware(), OPT);
-    m.soc.flash.jedec = [0xB3, 0x60, 0x14];
-    m.soc.usb_plug();
-    m.run_ms(1500);
-    let id = handshake(&mut m, true, 500).expect("no answer to the full handshake");
-    assert_eq!(id.jedec, Some([0xB3, 0x60, 0x14]), "the UC25HQ80 part");
+fn identity_field_is_text_and_zeros() {
+    for part in [[0x85, 0x60, 0x14], [0xB3, 0x60, 0x14]] {
+        let mut m = Machine::boot(firmware(), OPT);
+        m.soc.flash.jedec = part;
+        m.soc.usb_plug();
+        m.run_ms(1500);
+        for full in [false, true] {
+            let id = handshake(&mut m, full, 500).expect("no answer to the handshake");
+            assert_eq!(id.text, "FM-1_048", "{part:02X?}, full {full}");
+            assert_eq!(id.jedec, None, "bytes after the padding, {part:02X?}, full {full}");
+        }
+    }
 }
 
 #[test]
@@ -395,7 +398,6 @@ fn unknown_flash_refused() {
     assert_eq!(m.soc.flash.ops, ops, "flash erased or programmed");
     let id = handshake(&mut m, true, 500).expect("no answer to the handshake");
     assert_eq!(id.text, "FM-1_048");
-    assert_eq!(id.jedec, Some([0xEF, 0x40, 0x14]));
 }
 
 #[test]

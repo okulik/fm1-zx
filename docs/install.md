@@ -121,17 +121,19 @@ To go back, restore one of M-Flasher's backups the same way, or install another 
 
 ## Installing on an FM-1 with a USB-MIDI installer (unverified)
 
-FM-1 firmware is updated through the firmware that is running: the community installers (for
-example Felucca's web installer, or the FM-1 Firmware Hub) send a `.fwsc` over USB-MIDI to the
-running firmware, which hands it to the update loader in the package (`ota.bin`), which writes
-the app area. *Unverified:* that the stock firmware or Felucca accepts this package (identity
+FM-1 firmware is updated through the firmware that is running: a USB-MIDI installer sends a
+`.fwsc` to the running firmware, which hands it to the update loader in the package (`ota.bin`),
+which writes the app area. For a local package file the installer is felucca-bsp's
+`tools/fm1_install.py` (<https://github.com/hugelton/felucca-bsp>; it needs Python with `mido` and
+`python-rtmidi`). The FM-1 Firmware Hub installs the packages it lists, and Felucca's web
+installer installs Felucca (it takes a local file only for the official V15). *Unverified:* that the stock firmware or Felucca accepts this package (identity
 `FM-1_048`, with felucca-bsp's loader, which presents itself to update hosts as `ota-FM-1_900`), and
 that a given installer takes it. The first device test checks this.
 
 1. Start the FM-1 with its current firmware (stock or another community firmware) and connect
    it by USB.
-2. Open a community installer, choose "install a local file" (or the installer's equivalent)
-   and pick `build/fm1/fmzx.fwsc`.
+2. Run `python3 tools/fm1_install.py build/fm1/fmzx.fwsc` from a felucca-bsp checkout (with the
+   path to the package; `--info` first shows the FM-1's identity).
 3. Wait until the installer reports success and the FM-1 restarts into the game picker
    (expected, unverified).
 
@@ -139,8 +141,8 @@ that a given installer takes it. The first device test checks this.
 
 Whenever the USB cable is in (in the picker, the HOME menu, a game running or paused), FM-1 ZX is
 a class-compliant USB-MIDI device named `FM-1 ZX`. It answers the installers' handshake with its
-identity `FM-1_048` (and the flash chip's JEDEC ID) and runs their update session, with
-felucca-bsp's USB-MIDI device and update code (`platform/fm1/usbota.c`). So the same installers
+identity `FM-1_048` and runs their update session, with felucca-bsp's USB-MIDI device and update
+code (`platform/fm1/usbota.c`). So the same installers
 that reach the stock firmware and Felucca reach FM-1 ZX, for a newer FM-1 ZX, another firmware or
 the stock firmware:
 
