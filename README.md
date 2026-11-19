@@ -46,8 +46,9 @@ open-source work:
 
 ## Status
 
-**FM-1 ZX runs on the real FM-1 and is tested on it**: it installs with M-Flasher, boots to the
-game picker and plays the games with the FM-1's keys and knobs ([device test](docs/hardware-test.md)).
+**FM-1 ZX runs on the real FM-1 and is tested on it**: it installs with M-Flasher and over USB from
+the FM-1 Firmware Hub, boots to the game picker, plays the games with the FM-1's keys and knobs and
+keeps a saved game across power-off and updates ([device test](docs/hardware-test.md)).
 Installing custom firmware is at your own risk; [install and recovery](docs/install.md) describes
 the way back to the stock firmware.
 

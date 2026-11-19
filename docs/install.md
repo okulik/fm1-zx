@@ -159,7 +159,9 @@ restarts into the package's update loader (felucca-bsp's presents itself to the 
 `ota-FM-1_900`), which writes the app area, and the new firmware starts. Until the installer's
 go-ahead nothing is committed: a failure (the installer gone, a damaged read, a refused package)
 shows `FAILED -<n>` for 1.5 s, erases the OTA area and returns to where you were, the picker or
-the game paused. While FM-1 ZX runs it writes the flash only in the OTA area. It refuses, before
+the game paused. While FM-1 ZX runs it writes the flash only in the OTA area and in the saved
+game's area (0xEA000-0xF6FFF, above the app area: [save format](save-format.md)), which an
+update leaves as it is; installing another firmware may overwrite it. It refuses, before
 anything is erased:
 
 - a package with felucca-bsp's update loader whose `flash.bin` that loader would refuse after the
