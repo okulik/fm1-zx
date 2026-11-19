@@ -160,6 +160,9 @@ pub struct ServeOpts {
     pub corrupt_at: Option<u32>,
     /// Emulated milliseconds without a request that end the session.
     pub max_ms: u64,
+    /// MIDI messages (a note-on, then clock bytes) the computer sends every emulated millisecond
+    /// while it serves, as a DAW sending to the port would.
+    pub midi_noise: u32,
 }
 
 /// Sends `UPGRADE` and answers the firmware's read requests from the logical image of `fwsc` until
@@ -172,6 +175,13 @@ pub fn upgrade_step1(m: &mut Machine, fwsc: &[u8], o: &ServeOpts) -> Serve {
     m.soc.usb.midi_send(&UPGRADE);
     let (mut served, mut asked, mut last) = (0u32, 0u32, m.ms());
     while m.ms() < last + o.max_ms {
+        for i in 0..o.midi_noise {
+            if i == 0 {
+                m.soc.usb.midi_send(&[0x90, 36 + (m.ms() % 40) as u8, 100]);
+            } else {
+                m.soc.usb.midi_send(&[0xF8]);
+            }
+        }
         m.run_ms(1);
         for msg in m.soc.usb.midi_take() {
             let Some((fl, addr, n)) = parse_request(&msg) else { continue };

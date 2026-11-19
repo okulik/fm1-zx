@@ -55,6 +55,10 @@ static uint32_t ota_now_ms(void)
 
 static void ota_idle(void)
 {
+    /* nothing here plays MIDI: what the computer sends to the port is dropped, as in usbota_service,
+     * so it never fills the ring and makes EP1 refuse the host's replies */
+    mi_r = mi_w;
+    midi_in_overflow = 0;
     fm1_wdt_feed();
 }
 
@@ -66,9 +70,12 @@ static int ota_in_area(uint32_t off, uint32_t n)
 static int ota_erase(uint32_t off)
 {
     uint32_t took;
+    int rc;
     if (!ota_in_area(off, 0x1000u) || (off & 0xFFFu))
         return -8;
-    return fl_erase4k(off, &took);
+    rc = fl_erase4k(off, &took);
+    fm1_wdt_feed(); /* five erases in a row: each may take seconds on a slow part */
+    return rc;
 }
 
 static int ota_prog(uint32_t off, const void *p, uint32_t n)
@@ -87,12 +94,16 @@ static int ota_fread(uint32_t off, void *p, uint32_t n)
 static const char *const OTA_STEPS[] = {"", "PACKAGE", "CHECK HEAD", "LOADER", "CONFIRM", "RESTART"};
 #define OTA_FAIL_MS 1500u /* a failure stays on the panel this long */
 
+static uint32_t shown_step; /* the step last painted: usbota_run_update's PACKAGE is not painted twice */
+
 static void ota_show(uint32_t step, int32_t code)
 {
     char line[16] = "FAILED -";
     uint32_t i = 8, v, t;
     if (step < sizeof OTA_STEPS / sizeof OTA_STEPS[0]) {
-        usbota_screen(OTA_STEPS[step]);
+        if (step != shown_step)
+            usbota_screen(OTA_STEPS[step]);
+        shown_step = step;
         return;
     }
     v = code < 0 ? (uint32_t)-code : (uint32_t)code;
@@ -194,6 +205,7 @@ void usbota_run_update(void)
      * with felucca-bsp's loader, ota_session does not check flash.bin, and a flash.bin that loader
      * refuses after the restart is refused here, before ota_session erases the OTA area. Another
      * writer's package goes on to ota_session's own checks */
+    shown_step = 0;
     ota_deadline = 0; /* no time limit on these reads (a failed session leaves its limit set) */
     ota_show(1, 0);
     rc = ota_ufw(b, &fl_off, &fl_len, &ota_off, &ota_len);

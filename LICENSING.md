@@ -26,9 +26,9 @@ How a part is combined decides what it means for the whole:
 | FM-1 ZX: the machine core, the firmware logic, the platform code, the host tests and tools, the docs | `core/`, `app/`, `platform/fm1/` (not `bsp/`), `host/`, `tools/`, `docs/`, `games/` | GPL-3.0-or-later | linked into the image; host tool |
 | redcode/Z80, the Z80 CPU emulator by Manuel Sainz de Baranda y Goñi | `third_party/Z80/` | LGPL-3.0-or-later | linked into the image (and the host tests) |
 | Z80InsnClock by Sofía Ortega Sosa | `third_party/Z80InsnClock/` | 0BSD | linked into the image |
-| felucca-bsp, the FM-1 hardware headers by Leo Kuroshita, Hügelton Instruments (`platform/fm1/VENDORED.md`) | `platform/fm1/bsp/` | MPL-2.0 | linked into the image (MPL-2.0 section 3.3: no "Incompatible With Secondary Licenses" notice) |
+| felucca-bsp: the FM-1 hardware layer, the USB-MIDI device, the update session and the flash code, and the update loader, by Leo Kuroshita, Hügelton Instruments, with Kerem Kilic (keremimo), Julius Vitkauskas, Charles Vestal and other contributors as `platform/fm1/bsp/NOTICE` and each file's copyright lines credit them (`platform/fm1/VENDORED.md`) | `platform/fm1/bsp/` | MPL-2.0 | linked into the image (MPL-2.0 section 3.3: no "Incompatible With Secondary Licenses" notice) |
 | The ZX Spectrum 48K ROM | `third_party/zx-rom/48.rom` | Amstrad's permission to distribute the unmodified ROM with emulators (`LicenseRef-Amstrad-ZX-ROM`) | data, embedded in the image |
-| felucca-bsp's update loader by Leo Kuroshita, Hügelton Instruments (`platform/fm1/VENDORED.md`) | `platform/fm1/bsp/loader/` | MPL-2.0 | separate program in the package (`ota.bin`) |
+| felucca-bsp's update loader, by the same authors (`platform/fm1/VENDORED.md`) | `platform/fm1/bsp/loader/` | MPL-2.0 | separate program in the package (`ota.bin`) |
 | The package writer, ports of Felucca's `tools/fm1pkg_make.py` and `tools/lz4blk.py` (and the loader wrapping of its `tools/build.py`), including the flash header values Felucca's file gives as "JieLi SDK default values" | `host/crates/fmzx-pack/src/fwsc.rs`, `src/lz4blk.rs` | GPL-3.0-only (Felucca's copyright line kept) | host tool; `fmzx-pack` as a whole is therefore GPL-3.0-only |
 | Three files from JieLi's AC79 SDK (`AC79NN_SDK_V1.2.1_2023-12-13`): the boot loader `uboot.boot`, `cfg_tool.bin`, `cfg/eq_cfg_hw.bin` | not in the repository: fetched into `build/ac79/`, pinned by SHA-256 in `host/crates/fmzx-pack/inputs.toml` | Apache-2.0 (the SDK's licence; its text is `docs/third-party/AC79-SDK-Apache-2.0.txt`, which `tools/make-packages` copies next to the packages) | separate program (`uboot.boot`, in the flash head) and data (the two `cfg` files) in the package |
 | The built-in games (below) | `third_party/games/` | their own | data, in the game pack |
@@ -51,7 +51,7 @@ is this repository, so anyone given the image can rebuild it, also with a change
 
 The `.fwsc` package is an aggregate of separate works, side by side in one container: the image
 and the game pack (above), felucca-bsp's update loader (MPL-2.0; its complete source is
-`platform/fm1/bsp/loader/` with the `chip/` files it includes) and the three SDK files (Apache-2.0). Whoever passes a
+`platform/fm1/bsp/loader/` with the `chip/` and `boards/` files it includes) and the three SDK files (Apache-2.0). Whoever passes a
 package on should pass on with it, or point to, this repository at the same commit (the source
 of the GPL parts and the build of every byte), the licence texts (`LICENSE` for the GPL,
 `third_party/Z80/COPYING.LESSER`, `third_party/Z80InsnClock/LICENSE-0BSD`, `platform/fm1/bsp/LICENSE`,

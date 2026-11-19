@@ -53,10 +53,10 @@
 #define TIMER5_PRIO 4u
 #define USB_POLL_TICKS 5u   /* TIMER5 ticks (10 kHz) per USB poll: 2 kHz */
 #define USB_WAIT_SAMPLES 1200u /* usbota_retry's wait (about 27 ms) at 44,117 Hz: 1,191 samples */
-/* the FIFO a retry needs in a running game: its wait, then the next frame up to its samples
- * (2.5M instructions, about 10.5 ms: 463 samples), with room to spare */
-#define USB_RETRY_SAMPLES (USB_WAIT_SAMPLES + 600u)
 #define AUDIO_LOW 1024u     /* run a Spectrum frame while fewer samples than this are queued */
+/* the FIFO a retry needs in a running game: the wait, then AUDIO_LOW left for the next frame (the
+ * level audio_low() raises the threshold to while a retry is due) */
+#define USB_RETRY_SAMPLES (AUDIO_LOW + USB_WAIT_SAMPLES)
 #define FRAME_SAMPLES 1024u /* room for one frame's samples: 750000/17 Hz * 69888 / 3.5 MHz < 882 */
 _Static_assert(FRAME_SAMPLES <= SND_MAX_FRAME_SAMPLES, "the mixer takes a whole frame");
 #define GAIN_FRAMES 10u     /* MASTER -> gain every 10 frames */

@@ -215,7 +215,7 @@ fn ufw_entry(fwsc: &[u8], typ: u16) -> Vec<u8> {
 }
 
 fn opts() -> ServeOpts {
-    ServeOpts { stop_after: None, corrupt_at: None, max_ms: IDLE_MS }
+    ServeOpts { stop_after: None, corrupt_at: None, max_ms: IDLE_MS, midi_noise: 0 }
 }
 
 /// The first flash offset outside the OTA area that differs from `before`.
@@ -255,6 +255,15 @@ fn installs(m: &mut Machine, what: &str) {
     assert_eq!(&fl[0xE0020..0xE0000 + ota.len()], &ota[0x20..], "{what}: the staged loader");
     assert_eq!(&fl[0xE0010..0xE001A], b"LOADER.BIN", "{what}: the staged loader's head");
     assert_ne!(&fl[0xE4F00..0xE4F08], &[0xFF; 8], "{what}: no update record");
+}
+
+#[test]
+fn midi_during_the_session_does_not_fail_it() {
+    let mut m = boot_plugged();
+    m.watch("fmzx_enter_update");
+    let o = ServeOpts { midi_noise: 3, ..opts() };
+    assert_eq!(upgrade_step1(&mut m, &package(), &o), Serve::Success, "notes and clock sent during the session");
+    assert!(m.run_until("fmzx_enter_update", 2000), "fmzx_enter_update not reached");
 }
 
 #[test]

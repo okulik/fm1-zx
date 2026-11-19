@@ -6,7 +6,7 @@ name = "emu-gate"
 version = "0.1.0"
 edition.workspace = true
 rust-version = "1.99"
-license.workspace = true
+license = "GPL-3.0-or-later AND MPL-2.0"  # src/upgrade.rs is MPL-2.0 (LICENSING.md)
 publish = false
 
 [dependencies]

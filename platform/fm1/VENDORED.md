@@ -14,7 +14,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
   `docs/third-party/AC79-SDK-Apache-2.0.txt`). The files carry no "Incompatible With Secondary Licenses" notice, so
   they combine with our GPL-3.0-or-later code under MPL-2.0 section 3.3.
 - Local changes: none. Every file is byte for byte as at the commit above; the firmware hooks
-  around it (`platform/fm1/main.c`, `platform/fm1/lcd.c`, `platform/fm1/audio.c`).
+  around it (`platform/fm1/main.c`, `platform/fm1/lcd.c`, `platform/fm1/audio.c`,
+  `platform/fm1/usbota.c`).
 
 Files, at the same paths as upstream under `bsp/`:
 
@@ -26,7 +27,7 @@ Files, at the same paths as upstream under `bsp/`:
 | `chip/fm1_flash.h` | flash driver (update session) |
 | `chip/fm1_flash_access.h` | included by `fm1_cpu1_stop.h` and `fm1_flash.h` |
 | `chip/fm1_flash_api.h`, `chip/fm1_flash_policy.h`, `chip/fm1_flash_wait.h` | included by `fm1_flash.h` |
-| `chip/fm1_guard.h` | flash-write guard |
+| `chip/fm1_guard.h` | flash-write guard; vendored with the set, included by nothing |
 | `chip/fm1_gpio.h` | GPIO port registers |
 | `chip/fm1_irq.h` | interrupt and exception setup, the crash record, `fm1_fault` hook |
 | `chip/fm1_isr.S` | ISR entry wrappers (`isr_timer5`, `isr_alnk0`) |
