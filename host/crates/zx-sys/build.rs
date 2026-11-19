@@ -123,13 +123,14 @@ fn main() {
         .header(app.join("keymap.h").to_string_lossy())
         .header(app.join("lz4.h").to_string_lossy())
         .header(app.join("pack.h").to_string_lossy())
+        .header(app.join("save.h").to_string_lossy())
         .header(app.join("ui.h").to_string_lossy())
         .header(app.join("menu.h").to_string_lossy())
-        .allowlist_function("(zx|pix|lcd|km|pack|lz4|ui|menu|snd)_.*")
-        .allowlist_type("(zx|pix|lcd|km|pack|snd)_.*")
+        .allowlist_function("(zx|pix|lcd|km|pack|lz4|ui|menu|snd|save)_.*")
+        .allowlist_type("(zx|pix|lcd|km|pack|snd|save)_.*")
         .allowlist_type("keymap")
         .allowlist_type("menu")
-        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND|snd)_.*")
+        .allowlist_var("(ZX|LCD|PIX|KM|PACK|UI|EV|VIEW|CMD|SND|SAVE|MENU|snd)_.*")
         .derive_default(false)
         .layout_tests(false);
     for inc in &includes {

@@ -79,6 +79,15 @@ fn press_to(m: &mut Machine, key: u8, view: i32) {
     panic!("view {} after pressing {key}, expected {view}", m.stats().view);
 }
 
+/// From the picker, on the game that owns the saved game (a game left for the HOME menu is saved):
+/// its page, "Start new".
+fn start_new(m: &mut Machine) {
+    press_to(m, PLAY, view::SAVED);
+    m.press(OCT_UP, 30);
+    m.run_ms(50);
+    press_to(m, PLAY, view::GAME);
+}
+
 /// Port 0x1F as the Spectrum reads it now.
 fn kempston(m: &Machine) -> u32 {
     m.peek32(m.symbol("fmzx_kempston_now"))
@@ -426,7 +435,7 @@ fn note_key_held_through_the_picker() {
     }
 
     // a new game with C#4 still held: left only while C#4 is down, released with it
-    press_to(&mut m, PLAY, view::GAME);
+    start_new(&mut m);
     for _ in 0..5 {
         m.run_ms(20);
         assert!(matches!(kempston(&m), 0 | KEMPSTON_LEFT), "Kempston {:#x} with C#4 held", kempston(&m));
@@ -452,7 +461,7 @@ fn leave_and_restart() {
 
     // PLAY starts the game the picker still has selected; its first frames run back to back
     // until the audio FIFO holds AUDIO_LOW samples, so a few are in by the time the view changed
-    press_to(&mut m, PLAY, view::GAME);
+    start_new(&mut m);
     let s = m.stats();
     assert_eq!(s.game, SCROLL);
     assert!(s.frames <= 5 && s.frames < before, "frames did not restart from 0: {s:?}");

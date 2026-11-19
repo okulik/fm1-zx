@@ -9,6 +9,19 @@
 
 #include <stdint.h>
 
+/* The saved game's flash: SAVE_AREA_LEN bytes (app/save.h) above the SDK's VM area, kept by FM-1 ZX
+ * updates. */
+#define FMZX_SAVE_FLASH 0xEA000u
+#define FMZX_SAVE_LEN 0xD000u
+
+/* The saved game's flash (fmsave.c): 0 is done, anything else an error. All three refuse (nonzero)
+ * unless the flash is a part the update may write and the range lies in [FMZX_SAVE_FLASH,
+ * FMZX_SAVE_FLASH + FMZX_SAVE_LEN). The erase takes a 4 KiB sector start; both it and the write
+ * feed the watchdog; fmzx_flash_write's data must be in RAM (the XIP is off while it programs). */
+int fmzx_flash_erase4k(uint32_t off);
+int fmzx_flash_write(uint32_t off, const uint8_t *p, uint32_t n);
+int fmzx_flash_read(uint32_t off, uint8_t *p, uint32_t n);
+
 /* What usbota_service saw. */
 #define USBOTA_NONE 0
 #define USBOTA_UPDATE 1 /* the upgrade message, on a flash part the update may write */

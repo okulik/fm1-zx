@@ -17,6 +17,7 @@
 #include "fm1_timer.h"
 
 #include "audio.h"
+#include "fmsave.h"
 #include "input.h"
 #include "lcd.h"
 #include "lcdsched.h"
@@ -131,6 +132,13 @@ uint32_t fmzx_screen_mode;
  * kept across games until power off, each game's mixer starting with it. Read by emu-gate. */
 uint32_t fmzx_effects;
 static km_state kms;
+/* The frame count the saved game was taken at: a pause or HOME saves only a game that ran frames
+ * since (0 for a freshly started game). */
+static uint32_t frames_at_save;
+/* TIMER4 tick from which a save's first step may run: the erase holds the interrupts off, so the
+ * audio DMA replays its two buffers until it ends; they must hold silence by then. */
+static uint32_t save_ready;
+#define SAVE_QUIET_MS 12u /* more than the two DMA halves (5.8 ms) */
 static struct {
     uint8_t loaded;      /* fmzx_machine holds a game */
     uint8_t crop_x;
@@ -426,20 +434,47 @@ static void learned_start(uint32_t index)
     snd_mixer_set_engines(&mixer, learned_table, snd_engine_count + n);
 }
 
-/* Loads pack entry `index` into fmzx_machine; ZX_OK, or the error (the game does not run). */
-static int game_start(uint32_t index)
+/* What a started or resumed game shares once fmzx_machine holds it: the sound and the pictures
+ * start empty, the game's key map and crop. */
+static void game_ready(uint32_t index, const pack_game *g)
 {
-    zx_machine *m = &fmzx_machine;
-    pack_game g;
-    uint32_t len, i;
-    int e;
+    uint32_t i;
+    zx_beeper_init(&beeper, 750000u, 17u);   /* XIP: core/zx/beeper_init.c */
+    /* the decoder's history and the delay ring start empty: nothing of the last game plays */
+    snd_mixer_init(&mixer, 750000u, 17u);
+    mixer.effects = (uint8_t)fmzx_effects;
+    learned_start(index);
+    for (i = 0; i < LCD_ROWS; i++)
+        border_sent[i] = line_seen[i] = NO_COLOUR;
+    game.crop_x = g->crop_x;
+    game.keys = g->keys;
+    km_reset(&kms);
+    game.loaded = 1;
+    audio_set_gain(gain_q10(fmzx_master));
+    lcd_mark_all(lcd_frame);
+}
+
+/* The state of a game being loaded: nothing runs, nothing plays, no frame has run. */
+static void game_loading(uint32_t index)
+{
     audio_mute(1);
     audio_flush();
     game.loaded = 0;
     game.index = index;
     game.frames = 0;
+    frames_at_save = 0;
     fmzx_stats.frames = 0;
     fmzx_stats.game = index;
+}
+
+/* Loads pack entry `index` into fmzx_machine; ZX_OK, or the error (the game does not run). */
+static int game_start(uint32_t index)
+{
+    zx_machine *m = &fmzx_machine;
+    pack_game g;
+    uint32_t len;
+    int e;
+    game_loading(index);
     if (!pack_base || pack_game_at(pack_base, index, &g) != ZX_OK ||
         pack_extract(&g, game_file, sizeof game_file, &len) != ZX_OK)
         return ZX_ERR_FORMAT;
@@ -455,19 +490,39 @@ static int game_start(uint32_t index)
     }
     if (e != ZX_OK)
         return e;
-    zx_beeper_init(&beeper, 750000u, 17u);   /* XIP: core/zx/beeper_init.c */
-    /* the decoder's history and the delay ring start empty: nothing of the last game plays */
-    snd_mixer_init(&mixer, 750000u, 17u);
-    mixer.effects = (uint8_t)fmzx_effects;
-    learned_start(index);
-    for (i = 0; i < LCD_ROWS; i++)
-        border_sent[i] = line_seen[i] = NO_COLOUR;
-    game.crop_x = g.crop_x;
-    game.keys = g.keys;
-    km_reset(&kms);
-    game.loaded = 1;
-    audio_set_gain(gain_q10(fmzx_master));
-    lcd_mark_all(lcd_frame);
+    game_ready(index, &g);
+    return ZX_OK;
+}
+
+/* Loads the saved game of pack entry `index` into fmzx_machine, where the saved tape stood; ZX_OK,
+ * or the error (the save is unusable, the game does not run). */
+static int game_resume(uint32_t index)
+{
+    zx_machine *m = &fmzx_machine;
+    pack_game g;
+    save_info info;
+    uint32_t len;
+    int e;
+    game_loading(index);
+    if (!pack_base || pack_game_at(pack_base, index, &g) != ZX_OK ||
+        fmsave_load_z80(pack_base, game_file, sizeof game_file, &info) != ZX_OK || info.game != index)
+        return ZX_ERR_FORMAT;
+    fmzx_ram.init(m, rom_copy);
+    e = fmzx_ram.load_z80(m, game_file, SAVE_Z80_LEN);
+    if (e == ZX_OK && g.kind != PACK_SNA && g.kind != PACK_Z80) {
+        /* game_file held the .z80; the tape replaces it, and the saved position (a block start) is set */
+        if (pack_extract(&g, game_file, sizeof game_file, &len) != ZX_OK)
+            return ZX_ERR_FORMAT;
+        e = fmzx_ram.tape_insert(m, game_file, len);
+        if (e == ZX_OK) {
+            if (!save_tape_pos_ok(game_file, len, info.tape_pos))
+                return ZX_ERR_FORMAT;
+            m->tape_pos = info.tape_pos;
+        }
+    }
+    if (e != ZX_OK)
+        return e;
+    game_ready(index, &g);
     return ZX_OK;
 }
 
@@ -567,19 +622,70 @@ static void game_leave(void)
     game.loaded = 0;
 }
 
+/* A save that ended: the menu learns the result. A failed save may be tried again at the next pause. */
+static void save_ended(int r)
+{
+    if (r == FMSAVE_DONE) {
+        menu_set_saving(&mn, MENU_SAVE_IDLE);
+        menu_set_saved(&mn, game.index);
+    } else if (r == FMSAVE_FAILED) {
+        menu_set_saving(&mn, MENU_SAVE_FAILED);
+        menu_set_saved(&mn, SAVE_NONE);
+        frames_at_save = ~0u;
+    }
+}
+
+/* CMD_SAVE: the machine's state goes to flash in the steps of the main loop. Nothing is saved for
+ * a game that ran no frames since the last save, one still autostarting its tape, or one at PC 0
+ * (a version 1 .z80 cannot hold it). */
+static void save_begin(void)
+{
+    const zx_machine *m = &fmzx_machine;
+    pack_game g;
+    zx_regs r;
+    if (!game.loaded || game.frames == frames_at_save || m->auto_step != 0)
+        return;
+    fmzx_ram.get_regs(m, &r);
+    if (r.pc == 0 || pack_game_at(pack_base, game.index, &g) != ZX_OK)
+        return;
+    fmsave_begin(m, game.index, g.crc32, m->tape != 0 ? m->tape_pos : 0u);
+    audio_mute(1); /* no flush: the queued samples play on when the game resumes, as after a pause */
+    save_ready = fm1_ticks() + SAVE_QUIET_MS * 1000u * FM1_TICKS_PER_US;
+    menu_set_saving(&mn, MENU_SAVE_BUSY);
+    menu_set_saved(&mn, game.index); /* the picker offers this game's save at once: Resume finishes the write first */
+    frames_at_save = game.frames;
+}
+
 static void handle_event(int ev)
 {
     uint32_t arg = 0;
     if (ev == EV_NONE)
         return;
     switch (menu_event(&mn, ev, &arg)) {
+    case CMD_SAVE:
+        save_begin();
+        break;
     case CMD_START:
+        save_ended(fmsave_finish());
         if (game_start(arg) == ZX_OK)
             menu_set_view(&mn, VIEW_GAME);
         else
             menu_message(&mn, "Load failed");
         break;
+    case CMD_RESUME_SAVE:
+        save_ended(fmsave_finish());
+        if (mn.saving == MENU_SAVE_FAILED) {
+            menu_message(&mn, "Save failed"); /* the write that was still running failed: nothing to resume */
+        } else if (game_resume(arg) == ZX_OK) {
+            menu_set_view(&mn, VIEW_PAUSED);
+        } else {
+            fmsave_forget();
+            menu_set_saved(&mn, SAVE_NONE);
+            menu_message(&mn, "Save damaged");
+        }
+        break;
     case CMD_RESET:
+        save_ended(fmsave_finish());
         if (game_start(game.index) != ZX_OK)
             menu_message(&mn, "Load failed");
         break;
@@ -806,6 +912,7 @@ void usbota_screen(const char *line)
  * the picker, the HOME menu, or the game paused. */
 static void usb_update(void)
 {
+    save_ended(fmsave_finish()); /* a save in progress completes first */
     if (menu_runs_game(&mn))
         menu_set_view(&mn, VIEW_PAUSED);
     audio_mute(1);
@@ -893,6 +1000,7 @@ void fmzx_main(void)
     fmzx_master = input_master();
     probe_stage(4, PROBE_GREEN);
     usbota_init(); /* its flash accesses hold the interrupts off: before the audio starts */
+    menu_set_saved(&mn, fmsave_find(pack_base)); /* after usbota_init: it identifies the flash part */
     audio_init();
     probe_stage(5, PROBE_GREEN);
     audio_on = audio_start() == 0;
@@ -910,6 +1018,8 @@ void fmzx_main(void)
             master_at += MASTER_MS * 1000u * FM1_TICKS_PER_US;
             fmzx_master = input_master();
         }
+        if (fmsave_busy() && (int32_t)(fm1_ticks() - save_ready) >= 0)
+            save_ended(fmsave_step());
         view = menu_layout(&mn);
         if (view != last_view) { /* every view (or keyboard place) change repaints the whole panel, from now */
             unsigned r;
@@ -923,7 +1033,7 @@ void fmzx_main(void)
                     ui_rows[r >> 3] |= (uint8_t)(1u << (r & 7u));
             lcd_mark_all(lcd_frame);
         }
-        if (menu_runs_game(&mn)) {
+        if (menu_runs_game(&mn) && !fmsave_busy()) {
             /* State-based like the release below: running means unmuted, so a resumed game's
              * queued samples drain again. Only a game that has not yet queued its first frame
              * stays muted (game_frame unmutes after that push), so a start is no underrun. */

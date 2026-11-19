@@ -5,6 +5,7 @@
 #include "keymap.h"
 #include "pack.h"
 #include "pixels.h"
+#include "save.h"
 #include "sound.h"
 #include <string.h>
 
@@ -18,12 +19,16 @@
 
 #define PICKER_FIRST 8u  /* grid row of the first game name */
 #define PICKER_ROWS 20u
+#define TITLE_ROW 8u     /* grid row of a page title: below the art band (LCD rows 0-63), above the items from row 9 */
+#define SAVED_MARK '*' /* beside the name of the game that owns the saved game */
 #define KEYS_FIRST 2u
 #define KEYS_PAGE 24u
 #define KEYS_MAX_PAGE 4u /* 110 mappings at most, 24 per page */
 #define OSK_FIRST 25u    /* grid rows 25-28 hold the keys, 29 the status line */
 #define OSK_KEYS 10u
 #define OSK_KEY_W 3u
+
+enum { SV_RESUME, SV_START_NEW, SV_COUNT };
 
 enum { IT_RESUME, IT_RESET, IT_KEYBOARD, IT_KEYMAP, IT_SPEED, IT_SOUND, IT_EFFECTS, IT_SCREEN, IT_LEAVE, IT_COUNT };
 
@@ -96,6 +101,7 @@ void menu_init(menu *mn, uint32_t game_count)
     mn->sound = SND_MODE_FM_B;
     mn->effects = 1u;
     mn->screen = PIX_FIT_SMOOTH;
+    mn->saved = SAVE_NONE;
 }
 
 int menu_view(const menu *mn)
@@ -118,6 +124,9 @@ void menu_set_view(menu *mn, int view)
 {
     ui_invalidate();
     mn->view = (uint8_t)view;
+    if (view == VIEW_GAME && mn->saving == MENU_SAVE_FAILED) {
+        mn->saving = MENU_SAVE_IDLE;
+    }
     if (view == VIEW_MENU) {
         mn->item = 0;
     } else if (view == VIEW_KEYS) {
@@ -143,6 +152,16 @@ void menu_message(menu *mn, const char *text)
 void menu_set_divider(menu *mn, unsigned d)
 {
     mn->divider = (uint8_t)d;
+}
+
+void menu_set_saved(menu *mn, uint32_t index)
+{
+    mn->saved = index;
+}
+
+void menu_set_saving(menu *mn, int state)
+{
+    mn->saving = (uint8_t)state;
 }
 
 int menu_runs_game(const menu *mn)
@@ -325,6 +344,11 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
             mn->sel = mn->sel + 1u >= mn->count ? 0u : mn->sel + 1u;
         } else if (ev == EV_OK) {
             *arg = mn->sel;
+            if (mn->sel == mn->saved) {
+                mn->item = SV_RESUME;
+                mn->view = VIEW_SAVED;
+                return CMD_NONE;
+            }
             return CMD_START;
         }
         if (mn->sel < mn->top) {
@@ -337,8 +361,10 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
     case VIEW_GAME:
         if (ev == EV_HOME) {
             menu_set_view(mn, VIEW_MENU);
+            return CMD_SAVE;
         } else if (ev == EV_PAUSE) {
             mn->view = VIEW_PAUSED;
+            return CMD_SAVE;
         }
         return CMD_NONE;
 
@@ -347,6 +373,19 @@ static int event_inner(menu *mn, int ev, uint32_t *arg)
             mn->view = VIEW_GAME;
         } else if (ev == EV_HOME) {
             menu_set_view(mn, VIEW_MENU);
+            return CMD_SAVE;
+        }
+        return CMD_NONE;
+
+    case VIEW_SAVED:
+        if (ev == EV_UP || ev == EV_DOWN) {
+            mn->item = (uint8_t)(mn->item == SV_RESUME ? SV_START_NEW : SV_RESUME);
+        } else if (ev == EV_BACK || ev == EV_HOME) {
+            mn->view = VIEW_PICKER;
+        } else if (ev == EV_OK) {
+            *arg = mn->sel;
+            mn->view = VIEW_PICKER;
+            return mn->item == SV_RESUME ? CMD_RESUME_SAVE : CMD_START;
         }
         return CMD_NONE;
 
@@ -458,6 +497,9 @@ int menu_event(menu *mn, int ev, uint32_t *arg)
     int c = event_inner(mn, ev, arg);
     if (mn->view != before) {
         ui_invalidate();
+        if (mn->view == VIEW_GAME && mn->saving == MENU_SAVE_FAILED) {
+            mn->saving = MENU_SAVE_IDLE;
+        }
     }
     return c;
 }
@@ -482,7 +524,7 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
         if (pack != 0 && pack_game_at(pack, i, &g) == 0) {
             name = g.name;
         }
-        line[0] = ' ';
+        line[0] = i == mn->saved ? SAVED_MARK : ' ';
         {
             unsigned n = 1;
             while (n < UI_COLS && name[n - 1u] != '\0') {
@@ -503,6 +545,29 @@ static void draw_picker(const menu *mn, const uint8_t *pack)
     }
 }
 
+static void draw_saved(const menu *mn, const uint8_t *pack)
+{
+    static const char *const items[SV_COUNT] = { " Resume", " Start new" };
+    pack_game g;
+    unsigned i;
+    ui_clear(INK, PAPER);
+    ui_set_art(1);
+    if (pack != 0 && mn->count != 0 && pack_game_at(pack, mn->sel, &g) == 0) {
+        char title[UI_COLS + 1u];
+        unsigned n = 0;
+        while (n < UI_COLS && g.name[n] != '\0') {
+            title[n] = g.name[n];
+            n++;
+        }
+        title[n] = '\0';
+        centred(TITLE_ROW, title, TITLE_INK, PAPER);
+    }
+    for (i = 0; i < SV_COUNT; i++) {
+        int sel = i == mn->item;
+        full_row(9u + 2u * i, items[i], sel ? BAR_INK : INK, sel ? BAR_PAPER : PAPER);
+    }
+}
+
 static void draw_menu(const menu *mn)
 {
     static const char *const items[IT_COUNT] = {
@@ -511,6 +576,9 @@ static void draw_menu(const menu *mn)
     unsigned i, row = 0;
     ui_clear(INK, PAPER);
     ui_set_art(1);
+    if (mn->saving == MENU_SAVE_FAILED) {
+        centred(TITLE_ROW, "Save failed", TITLE_INK, PAPER);
+    }
     for (i = 0; i < IT_COUNT; i++) {
         char line[UI_COLS + 1u];
         unsigned n = 0;
@@ -606,14 +674,15 @@ static void draw_osk(const menu *mn)
     ui_text(12, first + 4u, "SYMBOL SHIFT", mn->sym ? BAR_INK : INK, mn->sym ? BAR_PAPER : PAPER);
 }
 
-static void draw_paused(void)
+static void draw_paused(const menu *mn)
 {
     unsigned r;
     ui_set_art(0); /* the HOME menu's art band would cover the bar */
     for (r = 0; r < 3u; r++) {
         full_row(r, "", INK, PAPER);
     }
-    centred(1, "PAUSED", TITLE_INK, PAPER);
+    centred(1, mn->saving == MENU_SAVE_BUSY ? "SAVING" : mn->saving == MENU_SAVE_FAILED ? "SAVE FAILED" : "PAUSED",
+            TITLE_INK, PAPER);
 }
 
 void menu_draw(const menu *mn, const uint8_t *pack_base)
@@ -621,6 +690,9 @@ void menu_draw(const menu *mn, const uint8_t *pack_base)
     switch (mn->view) {
     case VIEW_PICKER:
         draw_picker(mn, pack_base);
+        break;
+    case VIEW_SAVED:
+        draw_saved(mn, pack_base);
         break;
     case VIEW_MENU:
         draw_menu(mn);
@@ -632,7 +704,7 @@ void menu_draw(const menu *mn, const uint8_t *pack_base)
         draw_osk(mn);
         break;
     case VIEW_PAUSED:
-        draw_paused();
+        draw_paused(mn);
         break;
     case VIEW_MESSAGE:
         ui_clear(INK, PAPER);

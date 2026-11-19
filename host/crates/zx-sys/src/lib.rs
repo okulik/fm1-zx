@@ -19,7 +19,7 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_TR_INSN, ZX_TR_INTA, ZX_TR_OUT, ZX_TR_READ, ZX_TR_WRITE, ZX_ERR_FORMAT, ZX_OUT_SITES, ZX_ERR_UNSUPPORTED, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
+pub use sys::{lcd_stats, zx_edge, zx_regs, ZX_TR_INSN, ZX_TR_INTA, ZX_TR_OUT, ZX_TR_READ, ZX_TR_WRITE, ZX_ERR_FORMAT, ZX_OUT_SITES, ZX_ERR_UNSUPPORTED, ZX_OK, ZX_FRAME_TSTATES, ZX_RAM_SIZE, ZX_ROM_SIZE};
 
 /// One event of the trace hook ([`Machine::set_trace`]).
 #[derive(Clone, Copy, Debug)]
@@ -1589,6 +1589,15 @@ pub mod view {
     pub const OSK: i32 = sys::VIEW_OSK as i32;
     pub const PAUSED: i32 = sys::VIEW_PAUSED as i32;
     pub const MESSAGE: i32 = sys::VIEW_MESSAGE as i32;
+    pub const SAVED: i32 = sys::VIEW_SAVED as i32;
+}
+
+/// States of `Menu::set_saving`.
+pub mod saving {
+    use super::sys;
+    pub const IDLE: i32 = sys::MENU_SAVE_IDLE as i32;
+    pub const BUSY: i32 = sys::MENU_SAVE_BUSY as i32;
+    pub const FAILED: i32 = sys::MENU_SAVE_FAILED as i32;
 }
 
 /// Commands the menu state machine returns.
@@ -1604,6 +1613,8 @@ pub mod cmd {
     pub const SOUND: i32 = sys::CMD_SOUND as i32;
     pub const SCREEN: i32 = sys::CMD_SCREEN as i32;
     pub const EFFECTS: i32 = sys::CMD_EFFECTS as i32;
+    pub const SAVE: i32 = sys::CMD_SAVE as i32;
+    pub const RESUME_SAVE: i32 = sys::CMD_RESUME_SAVE as i32;
 }
 
 pub const UI_COLS: usize = sys::UI_COLS as usize;
@@ -1740,6 +1751,18 @@ impl Menu {
         with_ui_lock(|| unsafe { sys::menu_message(&mut *self.raw, c.as_ptr()) })
     }
 
+    /// The game that owns the saved game (`SAVE_NONE` for none).
+    pub fn set_saved(&mut self, index: u32) {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_set_saved(&mut *self.raw, index) }
+    }
+
+    /// The save state the banner shows (`saving::*`).
+    pub fn set_saving(&mut self, state: i32) {
+        // SAFETY: `raw` was initialised by menu_init.
+        unsafe { sys::menu_set_saving(&mut *self.raw, state) }
+    }
+
     pub fn set_divider(&mut self, d: u32) {
         // SAFETY: `raw` was initialised by menu_init.
         unsafe { sys::menu_set_divider(&mut *self.raw, d) }
@@ -1783,4 +1806,70 @@ pub fn ui_art_top_row(y: u32) -> [u8; 240] {
     // SAFETY: the buffer is LCD_W bytes.
     unsafe { sys::ui_art_top_row(y, out.as_mut_ptr()) };
     out
+}
+
+// ---- the save format ---------------------------------------------------
+
+pub const SAVE_HEADER_SIZE: usize = sys::SAVE_HEADER_SIZE as usize;
+pub const SAVE_Z80_HEADER: usize = sys::SAVE_Z80_HEADER as usize;
+pub const SAVE_Z80_LEN: usize = sys::SAVE_Z80_LEN as usize;
+pub const SAVE_NONE: u32 = sys::SAVE_NONE;
+
+/// The fields of a save header (`save_info`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveInfo {
+    pub game: u32,
+    pub game_crc: u32,
+    pub tape_pos: u32,
+    pub z80_crc: u32,
+}
+
+/// The 30-byte version 1 `.z80` header for `r` and `border`.
+pub fn save_z80_header(r: &zx_regs, border: u8) -> [u8; SAVE_Z80_HEADER] {
+    let mut out = [0u8; SAVE_Z80_HEADER];
+    // SAFETY: both pointers are valid; the C side writes exactly 30 bytes.
+    unsafe { sys::save_z80_header(r, border, out.as_mut_ptr()) };
+    out
+}
+
+/// The 64-byte save header for `s`.
+pub fn save_header_build(s: &SaveInfo) -> [u8; SAVE_HEADER_SIZE] {
+    let raw = sys::save_info { game: s.game, game_crc: s.game_crc, tape_pos: s.tape_pos, z80_crc: s.z80_crc };
+    let mut out = [0u8; SAVE_HEADER_SIZE];
+    // SAFETY: both pointers are valid; the C side writes exactly 64 bytes.
+    unsafe { sys::save_header_build(&raw, out.as_mut_ptr()) };
+    out
+}
+
+/// Checks header `h` against `pack` (which pack_open must accept, else its error), or against no pack
+/// at all (`None`).
+pub fn save_header_check(h: &[u8; SAVE_HEADER_SIZE], pack: Option<&[u8]>) -> Result<SaveInfo, i32> {
+    if let Some(p) = pack {
+        pack_open(p)?;
+    }
+    let mut raw = sys::save_info { game: 0, game_crc: 0, tape_pos: 0, z80_crc: 0 };
+    let base = pack.map_or(std::ptr::null(), |p| p.as_ptr());
+    // SAFETY: `h` is 64 bytes; `base` is NULL or the start of a pack image that pack_open accepted.
+    match unsafe { sys::save_header_check(h.as_ptr(), base, &mut raw) } {
+        0 => Ok(SaveInfo { game: raw.game, game_crc: raw.game_crc, tape_pos: raw.tape_pos, z80_crc: raw.z80_crc }),
+        e => Err(e),
+    }
+}
+
+/// Whether `pos` is a block boundary of `tap`, or its length.
+pub fn save_tape_pos_ok(tap: &[u8], pos: u32) -> bool {
+    // SAFETY: the pointer and length describe `tap`.
+    unsafe { sys::save_tape_pos_ok(tap.as_ptr(), tap.len() as u32, pos) != 0 }
+}
+
+pub const SAVE_SECTOR: usize = sys::SAVE_SECTOR as usize;
+pub const SAVE_SECTOR_DATA: usize = sys::SAVE_SECTOR_DATA as usize;
+pub const SAVE_SECTORS: usize = sys::SAVE_SECTORS as usize;
+pub const SAVE_AREA_LEN: usize = sys::SAVE_AREA_LEN as usize;
+pub const SAVE_LEN: usize = sys::SAVE_LEN as usize;
+
+/// The save area offset of save position `pos`.
+pub fn save_area_offset(pos: u32) -> u32 {
+    // SAFETY: pure arithmetic.
+    unsafe { sys::save_area_offset(pos) }
 }

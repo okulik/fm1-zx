@@ -107,7 +107,7 @@ fn picker_lists_and_scrolls() {
 fn open_menu() -> Menu {
     let mut m = Menu::new(2);
     m.set_view(view::GAME);
-    assert_eq!(m.event(ev::HOME).0, cmd::NONE);
+    assert_eq!(m.event(ev::HOME).0, cmd::SAVE);
     assert_eq!(m.view(), view::MENU);
     m
 }
@@ -143,7 +143,7 @@ const SOUND_ITEM: usize = 5;
 /// Opens the HOME menu from the game and moves to the Sound item.
 fn to_sound(m: &mut Menu) {
     m.set_view(view::GAME);
-    assert_eq!(m.event(ev::HOME).0, cmd::NONE);
+    assert_eq!(m.event(ev::HOME).0, cmd::SAVE);
     for _ in 0..SOUND_ITEM {
         m.event(ev::DOWN);
     }
@@ -198,7 +198,7 @@ const SCREEN_ITEM: usize = SOUND_ITEM + 2;
 /// Opens the HOME menu from the game and moves to the Screen item.
 fn to_screen(m: &mut Menu) {
     m.set_view(view::GAME);
-    assert_eq!(m.event(ev::HOME).0, cmd::NONE);
+    assert_eq!(m.event(ev::HOME).0, cmd::SAVE);
     for _ in 0..SCREEN_ITEM {
         m.event(ev::DOWN);
     }
@@ -351,7 +351,7 @@ fn paused_and_message() {
     let mut ui = Ui::new();
     let mut m = Menu::new(1);
     m.set_view(view::GAME);
-    assert_eq!(m.event(ev::PAUSE).0, cmd::NONE);
+    assert_eq!(m.event(ev::PAUSE).0, cmd::SAVE);
     assert_eq!(m.view(), view::PAUSED);
     ui.draw(&m, None);
     assert!((0..3).any(|r| ui.row_text(r).contains("PAUSED")));
@@ -877,4 +877,145 @@ fn ui_pack_row_every_new_colour() {
         let want = (((r8 >> 3) << 11) | ((g8 >> 2) << 5) | (b8 >> 3)) as u16;
         assert_eq!(u16::from_be_bytes([o[0], o[1]]), want, "565 colour {}", 16 + i);
     }
+}
+
+// ---- saving and the saved game ----
+
+#[test]
+fn pause_and_home_ask_to_save() {
+    let mut m = Menu::new(1);
+    m.set_view(view::GAME);
+    assert_eq!(m.event(ev::PAUSE).0, cmd::SAVE);
+    assert_eq!(m.view(), view::PAUSED);
+    assert_eq!(m.event(ev::HOME).0, cmd::SAVE);
+    assert_eq!(m.view(), view::MENU);
+    m.set_view(view::GAME);
+    assert_eq!(m.event(ev::HOME).0, cmd::SAVE);
+    m.set_view(view::PAUSED);
+    assert_eq!(m.event(ev::PAUSE).0, cmd::NONE);
+    assert_eq!(m.view(), view::GAME);
+}
+
+#[test]
+fn keyboard_home_does_not_save() {
+    let mut m = Menu::new(1);
+    m.set_view(view::GAME);
+    m.event(ev::HOME);
+    m.event(ev::DOWN);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK).0, cmd::NONE);
+    assert_eq!(m.view(), view::OSK);
+    assert_eq!(m.event(ev::HOME).0, cmd::NONE);
+    assert_eq!(m.view(), view::GAME);
+}
+
+#[test]
+fn saved_game_opens_page() {
+    let mut m = Menu::new(3);
+    m.set_saved(1);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::NONE, 1));
+    assert_eq!(m.view(), view::SAVED);
+    assert!(!m.runs_game(), "the page runs no game");
+    assert!((0..240).all(|y| m.row_is_ui(y)), "every row is UI");
+    assert_eq!(m.event(ev::OK), (cmd::RESUME_SAVE, 1));
+    assert_eq!(m.view(), view::PICKER);
+    m.event(ev::OK);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::START, 1));
+    assert_eq!(m.view(), view::PICKER);
+    m.event(ev::OK);
+    assert_eq!(m.event(ev::BACK), (cmd::NONE, 0));
+    assert_eq!(m.view(), view::PICKER);
+}
+
+#[test]
+fn unsaved_game_starts_at_once() {
+    let mut m = Menu::new(3);
+    m.set_saved(1);
+    assert_eq!(m.event(ev::OK), (cmd::START, 0));
+    m.set_saved(zx_sys::SAVE_NONE);
+    m.event(ev::DOWN);
+    assert_eq!(m.event(ev::OK), (cmd::START, 1));
+}
+
+#[test]
+fn saved_page_and_mark_draw() {
+    let pack = build_pack(&["Alpha", "Beta", "Gamma"]);
+    let mut ui = Ui::new();
+    let mut m = Menu::new(3);
+    let rows = |m: &Menu, ui: &mut Ui| {
+        ui.draw(m, Some(&pack));
+        let r = find_row(ui, "Beta").unwrap();
+        let a = find_row(ui, "Alpha").unwrap();
+        (ui.compose_row(r * 8 + 3).to_vec(), ui.compose_row(a * 8 + 3).to_vec())
+    };
+    let (beta_none, alpha_none) = rows(&m, &mut ui);
+    m.set_saved(1);
+    let (beta_saved, alpha_saved) = rows(&m, &mut ui);
+    assert_ne!(beta_none, beta_saved);
+    assert_eq!(alpha_none, alpha_saved);
+    m.event(ev::DOWN);
+    m.event(ev::OK);
+    assert_eq!(m.view(), view::SAVED);
+    ui.draw(&m, Some(&pack));
+    assert!(find_row(&ui, "Beta").is_some());
+    assert!(find_row(&ui, "Resume").is_some());
+    assert!(find_row(&ui, "Start new").is_some());
+}
+
+#[test]
+fn saving_banner() {
+    let mut ui = Ui::new();
+    let mut m = Menu::new(1);
+    m.set_view(view::GAME);
+    m.event(ev::PAUSE);
+    m.set_saving(saving::BUSY);
+    ui.draw(&m, None);
+    assert!(find_row(&ui, "SAVING").is_some());
+    assert!(find_row(&ui, "PAUSED").is_none());
+    m.set_saving(saving::IDLE);
+    ui.draw(&m, None);
+    assert!(find_row(&ui, "PAUSED").is_some());
+    m.set_saving(saving::FAILED);
+    ui.draw(&m, None);
+    assert!(find_row(&ui, "SAVE FAILED").is_some());
+    m.event(ev::HOME);
+    assert_eq!(m.view(), view::MENU);
+    ui.draw(&m, None);
+    assert!(find_row(&ui, "Save failed").is_some());
+    assert_eq!(m.event(ev::OK).0, cmd::RESUME);
+    assert_eq!(m.view(), view::GAME);
+    m.event(ev::PAUSE);
+    ui.draw(&m, None);
+    assert!(find_row(&ui, "PAUSED").is_some());
+}
+
+#[test]
+fn page_titles_show_below_the_art_band() {
+    // The art replaces LCD rows 0-63; a title there is in the grid but never on the panel.
+    let pack = build_pack(&["Alpha", "Beta", "Gamma"]);
+    let mut ui = Ui::new();
+    let mut m = Menu::new(1);
+    m.set_view(view::MENU);
+    ui.draw(&m, None);
+    let plain: Vec<Vec<u8>> = (64..72).map(|y| ui.compose_row(y).to_vec()).collect();
+    m.set_saving(saving::FAILED);
+    ui.draw(&m, None);
+    let failed: Vec<Vec<u8>> = (64..72).map(|y| ui.compose_row(y).to_vec()).collect();
+    assert_ne!(plain, failed, "Save failed is under the art");
+
+    let mut m = Menu::new(3);
+    m.set_saved(0);
+    m.event(ev::OK);
+    assert_eq!(m.view(), view::SAVED);
+    ui.draw(&m, Some(&pack));
+    let alpha: Vec<Vec<u8>> = (64..72).map(|y| ui.compose_row(y).to_vec()).collect();
+    let mut m2 = Menu::new(3);
+    m2.set_saved(1);
+    m2.event(ev::DOWN);
+    m2.event(ev::OK);
+    ui.draw(&m2, Some(&pack));
+    let beta: Vec<Vec<u8>> = (64..72).map(|y| ui.compose_row(y).to_vec()).collect();
+    assert_ne!(alpha, beta, "the game name is under the art");
 }

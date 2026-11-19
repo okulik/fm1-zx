@@ -97,6 +97,24 @@ next game); PLAY starts the selected game.
 keyboard and the Kempston joystick. PLAY pauses the game ("PAUSED" in the top border) and resumes
 it; HOME opens the menu.
 
+**Saved game.** Pausing a running game with PLAY, and opening the HOME menu from a running or
+paused game, saves it to flash (about a second; the paused banner reads SAVING meanwhile, and
+anything that would run or replace the game waits for it). Nothing is written when no frame has
+run since the last save or since the game was loaded. A game still loading its tape in the first
+seconds is not saved; the keyboard's HOME and BACK do not save. There is one save: saving a game
+replaces the one before. The save survives power-off and FM-1 ZX updates (an update does not erase
+it); installing another firmware may overwrite it, and FM-1 ZX then finds none. Sound, Screen,
+Effects and LCD speed are not part of it.
+
+In the picker the game that owns the save has a `*` before its name. PLAY on it opens a page
+titled with the game's name and the items Resume and Start new (OCT-/OCT+ and the turns move,
+PLAY picks, HOME goes back to the picker). Resume brings the game back **paused**, the screen as it
+was, and PLAY continues; Start new and Reset game start the game from the beginning and leave the
+save as it is until the next pause or HOME replaces it. Every other game starts at once. A save
+that cannot be read shows "Save damaged" and is forgotten, also after power-off. If writing the
+save fails the paused banner reads SAVE FAILED and the game goes on as before. A save belongs to
+its game in the current pack: with a different pack, or a changed game, the picker shows no mark.
+
 While the game is paused or in the menu or on the key map page, it does not run: no Spectrum
 frames, no sound, and every Spectrum key and Kempston direction is up. A key still held when the
 game resumes counts again from the next frame.

@@ -104,6 +104,20 @@ ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the
 - [ ] A World of One-Way: OCT- starts from the menu, F3/A3/F#3/G3 slide the heroes left, right, up and down to the next wall, and the picture stays clean while they move.
 - [ ] Tape multi-load test ("Tape multi-load test"): about 4 to 5 seconds after you start it (the ROM autostarts the tape, then the program waits two seconds) the border turns green and a screen image appears from the third block; Reset game in the HOME menu loads the tape again from its first block and reaches green again.
 
+### Saved game
+
+- [x] Play a game, pause with PLAY, switch off and on: the picker marks the game with a `*`; PLAY
+      on it opens Resume / Start new; Resume shows the game as it was, paused (PAUSED in the top
+      border); PLAY continues it.
+- [x] Play, leave with HOME then Back to games, pick the game again, Resume: the game is as it was
+      left. Start new starts it from the beginning, and after another pause the picker still marks it.
+- [x] A tape game (the tape multi-load test): pause after the loader has finished (about 3 seconds in) and
+      before the border turns green, switch off and on, Resume, PLAY: the tape goes on from where it was and the border turns green.
+- [x] Install an update over USB (`docs/install.md`): the mark is still in the picker afterwards
+      and Resume works (an update with the same games).
+- [x] Play, then HOME and at once Back to games and PLAY on the same game, within a second: the
+      Resume / Start new page opens, and Resume shows the game as it was.
+
 ### Underruns
 
 `fmzx_stats.underruns` counts the audio FIFO running dry while a game runs. On the device it
@@ -145,8 +159,12 @@ m-bootloader 2.4 and behind M-VAVE's stock bootloader.
   Connect finds FM-1 ZX and its Install puts SLOOP on from FM-1 ZX; felucca-bsp's
   `tools/fm1_install.py` installs FM-1 ZX over itself and back from SLOOP, and an interrupted
   install resumes; the soft UBOOT key; no clicks with the cable in or out.
+- **The saved game:** PLAY and HOME save it, the picker marks it after a power cycle, Resume
+  brings it back paused, a tape game goes on from where it was, and the save stays through an
+  update (the checks under "Saved game").
 - Behind m-bootloader its own keys work whatever the firmware: PLAY at power-on opens its menu
-  (it shows APP OK for FM-1 ZX), REC at power-on enters download mode.
+  (it shows APP OK for FM-1 ZX, and APP INCOMPLETE once a byte of the app area differs from the
+  install, which is why the save lives above the app area), REC at power-on enters download mode.
 
 The panel needs CS high after each command and its arguments: with CS held low from SWRESET to
 DISPON it ignores every command after SWRESET and the screen stays black. fm1-emu's panel ignores

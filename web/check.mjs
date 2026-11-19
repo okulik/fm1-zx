@@ -4,7 +4,7 @@
 // Headless smoke test of the built browser demo (tools/web-demo --check): boots DIR/fm1_web.wasm
 // with DIR/fmzx.fwsc as the page does (JIT on, 240 MHz) and checks that it boots, draws the
 // game picker, plays sound from the border-and-tone test, reports the running game (fmzx_stats
-// at keymaps.json's address) and takes computer keys through web/fmzx.js. One line per check; exit 0 when
+// at keymaps.json's address), takes computer keys through web/fmzx.js, and saves and resumes a game. One line per check; exit 0 when
 // all pass, 1 otherwise. The preview package (RGB565) boots in a second instance as the colour
 // reference for the release package's RGB444.
 //   node web/check.mjs build/web build/fm1/fmzx-preview.fwsc
@@ -123,6 +123,14 @@ const loud = run(1.0);
     };
     const seen = [tap("Escape"), tap("Enter"), tap("Tab"), tap("Tab")];
     report("computer keys", seen.join() === "2,1,5,1", `views after Esc, Enter, Tab, Tab: ${seen.join(", ")} (want 2, 1, 5, 1)`);
+
+    // saving: pause, HOME saves the game to flash (the page's flash answers the accepted JEDEC ID),
+    // "Back to games" (the menu's last item, one UP from the first) shows the picker, OK on the
+    // saved game opens its page (view 7), OK on Resume brings it back paused (view 5)
+    tap("Tab");
+    run(1);
+    const path = [tap("Escape"), tap("ArrowUp"), tap("Enter"), tap("Enter"), tap("Enter")];
+    report("save and resume", path.join() === "2,2,0,7,5", `views after Esc, Up, Enter (Back to games), Enter (saved game), Enter (Resume): ${path.join(", ")} (want 2, 2, 0, 7, 5)`);
   }
 }
 

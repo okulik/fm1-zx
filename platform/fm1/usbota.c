@@ -15,13 +15,15 @@
 #include "fm1_sys.h"
 
 #include "usbota.h"
+#include "save.h"
 
 #define FELUCCA_OTA 1
 #define FELUCCA_CDC 0
 /* OTA_FLASH_ID stays ota.c's default (0): the identity field is the text and zeros, which the FM-1
  * Firmware Hub's page needs (it reads everything before the trailing zeros as the identity) */
-/* the only flash this firmware writes while it runs: the OTA area (ota.c's OTA_AREA, OTA_AREA_LEN) */
-#define FM1_FLASH_WRITE_REGIONS(X) X(0xE0000u, 0xE5000u)
+/* the only flash this firmware writes while it runs: the OTA area (ota.c's OTA_AREA, OTA_AREA_LEN)
+ * and the saved game's area (FMZX_SAVE_FLASH, FMZX_SAVE_LEN) */
+#define FM1_FLASH_WRITE_REGIONS(X) X(0xE0000u, 0xE5000u) X(0xEA000u, 0xF7000u)
 /* the rings are shared with the TIMER5 interrupt on the one core: a compiler barrier */
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")
 /* the driver's RAM functions in a section of their own (app.ld: .ram_flash, in the RAM region, not
@@ -42,6 +44,15 @@ const char *fmzx_usb_serial(void);
 #include "ota.c"
 
 _Static_assert(OTA_AREA == 0xE0000u && OTA_AREA_LEN == 0x5000u, "FM1_FLASH_WRITE_REGIONS is ota.c's OTA area");
+_Static_assert(FMZX_SAVE_LEN == SAVE_AREA_LEN, "FMZX_SAVE_LEN is the save area of app/save.h");
+/* the save area: 0xEA000 (the end of the SDK's VM area) to 0xF7000, below the globals at 0xFC000,
+ * sector-aligned, clear of the OTA area */
+_Static_assert(FMZX_SAVE_FLASH == 0xEA000u && FMZX_SAVE_FLASH + FMZX_SAVE_LEN == 0xF7000u,
+               "FM1_FLASH_WRITE_REGIONS is the save area");
+_Static_assert(FMZX_SAVE_FLASH >= 0xEA000u && FMZX_SAVE_FLASH + FMZX_SAVE_LEN <= 0xFC000u,
+               "the save area is above the SDK's VM area and below the globals");
+_Static_assert(FMZX_SAVE_FLASH % SAVE_SECTOR == 0 && FMZX_SAVE_LEN % SAVE_SECTOR == 0, "the save area is sector-aligned");
+_Static_assert(FMZX_SAVE_FLASH >= OTA_AREA + OTA_AREA_LEN, "the save area does not overlap the OTA area");
 
 #define JEDEC_PUYA 0x856014u     /* the FM-1's usual part */
 #define JEDEC_UC25HQ80 0xB36014u /* the other part FM-1s ship with */
@@ -95,6 +106,41 @@ static int ota_prog(uint32_t off, const void *p, uint32_t n)
 
 static int ota_fread(uint32_t off, void *p, uint32_t n)
 {
+    return fl_read(off, p, n);
+}
+
+/* The saved game's flash, for fmsave.c: 0 or a driver error, and nonzero unless the part is one the
+ * update may write and the range lies in the save area. */
+static int save_range_ok(uint32_t off, uint32_t n)
+{
+    return flash_ok() && FL_IN(off, n, FMZX_SAVE_FLASH, FMZX_SAVE_FLASH + FMZX_SAVE_LEN);
+}
+
+int fmzx_flash_erase4k(uint32_t off)
+{
+    uint32_t took;
+    int rc;
+    if (!save_range_ok(off, 0x1000u) || (off & 0xFFFu))
+        return -8;
+    rc = fl_erase4k(off, &took);
+    fm1_wdt_feed();
+    return rc;
+}
+
+int fmzx_flash_write(uint32_t off, const uint8_t *p, uint32_t n)
+{
+    int rc;
+    if (!save_range_ok(off, n))
+        return -8;
+    rc = fl_write(off, p, n);
+    fm1_wdt_feed();
+    return rc;
+}
+
+int fmzx_flash_read(uint32_t off, uint8_t *p, uint32_t n)
+{
+    if (!save_range_ok(off, n))
+        return -8;
     return fl_read(off, p, n);
 }
 

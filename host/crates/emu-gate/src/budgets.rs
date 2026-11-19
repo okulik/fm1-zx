@@ -334,6 +334,13 @@ pub fn start_game_in(fw: &Firmware, opt: BootOpt, index: u32, sound: u32, screen
     m.run_ms(200);
     m.press(PLAY, 30);
     m.run_ms(20);
+    if m.stats().view == VIEW_SAVED {
+        // HOME saved this game: Start new
+        m.press(OCT_UP, 30);
+        m.run_ms(50);
+        m.press(PLAY, 30);
+        m.run_ms(20);
+    }
     assert_eq!(
         (m.stats().view, m.stats().game, sound_mode(&m), screen_mode(&m)),
         (VIEW_GAME, index, sound, screen),
@@ -467,6 +474,7 @@ pub fn measure_with(
 pub const VIEW_PICKER: u32 = 0;
 pub const VIEW_GAME: u32 = 1;
 pub const VIEW_MENU: u32 = 2;
+pub const VIEW_SAVED: u32 = 7;
 
 #[cfg(test)]
 mod tests {

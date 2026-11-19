@@ -55,6 +55,8 @@ What works:
 
 - a game picker, a HOME menu (resume, reset, on-screen Spectrum keyboard, the key map, LCD speed,
   sound, screen, back to games) and pause;
+- one saved game: pausing with PLAY or leaving a game with HOME saves it, also across power-off;
+  the picker marks that game, and Resume brings it back paused ([controls](docs/controls.md));
 - four screen modes in the HOME menu's Screen item: Crop (240 of the 256 columns),
   Fit and Fit smooth (all 256 columns, sharp or blended; Fit smooth is the default) and Border (the whole picture with a thin
   border, scaled down);

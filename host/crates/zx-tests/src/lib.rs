@@ -3,7 +3,7 @@
 
 //! Shared fixtures for the machine tests.
 
-pub use zx_sys::{cmd, ev, view, Menu, Ui, UI_COLS, UI_ROWS, km_default, KeyMapper, KmInput, KM_INPUTS, KM_NONE, KM_PULSE_FRAMES, lcd_budget_bytes, zx_edge, zx_regs, Beeper, Machine, PixFormat, Sched};
+pub use zx_sys::{cmd, ev, saving, view, Menu, Ui, UI_COLS, UI_ROWS, km_default, KeyMapper, KmInput, KM_INPUTS, KM_NONE, KM_PULSE_FRAMES, lcd_budget_bytes, zx_edge, zx_regs, Beeper, Machine, PixFormat, Sched};
 
 /// Pokes `bytes` into the machine starting at `addr`.
 pub fn load(m: &mut Machine, addr: u16, bytes: &[u8]) {
