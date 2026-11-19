@@ -1,5 +1,5 @@
 {
-  "what": "A ZX Spectrum 48K emulator: play Spectrum games with the FM-1's keys and knobs. Five freely licensed games are built in, and a tool packs your own. It can replay the games' beeper music and effects on the FM-1's FM synth.",
+  "what": "A ZX Spectrum 48K emulator: play Spectrum games with the FM-1's keys and knobs. Five freely licensed games are built in, and a tool packs your own. It can replay the games' beeper music and effects on the FM-1's FM synth, and it installs and updates over USB from the hub.",
   "author": "Orest Kulik",
   "kinds": ["other"],
   "play": "https://dev-gh.nisdom.com/fm1-zx/",
