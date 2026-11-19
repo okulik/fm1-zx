@@ -25,10 +25,11 @@ fmzx_embed("${PROJECT_SOURCE_DIR}/third_party/zx-rom/48.rom" zx_rom_data
 
 set(_bsp "${CMAKE_CURRENT_SOURCE_DIR}/bsp")
 set(_ours crt0.S main.c lcd.c input.c audio.c libc_min.c rt_mem.c usbota.c)
-# usbota.c: felucca-bsp's USB-MIDI device and update entry, named "FM-1 ZX" on USB and answering the
-# installers' handshake with the product identity.
+# usbota.c: felucca-bsp's USB-MIDI device and update entry, named "FM-1 ZX" by "FM-1 ZX contributors"
+# on USB, with the flash's unique ID as its serial number, and answering the installers' handshake
+# with the product identity.
 set_source_files_properties(usbota.c PROPERTIES COMPILE_DEFINITIONS
-  "FELUCCA_ID=\"${FMZX_PRODUCT}\";FELUCCA_USB_PRODUCT=\"FM-1 ZX\"")
+  "FELUCCA_ID=\"${FMZX_PRODUCT}\";FELUCCA_USB_PRODUCT=\"FM-1 ZX\";FELUCCA_USB_MANUFACTURER=\"FM-1 ZX contributors\";FELUCCA_USB_SERIAL_FN=fmzx_usb_serial")
 if(FMZX_BOOT_PROBE)
   list(APPEND _ours probe.c)
   set(_probe 1)

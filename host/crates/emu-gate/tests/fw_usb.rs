@@ -110,6 +110,22 @@ fn identity_field_is_text_and_zeros() {
     }
 }
 
+/// The USB names: the manufacturer string is FM-1 ZX's own, and the serial number is the flash's
+/// unique ID (its first 15 bytes as hex), so a host tells this device from another on the same port
+/// (macOS names a device without a serial after whatever it kept for the port).
+#[test]
+fn usb_names_are_fm1_zx_and_the_flash_uid() {
+    let fw = firmware();
+    assert!(fw.image.windows(20).any(|w| w == b"FM-1 ZX contributors"), "no manufacturer string in the image");
+    let m = boot_plugged();
+    let at = m.symbol("fmzx_usb_serial_text");
+    let text: Vec<u8> = (0..32u32).map(|i| (m.peek32((at + i) & !3) >> (8 * ((at + i) & 3))) as u8).collect();
+    let text = String::from_utf8_lossy(&text[..text.iter().position(|&b| b == 0).unwrap_or(32)]).into_owned();
+    // fm1-emu's flash answers the unique-ID read (0x4B) with "FM1-" repeated
+    let want: String = b"FM1-FM1-FM1-FM1".iter().map(|b| format!("{b:02X}")).collect();
+    assert_eq!(text, want);
+}
+
 #[test]
 fn handshake_in_every_view() {
     let mut m = boot_plugged();

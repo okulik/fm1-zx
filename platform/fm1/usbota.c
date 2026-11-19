@@ -4,7 +4,8 @@
 /* USB through felucca-bsp (MPL-2.0, platform/fm1/VENDORED.md): its USB-MIDI device (chip/usb.c)
  * and its update entry (chip/ota.c), included into this one unit as felucca-bsp's own firmwares
  * include them, and its flash driver (fm1_flash.h), which may write felucca-bsp's OTA area only.
- * The identity (FELUCCA_ID) and the USB product string (FELUCCA_USB_PRODUCT) come from CMake.
+ * The identity (FELUCCA_ID), the USB product and manufacturer strings (FELUCCA_USB_PRODUCT,
+ * FELUCCA_USB_MANUFACTURER) and the serial number's function (FELUCCA_USB_SERIAL_FN) come from CMake.
  * Not built with felucca-bsp's console (FELUCCA_CDC 0) or USB audio. */
 
 #include <stdint.h>
@@ -28,6 +29,13 @@
 #define RAMFN __attribute__((section(".ram_flash"), noinline))
 
 static uint32_t flash_id;
+/* the USB serial number: the first 15 bytes of the flash's unique ID as hex (31 characters at most
+ * in usb.c's string descriptor), read once at boot; empty (usb.c then reads "0") if the read fails */
+char fmzx_usb_serial_text[31];
+const char *fmzx_usb_serial(void);
+
+/* fm1_flash.h's unique-ID read (fl_uid) */
+#define FL_UID 1
 
 #include "fm1_flash.h"
 #include "usb.c"
@@ -125,9 +133,29 @@ static void ota_commit(const uint8_t *parm)
 
 /* ---- usbota.h ---- */
 
+const char *fmzx_usb_serial(void)
+{
+    return fmzx_usb_serial_text;
+}
+
+static void read_serial(void)
+{
+    static const char HEX[] = "0123456789ABCDEF";
+    uint8_t uid[16];
+    uint32_t i;
+    if (fl_uid(uid) != 0)
+        return;
+    for (i = 0; i < 15u; i++) {
+        fmzx_usb_serial_text[2u * i] = HEX[uid[i] >> 4];
+        fmzx_usb_serial_text[2u * i + 1u] = HEX[uid[i] & 15u];
+    }
+    fmzx_usb_serial_text[30] = 0;
+}
+
 void usbota_init(void)
 {
     flash_id = fl_jedec();
+    read_serial();
     if (flash_ok())
         ota_boot_cleanup();
     usb_start();
