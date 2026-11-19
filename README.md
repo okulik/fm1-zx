@@ -89,9 +89,10 @@ What works:
   (`fmzx_enter_uboot`); behind M-VAVE's stock bootloader the computer then sees the boot loader on
   USB ([install and recovery](docs/install.md)).
 
-Built and tested in fm1-emu, not yet on a device: installing and updating from the FM-1 Firmware
-Hub over USB, from FM-1 ZX itself (a USB-MIDI device whenever the cable is in;
-[install and recovery](docs/install.md)).
+Installing and updating over USB, from FM-1 ZX itself (a USB-MIDI device named `FM-1 ZX` whenever
+the cable is in), tested on the FM-1: the FM-1 Firmware Hub finds it and installs other firmwares
+from it, and a local installer installs a new package over it, an interrupted install resuming
+([install and recovery](docs/install.md)).
 
 Not supported: adding games without a new package, tapes played on the device itself.
 

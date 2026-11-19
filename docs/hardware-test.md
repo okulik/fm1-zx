@@ -141,6 +141,10 @@ m-bootloader 2.4 and behind M-VAVE's stock bootloader.
   mode.
 - **The UBOOT gesture works** behind the stock bootloader: with OCT- held at power-on the computer
   sees the boot loader on USB, and M-Flasher installs from there.
+- **Installing and updating over USB from FM-1 ZX** (`docs/install.md`): the FM-1 Firmware Hub's
+  Connect finds FM-1 ZX and its Install puts SLOOP on from FM-1 ZX; felucca-bsp's
+  `tools/fm1_install.py` installs FM-1 ZX over itself and back from SLOOP, and an interrupted
+  install resumes; the soft UBOOT key; no clicks with the cable in or out.
 - Behind m-bootloader its own keys work whatever the firmware: PLAY at power-on opens its menu
   (it shows APP OK for FM-1 ZX), REC at power-on enters download mode.
 

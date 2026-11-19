@@ -119,25 +119,25 @@ area only (from 0x4000: the unit's bootloader stays as it is) and checks what it
 
 To go back, restore one of M-Flasher's backups the same way, or install another firmware's package.
 
-## Installing on an FM-1 with a USB-MIDI installer (unverified)
+## Installing on an FM-1 with a USB-MIDI installer
 
 FM-1 firmware is updated through the firmware that is running: a USB-MIDI installer sends a
 `.fwsc` to the running firmware, which hands it to the update loader in the package (`ota.bin`),
 which writes the app area. For a local package file the installer is felucca-bsp's
 `tools/fm1_install.py` (<https://github.com/hugelton/felucca-bsp>; it needs Python with `mido` and
 `python-rtmidi`). The FM-1 Firmware Hub installs the packages it lists, and Felucca's web
-installer installs Felucca (it takes a local file only for the official V15). *Unverified:* that the stock firmware or Felucca accepts this package (identity
-`FM-1_048`, with felucca-bsp's loader, which presents itself to update hosts as `ota-FM-1_900`), and
-that a given installer takes it. The first device test checks this.
+installer installs Felucca (it takes a local file only for the official V15). Tested on the FM-1:
+`fm1_install.py` installs this package (identity `FM-1_048`, with felucca-bsp's loader, which
+presents itself to update hosts as `ota-FM-1_900`) from SLOOP and from FM-1 ZX itself.
+*Unverified:* from the stock firmware.
 
 1. Start the FM-1 with its current firmware (stock or another community firmware) and connect
    it by USB.
 2. Run `python3 tools/fm1_install.py build/fm1/fmzx.fwsc` from a felucca-bsp checkout (with the
    path to the package; `--info` first shows the FM-1's identity).
-3. Wait until the installer reports success and the FM-1 restarts into the game picker
-   (expected, unverified).
+3. Wait until the installer reports success and the FM-1 restarts into the game picker.
 
-## Installing and updating over USB from FM-1 ZX (unverified on hardware)
+## Installing and updating over USB from FM-1 ZX
 
 Whenever the USB cable is in (in the picker, the HOME menu, a game running or paused), FM-1 ZX is
 a class-compliant USB-MIDI device named `FM-1 ZX`. It answers the installers' handshake with its
@@ -180,9 +180,11 @@ the session stages the loader and reaches the restart on both flash chips with n
 outside the OTA area; an abandoned session, corrupted reads (of the loader's head and of its
 body) and a `flash.bin` the loader refuses (missing, too short, past the flash) leave the OTA
 area erased and FM-1 ZX where it was, the panel as it was before the session, while a `flash.bin`
-with a longer app area (0xA9000) passes the check; the soft UBOOT key enters the update mode. *Unverified:* all of it
-on hardware, and the loader's install after the restart (fm1-emu does not run the boot loader's
-update mode); the first USB device test checks them.
+with a longer app area (0xA9000) passes the check; the soft UBOOT key enters the update mode.
+Tested on the FM-1 (flash chip 0x856014): the hub's **Connect FM-1** finds FM-1 ZX; the hub installs
+SLOOP from FM-1 ZX; `fm1_install.py` installs FM-1 ZX over itself and back from SLOOP, and an
+install unplugged while the loader writes resumes when it is run again; the soft UBOOT key; a game
+plays without clicks with the cable in and out. *Unverified:* the other flash chip (0xB36014).
 
 ## The update mode (UBOOT gesture)
 
