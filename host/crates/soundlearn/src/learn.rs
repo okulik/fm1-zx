@@ -17,10 +17,26 @@
 //!    its entry. A learned heard routine then gets the drums the replay shows
 //!    ([`drum_ok`], [`add_drum`]), each kept only if the routine, replayed with it, still passes.
 //!    A routine never heard goes through the code-only gates.
-//! 5. **Keep** at most [`SND_LEARNED_MAX`] learned entries, matching at most
+//! 5. **Observe** each heard routine its code did not give (the reader refused it or a gate did,
+//!    not as a built-in entry's), from its site heard in the most frames, if that site sounded in
+//!    at least [`OBSERVE_FRAMES`] frames and lies in no routine observed before it
+//!    ([`crate::observe`]: the values its loop reads that hold its channels' pitches, by the
+//!    spectrum of the speaker); a site that is an `OUT` of a routine learned by observation
+//!    before it is skipped, as one of a routine already read. Its entry is an observed one
+//!    ([`LearnedEntry::observed`]): every `OUT` of the routine a tonal site of channel 0, the
+//!    pass as played (the pitch heard holds the contention), no timing; its signature leaves out
+//!    the bytes written while it played and those that differ between the frames it sounds in.
+//!    A channel whose input is a register (or read through one) is kept only if it reads the
+//!    same at every `OUT` of the routine that sounds in a frame, in at least 95% of the frames
+//!    two or more of them sound in (method B reads the registers of the `OUT` that made the
+//!    frame's last edge). It is learned if no built-in entry matches inside it and the built-in
+//!    table claims none of its frames, it overlaps no routine learned from its code, and its
+//!    replay through method B claims at least half of the frames its sites sound in and passes
+//!    the music gate.
+//! 6. **Keep** at most [`SND_LEARNED_MAX`] learned entries, matching at most
 //!    [`SND_LEARNED_WORK_MAX`] site-signature bytes in all: heard ones first, then by the frames
 //!    their sites sound in.
-//! 6. **Roles:** each kept routine's channels get stored roles ([`crate::roles`]) from its replay,
+//! 7. **Roles:** each kept routine's channels get stored roles ([`crate::roles`]) from its replay,
 //!    in its entry's `instrument[]`; each built-in routine the built-in table gave frames to while
 //!    listening gets them from those frames, in a kind-1 record ([`BuiltinRoles`]: after the
 //!    learned entries, while the list holds fewer than [`SND_LEARNED_MAX`]; none if it has no
@@ -33,27 +49,33 @@
 //! What it says is in [`crate::report`].
 
 use crate::entry::{encode_list, BuiltinRoles, LearnedEntry};
-use crate::fit::{check_fit, to_entry, FitResult};
+use crate::fit::{check_fit, digest, to_entry, FitResult};
 use crate::gate::{ReplayStats, add_drum, builtin_at, drum_ok, judge_table, replay_table, Verdict, BUILTIN, NOT_REPLAYED};
 use crate::listen::{listen_observed, Inputs, SiteHeard, LISTEN_FRAMES};
-use crate::model::{read_engine, scan_out_sites, EngineModel, Refusal};
-use crate::report::{self, ChannelRole, Routine};
+use crate::model::{read_engine, scan_out_sites, EngineModel, Input, Refusal};
+use crate::observe::{observe, ObservedModel};
+use crate::report::{self, ChannelRole, Observation, Routine};
 use crate::roles::BuiltinRun;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_WORK_MAX, SND_TONAL};
+use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_SITES_MAX, SND_LEARNED_WORK_MAX, SND_SITE_TONAL, SND_TONAL};
 
 /// The learner's version: part of the personal pack's cache key, so bump it when learning
 /// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
 /// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
 /// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
-pub const LEARNER_VERSION: u32 = 5;
+pub const LEARNER_VERSION: u32 = 6;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
 /// Bytes either side of a site the code reader may look at (a site's code is compared over them
 /// in the two memories).
 const READ_REACH: u16 = 512;
+/// The frames a heard routine's site must sound in to be observed.
+pub const OBSERVE_FRAMES: u32 = 100;
+/// The share of the frames two or more of an observed routine's `OUT`s sound in, in which a
+/// channel read through a register must read the same at each of them.
+const AGREE: f64 = 0.95;
 
 /// What the learner made of a game.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,7 +212,7 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
         let (model, mem) = match read_site(pc, &mems, builtins) {
             Ok(got) => got,
             Err(why) => {
-                let routine = Routine { site: pc, heard: site_heard, model: None, fit: None, replay: None, drums: Vec::new(), outcome: Err(why), roles: Vec::new() };
+                let routine = Routine { site: pc, heard: site_heard, model: None, fit: None, replay: None, drums: Vec::new(), outcome: Err(why), roles: Vec::new(), observation: None };
                 done.push(Judged { routine, entry: None, sounding: 0 });
                 continue;
             }
@@ -201,6 +223,7 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
         }
         done.push(judge_routine(load, inputs, &heard.sites, pc, model, mem, builtins));
     }
+    observe_refused(load, inputs, &heard.sites, &end, &mut done, builtins);
 
     // the entries kept: heard first, then by sounding frames; at most SND_LEARNED_MAX, and only
     // a list the decoder takes
@@ -209,15 +232,27 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
     let cands: Vec<LearnedEntry> = order.iter().filter_map(|&i| done[i].entry.clone()).collect();
     let mut kept: Vec<usize> = Vec::new();
     for (&i, outcome) in order.iter().zip(keep(&cands)) {
-        match outcome {
-            Ok(()) => kept.push(i),
-            Err(why) => done[i].routine.outcome = Err(why),
+        let r = &mut done[i].routine;
+        match (outcome, r.observation.as_mut()) {
+            (Ok(()), _) => kept.push(i),
+            // an observed entry left out: the code's refusal stands, the observation says why
+            (Err(why), Some(o)) => {
+                r.outcome = Err(o.code.clone());
+                o.outcome = Err(why);
+            }
+            (Err(why), None) => r.outcome = Err(why),
         }
     }
     let builtin_heard = builtin_run.map_or_else(Vec::new, |r| r.heard());
     let (roles, override_error) = stored_roles(&mut done, &kept, &builtin_heard, &opts.instruments);
     let entries: Vec<LearnedEntry> = kept.iter().filter_map(|&k| done[k].entry.clone()).collect();
-    let learned: Vec<(bool, usize)> = kept.iter().map(|&k| (done[k].routine.heard.is_some(), done[k].entry.as_ref().map_or(0, |e| e.progs.len()))).collect();
+    let learned: Vec<(bool, bool, usize)> = kept
+        .iter()
+        .map(|&k| {
+            let j = &done[k];
+            (j.routine.heard.is_some(), j.entry.as_ref().is_some_and(|e| e.observed), j.entry.as_ref().map_or(0, |e| e.progs.len()))
+        })
+        .collect();
     // the first refusal: a heard routine's, else a code-only routine the reader could read
     let refused = done
         .iter()
@@ -244,9 +279,18 @@ fn stored_roles(done: &mut [Judged], kept: &[usize], heard: &[crate::roles::Buil
     let mut takes: Vec<Takes> = Vec::new();
     for &k in kept {
         let r = &done[k].routine;
-        let Some(m) = &r.model else { continue };
-        let outs = m.channels.iter().flat_map(|c| c.sites.iter().copied()).chain([r.site]).collect();
-        takes.push(Takes { block: k, channels: m.channels.len(), analysis: r.replay.as_ref().and_then(|p| p.roles), outs, builtin: None });
+        let code_outs = r.model.iter().flat_map(|m| m.channels.iter().flat_map(|c| c.sites.iter().copied()));
+        let observed = r.observation.as_ref().filter(|o| o.outcome.is_ok());
+        let (channels, analysis, outs) = match (observed, &r.model) {
+            (Some(o), _) => {
+                let m = o.model.as_ref().expect("an observed routine learned has its model");
+                let outs = m.sites.iter().map(|&off| m.anchor.wrapping_add(off)).chain(code_outs).chain([r.site]).collect();
+                (done[k].entry.as_ref().map_or(0, |e| e.progs.len()), o.replay.as_ref().and_then(|p| p.roles), outs)
+            }
+            (None, Some(m)) => (m.channels.len(), r.replay.as_ref().and_then(|p| p.roles), code_outs.chain([r.site]).collect()),
+            (None, None) => continue,
+        };
+        takes.push(Takes { block: k, channels, analysis, outs, builtin: None });
     }
     let table = SndEngines::new().entries();
     let shown: BTreeSet<u16> = done.iter().map(|j| j.routine.site).collect();
@@ -318,6 +362,184 @@ fn builtin_block(blocks: &[(u16, &Result<(), String>)], outs: &BTreeSet<u16>) ->
     blocks.iter().position(|b| refused(b) && builtin(b)).or_else(|| blocks.iter().position(refused))
 }
 
+/// Step 5 of the module docs: each heard routine of `done` its code did not give, observed (in
+/// the order of `done`), its block given the observation and, if learned, its entry; a block
+/// whose site is an `OUT` of a routine learned by observation before it is dropped. `mem` is
+/// the memory at the end of the run (for the built-in entries' signatures).
+fn observe_refused(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard], mem: &Machine, done: &mut Vec<Judged>, builtins: bool) {
+    // the routines learned from their code: anchor and length
+    let learned: Vec<(u16, u16)> = done
+        .iter()
+        .filter(|j| j.entry.is_some())
+        .filter_map(|j| j.routine.model.as_ref())
+        .map(|m| (m.anchor, m.code_end.wrapping_sub(m.anchor)))
+        .collect();
+    // the routines observed: anchor, length, the site observed; and their OUTs
+    let mut observed: Vec<(u16, u16, u16)> = Vec::new();
+    let mut outs: HashSet<u16> = HashSet::new();
+    let mut skip = vec![false; done.len()];
+    for (k, j) in done.iter_mut().enumerate() {
+        let r = &j.routine;
+        let (Some((frames, _)), Err(code)) = (r.heard, &r.outcome) else { continue };
+        if code.starts_with(BUILTIN) || frames < OBSERVE_FRAMES {
+            continue;
+        }
+        let site = r.site;
+        // an OUT of a routine learned by observation already: skipped, as a site of a routine
+        // already read
+        if outs.contains(&site) {
+            skip[k] = true;
+            continue;
+        }
+        let mut o = Observation { code: code.clone(), model: None, dropped: Vec::new(), replay: None, outcome: Ok(()) };
+        let got = match observed.iter().find(|&&(a, len, _)| site.wrapping_sub(a) < len) {
+            Some(&(_, _, from)) => Err(format!("its OUT lies in the routine observed from the OUT at {from:04X}h")),
+            None => match observe(load, inputs, LISTEN_FRAMES, site) {
+                Err(why) => Err(why),
+                Ok(om) => {
+                    observed.push((om.anchor, om.len, site));
+                    let got = judge_observed(load, inputs, mem, &om, &learned, builtins, &mut o);
+                    o.model = Some(om);
+                    got
+                }
+            },
+        };
+        match got {
+            Ok(entry) => {
+                let m = o.model.as_ref().expect("observed");
+                outs.extend(m.sites.iter().map(|&off| m.anchor.wrapping_add(off)));
+                j.sounding = m.sites.iter().filter_map(|&off| heard.iter().find(|s| s.pc == m.anchor.wrapping_add(off))).map(|s| s.frames_with_edges).sum();
+                j.entry = Some(entry);
+                j.routine.outcome = Ok(());
+            }
+            Err(why) => o.outcome = Err(why),
+        }
+        j.routine.observation = Some(o);
+    }
+    let mut k = 0;
+    done.retain(|_| {
+        k += 1;
+        !skip[k - 1]
+    });
+}
+
+/// The verdict on an observed routine `om` (step 5 of the module docs; `learned`: the routines
+/// learned from their code, anchor and length), with its entry if learned; `o` gets the
+/// channels dropped and the replay.
+fn judge_observed(load: &dyn Fn() -> Machine, inputs: &Inputs, mem: &Machine, om: &ObservedModel, learned: &[(u16, u16)], builtins: bool, o: &mut Observation) -> Result<LearnedEntry, String> {
+    let outs: Vec<u16> = om.sites.iter().map(|&off| om.anchor.wrapping_add(off)).collect();
+    if let Some(b) = outs.iter().chain([&om.anchor]).filter(|_| builtins).find_map(|&pc| builtin_at(mem, pc)) {
+        return Err(format!("the {BUILTIN} at {b:04X}h matches in it"));
+    }
+    let overlaps = |&&(a, len): &&(u16, u16)| om.anchor.wrapping_sub(a) < len || a.wrapping_sub(om.anchor) < om.len;
+    if let Some(&(a, _)) = learned.iter().find(overlaps) {
+        return Err(format!("it overlaps the routine at {a:04X}h, learned from its code"));
+    }
+    if om.sites.len() > SND_LEARNED_SITES_MAX {
+        return Err(format!("{} OUTs (at most {SND_LEARNED_SITES_MAX})", om.sites.len()));
+    }
+    let run = observed_run(load, inputs, om);
+    let mut keep = Vec::new();
+    for (c, (ch, &share)) in om.channels.iter().zip(&run.agree).enumerate() {
+        if share >= AGREE {
+            keep.push(c);
+        } else {
+            o.dropped.push((*ch, share));
+        }
+    }
+    if keep.is_empty() {
+        return Err("no channel reads the same at all the routine's OUTs".into());
+    }
+    let Some(code) = run.code else { return Err(format!("the site {:04X}h never sounds", om.site)) };
+    let peek = |a: u16| code[usize::from(a.wrapping_sub(om.anchor))];
+    let wild: Vec<u16> = om.wild.iter().chain(&run.varies).copied().collect::<BTreeSet<u16>>().into_iter().collect();
+    let n = keep.len();
+    let entry = LearnedEntry {
+        digest: digest(&peek, om.anchor, om.len, &wild, &[]),
+        len: om.len,
+        wild,
+        reloc: Vec::new(),
+        sites: om.sites.iter().map(|&off| (off, SND_SITE_TONAL, 0)).collect(),
+        pass: 0,
+        pos: vec![0; n],
+        flips: false,
+        observed: true,
+        drum: 0,
+        stale: None,
+        level: vec![200; n],
+        instrument: [0; SND_TONAL],
+        progs: keep.iter().map(|&c| om.program(c)).collect(),
+        timing: None,
+    };
+    let (stats, _) = replay_table(load, inputs, LISTEN_FRAMES, &entry, builtins);
+    o.replay = Some(stats.clone());
+    if builtins && stats.builtin_claimed > 0 {
+        return Err(format!("replay: the built-in table claims {} of the {} frames it sounds in", stats.builtin_claimed, stats.routine_frames));
+    }
+    if stats.routine_frames == 0 || stats.claimed * 2 < stats.routine_frames {
+        return Err(format!("replay: method B claims {} of the {} frames it sounds in (at least 50%)", stats.claimed, stats.routine_frames));
+    }
+    if !stats.music_gate {
+        return Err("replay: not music (held notes, recurring pitches, no sweeps)".into());
+    }
+    Ok(entry)
+}
+
+/// What one run shows of an observed routine ([`observed_run`]).
+struct ObservedRun {
+    /// Per channel: the share of the frames two or more of the routine's `OUT`s sound in, in
+    /// which its input reads the same at each of them (1 when it reads no register, or no frame
+    /// has two).
+    agree: Vec<f64>,
+    /// The routine's bytes at the end of the last frame its site sounds in (None: it never does).
+    code: Option<Vec<u8>>,
+    /// The offsets of its bytes that differ between the frames its site sounds in (written by
+    /// the music after the traced run's span): wild too.
+    varies: Vec<u16>,
+}
+
+/// Runs the game for an observed routine `om` (see [`ObservedRun`]): registers are those at each
+/// `OUT`'s last edge ([`Machine::out_sites`]), memory the frame's end.
+fn observed_run(load: &dyn Fn() -> Machine, inputs: &Inputs, om: &ObservedModel) -> ObservedRun {
+    let mut m = load();
+    let outs: Vec<u16> = om.sites.iter().map(|&off| om.anchor.wrapping_add(off)).collect();
+    let by_reg = |i: &Input| matches!(i, Input::Reg(_) | Input::RegHalf(..) | Input::Indexed(..));
+    let (mut frames, mut same) = (0u32, vec![0u32; om.channels.len()]);
+    let mut code: Option<Vec<u8>> = None;
+    let mut varies = vec![false; usize::from(om.len)];
+    for f in 0..LISTEN_FRAMES {
+        let (rows, kemp) = inputs(f);
+        m.set_keys(rows);
+        m.set_kempston(kemp);
+        m.run_frame();
+        if m.edges().iter().any(|e| e.pc == om.site) {
+            let now: Vec<u8> = (0..om.len).map(|i| m.peek(om.anchor.wrapping_add(i))).collect();
+            if let Some(before) = &code {
+                for (v, (a, b)) in varies.iter_mut().zip(now.iter().zip(before)) {
+                    *v |= a != b;
+                }
+            }
+            code = Some(now);
+        }
+        if outs.len() < 2 {
+            continue;
+        }
+        let at: Vec<_> = m.out_sites().into_iter().filter(|s| outs.contains(&s.pc)).collect();
+        if at.len() < 2 {
+            continue;
+        }
+        frames += 1;
+        let peek = |a: u16| m.peek(a);
+        for (n, ch) in same.iter_mut().zip(&om.channels) {
+            let v: Vec<Option<u32>> = at.iter().map(|s| ch.input.read(&peek, om.anchor, &s.regs)).collect();
+            *n += u32::from(!by_reg(&ch.input) || v.windows(2).all(|w| w[0] == w[1]));
+        }
+    }
+    let agree = same.iter().map(|&n| if frames == 0 { 1.0 } else { f64::from(n) / f64::from(frames) }).collect();
+    let varies = (0..om.len).filter(|&i| varies[usize::from(i)]).collect();
+    ObservedRun { agree, code, varies }
+}
+
 /// Which of the learned entries `cands` (in order of preference) a game's list keeps: each in
 /// turn while the list holds fewer than [`SND_LEARNED_MAX`], their matching's work
 /// ([`LearnedEntry::work`]) stays within [`SND_LEARNED_WORK_MAX`] and method B's decoder takes
@@ -367,6 +589,7 @@ fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard
         drums: Vec::new(),
         outcome: Ok(()),
         roles: Vec::new(),
+        observation: None,
     };
     let sounding = model.channels.iter().flat_map(|c| c.sites.iter()).filter_map(|&p| heard.iter().find(|s| s.pc == p)).map(|s| s.frames_with_edges).sum();
     let mut entry = to_entry(&model, peek);
@@ -463,6 +686,7 @@ mod tests {
             pass: 0,
             pos: vec![0],
             flips: false,
+            observed: false,
             drum: 0,
             stale: None,
             level: vec![200],

@@ -24,6 +24,7 @@
 #![allow(dead_code)]
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use zx_sys::{zx_regs, Machine, TraceEv, ZX_FRAME_TSTATES, ZX_TR_OUT, ZX_TR_WRITE};
 
@@ -1138,6 +1139,274 @@ pub fn rom_beep_sna() -> Vec<u8> {
         0x18, 0xE3,
     ];
     sna(&code, &[])
+}
+
+/// The steps (s0, s1) of [`or_mixed_sna`]'s notes, and the T-states of its pass.
+pub const OR_MIXED_NOTES: [(u16, u16); 3] = [(1796, 2262), (2016, 2540), (1600, 2400)];
+pub const OR_MIXED_PASS: u32 = 214;
+/// Where [`or_mixed_sna`] keeps the steps it plays.
+pub const OR_MIXED_STEPS: [u16; 2] = [0x9004, 0x9006];
+/// Its one speaker `OUT`, from 8000h.
+pub const OR_MIXED_OUT: u16 = 0x3E;
+
+/// A mixing routine: two phase accumulators, the speaker high while either one's top bit is (the
+/// two squares ORed into the one bit), so its edges are neither channel's. Channel c's period is
+/// `65536 x 214 / s_c` T. Each note `3000h` passes (about 38 frames); the steps from the table.
+///
+/// ```text
+/// 8000 21 49 80     start: LD HL,8049h    the notes: s0, s1 (16 bits each), then 0
+/// 8003 5E           note:  LD E,(HL)
+/// 8004 23                  INC HL
+/// 8005 56                  LD D,(HL)
+/// 8006 23                  INC HL
+/// 8007 7A                  LD A,D
+/// 8008 B3                  OR E
+/// 8009 28 F5               JR Z,start
+/// 800B ED 53 04 90         LD (9004h),DE
+/// 800F 5E                  LD E,(HL)
+/// 8010 23                  INC HL
+/// 8011 56                  LD D,(HL)
+/// 8012 23                  INC HL
+/// 8013 ED 53 06 90         LD (9006h),DE
+/// 8017 E5                  PUSH HL
+/// 8018 01 00 30            LD BC,3000h
+/// 801B 2A 00 90     pass:  LD HL,(9000h)  16   phase 0
+/// 801E ED 5B 04 90         LD DE,(9004h)  20
+/// 8022 19                  ADD HL,DE      11
+/// 8023 22 00 90            LD (9000h),HL  16
+/// 8026 7C                  LD A,H         4
+/// 8027 32 08 90            LD (9008h),A   13
+/// 802A 2A 02 90            LD HL,(9002h)  16   phase 1
+/// 802D ED 5B 06 90         LD DE,(9006h)  20
+/// 8031 19                  ADD HL,DE      11
+/// 8032 22 02 90            LD (9002h),HL  16
+/// 8035 3A 08 90            LD A,(9008h)   13
+/// 8038 B4                  OR H           4    either top bit
+/// 8039 E6 80               AND 80h        7
+/// 803B 0F                  RRCA           4
+/// 803C 0F                  RRCA           4
+/// 803D 0F                  RRCA           4    to bit 4
+/// 803E D3 FE               OUT (FEh),A    11
+/// 8040 0B                  DEC BC         6
+/// 8041 78                  LD A,B         4
+/// 8042 B1                  OR C           4
+/// 8043 C2 1B 80            JP NZ,pass     10   214 T a pass
+/// 8046 E1                  POP HL
+/// 8047 18 BA               JR note
+/// 8049                     the notes
+/// ```
+pub fn or_mixed_sna() -> Vec<u8> {
+    #[rustfmt::skip]
+    let mut code = vec![
+        0x21, 0x49, 0x80, 0x5E, 0x23, 0x56, 0x23, 0x7A, 0xB3, 0x28, 0xF5,
+        0xED, 0x53, 0x04, 0x90, 0x5E, 0x23, 0x56, 0x23, 0xED, 0x53, 0x06, 0x90, 0xE5, 0x01, 0x00, 0x30,
+        // pass
+        0x2A, 0x00, 0x90, 0xED, 0x5B, 0x04, 0x90, 0x19, 0x22, 0x00, 0x90, 0x7C, 0x32, 0x08, 0x90,
+        0x2A, 0x02, 0x90, 0xED, 0x5B, 0x06, 0x90, 0x19, 0x22, 0x02, 0x90, 0x3A, 0x08, 0x90,
+        0xB4, 0xE6, 0x80, 0x0F, 0x0F, 0x0F, 0xD3, 0xFE,
+        0x0B, 0x78, 0xB1, 0xC2, 0x1B, 0x80, 0xE1, 0x18, 0xBA,
+    ];
+    assert_eq!(code.len(), 0x49);
+    assert_eq!(code[usize::from(OR_MIXED_OUT)..usize::from(OR_MIXED_OUT) + 2], [0xD3, 0xFE]);
+    for (s0, s1) in OR_MIXED_NOTES {
+        code.extend_from_slice(&s0.to_le_bytes());
+        code.extend_from_slice(&s1.to_le_bytes());
+    }
+    code.extend_from_slice(&[0, 0]);
+    sna(&code, &[])
+}
+
+// The observing learner's engines: generated code that mixes channels into the speaker bit.
+
+/// Where [`Asm`] assembles: [`CODE`].
+const ORG: u16 = CODE;
+
+/// A label's address, by name.
+pub type Labels = HashMap<&'static str, u16>;
+
+/// A tiny assembler: bytes, labels, and 16-bit or relative references to labels.
+#[derive(Default)]
+pub struct Asm {
+    code: Vec<u8>,
+    pub labels: Labels,
+    /// (offset, label, relative)
+    fixups: Vec<(usize, &'static str, bool)>,
+}
+
+impl Asm {
+    pub fn pc(&self) -> u16 {
+        ORG + self.code.len() as u16
+    }
+    pub fn label(&mut self, name: &'static str) -> &mut Self {
+        let pc = self.pc();
+        self.labels.insert(name, pc);
+        self
+    }
+    pub fn b(&mut self, bytes: &[u8]) -> &mut Self {
+        self.code.extend_from_slice(bytes);
+        self
+    }
+    /// An opcode followed by a label's address.
+    pub fn w(&mut self, op: &[u8], name: &'static str) -> &mut Self {
+        self.code.extend_from_slice(op);
+        self.fixups.push((self.code.len(), name, false));
+        self.code.extend_from_slice(&[0, 0]);
+        self
+    }
+    /// An opcode followed by a label's displacement from the next instruction.
+    pub fn r(&mut self, op: u8, name: &'static str) -> &mut Self {
+        self.code.push(op);
+        self.fixups.push((self.code.len(), name, true));
+        self.code.push(0);
+        self
+    }
+    pub fn at(&self, name: &str) -> u16 {
+        self.labels[name]
+    }
+    pub fn finish(mut self) -> (Vec<u8>, Labels) {
+        for &(off, name, rel) in &self.fixups {
+            let target = self.labels[name];
+            if rel {
+                let d = i32::from(target) - (i32::from(ORG) + off as i32 + 1);
+                self.code[off] = i8::try_from(d).expect("JR in reach") as u8;
+            } else {
+                self.code[off..off + 2].copy_from_slice(&target.to_le_bytes());
+            }
+        }
+        (self.code, self.labels)
+    }
+}
+
+/// A machine running `code` from 8000h, interrupts off (no snapshot: the registers set directly).
+pub fn bare(code: &[u8]) -> Machine {
+    let mut m = Machine::new();
+    for (i, &b) in code.iter().enumerate() {
+        m.poke(ORG + i as u16, b);
+    }
+    m.set_regs(&zx_regs { af: 0, bc: 0, de: 0, hl: 0, af_: 0, bc_: 0, de_: 0, hl_: 0, ix: 0, iy: 0, sp: 0xFF00, pc: ORG, i: 0x3F, r: 0, iff1: 0, iff2: 0, im: 1 });
+    m
+}
+
+/// Note lengths, frames.
+pub const LENGTHS: [u32; 8] = [4, 6, 3, 5, 7, 4, 5, 6];
+
+/// Two-channel counter engine of pin pulses: each pass, counters C and B (channels 0 and 1)
+/// count down; one running out reloads from its `LD r,n` (the immediates the note's setup
+/// writes) and starts a pulse two passes wide (`LD L,248`, then L shifted left each pass, its
+/// bit 4 to the speaker). Both arms of each counter take 14 T: a pass is 110 T, channel c's
+/// period `n_c x 110` T.
+///
+/// ```text
+/// start: DI ; LD IX,table
+/// next:  LD A,(IX+0) ; OR A ; JR Z,start ; LD (r1+1),A ; LD A,(IX+1) ; LD (r2+1),A
+///        LD E,(IX+2) ; LD D,(IX+3) ; INC IX x4                     DE: passes in the note
+/// loop:  DEC C ; JP NZ,skc        14
+/// r1:    LD C,n1 ; LD L,248       14
+/// b1:    DEC B ; JP NZ,skb        14
+/// r2:    LD B,n2 ; LD L,248       14
+/// b2:    LD A,L ; AND 16 ; SLA L ; OUT (254),A                  30
+///        DEC DE ; LD A,D ; OR E ; JP NZ,loop                     24
+///        JP next
+/// skc:   NOP ; JP b1              14
+/// skb:   NOP ; JP b2              14
+/// table: n1, n2, passes (16 bits) ... 0
+/// ```
+pub fn counter_engine() -> (Vec<u8>, Labels, Vec<(u8, u8)>) {
+    counter_engine_of(false)
+}
+
+/// [`counter_engine`] with channel 1's reload in IYh: the note's setup does `LD IYh,A` where
+/// it wrote `r2+1`, and `r2` is `LD B,IYh ; LD L,248` (15 T: a pass that reloads B takes 111 T).
+pub fn iyh_counter_engine() -> (Vec<u8>, Labels, Vec<(u8, u8)>) {
+    counter_engine_of(true)
+}
+
+fn counter_engine_of(iyh: bool) -> (Vec<u8>, Labels, Vec<(u8, u8)>) {
+    let notes: Vec<(u8, u8)> = vec![(243, 97), (216, 86), (162, 54), (182, 73), (193, 77), (144, 48), (128, 51), (153, 61)];
+    let mut a = Asm::default();
+    a.label("start").b(&[0xF3]).w(&[0xDD, 0x21], "table");
+    a.label("next").b(&[0xDD, 0x7E, 0x00, 0xB7]).r(0x28, "start");
+    a.w(&[0x32], "r1+1").b(&[0xDD, 0x7E, 0x01]);
+    if iyh {
+        a.b(&[0xFD, 0x67]);
+    } else {
+        a.w(&[0x32], "r2+1");
+    }
+    a.b(&[0xDD, 0x5E, 0x02, 0xDD, 0x56, 0x03, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23]);
+    a.label("loop").b(&[0x0D]).w(&[0xC2], "skc");
+    a.label("r1").b(&[0x0E, 0x00, 0x2E, 0xF8]);
+    a.label("b1").b(&[0x05]).w(&[0xC2], "skb");
+    a.label("r2").b(if iyh { &[0xFD, 0x44, 0x2E, 0xF8] } else { &[0x06, 0x00, 0x2E, 0xF8] });
+    a.label("b2").b(&[0x7D, 0xE6, 0x10, 0xCB, 0x25]);
+    a.label("out").b(&[0xD3, 0xFE, 0x1B, 0x7A, 0xB3]).w(&[0xC2], "loop").w(&[0xC3], "next");
+    a.label("skc").b(&[0x00]).w(&[0xC3], "b1");
+    a.label("skb").b(&[0x00]).w(&[0xC3], "b2");
+    a.label("table");
+    let passes = |frames: u32| (frames * ZX_FRAME_TSTATES / 110) as u16;
+    for (&(n1, n2), &len) in notes.iter().zip(&LENGTHS) {
+        a.b(&[n1, n2]).b(&passes(len).to_le_bytes());
+    }
+    a.b(&[0]);
+    let (r1, r2) = (a.at("r1"), a.at("r2"));
+    a.labels.insert("r1+1", r1 + 1);
+    a.labels.insert("r2+1", r2 + 1);
+    let (code, labels) = a.finish();
+    (code, labels, notes)
+}
+
+/// Two-channel phase-accumulator engine: each pass adds DE to HL (channel 0) and DE' to HL'
+/// (channel 1); a carry from either sets the speaker high at the first `OUT`, and the second,
+/// 23 T later, sets it low. A pass is 108 T (the duration count in memory adds 40 T every 256
+/// passes): channel c's period `108 x 65536 / step_c` T.
+///
+/// ```text
+/// start: DI ; LD IX,table
+/// next:  LD E,(IX+0) ; LD D,(IX+1) ; LD A,D ; OR E ; JR Z,start
+///        EXX ; LD E,(IX+2) ; LD D,(IX+3) ; EXX ; LD A,(IX+4) ; LD (dur),A ; INC IX x5
+/// loop:  ADD HL,DE ; SBC A,A ; AND 16 ; LD B,A
+///        EXX ; ADD HL,DE ; SBC A,A ; AND 16 ; EXX ; OR B
+///        OUT (254),A ; XOR A ; NOP ; NOP ; OUT (254),A
+///        DEC C ; JP NZ,loop
+///        LD A,(dur) ; DEC A ; LD (dur),A ; JP NZ,loop ; JP next
+/// dur:   0
+/// table: step0 (16 bits), step1 (16 bits), 256 passes ... 0, 0
+/// ```
+pub fn accumulator_engine() -> (Vec<u8>, Labels, Vec<(u16, u16)>) {
+    accumulator_engine_of(false)
+}
+
+/// [`accumulator_engine`] with the register sets swapped between its `OUT`s: `out1` is
+/// `OUT (254),A ; XOR A ; EXX ; NOP` and `out2` `OUT (254),A ; EXX`, so DE at the second `OUT`
+/// holds channel 1's step and DE' channel 0's (a pass of 112 T).
+pub fn swapped_accumulator_engine() -> (Vec<u8>, Labels, Vec<(u16, u16)>) {
+    accumulator_engine_of(true)
+}
+
+fn accumulator_engine_of(swap: bool) -> (Vec<u8>, Labels, Vec<(u16, u16)>) {
+    let notes: Vec<(u16, u16)> = vec![(265, 662), (297, 891), (334, 835), (354, 1062), (396, 990), (445, 1112), (499, 1497), (315, 788)];
+    let mut a = Asm::default();
+    a.label("start").b(&[0xF3]).w(&[0xDD, 0x21], "table");
+    a.label("next").b(&[0xDD, 0x5E, 0x00, 0xDD, 0x56, 0x01, 0x7A, 0xB3]).r(0x28, "start");
+    a.b(&[0xD9, 0xDD, 0x5E, 0x02, 0xDD, 0x56, 0x03, 0xD9, 0xDD, 0x7E, 0x04]).w(&[0x32], "dur");
+    a.b(&[0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23]);
+    a.label("loop").b(&[0x19, 0x9F, 0xE6, 0x10, 0x47, 0xD9, 0x19, 0x9F, 0xE6, 0x10, 0xD9, 0xB0]);
+    if swap {
+        a.label("out1").b(&[0xD3, 0xFE, 0xAF, 0xD9, 0x00]);
+        a.label("out2").b(&[0xD3, 0xFE, 0xD9, 0x0D]).w(&[0xC2], "loop");
+    } else {
+        a.label("out1").b(&[0xD3, 0xFE, 0xAF, 0x00, 0x00]);
+        a.label("out2").b(&[0xD3, 0xFE, 0x0D]).w(&[0xC2], "loop");
+    }
+    a.w(&[0x3A], "dur").b(&[0x3D]).w(&[0x32], "dur").w(&[0xC2], "loop").w(&[0xC3], "next");
+    a.label("dur").b(&[0]);
+    a.label("table");
+    for (&(s0, s1), &len) in notes.iter().zip(&LENGTHS) {
+        let units = (len * ZX_FRAME_TSTATES / (108 * 256)) as u8;
+        a.b(&s0.to_le_bytes()).b(&s1.to_le_bytes()).b(&[units]);
+    }
+    a.b(&[0, 0]);
+    let (code, labels) = a.finish();
+    (code, labels, notes)
 }
 
 /// Every fixture.

@@ -332,6 +332,7 @@ fn stress_list() -> Vec<u8> {
             pass: 0,
             pos: vec![0],
             flips: false,
+            observed: false,
             drum: 0,
             stale: None,
             level: vec![200],

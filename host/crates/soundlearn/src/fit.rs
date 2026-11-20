@@ -198,6 +198,7 @@ pub fn to_entry(model: &EngineModel, peek: impl Fn(u16) -> u8) -> LearnedEntry {
         pass: model.pass_t,
         pos: model.pos.clone(),
         flips: model.flips,
+        observed: false,
         drum: 0,
         stale: model.stale,
         level: vec![LEVEL; model.channels.len()],
@@ -228,22 +229,11 @@ pub fn digest(peek: &dyn Fn(u16) -> u8, anchor: u16, len: u16, wild: &[u16], rel
     h
 }
 
-/// The op that pushes `x`.
-fn input_op(x: &Input) -> Op {
-    match *x {
-        Input::Rel(o) => Op::PeekRel(o),
-        Input::Rel16(o) => Op::Peek16Rel(o),
-        Input::Abs(a) => Op::Peek(a),
-        Input::Abs16(a) => Op::Peek16(a),
-        Input::Indexed(r, d) => Op::PeekReg(r, d),
-        Input::Reg(r) => Op::Reg(r),
-    }
-}
-
 /// Pushes `x` as a count: 0 is 256 (65,536 for a 16-bit input).
 fn push_count(ops: &mut Vec<Op>, x: &Input) {
     let mask = if x.wide() { 0xFFFF } else { 0xFF };
-    ops.extend([input_op(x), Op::K(1), Op::Sub, Op::K(mask), Op::And, Op::K(1), Op::Add]);
+    ops.extend(x.ops());
+    ops.extend([Op::K(1), Op::Sub, Op::K(mask), Op::And, Op::K(1), Op::Add]);
 }
 
 /// Pushes `k` (two's complement for a negative one: the arithmetic wraps).
@@ -282,7 +272,8 @@ fn push_sum(ops: &mut Vec<Op>, terms: &[Term], scale: i64) {
                     shift += 1;
                 }
                 push_k(ops, num);
-                ops.extend([input_op(x), Op::Div]);
+                ops.extend(x.ops());
+                ops.push(Op::Div);
                 if shift > 0 {
                     ops.push(Op::Shl(shift));
                 }
@@ -308,14 +299,16 @@ fn push_sum(ops: &mut Vec<Op>, terms: &[Term], scale: i64) {
 pub(crate) fn period_prog(ch: &ChannelModel) -> Vec<Op> {
     let mut ops = Vec::new();
     if let Some(x) = &ch.silent_if_zero {
-        ops.extend([input_op(x), Op::ZeroSilent]);
+        ops.extend(x.ops());
+        ops.push(Op::ZeroSilent);
     }
     if let Some((x, m, set)) = &ch.silent_if_bit {
         // silent when set: m - (x & m) is 0 then; silent when clear: x & m is 0 then
         if *set {
             ops.push(Op::K(u32::from(*m)));
         }
-        ops.extend([input_op(x), Op::K(u32::from(*m)), Op::And]);
+        ops.extend(x.ops());
+        ops.extend([Op::K(u32::from(*m)), Op::And]);
         if *set {
             ops.push(Op::Sub);
         }
@@ -392,9 +385,10 @@ pub(crate) fn timing_prog(d: &DurationModel) -> Option<Vec<Op>> {
     } else {
         match start {
             Input::Indexed(r, dd) if wide => ops.extend([Op::PeekReg(r, dd), Op::PeekReg(r, dd.checked_add(1)?), Op::Shl(8), Op::Add]),
-            x => ops.push(input_op(&x)),
+            x => ops.extend(x.ops()),
         }
-        ops.extend([input_op(&d.counter), Op::Sub, Op::K(mask), Op::And]);
+        ops.extend(d.counter.ops());
+        ops.extend([Op::Sub, Op::K(mask), Op::And]);
     }
     push_sum(&mut ops, &d.per_unit_t, 1);
     ops.push(Op::Mul);

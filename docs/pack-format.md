@@ -64,7 +64,7 @@ u8 count (<= 8), u8 0, u16 0, then `count` entries, each a learned entry or a ki
   u16 size (a multiple of 4: the whole entry, from its first byte to the next entry), u8 kind (0: music), u8 channels (1-3)
   u64 digest
   u16 len, u8 n_wild, u8 n_reloc
-  u8 n_sites, u8 flips, u8 drum, u8 timing (1: a timing program follows)
+  u8 n_sites, u8 flags (0; 1: flips; 2: observed), u8 drum, u8 timing (1: a timing program follows)
   u16 pass, u16 stale_from, u16 stale_len   (stale: an anchor-relative pc range; stale_len 0: none)
   u8 level[3], u8 instrument[3]
   u8 prog_len[3], u8 timing_len
@@ -72,7 +72,9 @@ u8 count (<= 8), u8 0, u16 0, then `count` entries, each a learned entry or a ki
   channel programs (prog_len[c] bytes each, for c < channels), the timing program, zero padding up to `size`
 ```
 
-The fixed part of an entry is 36 bytes. `digest`, `len`, `wild`, `reloc`, `sites`, `pass`, `pos`, `flips` and `drum` are the matcher's signature fields (`core/sound/sound.h`, `snd_engine`); `role` is 0 tonal, 1 drum, 2 stop; `chan` is the channel of a tonal site, or `0xFF` (any) on a `flips` entry. `level[c]` is channel `c`'s loudness; entries are named `learned`.
+The fixed part of an entry is 36 bytes. `digest`, `len`, `wild`, `reloc`, `sites`, `pass`, `pos`, `flags` and `drum` are the matcher's signature fields (`core/sound/sound.h`, `snd_engine`); `role` is 0 tonal, 1 drum, 2 stop; `chan` is the channel of a tonal site, or `0xFF` (any) on a `flips` entry, and always 0 on an `observed` entry. `level[c]` is channel `c`'s loudness; entries are named `learned`.
+
+`flags` is a bit set, at most one bit of it set: bit 0 `flips` (each edge flips one channel's level, the speaker sounds their XOR: `snd_engine.flips`), bit 1 `observed` (`snd_engine.observed`). An observed entry describes a routine that mixes its channels into the one speaker bit, so its edges cannot be split into channels: the personal-pack builder verifies it on the host (by ear and by a replay through method B), and method B takes every frame whose edges all come from the entry's sites with the voices its programs give, without checking them against the edges. Every `OUT` site of such a routine is listed as a tonal site of channel 0.
 
 `instrument[c]` is channel `c`'s stored role in the FM synth: 0 none (the live rule decides by pitch), 1 bass, 2 lead, 3 pad. A value above 3 counts as 0, and so does the byte of a channel past `channels`. While the entry claims a frame, method B gives each of its channels that role; a channel with none, and any frame no entry with stored roles claims, gets the live rule's role (`core/sound/roles.c`).
 
@@ -93,12 +95,12 @@ The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole lis
 - the entry's `size` and `kind` lie in the list; `kind` is 0 or 1; `size` is at least 36 (a kind-1 record: 16), a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
 - a kind-1 record's `channels` is 1-3; it counts towards `count`'s 8, has no sites and adds no work; nothing else in it is checked (its roles are read as above);
 - for a learned entry (kind 0):
-  - `channels` is 1-3; `flips` and `timing` are 0 or 1;
+  - `channels` is 1-3; `flags` is 0, 1 or 2 (no other bit, not `flips` and `observed` together); `timing` is 0 or 1;
   - `len` is 1 to 512 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
   - `prog_len[c]` is 1-64 for each channel and 0 for the unused ones; `timing_len` is 1-64 with a timing program, else 0;
   - the arrays and programs together fit in `size` after the 36 fixed bytes;
   - `wild` offsets strictly ascend and are below `len`; `reloc` offsets ascend at least 2 apart and are below `len`;
-  - every site offset is below `len`, `role` is at most 2, and a tonal site's `chan` is below `channels` (or `0xFF` on a `flips` entry);
+  - every site offset is below `len`, `role` is at most 2, and a tonal site's `chan` is below `channels` (or `0xFF` on a `flips` entry; exactly 0 on an `observed` entry);
   - every program is valid (below);
 - over the whole list, the sum of the learned entries' `n_sites x len` is at most 4096 (`SND_LEARNED_WORK_MAX`): method B hashes each site's signature for an `OUT` no entry is known at yet, so this bounds that work per frame.
 

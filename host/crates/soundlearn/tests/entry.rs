@@ -168,6 +168,7 @@ fn base() -> LearnedEntry {
         pass: 0,
         pos: vec![0],
         flips: false,
+        observed: false,
         drum: 0,
         stale: None,
         level: vec![200],
@@ -282,7 +283,9 @@ fn decode_rejects_raw_bytes() {
         ("a program that pushes 9 values", with_prog(push9)),
         ("an unknown opcode 0xFF", patched(PROG, &[0xFF])),
         ("kind 2 (0: a learned entry, 1: roles for a built-in entry)", patched(KIND, &[2])),
-        ("flips 2", patched(FLIPS, &[2])),
+        ("flags 3 (flips and observed)", patched(FLIPS, &[3])),
+        ("flags 4 (an unknown bit)", patched(FLIPS, &[4])),
+        ("flags 80h (an unknown bit)", patched(FLIPS, &[0x80])),
         ("a tonal site channel past the channels", patched(SITE_CHAN, &[1])),
         ("reloc offsets descending", two_relocs(vec![0x0C, 0x08])),
         ("reloc offsets equal", two_relocs(vec![0x08, 0x08])),
@@ -439,4 +442,133 @@ fn encodes_kind1_record() {
     let (plain, _) = roles_of(&decisions(fixtures::machine(&sna), SndEngines::new(), 300), engine);
     assert_eq!(plain.len(), claimed.len());
     assert!(plain.iter().all(|r| *r == [SND_ROLE_AUTO; 3]));
+}
+
+/// The flags byte: bit 0 flips, bit 1 observed. An observed entry's tonal sites are channel 0.
+#[test]
+fn decode_observed_flag() {
+    const FLAGS: usize = ENTRY + 17;
+    let observed = LearnedEntry { observed: true, ..base() };
+    let l = encode_list(std::slice::from_ref(&observed));
+    assert_eq!(l[FLAGS], 2);
+    assert_eq!(encode_list(&[LearnedEntry { flips: true, ..base() }])[FLAGS], 1);
+    assert_eq!(encode_list(&[base()])[FLAGS], 0);
+    assert_eq!(patched(FLAGS, &[2]), l, "the encoder writes bit 1");
+    let x = SndEngines::with_learned(&l).expect("decodes").entries().pop().unwrap();
+    assert!(x.observed && !x.flips, "flags 2");
+    let x = SndEngines::with_learned(&encode_list(&[base()])).unwrap().entries().pop().unwrap();
+    assert!(!x.observed && !x.flips, "flags 0");
+    let x = SndEngines::with_learned(&encode_list(&[LearnedEntry { flips: true, ..base() }])).unwrap().entries().pop().unwrap();
+    assert!(x.flips && !x.observed, "flags 1");
+    assert!(SndEngines::new_test().entries().iter().all(|e| !e.observed), "no built-in entry is observed");
+
+    // two channels, every site channel 0; a tonal site of channel 1, or of any (0xFF), is refused
+    let two = |sites: Vec<(u16, u8, u8)>| LearnedEntry {
+        sites,
+        level: vec![200, 200],
+        progs: vec![vec![Op::K(300)], vec![Op::K(400)]],
+        pos: vec![0, 0],
+        observed: true,
+        ..base()
+    };
+    let ok = |e: LearnedEntry| SndEngines::with_learned(&encode_list(&[e])).is_ok();
+    assert!(ok(two(vec![(0x10, SND_SITE_TONAL, 0), (0x14, SND_SITE_TONAL, 0), (0x02, zx_sys::SND_SITE_DRUM, 0)])));
+    assert!(!ok(two(vec![(0x10, SND_SITE_TONAL, 0), (0x14, SND_SITE_TONAL, 1)])), "an observed tonal site of channel 1");
+    assert!(!ok(two(vec![(0x10, SND_SITE_TONAL, zx_sys::SND_CHAN_ANY)])), "an observed tonal site of any channel");
+    assert!(!ok(LearnedEntry { flips: true, ..observed }), "flips and observed");
+}
+
+/// A routine that mixes two channels into the one speaker bit ([`fixtures::or_mixed_sna`]): its
+/// edges are neither channel's. As an observed entry, method B claims its frames with the voices
+/// the programs read (each frame ending with the steps then in memory); the same entry unflagged
+/// is refused by the check.
+#[test]
+fn observed_entry_claims_a_mixing_routine() {
+    const ANCHOR: u16 = 0x8000;
+    const FRAMES: usize = 400;
+    // channel c's period: 65536 x 214 x 256 / s_c (T x 256)
+    const K: u32 = 65536 * fixtures::OR_MIXED_PASS * 256;
+    let sna = fixtures::or_mixed_sna();
+    let mut entry = LearnedEntry {
+        digest: 0,
+        len: 0x49,
+        wild: vec![],
+        reloc: vec![],
+        sites: vec![(fixtures::OR_MIXED_OUT, SND_SITE_TONAL, 0)],
+        pass: 0,
+        pos: vec![0, 0],
+        flips: false,
+        observed: true,
+        drum: 0,
+        stale: None,
+        level: vec![200, 150],
+        instrument: [0; 3],
+        progs: fixtures::OR_MIXED_STEPS.iter().map(|&a| vec![Op::K(K), Op::Peek16(a), Op::Div]).collect(),
+        timing: None,
+    };
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    let index = usize::from(mine) - 1;
+    let probe = SndEngines::with_learned(&encode_list(std::slice::from_ref(&entry))).unwrap();
+    entry.digest = probe.digest(&fixtures::machine(&sna), index, ANCHOR);
+
+    // B's decisions, and per frame the voices the programs give at its end
+    let run = |entry: &LearnedEntry| {
+        let mut m = fixtures::machine(&sna);
+        let mut b = SndEngines::with_learned(&encode_list(std::slice::from_ref(entry))).expect("decodes");
+        let (mut decided, mut want, mut sounding) = (Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..FRAMES {
+            m.run_frame();
+            sounding.push(m.edges().first().filter(|e| e.pc == ANCHOR + fixtures::OR_MIXED_OUT).map(|e| e.tstate));
+            want.push(fixtures::OR_MIXED_STEPS.map(|a| K / u32::from(u16::from_le_bytes([m.peek(a), m.peek(a + 1)]))));
+            decided.push(b.frame(&m, m.edges(), m.edges_start_level()));
+        }
+        (decided, want, sounding)
+    };
+    let delay = zx_sys::SND_DELAY_FRAMES as usize;
+    let periods: Vec<[u32; 2]> = fixtures::OR_MIXED_NOTES.iter().map(|&(s0, s1)| [K / u32::from(s0), K / u32::from(s1)]).collect();
+
+    let (decided, want, sounding) = run(&entry);
+    let (mut total, mut claimed) = (0, 0);
+    let mut notes = std::collections::BTreeSet::new();
+    for f in 0..FRAMES - delay {
+        let d = &decided[f + delay];
+        let ours = d.confident != 0 && d.engine == mine;
+        if sounding[f].is_some() {
+            total += 1;
+            claimed += usize::from(ours);
+        }
+        if !ours {
+            continue;
+        }
+        // the voices after the frame's events are those read at its end, each change at its
+        // first edge
+        let mut v = [d.tone[0].period_q8, d.tone[1].period_q8];
+        for ev in d.events() {
+            assert_eq!(Some(ev.t), sounding[f], "frame {f}: {:?}", d.events());
+            if usize::from(ev.voice) < 2 {
+                v[usize::from(ev.voice)] = ev.period_q8;
+            }
+        }
+        assert_eq!(v, want[f], "frame {f}: {:?}", d.events());
+        assert!(periods.contains(&v), "frame {f}: {v:?}");
+        assert_eq!(d.tone[2].period_q8, 0);
+        notes.insert(v);
+    }
+    eprintln!("observed: {claimed} of {total} sounding frames claimed, notes {notes:?}");
+    assert!(total > 350 && claimed * 100 >= total * 99, "{claimed} of {total}");
+    assert_eq!(notes.len(), 3, "every note played");
+
+    // the speaker's edges do not fit the periods read: unflagged, the check refuses the frames
+    // (with both channels, and with channel 0's alone)
+    for unflagged in [
+        LearnedEntry { observed: false, ..entry.clone() },
+        LearnedEntry { observed: false, progs: entry.progs[..1].to_vec(), level: vec![200], pos: vec![0], ..entry.clone() },
+    ] {
+        let (decided, _, sounding) = run(&unflagged);
+        let total = sounding[..FRAMES - delay].iter().filter(|s| s.is_some()).count();
+        let ours: Vec<usize> = (0..FRAMES - delay).filter(|&f| decided[f + delay].confident != 0 && decided[f + delay].engine == mine).collect();
+        let claimed = ours.len();
+        eprintln!("unflagged, {} channels: {claimed} of {total} claimed: {ours:?}", unflagged.progs.len());
+        assert!(claimed * 50 <= total, "{claimed} of {total}");
+    }
 }

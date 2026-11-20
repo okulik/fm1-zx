@@ -28,6 +28,7 @@ fn burst_entry() -> LearnedEntry {
         pass: 0,
         pos: vec![0],
         flips: false,
+        observed: false,
         drum: 0,
         stale: None,
         level: vec![200],

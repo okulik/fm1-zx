@@ -59,7 +59,7 @@ mod cfg;
 mod shape;
 mod sym;
 
-use crate::prog::reg;
+use crate::prog::{reg, Op};
 use crate::z80::{decode, Flow, PortRef};
 use std::collections::BTreeSet;
 use zx_sys::zx_regs;
@@ -77,7 +77,9 @@ pub enum Family {
 
 /// A value the routine reads, as the bytecode's inputs (`crate::prog::Op`): the byte or word at
 /// an offset from the anchor (`PeekRel`, `Peek16Rel`) or at an address (`Peek`, `Peek16`), the
-/// byte at a register (8-12) plus a displacement (`PeekReg`), a register (`Reg`). Registers are
+/// byte at a register (8-12) plus a displacement (`PeekReg`), a register (`Reg`), the high or
+/// low byte of IX or IY (`RegHalf`: the bytecode has no such register, so it reads the pair and
+/// shifts or masks; the code reader never gives one, the observing learner can). Registers are
 /// their values at the site's last edge (the `OUT`); memory is read at the frame's end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Input {
@@ -87,6 +89,8 @@ pub enum Input {
     Abs16(u16),
     Indexed(u8, i8),
     Reg(u8),
+    /// Register 11 (IX) or 12 (IY); true: its high byte.
+    RegHalf(u8, bool),
 }
 
 impl Input {
@@ -111,7 +115,26 @@ impl Input {
             Input::Indexed(r, d) if (8..=12).contains(&r) => peek((reg(regs, r)? as u16).wrapping_add(d as u16)).into(),
             Input::Indexed(..) => return None,
             Input::Reg(r) => reg(regs, r)?,
+            Input::RegHalf(r @ (11 | 12), hi) => {
+                let w = reg(regs, r)?;
+                if hi { w >> 8 } else { w & 0xFF }
+            }
+            Input::RegHalf(..) => return None,
         })
+    }
+
+    /// The ops that push the value.
+    pub fn ops(&self) -> Vec<Op> {
+        match *self {
+            Input::Rel(o) => vec![Op::PeekRel(o)],
+            Input::Rel16(o) => vec![Op::Peek16Rel(o)],
+            Input::Abs(a) => vec![Op::Peek(a)],
+            Input::Abs16(a) => vec![Op::Peek16(a)],
+            Input::Indexed(r, d) => vec![Op::PeekReg(r, d)],
+            Input::Reg(r) => vec![Op::Reg(r)],
+            Input::RegHalf(r, true) => vec![Op::Reg(r), Op::Shr(8)],
+            Input::RegHalf(r, false) => vec![Op::Reg(r), Op::K(0xFF), Op::And],
+        }
     }
 
     /// As a count: 0 runs 256 times (65,536 for a 16-bit input).

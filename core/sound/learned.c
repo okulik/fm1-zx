@@ -26,7 +26,8 @@
  * signature, SND_LEARNED_WORK_MAX sites x signature bytes over the list: engines.c's find()
  * hashes each site's signature for an OUT no entry is known at), and dry-runs every program
  * (the interpreter with no machine: every op and operand checked, every read 0, nothing silent)
- * before an entry is used.
+ * before an entry is used. An entry's flags byte is 0, 1 (flips: snd_engine.flips) or 2 (observed:
+ * snd_engine.observed, every tonal site channel 0); any other value refuses the list.
  *
  * Besides learned entries (kind 0), a list may hold kind-1 records: stored roles for a built-in
  * entry, by its digest, which snd_learned_roles copies into the firmware's assembled table.
@@ -41,6 +42,8 @@
 #define ENTRY 36u     /* an entry's fixed part */
 #define ROLES 16u     /* a kind-1 record (roles for a built-in entry), padded */
 #define REGS 18u      /* register numbers 0-17 */
+#define FLIPS 1u      /* an entry's flags byte: snd_engine.flips */
+#define OBSERVED 2u   /* snd_engine.observed */
 
 static uint32_t rd16(const uint8_t *p)
 {
@@ -214,11 +217,12 @@ static int ascending(const uint8_t *p, uint32_t n, uint32_t gap, uint32_t below)
 static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ext *x)
 {
 	const uint32_t channels = e[3], len = rd16(e + 12), n_wild = e[14], n_reloc = e[15], n_sites = e[16];
-	const uint32_t timing = e[19], timing_len = e[35];
+	const uint32_t flags = e[17], timing = e[19], timing_len = e[35];
 	uint32_t c, k, at = ENTRY, progs = 0;
 	uint64_t digest = 0;
 
-	if (e[2] != 0 || channels < 1 || channels > SND_TONAL || e[17] > 1u || timing > 1u) return 0;
+	/* flags: 0, FLIPS or OBSERVED (not both, no other bit) */
+	if (e[2] != 0 || channels < 1 || channels > SND_TONAL || flags > OBSERVED || timing > 1u) return 0;
 	if (len < 1 || len > SND_LEARNED_LEN_MAX || n_sites > SND_LEARNED_SITES_MAX) return 0;
 	if (timing ? !timing_len || timing_len > SND_PROG_MAX : timing_len != 0) return 0;
 	for (c = 0; c < SND_TONAL; c++) {
@@ -238,7 +242,7 @@ static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ex
 		const uint8_t *s = e + at + 4u * k;
 		const uint32_t role = s[2], chan = s[3];
 		if (rd16(s) >= len || role > SND_SITE_STOP) return 0;
-		if (role == SND_SITE_TONAL && chan >= channels && !(chan == SND_CHAN_ANY && e[17])) return 0;
+		if (role == SND_SITE_TONAL && (flags == OBSERVED ? chan != 0 : chan >= channels && !(chan == SND_CHAN_ANY && flags))) return 0;
 	}
 	en->sites = (const snd_engine_site *)(const void *)(e + at);
 	at += 4u * n_sites;
@@ -269,10 +273,11 @@ static int entry(const uint8_t *e, uint32_t size, snd_engine *en, snd_learned_ex
 	en->pass = (uint16_t)rd16(e + 20);
 	en->read = snd_learned_read;
 	en->drum = e[18];
-	en->flips = e[17];
+	en->flips = (uint8_t)(flags & FLIPS);
 	en->min_len = 0;
 	en->data = x;
 	en->strict = 1;
+	en->observed = flags == OBSERVED;
 	return 1;
 }
 

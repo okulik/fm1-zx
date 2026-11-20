@@ -222,9 +222,9 @@ fn sounded_hz(f: &SndFrame) -> Vec<f64> {
     last.into_iter().filter(|&p| p != 0).map(hz_of_period_q8).collect()
 }
 
-/// Runs one game for `opts.seconds`; with `opts.wav` writes its three WAV files under `opts.out`
+/// Runs one game for `opts.seconds`; with `opts.wav` writes its WAV files under `opts.out`
 /// (`<wav_stem>_beeper.wav`, `<wav_stem>_fm.wav` for FM: sound, `<wav_stem>_fm_b.wav` for FM:
-/// engines).
+/// engines, and `<wav_stem>_fm_l.wav` for FM: engines with the learned entries when it has some).
 pub fn run_game(path: &Path, opts: &Options) -> Row {
     let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut row = Row { file: file.clone(), ..Row::default() };
@@ -271,7 +271,7 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         eng_l = None;
     }
     let builtins = eng.entries().len() as u8;
-    let (mut fm, mut fm_b) = (Vec::new(), Vec::new());
+    let (mut fm, mut fm_b, mut fm_l) = (Vec::new(), Vec::new(), Vec::new());
     let (mut on_a, mut on_b, mut on_l) = (Vec::with_capacity(frames), Vec::with_capacity(frames), Vec::with_capacity(frames));
     let (mut b_dec, mut l_dec) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
     let mut level = 0;
@@ -288,7 +288,10 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         let b = mix_b.frame(SND_MODE_FM_B, Some(&m), &f.edges, f.start_level, &f.beeper);
         b_dec.push(eng.frame(&m, &f.edges, f.start_level));
         if let Some(e) = eng_l.as_mut() {
-            mix_l.frame(SND_MODE_FM_B, Some(&m), &f.edges, f.start_level, &f.beeper);
+            let l = mix_l.frame(SND_MODE_FM_B, Some(&m), &f.edges, f.start_level, &f.beeper);
+            if opts.wav {
+                fm_l.extend(l);
+            }
             l_dec.push(e.frame(&m, &f.edges, f.start_level));
         }
         if opts.wav {
@@ -363,7 +366,9 @@ pub fn run_game(path: &Path, opts: &Options) -> Row {
         let stem = wav_stem(path);
         let bp: Vec<i16> = run.iter().flat_map(|f| f.beeper.iter().copied()).collect();
         let rate = sample_rate().round() as u32;
-        for (suffix, s) in [("beeper", &bp), ("fm", &fm), ("fm_b", &fm_b)] {
+        let learned = [("fm_l", &fm_l)];
+        let n = if eng_l.is_some() { 1 } else { 0 };
+        for (suffix, s) in [("beeper", &bp), ("fm", &fm), ("fm_b", &fm_b)].iter().chain(&learned[..n]) {
             if let Err(e) = wav::write(&opts.out.join(format!("{stem}_{suffix}.wav")), s, rate) {
                 row.note = format!("wav not written: {e}");
             }

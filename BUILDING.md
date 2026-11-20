@@ -208,23 +208,39 @@ out, with why:
 **The music.** The command also learns each game's music, so that the Sound choice FM: engines
 (docs/controls.md) plays it as FM. It runs each game on the host for 3 minutes of emulated time,
 as the FM-1 starts it: 40 s untouched, then ENTER, SPACE, 0, 1 and Kempston fire in turn, then
-random play from a fixed seed (the same game gives the same run). A key script beside the game
+random play from a fixed seed (the same game gives the same run). Music demos often start on one
+key press and stop or skip on the next, so the learner also tries nothing pressed and each start
+key alone (held 5 frames at frame 500, then nothing), counts the frames of each run with at least
+3 speaker flips, and uses the generic run unless another hears 1.5 times as many and 500 frames
+more (then the one with the most); the details line `run:` names it. A key script beside the game
 file, `<name>.keys` for `<name>.tzx` (the music corpus' format below, its times from the start),
 replaces that run. The learner reads the code of the routines it heard and of the speaker `OUT`s
 it finds in memory (with the calls a sound loop makes into code near it, and a loop that stops on
 a key press read as running with no key down), and keeps a routine only when it is sure of it (the
-same notes heard as read, and method B playing them back); anything else stays on the beeper. After the table it prints one
-line per game:
+same notes heard as read, and method B playing them back). A heard routine whose code it cannot
+read or does not trust, such as one that mixes several channels into the one speaker bit, it
+observes instead, if the routine sounded in at least 100 frames: it looks for the values the
+routine's loop reads (bytes, words, registers) that hold each channel's pitch, by testing the
+pitches they predict against the spectrum of the speaker's sound, and keeps the routine when
+method B, replaying the run with it, plays at least half of the routine's frames as music and no
+known routine claims any of them. On the FM-1 an observed routine's channels play from the values
+it reads, without the check against the beeper's edges (its edges hold all its channels at
+once). Anything else stays on the beeper. After the table it prints one line per game:
 
     tune: music learned (1 routine, heard, 1 channel)
+    mixer: music learned (1 routine, heard, observed, 2 channels)
     border: no music learned (OUTs that do not always flip the speaker at 801Ah)
 
 `DIR/sound-report.txt` holds the same lines and, per routine, the speaker `OUT` it was read from,
 the routine, each channel's half period as a formula, the fit and replay figures, why a
-routine was left out, and each channel's instrument. The games are learned in parallel, a few
-seconds each; the results are cached in `DIR/sound-cache/` (by the converted game's CRC, its key
-script, its instrument overrides and the learner's version), which runs keep, so a re-run learns
-only new or changed games.
+routine was left out, and each channel's instrument. A routine observed shows why its code was
+not used, the routine observed, each channel's value (`word (9004h)`, `DE`, `IYh`), how the value
+gives the pitch (`counter x1`: that many passes of the loop; `16-bit accumulator`: a step added
+each pass) and its score (the share of the music in which the predicted pitch was heard), its
+replay, and `learned by observation: 2 channels` or `observation:` and why not. The games are
+learned in parallel, a few seconds each; the results are cached in `DIR/sound-cache/` (by the
+converted game's CRC, its key script, its instrument overrides and the learner's version), which
+runs keep, so a re-run learns only new or changed games.
 
 **Instruments.** In FM, each voice plays a bass, lead or pad instrument by its role in the tune.
 The FM-1 decides the roles live, by pitch; for the routines a game's music uses (learned ones,
@@ -300,8 +316,9 @@ loaded first through the tape signal (as `fmzx-pack` does for the personal pack)
 key script's times, start at the loaded snapshot, 2 s after the end of the tape. A game whose load
 fails the success test, and a 128K file, report "not loadable" with the reason, and are skipped. The output goes to `build/music-corpus` (the repository's `build/`) unless
 `-o` says otherwise: `report.txt`, `report.csv`, and with `--wav` `<name>_<ext>_beeper.wav`,
-`<name>_<ext>_fm.wav` (the mixer's output in FM: sound) and `<name>_<ext>_fm_b.wav` (in FM: engines), both 3 frames
-late to listen to the difference (`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx`
+`<name>_<ext>_fm.wav` (the mixer's output in FM: sound), `<name>_<ext>_fm_b.wav` (in FM: engines, the
+built-in entries) and, for a game with learned music, `<name>_<ext>_fm_l.wav` (in FM: engines with its
+learned entries, as the personal pack plays it), all 3 frames late to listen to the difference (`foo.tap` writes `foo_tap_beeper.wav`, so a `foo.tzx`
 beside it keeps its own).
 
 Key scripts: a file `<name>.keys` beside the game holds steps `ACTION@ms[+hold]` separated by commas

@@ -53,11 +53,11 @@ static void read_flips(const zx_machine *m, const snd_engine *en, uint16_t a, ui
 static const uint16_t flips_reloc[] = { 0x04 };
 static const snd_engine_site flips_sites[] = { { 0x32, SND_SITE_TONAL, SND_CHAN_ANY } };
 
-#define FLIPS_ENTRY(rd) { "Test flips", 0x351e1ec1682afe7eull, 0x41, 0, 1, 1, 2, 0, 0, flips_reloc, flips_sites, beep_pos, rd, 0, 1, 0, 0, 0, { 0 } }
+#define FLIPS_ENTRY(rd) { "Test flips", 0x351e1ec1682afe7eull, 0x41, 0, 1, 1, 2, 0, 0, flips_reloc, flips_sites, beep_pos, rd, 0, 1, 0, 0, 0, { 0 }, 0 }
 
 const snd_engine snd_engine_test_table[] = {
 	SND_ENGINES_BUILTIN,
-	{ "Test burst", 0xd4b551f46da9de4cull, 0x2C, 1, 2, 1, 1, 0, burst_wild, burst_reloc, burst_sites, burst_pos, read_burst, 0, 0, 0, 0, 0, { 0 } },
+	{ "Test burst", 0xd4b551f46da9de4cull, 0x2C, 1, 2, 1, 1, 0, burst_wild, burst_reloc, burst_sites, burst_pos, read_burst, 0, 0, 0, 0, 0, { 0 }, 0 },
 	FLIPS_ENTRY(read_flips),
 };
 const uint32_t snd_engine_test_count = sizeof snd_engine_test_table / sizeof snd_engine_test_table[0];

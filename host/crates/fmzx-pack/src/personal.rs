@@ -73,7 +73,7 @@ use crate::layout::pack_room;
 use crate::manifest::{game_path, parse_manifest, parse_personal_manifest, Game, NAME_MAX};
 use crate::pack::{attach_sound, build_pack};
 use crate::tapeload::{self, Kind, Loaded};
-use soundlearn::listen::{schedule, Inputs};
+use soundlearn::listen::{choose_run, Inputs, RunKind};
 use soundlearn::{encode_list_with, learn_with, LearnOptions, LEARNER_VERSION};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -286,7 +286,9 @@ const REPORT_HEAD: &str = "\
 # per routine: the speaker OUT it was read from, the routine, each channel's half period in
 # T-states (an input in a product counts a loop: 0 counts 256, 65,536 for a word), the gates'
 # figures, whether it was learned or why not, and its channels' stored roles in the FM synth
-# (from the analysis of the run, or your override in [game.instruments]).
+# (from the analysis of the run, or your override in [game.instruments]). A heard routine whose
+# code was not used is observed instead: each channel's value, how it gives the pitch, its score
+# (the share of the music in which that pitch was heard), and whether it was learned or why not.
 ";
 
 /// A packed game, for learning its music: its name, its converted file's bytes and name, where
@@ -430,15 +432,23 @@ fn learn_converted(
     if let Err(e) = machine(file, data) {
         return (None, format!("no music learned (the game does not load: {e})"), String::new(), None);
     }
+    // it loaded just now, so it loads again: the fallback is never used
+    let load = || machine(file, data).unwrap_or_else(|_| Machine::new());
+    let mut run_line = String::new();
     let run: Inputs = match steps {
         Some(steps) => Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS)),
-        None => schedule(u64::from(crc32fast::hash(data))),
+        None => {
+            let (run, kind, won, generic) = choose_run(&load, u64::from(crc32fast::hash(data)));
+            if kind != RunKind::Generic {
+                run_line = format!("  run: {} (it heard {won} music frames, the generic run {generic})\n", kind.describe());
+            }
+            run
+        }
     };
-    // it loaded just now, so it loads again: the fallback is never used
     let opts = LearnOptions { instruments: instruments.clone(), ..LearnOptions::default() };
-    let got = learn_with(&|| machine(file, data).unwrap_or_else(|_| Machine::new()), &run, &opts);
+    let got = learn_with(&load, &run, &opts);
     let list = (!got.entries.is_empty() || !got.roles.is_empty()).then(|| encode_list_with(&got.entries, &got.roles));
-    (list, got.line, got.details, got.override_error)
+    (list, got.line, run_line + &got.details, got.override_error)
 }
 
 /// A cache file: the magic, the CRC-32 of the rest (u32, little-endian), then the entry list,

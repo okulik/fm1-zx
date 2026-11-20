@@ -351,7 +351,8 @@ typedef struct {
 	uint16_t off;     /* the OUT's offset from the anchor */
 	uint8_t role;     /* enum snd_site_role */
 	uint8_t chan;     /* tonal: the channel (and the voice it plays on); SND_CHAN_ANY: any channel's
-	                   * (entries with flips: one OUT for all channels) */
+	                   * (entries with flips: one OUT for all channels); 0 on an observed entry
+	                   * (its edges are no one channel's) */
 } snd_engine_site;
 
 #define SND_CHAN_ANY 0xFFu
@@ -407,6 +408,11 @@ typedef struct snd_engine {   /* one table entry */
 	                           * and always for c >= channels. A learned entry's from its
 	                           * instrument bytes; a built-in's 0, or a kind-1 record's
 	                           * (snd_learned_roles) in a table the firmware assembles */
+	/* 0, or: the engine mixes its channels into the one speaker bit, so its edges cannot be split
+	 * into channels: a frame whose edges all come from its sites is B's with the voices read,
+	 * unchecked (engines.c, check; learned entries the host verified by ear and replay; every
+	 * tonal site channel 0; not with flips) */
+	uint8_t observed;
 } snd_engine;
 
 extern const snd_engine snd_engine_table[];   /* the built-in engines (engines_builtin.c) */

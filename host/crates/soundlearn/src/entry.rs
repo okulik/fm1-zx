@@ -13,7 +13,7 @@
 //!   u16 size (multiple of 4, the whole entry), u8 kind (0: a learned entry), u8 channels (1-3)
 //!   u64 digest
 //!   u16 len, u8 n_wild, u8 n_reloc
-//!   u8 n_sites, u8 flips, u8 drum, u8 timing (1: timing program present)
+//!   u8 n_sites, u8 flags (0, 1: flips, 2: observed), u8 drum, u8 timing (1: timing program present)
 //!   u16 pass, u16 stale_from, u16 stale_len   (stale: anchor-relative pc range; len 0 = none)
 //!   u8 level[3], u8 instrument[3] (each channel's stored role: 0 none, 1 bass, 2 lead, 3 pad)
 //!   u8 prog_len[3], u8 timing_len
@@ -48,6 +48,10 @@ pub struct LearnedEntry {
     pub pos: Vec<u16>,
     /// Each edge flips one channel's level.
     pub flips: bool,
+    /// The routine mixes its channels into the one speaker bit (learned by observation, verified
+    /// on the host): method B takes its frames with the voices read, without its edge check. Its
+    /// tonal sites are all channel 0; not with `flips` (the decoder refuses both).
+    pub observed: bool,
     /// The drum's strength, for an entry with drum sites.
     pub drum: u8,
     /// The frame-end pcs (offset from the anchor, length) where the memory is not to be read.
@@ -100,7 +104,7 @@ fn encode_entry(e: &LearnedEntry) -> Vec<u8> {
     b.extend([0, 0, KIND_LEARNED, channels as u8]);
     b.extend(e.digest.to_le_bytes());
     b.extend(e.len.to_le_bytes());
-    b.extend([e.wild.len() as u8, e.reloc.len() as u8, e.sites.len() as u8, e.flips.into(), e.drum, timing.is_some().into()]);
+    b.extend([e.wild.len() as u8, e.reloc.len() as u8, e.sites.len() as u8, u8::from(e.flips) | u8::from(e.observed) << 1, e.drum, timing.is_some().into()]);
     for w in [e.pass, stale_from, stale_len] {
         b.extend(w.to_le_bytes());
     }

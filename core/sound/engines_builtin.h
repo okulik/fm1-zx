@@ -79,7 +79,7 @@ _Static_assert(sizeof cw_pos / sizeof cw_pos[0] == 2, "a pos per channel");
 
 #define SND_ENGINE_CASTAWAY {                                                                          \
 	"Castaway", 0x45eefa6915ef8919ull, 0x53, sizeof cw_wild / sizeof cw_wild[0], sizeof cw_reloc / sizeof cw_reloc[0], \
-	sizeof cw_sites / sizeof cw_sites[0], 2, 156, cw_wild, cw_reloc, cw_sites, cw_pos, read_castaway, 0, 0, 0, 0, 0, { 0 }, \
+	sizeof cw_sites / sizeof cw_sites[0], 2, 156, cw_wild, cw_reloc, cw_sites, cw_pos, read_castaway, 0, 0, 0, 0, 0, { 0 }, 0, \
 }
 
 /* Escape from Colony 8's music (anchor 9493h in the pack: the tone-burst drum, the ROM-noise drum,
@@ -166,7 +166,7 @@ _Static_assert(sizeof c8_pos / sizeof c8_pos[0] == 3, "a pos per channel");
 
 #define SND_ENGINE_COLONY8 {                                                                           \
 	"Colony 8", 0xae5de8a81485ea1full, 0x93, sizeof c8_wild / sizeof c8_wild[0], sizeof c8_reloc / sizeof c8_reloc[0], \
-	sizeof c8_sites / sizeof c8_sites[0], 3, 155, c8_wild, c8_reloc, c8_sites, c8_pos, read_colony8, 200, 0, 0, 0, 0, { 0 }, \
+	sizeof c8_sites / sizeof c8_sites[0], 3, 155, c8_wild, c8_reloc, c8_sites, c8_pos, read_colony8, 200, 0, 0, 0, 0, { 0 }, 0, \
 }
 
 /* The 48K ROM's BEEPER (anchor 03B5h, 43h bytes to its RET; BASIC's BEEP and the key click call
@@ -200,7 +200,7 @@ static const snd_engine_site beep_sites[] = { { 0x2C, SND_SITE_TONAL, 0 } };
 static const uint16_t beep_pos[] = { 0 };
 
 #define SND_ENGINE_ROM_BEEP_READ(rd) {                                                                 \
-	"ROM BEEP", 0x51a995b5e20f53abull, 0x43, 0, 2, 1, 1, 0, 0, beep_reloc, beep_sites, beep_pos, rd, 0, 0, 70000u, 0, 0, { 0 }, \
+	"ROM BEEP", 0x51a995b5e20f53abull, 0x43, 0, 2, 1, 1, 0, 0, beep_reloc, beep_sites, beep_pos, rd, 0, 0, 70000u, 0, 0, { 0 }, 0, \
 }
 #define SND_ENGINE_ROM_BEEP SND_ENGINE_ROM_BEEP_READ(read_beep)   /* min_len 70,000 T: 20 ms */
 
@@ -244,7 +244,7 @@ static const uint16_t twc_reloc[] = { 0x0F, 0x18 };
 static const snd_engine_site twc_sites[] = { { 0x1C, SND_SITE_TONAL, SND_CHAN_ANY } };
 
 #define SND_ENGINE_TWO_COUNT {                                                                          \
-	"Two-count tune", 0x21ad39e14d5cbeddull, 0x33, 0, 2, 1, 2, 0, 0, twc_reloc, twc_sites, beep_pos, read_two_count, 0, 1, 0, 0, 0, { 0 }, \
+	"Two-count tune", 0x21ad39e14d5cbeddull, 0x33, 0, 2, 1, 2, 0, 0, twc_reloc, twc_sites, beep_pos, read_two_count, 0, 1, 0, 0, 0, { 0 }, 0, \
 }
 
 /* The burst tune (anchor 881Fh, the music flag test to the burst loop's end at 885Eh).
@@ -270,7 +270,7 @@ static const uint16_t bst_reloc[] = { 0x01, 0x1C, 0x20, 0x29, 0x2D };
 static const snd_engine_site bst_sites[] = { { 0x33, SND_SITE_TONAL, 0 } };
 
 #define SND_ENGINE_BURST {                                                                           \
-	"Burst tune", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, bst_reloc, bst_sites, beep_pos, read_burst_tune, 0, 1, 0, 0, 0, { 0 }, \
+	"Burst tune", 0xa3a926aa54f53cc1ull, 0x40, 0, 5, 1, 1, 0, 0, bst_reloc, bst_sites, beep_pos, read_burst_tune, 0, 1, 0, 0, 0, { 0 }, 0, \
 }
 
 /* The unison melody with drums (anchor 81B4h, the melody to the last drum's end at 82A6h). The melody (+12h):
@@ -310,7 +310,7 @@ static const snd_engine_site uni_sites[] = {
 
 #define SND_ENGINE_UNISON {                                                                             \
 	"Unison melody", 0xf45d15034e0cc08dull, 0xF3, 4, sizeof uni_reloc / sizeof uni_reloc[0], sizeof uni_sites / sizeof uni_sites[0], 2, 0, \
-	uni_wild, uni_reloc, uni_sites, beep_pos, read_unison, 200, 1, 0, 0, 0, { 0 }, \
+	uni_wild, uni_reloc, uni_sites, beep_pos, read_unison, 200, 1, 0, 0, 0, { 0 }, 0, \
 }
 
 #define SND_ENGINES_BUILTIN SND_ENGINE_CASTAWAY, SND_ENGINE_COLONY8, SND_ENGINE_ROM_BEEP, SND_ENGINE_TWO_COUNT, \

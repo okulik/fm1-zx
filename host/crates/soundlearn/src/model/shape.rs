@@ -895,7 +895,7 @@ pub(super) fn analyse(peek: &dyn Fn(u16) -> u8, cfg: &Cfg, items: Vec<Item>, out
     // signature fixes: nothing of them goes stale between notes, and the registers at the frame's
     // end say nothing of the note's timing
     let fixed = |x: &Input| match *x {
-        Input::Reg(_) => true,
+        Input::Reg(_) | Input::RegHalf(..) => true,
         Input::Rel(o) => !ctx.wild.contains(&anchor.wrapping_add(o)),
         Input::Rel16(o) => !ctx.wild.contains(&anchor.wrapping_add(o)) && !ctx.wild.contains(&anchor.wrapping_add(o).wrapping_add(1)),
         _ => false,
@@ -972,7 +972,7 @@ fn walked(end: &State, x: Input, anchor: u16) -> bool {
     match x {
         Input::Indexed(pair, _) => adv(pair),
         Input::Reg(r) if r < 8 || r == 14 => through(end.v[if r == 14 { 8 } else { r as usize }].src),
-        Input::Reg(r) => matches!(end.word(r), W::Idx { pair, base, d } if through(Src::Idx { pair, base, d })),
+        Input::Reg(r) | Input::RegHalf(r, _) => matches!(end.word(r), W::Idx { pair, base, d } if through(Src::Idx { pair, base, d })),
         Input::Abs(a) | Input::Abs16(a) => through(end.read_mem(a).src),
         Input::Rel(o) | Input::Rel16(o) => through(end.read_mem(anchor.wrapping_add(o)).src),
     }

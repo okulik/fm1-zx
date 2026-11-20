@@ -7,7 +7,8 @@
 //! The summary is one of:
 //!
 //! - `music learned (1 routine, heard, 2 channels)`: the routines learned; heard, code-only or
-//!   both; the most channels of any of them;
+//!   both; `observed` when they were all learned by observation (`1 observed` when some were);
+//!   the most channels of any of them;
 //! - `no music learned (<reason>)`: the first routine's refusal, heard routines first (the one
 //!   heard in the most frames first), then those found in the code only that the reader could
 //!   read;
@@ -20,10 +21,17 @@
 //! reason it was left out. A learned routine's block, and the block of a built-in routine's `OUT`
 //! heard in the most frames (one refused as the built-in entry first), then give each channel's stored role and where it came from
 //! ([`ChannelRole`]): `roles: channel 0 bass (analysis), channel 1 lead (override)`.
+//!
+//! A heard routine its code did not give, observed instead ([`Observation`]), says so after its
+//! code's figures: its code's refusal (`left out: ...`, or `from its code: ...` when the
+//! observation learned it), the routine observed with its `OUT`s and pass, each channel's input,
+//! mapping and score (and any channel dropped), the replay of its entry, and then
+//! `learned by observation: 3 channels` or `observation: <reason>`.
 
 use crate::fit::FitResult;
 use crate::gate::ReplayStats;
 use crate::model::{ChannelModel, EngineModel, Family, Input, Refusal, Term};
+use crate::observe::{Mapping, ObservedChannel, ObservedModel};
 use zx_sys::{SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD};
 
 /// One routine the learner looked at.
@@ -38,10 +46,29 @@ pub struct Routine {
     pub replay: Option<ReplayStats>,
     /// Drum `OUT`s added to its entry.
     pub drums: Vec<u16>,
-    /// Ok: learned; Err: why not.
+    /// Ok: learned (from its code, or by observation); Err: why not (the code path's reason when
+    /// an observation was tried too: that one's is in `observation`).
     pub outcome: Result<(), String>,
     /// Per channel, its stored role (empty: a routine with none: neither learned nor built-in).
     pub roles: Vec<ChannelRole>,
+    /// The observation tried when its code did not give the routine.
+    pub observation: Option<Observation>,
+}
+
+/// A heard routine observed ([`crate::observe`]) because its code did not give it.
+#[derive(Clone, Debug)]
+pub struct Observation {
+    /// The code path's refusal.
+    pub code: String,
+    /// What the observation found (None: it found no routine, or was not run).
+    pub model: Option<ObservedModel>,
+    /// Channels found but left out: their input does not read the same at the routine's `OUT`s
+    /// (the share of the frames, of those two or more of them sounded in, in which it did).
+    pub dropped: Vec<(ObservedChannel, f64)>,
+    /// The replay through method B with its entry.
+    pub replay: Option<ReplayStats>,
+    /// Ok: learned; Err: why not.
+    pub outcome: Result<(), String>,
 }
 
 /// A channel's stored role (`SND_ROLE_*`) and where it came from.
@@ -101,9 +128,9 @@ fn count(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
-/// The summary line: `learned` holds each learned routine's (heard, channels), `refused` the
-/// first refusal's text ([`reason`]).
-pub fn line(learned: &[(bool, usize)], refused: Option<&str>) -> String {
+/// The summary line: `learned` holds each learned routine's (heard, observed, channels),
+/// `refused` the first refusal's text ([`reason`]).
+pub fn line(learned: &[(bool, bool, usize)], refused: Option<&str>) -> String {
     if learned.is_empty() {
         return format!("no music learned ({})", refused.unwrap_or("no speaker routine found"));
     }
@@ -113,8 +140,13 @@ pub fn line(learned: &[(bool, usize)], refused: Option<&str>) -> String {
         h if h == learned.len() => "heard",
         _ => "both",
     };
-    let channels = learned.iter().map(|r| r.1).max().unwrap_or(0);
-    format!("music learned ({}, {how}, {})", count(learned.len(), "routine"), count(channels, "channel"))
+    let observed = match learned.iter().filter(|r| r.1).count() {
+        0 => String::new(),
+        o if o == learned.len() => ", observed".into(),
+        o => format!(", {o} observed"),
+    };
+    let channels = learned.iter().map(|r| r.2).max().unwrap_or(0);
+    format!("music learned ({}, {how}{observed}, {})", count(learned.len(), "routine"), count(channels, "channel"))
 }
 
 /// A refusal of the code reader.
@@ -147,7 +179,7 @@ fn reg_name(r: u8) -> &'static str {
 
 /// An input as the formula shows it: memory as `(8034h)` (`word (8034h)` for 16 bits) or
 /// `(IX+2)`, a register by name; `anchor` places the routine-relative ones.
-fn input(x: &Input, anchor: u16) -> String {
+pub(crate) fn input(x: &Input, anchor: u16) -> String {
     match *x {
         Input::Rel(o) => format!("({:04X}h)", anchor.wrapping_add(o)),
         Input::Rel16(o) => format!("word ({:04X}h)", anchor.wrapping_add(o)),
@@ -156,6 +188,7 @@ fn input(x: &Input, anchor: u16) -> String {
         Input::Indexed(r, d) if d < 0 => format!("({}-{})", reg_name(r), i16::from(d).unsigned_abs()),
         Input::Indexed(r, d) => format!("({}+{d})", reg_name(r)),
         Input::Reg(r) => reg_name(r).into(),
+        Input::RegHalf(r, hi) => format!("{}{}", reg_name(r), if hi { 'h' } else { 'l' }),
     }
 }
 
@@ -192,11 +225,66 @@ fn family(f: Family) -> &'static str {
     }
 }
 
+/// A mapping as the report shows it: `counter x1`, `16-bit accumulator`.
+pub(crate) fn mapping(m: Mapping) -> String {
+    match m {
+        Mapping::Counter { mult } => format!("counter x{mult}"),
+        Mapping::Accumulator { bits } => format!("{bits}-bit accumulator"),
+    }
+}
+
+/// A channel the observation found: its input, mapping and score.
+fn observed_channel(c: &ObservedChannel, anchor: u16) -> String {
+    format!("{}, {}, score {:.2}", input(&c.input, anchor), mapping(c.mapping), c.score)
+}
+
+/// The replay's line.
+fn replay_line(p: &ReplayStats) -> String {
+    let gate = if p.music_gate { "passed" } else { "failed" };
+    format!("    replay: method B claims {} of the {} frames it sounds in; music gate {gate}\n", p.claimed, p.routine_frames)
+}
+
+/// The observation's lines, after the code's outcome.
+fn observation_lines(o: &Observation) -> String {
+    let mut s = String::new();
+    if let Some(m) = &o.model {
+        let outs: Vec<String> = m.sites.iter().map(|&off| format!("{:04X}h", m.anchor.wrapping_add(off))).collect();
+        s += &format!(
+            "    observed routine {:04X}h-{:04X}h: OUT {}, pass {:.1} T\n",
+            m.anchor,
+            m.anchor.wrapping_add(m.len).wrapping_sub(1),
+            outs.join(" "),
+            m.pass_t
+        );
+        let kept = m.channels.iter().filter(|c| o.dropped.iter().all(|d| d.0.input != c.input));
+        for (c, ch) in kept.enumerate() {
+            s += &format!("    channel {c}: {}\n", observed_channel(ch, m.anchor));
+        }
+        for (ch, share) in &o.dropped {
+            s += &format!(
+                "    channel dropped: {}: reads the same at the routine's OUTs in {:.0}% of the frames two of them sound in (at least 95%)\n",
+                observed_channel(ch, m.anchor),
+                100.0 * share
+            );
+        }
+    }
+    if let Some(p) = &o.replay {
+        s += &replay_line(p);
+    }
+    s + &match &o.outcome {
+        Ok(()) => {
+            let n = o.model.as_ref().map_or(0, |m| m.channels.len() - o.dropped.len());
+            format!("    learned by observation: {}\n", count(n, "channel"))
+        }
+        Err(why) => format!("    observation: {why}\n"),
+    }
+}
+
 /// The routine's block of the details: indented lines, each ending in a line break.
 pub fn block(r: &Routine) -> String {
     let mut s = match r.heard {
         Some((frames, edges)) => format!("  OUT at {:04X}h, heard in {} ({})\n", r.site, count(frames as usize, "frame"), count(edges as usize, "edge")),
-        None if r.model.is_none() => {
+        None if r.model.is_none() && r.observation.is_none() => {
             // a site found in the code that the reader could not read: one line
             let why = r.outcome.as_ref().err().map_or("", String::as_str);
             return format!("  OUT at {:04X}h, code only: {why}\n", r.site);
@@ -236,15 +324,29 @@ pub fn block(r: &Routine) -> String {
         None => {}
     }
     if let Some(p) = &r.replay {
-        let gate = if p.music_gate { "passed" } else { "failed" };
-        s += &format!("    replay: method B claims {} of the {} frames it sounds in; music gate {gate}\n", p.claimed, p.routine_frames);
+        s += &replay_line(p);
     }
     for d in &r.drums {
         s += &format!("    drum: OUT at {d:04X}h\n");
     }
-    s += &match &r.outcome {
-        Ok(()) => "    learned\n".to_string(),
-        Err(why) => format!("    left out: {why}\n"),
+    s += &match (&r.observation, &r.outcome) {
+        (Some(o), _) if o.outcome.is_ok() => format!("    from its code: {}\n{}", o.code, observation_lines(o)),
+        (Some(o), _) => format!("    left out: {}\n{}", o.code, observation_lines(o)),
+        (None, Ok(())) => "    learned\n".to_string(),
+        (None, Err(why)) => format!("    left out: {why}\n"),
     };
     s + &roles_line(&r.roles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line;
+
+    #[test]
+    fn the_line_says_observed() {
+        assert_eq!(line(&[(true, false, 1)], None), "music learned (1 routine, heard, 1 channel)");
+        assert_eq!(line(&[(true, true, 3)], None), "music learned (1 routine, heard, observed, 3 channels)");
+        assert_eq!(line(&[(true, true, 2), (false, false, 1)], None), "music learned (2 routines, both, 1 observed, 2 channels)");
+        assert_eq!(line(&[], Some("a sweep, not music")), "no music learned (a sweep, not music)");
+    }
 }

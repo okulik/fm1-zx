@@ -124,6 +124,112 @@ pub fn schedule(seed: u64) -> Inputs {
     Box::new(move |frame| table.get(frame as usize).copied().unwrap_or(([0; 8], 0)))
 }
 
+/// Frame at which a start key is pressed in the single-key runs.
+const KEY_FRAME: u32 = 500;
+/// Speaker flips a frame needs to count as music.
+const MUSIC_EDGES: u32 = 3;
+/// A single-key or quiet run replaces the generic one only at this many times its music frames
+/// (as a ratio, numerator over denominator) ...
+const WIN_RATIO: (u32, u32) = (3, 2);
+/// ... and at this many more music frames.
+const WIN_MARGIN: u32 = 500;
+
+/// An input run the learner can listen under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunKind {
+    /// The generic [`schedule`].
+    Generic,
+    /// Nothing pressed.
+    Nothing,
+    /// The start key (an index into [`START`]) held 5 frames from frame 500, then nothing.
+    Once(usize),
+}
+
+impl RunKind {
+    /// The run's name for the report: `ENTER once, then nothing pressed`.
+    pub fn describe(self) -> String {
+        match self {
+            RunKind::Generic => "the generic run".into(),
+            RunKind::Nothing => "nothing pressed".into(),
+            RunKind::Once(i) => {
+                let name = START.get(i).and_then(|&p| PRESSES.get(p)).map_or("", |p| p.0);
+                let name = name.strip_prefix("key.").unwrap_or(name);
+                let name = if name == "kempston.fire" { "Kempston fire" } else { name };
+                format!("{name} once, then nothing pressed")
+            }
+        }
+    }
+}
+
+/// The candidate runs in order of preference: the generic run, nothing pressed, then each start key once.
+fn candidates() -> Vec<RunKind> {
+    let mut v = vec![RunKind::Generic, RunKind::Nothing];
+    v.extend((0..START.len()).map(RunKind::Once));
+    v
+}
+
+/// The inputs of a candidate run.
+pub fn run_inputs(kind: RunKind, seed: u64) -> Inputs {
+    match kind {
+        RunKind::Generic => schedule(seed),
+        RunKind::Nothing => Box::new(|_| ([0; 8], 0)),
+        RunKind::Once(i) => {
+            let mut set = ([0u8; 8], 0u8);
+            press(&mut set, START.get(i).copied().unwrap_or(usize::MAX));
+            Box::new(move |f| if (KEY_FRAME..KEY_FRAME + 5).contains(&f) { set } else { ([0; 8], 0) })
+        }
+    }
+}
+
+/// The winner among candidate `scores` (music frames, the generic run's first): the generic run,
+/// unless another has at least 1.5 times its music frames and 500 more; of those the highest,
+/// the earlier on a tie. Returns the index into `scores`.
+pub fn pick(scores: &[u32]) -> usize {
+    let Some(&generic) = scores.first() else { return 0 };
+    let (mut best, mut best_score) = (0, 0);
+    for (i, &s) in scores.iter().enumerate().skip(1) {
+        let wins = u64::from(s) * u64::from(WIN_RATIO.1) >= u64::from(generic) * u64::from(WIN_RATIO.0)
+            && s >= generic.saturating_add(WIN_MARGIN);
+        if wins && s > best_score {
+            (best, best_score) = (i, s);
+        }
+    }
+    best
+}
+
+/// Frames of `inputs` with at least 3 changes of the speaker (EAR) level, over [`LISTEN_FRAMES`]
+/// frames of a freshly loaded machine, with no trace hook.
+pub fn music_frames(m: &mut Machine, inputs: &Inputs) -> u32 {
+    let (mut ear, mut count) = (m.edges_start_level() & 2, 0);
+    for f in 0..LISTEN_FRAMES {
+        let (rows, kemp) = inputs(f);
+        m.set_keys(rows);
+        m.set_kempston(kemp);
+        m.run_frame();
+        let mut flips = 0;
+        for e in m.edges() {
+            let now = e.level & 2;
+            flips += u32::from(now != ear);
+            ear = now;
+        }
+        count += u32::from(flips >= MUSIC_EDGES);
+    }
+    count
+}
+
+/// The run that hears the most music, for a game with no key script: the generic run, nothing
+/// pressed, and each start key (ENTER, SPACE, 0, 1, Kempston fire) held 5 frames at frame 500 and
+/// then nothing, each scored by [`music_frames`] and chosen by [`pick`]. `load` gives a freshly
+/// loaded machine. Returns the run, its kind, its music frames and the generic run's.
+pub fn choose_run(load: &dyn Fn() -> Machine, seed: u64) -> (Inputs, RunKind, u32, u32) {
+    let kinds = candidates();
+    let scores: Vec<u32> = kinds.iter().map(|&k| music_frames(&mut load(), &run_inputs(k, seed))).collect();
+    let at = pick(&scores);
+    let kind = kinds.get(at).copied().unwrap_or(RunKind::Generic);
+    let (won, generic) = (scores.get(at).copied().unwrap_or(0), scores.first().copied().unwrap_or(0));
+    (run_inputs(kind, seed), kind, won, generic)
+}
+
 /// What a run of a game sounds like.
 #[derive(Clone, Debug, Default)]
 pub struct Heard {
@@ -374,4 +480,55 @@ fn record(m: &mut Machine, inputs: &Inputs, frames: u32, keep: usize, observe: &
     m.set_trace(None, 0);
     let heard = rec.borrow_mut().finish(frames);
     heard
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pick_keeps_the_generic_run_unless_far_ahead() {
+        assert_eq!(pick(&[]), 0);
+        assert_eq!(pick(&[100, 0, 0, 0, 0, 0, 0]), 0);
+        // 1.5 times but under 500 more
+        assert_eq!(pick(&[300, 450, 0, 0, 0, 0, 0]), 0);
+        // 500 more but under 1.5 times
+        assert_eq!(pick(&[4000, 4500, 0, 0, 0, 0, 0]), 0);
+        assert_eq!(pick(&[1000, 1500, 0, 0, 0, 0, 0]), 1);
+        assert_eq!(pick(&[0, 0, 500, 0, 0, 0, 0]), 2);
+        assert_eq!(pick(&[0, 0, 499, 0, 0, 0, 0]), 0);
+    }
+
+    #[test]
+    fn pick_takes_the_highest_and_the_earlier_on_a_tie() {
+        assert_eq!(pick(&[100, 900, 2000, 1500, 2000, 0, 0]), 2);
+        assert_eq!(pick(&[100, 0, 0, 0, 900, 0, 900]), 4);
+    }
+
+    #[test]
+    fn a_tune_that_plays_unprompted_keeps_the_generic_run() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../games/test/tune.sna");
+        let load = || {
+            let mut m = Machine::new();
+            m.load_sna(&std::fs::read(path).expect("tune.sna")).expect("loads");
+            m
+        };
+        assert!(music_frames(&mut load(), &run_inputs(RunKind::Nothing, 1)) > 1000);
+        let (_, kind, won, generic) = choose_run(&load, 1);
+        assert_eq!(kind, RunKind::Generic);
+        assert_eq!(won, generic);
+    }
+
+    #[test]
+    fn runs_press_what_they_say() {
+        let once = run_inputs(RunKind::Once(1), 1);
+        assert_eq!(once(KEY_FRAME - 1), ([0; 8], 0));
+        assert_eq!(once(KEY_FRAME).0[7], 1);
+        assert_eq!(once(KEY_FRAME + 4).0[7], 1);
+        assert_eq!(once(KEY_FRAME + 5), ([0; 8], 0));
+        assert_eq!(run_inputs(RunKind::Once(4), 1)(KEY_FRAME).1, 16);
+        assert_eq!(run_inputs(RunKind::Nothing, 1)(KEY_FRAME), ([0; 8], 0));
+        assert_eq!(RunKind::Once(0).describe(), "ENTER once, then nothing pressed");
+        assert_eq!(RunKind::Once(4).describe(), "Kempston fire once, then nothing pressed");
+    }
 }

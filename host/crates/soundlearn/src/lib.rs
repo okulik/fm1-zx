@@ -8,7 +8,9 @@
 //! fit of a model to what was heard and the entry built from it ([`fit`]), the gates and the
 //! replay through method B ([`gate`]), the channels' stored roles ([`roles`]), the encoder of the
 //! programs ([`prog`]) and the entry lists ([`entry`]), and the pipeline for one game
-//! ([`learn`](mod@learn)) with what it says ([`report`]).
+//! ([`learn`](mod@learn)) with what it says ([`report`]). The observing learner ([`observe`])
+//! finds a routine's channels from what the speaker plays instead, by its spectrum
+//! ([`spectrum`]).
 
 pub mod entry;
 pub mod fit;
@@ -16,9 +18,11 @@ pub mod gate;
 pub mod learn;
 pub mod listen;
 pub mod model;
+pub mod observe;
 pub mod prog;
 pub mod report;
 pub mod roles;
+pub mod spectrum;
 pub mod z80;
 
 pub use entry::{encode_list, encode_list_with, BuiltinRoles, LearnedEntry};

@@ -1023,7 +1023,7 @@ impl SndEngines {
                     let en = &*self.raw.table.add(i);
                     let sites = (0..en.n_sites as usize).map(|s| *en.sites.add(s)).map(|s| SndEngineSite { off: s.off, role: s.role, chan: s.chan }).collect();
                     let pos = if en.pass != 0 { (0..en.channels as usize).map(|c| *en.pos.add(c)).collect() } else { Vec::new() };
-                    SndEngineEntry { name: self.name(i as u8 + 1), digest: en.digest, len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, sites, pos, role: en.role }
+                    SndEngineEntry { name: self.name(i as u8 + 1), digest: en.digest, len: en.len, channels: en.channels, pass: en.pass, flips: en.flips != 0, observed: en.observed != 0, sites, pos, role: en.role }
                 }
             })
             .collect()
@@ -1089,6 +1089,8 @@ pub struct SndEngineEntry {
     /// T-states of a pass (0: none).
     pub pass: u16,
     pub flips: bool,
+    /// A mixing engine's learned entry: its frames are taken with the voices read, unchecked.
+    pub observed: bool,
     pub sites: Vec<SndEngineSite>,
     /// Per channel, its OUT's T-state in a pass (only for an entry with a pass).
     pub pos: Vec<u16>,

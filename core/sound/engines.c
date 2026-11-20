@@ -29,7 +29,11 @@
  *
  * An entry whose notes are calls of a routine (min_len: ROM BEEP) is checked its own way
  * (observe_calls); one whose channels each flip the speaker (flips: the two-count tune, the
- * unison melody) has its flips checked (flip).
+ * unison melody) has its flips checked (flip). An observed entry (a learned engine that mixes its
+ * channels into the one speaker bit, which the host verified against the spectrum of its sound
+ * and by replay) has no check: its edges cannot be split into channels (its tonal sites are all
+ * channel 0), so a frame whose edges all come from its sites (step 1) is B's with the voices
+ * read (step 2, stale as for any learned entry), and the decision is as for any entry.
  *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
  * games), the 48K ROM's BEEPER, and the two-count tune, the burst tune and the unison melody
@@ -530,7 +534,8 @@ typedef struct {          /* the voices of a frame in time: segment s from at[s]
 /* Do the voices agree with the engine's tonal edges, segment by segment? After a pause the
  * channels are followed afresh, the edges within MARGIN of it left out; at a step (a slide)
  * they are followed on. in: the check as the frame before left it with the first segment's
- * voices (NULL: not known); out (may be NULL): as this frame leaves it, with the last's. */
+ * voices (NULL: not known); out (may be NULL): as this frame leaves it, with the last's. An
+ * observed entry passes, in and out unused. */
 static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_t n, const segments *sg,
                  const snd_b_carry *in, snd_b_carry *out)
 {
@@ -543,6 +548,7 @@ static int check(classifier *cl, const snd_engine *en, const zx_edge *e, uint32_
 	uint32_t pj = 0, pl = 0;
 	int have = 0;
 
+	if (en->observed) return 1;   /* (its edges are no channel's: nothing to check them by) */
 	c.pass = en->pass;
 	c.strict = en->strict;
 	c.bad_at = NEVER;

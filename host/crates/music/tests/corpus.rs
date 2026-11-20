@@ -396,32 +396,74 @@ fn schedule_keys_match_parse_action() {
 }
 
 /// The learner with the built-in table disabled, on the repo's two games that have built-in
-/// entries: neither tune routine is learned. The code reader
-/// leaves Castaway's out at a zero test of flags that are not a counter's (its channel
-/// counters), and Colony 8's at a stack operation (`ADD HL,SP`: SP holds a phase step), so no
-/// learned entry exists to set against the built-in one. (A reader that learns either must check
-/// here that the two agree: the learned periods within 0.2% of the built-in reader's on every frame
-/// both claim.)
+/// entries: neither tune routine is learned from its code. The code reader leaves Castaway's out
+/// at a zero test of flags that are not a counter's (its channel counters), and Colony 8's at a
+/// stack operation (`ADD HL,SP`: SP holds a phase step). Observed instead, Castaway's is refused
+/// (its replay is not music) and Colony 8's is learned (SP as one channel's step, the others
+/// dropped: they read differently at its `OUT`s); a routine learned must agree with the built-in
+/// reader: the learned periods within 0.2% of the built-in reader's on every frame both claim.
 #[test]
 fn builtins_agree() {
     use soundlearn::listen::schedule;
     use soundlearn::model::{Refusal, Why};
     use soundlearn::{learn_with, LearnOptions};
-    for (game, machine, sites, why) in [
-        ("castaway", music::castaway as fn() -> zx_sys::Machine, &[0xC87Cu16, 0xC886][..], Refusal::Unmodelled(Why::BranchIdiom, 0xC88A)),
-        ("colony8", music::colony8, &[0x950D, 0x9517, 0x9505][..], Refusal::Unmodelled(Why::StackOp, 0x950F)),
+    use zx_sys::{SndEngines, SndFrame};
+    for (game, machine, sites, why, observed) in [
+        ("castaway", music::castaway as fn() -> zx_sys::Machine, &[0xC87Cu16, 0xC886][..], Refusal::Unmodelled(Why::BranchIdiom, 0xC88A), false),
+        ("colony8", music::colony8, &[0x950D, 0x9517, 0x9505][..], Refusal::Unmodelled(Why::StackOp, 0x950F), true),
     ] {
         let got = learn_with(&machine, &schedule(1), &LearnOptions { ignore_builtins: true, ..LearnOptions::default() });
         let why = soundlearn::report::refusal(&why);
-        assert!(got.entries.is_empty(), "{game}: {}", got.line);
-        assert_eq!(got.line, format!("no music learned ({why})"), "{game}");
-        // each of the tune's heard sites is read, and left out for that reason
-        for site in sites {
-            let block = format!("  OUT at {site:04X}h, heard in ");
-            let at = got.details.find(&block).unwrap_or_else(|| panic!("{game}: {site:04X}h not heard\n{}", got.details));
-            let rest = &got.details[at..];
-            let end = rest[1..].find("\n  OUT at ").map_or(rest.len(), |e| e + 2);
-            assert!(rest[..end].contains(&format!("    left out: {why}\n")), "{game} {site:04X}h: {}", &rest[..end]);
+        if !observed {
+            assert!(got.entries.is_empty(), "{game}: {}\n{}", got.line, got.details);
+            assert_eq!(got.line, format!("no music learned ({why})"), "{game}");
+            // each of the tune's heard sites is read, and left out for that reason
+            for site in sites {
+                let block = format!("  OUT at {site:04X}h, heard in ");
+                let at = got.details.find(&block).unwrap_or_else(|| panic!("{game}: {site:04X}h not heard\n{}", got.details));
+                let rest = &got.details[at..];
+                let end = rest[1..].find("\n  OUT at ").map_or(rest.len(), |e| e + 2);
+                assert!(rest[..end].contains(&format!("    left out: {why}\n")), "{game} {site:04X}h: {}", &rest[..end]);
+            }
+            continue;
         }
+        // learned by observation alone, its code left out for that reason, every site of the tune
+        // one of its OUTs
+        assert_eq!(got.entries.len(), 1, "{game}: {}\n{}", got.line, got.details);
+        assert!(got.entries[0].observed, "{game}");
+        assert!(got.details.contains(&format!("    from its code: {why}\n")), "{game}: {}", got.details);
+        let outs = got.details.lines().find(|l| l.starts_with("    observed routine ")).expect("observed");
+        assert!(sites.iter().all(|s| outs.contains(&format!(" {s:04X}h"))), "{game}: {outs}");
+        // the learned periods against the built-in reader's, on every frame both claim
+        let list = soundlearn::encode_list(&got.entries);
+        let (mut m, inputs) = (machine(), schedule(1));
+        let (mut builtin, mut learned) = (SndEngines::new(), SndEngines::with_learned_only(&list).expect("decodes"));
+        let voices = |d: &SndFrame| {
+            let mut v = d.tone.map(|t| if t.level != 0 { t.period_q8 } else { 0 });
+            for e in d.events().iter().filter(|e| e.period_q8 != 0 && e.level != 0) {
+                v[usize::from(e.voice)] = e.period_q8;
+            }
+            v
+        };
+        let mut both = 0;
+        for f in 0..soundlearn::listen::LISTEN_FRAMES {
+            let (rows, kempston) = inputs(f);
+            m.set_keys(rows);
+            m.set_kempston(kempston);
+            m.run_frame();
+            let a = builtin.frame(&m, m.edges(), m.edges_start_level());
+            let b = learned.frame(&m, m.edges(), m.edges_start_level());
+            if a.confident == 0 || a.engine == 0 || b.confident == 0 || b.engine == 0 {
+                continue;
+            }
+            let (va, vb) = (voices(&a), voices(&b));
+            for p in vb.into_iter().filter(|&p| p != 0) {
+                both += 1;
+                let near = va.iter().any(|&q| q != 0 && (f64::from(p) / f64::from(q) - 1.0).abs() <= 0.002);
+                assert!(near, "{game} frame {f}: learned {vb:?}, built-in {va:?}");
+            }
+        }
+        assert!(both > 300, "{game}: {both} voices both claim");
     }
 }
+
