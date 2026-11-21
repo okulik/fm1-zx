@@ -418,9 +418,10 @@ static uint16_t gain_q10(uint32_t master)
 }
 
 /* Game `index`'s learned entries, if its pack has any, after the built-in ones in method B's table
- * (the mixer just initialised), and the stored roles of its kind-1 records on the built-in ones:
- * the table is assembled whenever the list decodes, even with no learned entry. No list, or a bad
- * one, leaves the built-in table. */
+ * (the mixer just initialised), the stored roles of its kind-1 records on the built-in ones, and
+ * its recorded scores (kind 2, played from the pack in place): the table is assembled whenever
+ * the list decodes, even with no learned entry. No list, or a bad one, leaves the built-in table
+ * and no score. */
 static void learned_start(uint32_t index)
 {
     const uint8_t *list;
@@ -432,6 +433,7 @@ static void learned_start(uint32_t index)
         learned_table[i] = snd_engine_table[i];
     snd_learned_roles(list, len, learned_table, snd_engine_count + n);
     snd_mixer_set_engines(&mixer, learned_table, snd_engine_count + n);
+    snd_b_scores(&mixer.b, list, len);
 }
 
 /* What a started or resumed game shares once fmzx_machine holds it: the sound and the pictures

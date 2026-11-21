@@ -35,6 +35,9 @@
  * channel 0), so a frame whose edges all come from its sites (step 1) is B's with the voices
  * read (step 2, stale as for any learned entry), and the decision is as for any entry.
  *
+ * A game's recorded scores (learned.c) play after the decision, through snd_b.scores: a frame the
+ * decision leaves unclaimed may be a score's.
+ *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
  * games), the 48K ROM's BEEPER, and the two-count tune, the burst tune and the unison melody
  * (games outside the repository: their digests, offsets and formulas only), in engines_builtin.c;
@@ -1111,7 +1114,6 @@ void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 {
 	uint32_t k;
 
-	(void)start_level;
 	if (n > ZX_MAX_EDGES) n = ZX_MAX_EDGES;
 	{
 		snd_b_rec *r = &b->rec[b->frames % SND_HIST];
@@ -1127,15 +1129,16 @@ void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 		out->role[k] = SND_ROLE_AUTO;
 	if (b->frames > SND_DELAY_FRAMES) {
 		decide(b, out);
-		return;
+	} else {
+		for (k = 0; k < SND_TONAL; k++) {
+			out->tone[k].period_q8 = 0;
+			out->tone[k].level = 0;
+		}
+		out->drum = 0;
+		out->style = SND_STYLE_NONE;
+		out->confident = 0;
+		out->engine = 0;
+		out->n_ev = 0;
 	}
-	for (k = 0; k < SND_TONAL; k++) {
-		out->tone[k].period_q8 = 0;
-		out->tone[k].level = 0;
-	}
-	out->drum = 0;
-	out->style = SND_STYLE_NONE;
-	out->confident = 0;
-	out->engine = 0;
-	out->n_ev = 0;
+	if (b->scores) b->scores(b, zm, e, n, start_level, out);
 }

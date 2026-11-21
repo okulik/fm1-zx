@@ -181,6 +181,13 @@ void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n)
 	b->last_entry = 0;
 	b->engine = 0;
 	b->held = 0;
+	b->scores = 0;
+	for (k = 0; k < SND_SCORES_MAX; k++) {
+		b->score[k] = 0;
+		b->quiet[k] = 0;
+	}
+	b->n_scores = 0;
+	b->sc.rec = 0;
 }
 
 void snd_mixer_init(snd_mixer *m, uint32_t rate_num, uint32_t rate_den)

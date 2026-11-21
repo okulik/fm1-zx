@@ -10,7 +10,8 @@
 //! programs ([`prog`]) and the entry lists ([`entry`]), and the pipeline for one game
 //! ([`learn`](mod@learn)) with what it says ([`report`]). The observing learner ([`observe`])
 //! finds a routine's channels from what the speaker plays instead, by its spectrum
-//! ([`spectrum`]).
+//! ([`spectrum`]). The transcriber ([`transcribe`]) reads the notes of music nothing else
+//! reads from the speaker's signal alone, for a recorded score ([`scores`]).
 
 pub mod entry;
 pub mod fit;
@@ -22,9 +23,11 @@ pub mod observe;
 pub mod prog;
 pub mod report;
 pub mod roles;
+pub mod scores;
 pub mod spectrum;
+pub mod transcribe;
 pub mod z80;
 
-pub use entry::{encode_list, encode_list_with, BuiltinRoles, LearnedEntry};
+pub use entry::{encode_list, encode_list_scores, encode_list_with, BuiltinRoles, LearnedEntry, ScoreEvent, ScoreRecord};
 pub use learn::{learn, learn_with, GameSound, LearnOptions, LEARNER_VERSION};
 pub use prog::{encode_prog, eval_prog, Op};

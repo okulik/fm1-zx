@@ -225,10 +225,28 @@ pitches they predict against the spectrum of the speaker's sound, and keeps the 
 method B, replaying the run with it, plays at least half of the routine's frames as music and no
 known routine claims any of them. On the FM-1 an observed routine's channels play from the values
 it reads, without the check against the beeper's edges (its edges hold all its channels at
-once). Anything else stays on the beeper. After the table it prints one line per game:
+once).
+
+Music that no routine gives (none learned, none known) is recorded instead, as a score, when its
+`OUT` sounded in at least 250 frames: from the first speaker edge of that `OUT` after at least 25
+frames without one, for as long as the keys stay as they were (a key press may change the music)
+and the `OUT` is not silent for 100 frames, to the end of the 3-minute run at most; a stretch
+under 250 frames (5 s) is not recorded. Its notes are read from the speaker's sound alone (up to 3
+voices, by their spectrum; a held tone, under 8 notes or 3 pitches, is not music), and the pack
+stores them with the speaker edges of each frame-long stretch from that first edge. Method B,
+replaying the run with the game's whole list, must play the score from that edge to its end; one
+it stops following is cut to where it held, if 250 frames remain. At most 4 scores a game, the
+longest first, within 64 KB in all. On the FM-1, FM: engines starts a score when its `OUT` makes
+that first edge after the same silence with the same code around it, and plays it in step with the
+beeper, comparing the beeper's edges with the recorded ones as it goes: when the game does
+something else (a key pressed during the tune, another tune), the score stops within a few frames
+and the beeper plays. Its voices take their instruments by pitch, as a routine's channels do.
+
+Anything else stays on the beeper. After the table it prints one line per game:
 
     tune: music learned (1 routine, heard, 1 channel)
     mixer: music learned (1 routine, heard, observed, 2 channels)
+    demo: music recorded (1 score, 3 voices)
     border: no music learned (OUTs that do not always flip the speaker at 801Ah)
 
 `DIR/sound-report.txt` holds the same lines and, per routine, the speaker `OUT` it was read from,
@@ -237,7 +255,11 @@ routine was left out, and each channel's instrument. A routine observed shows wh
 not used, the routine observed, each channel's value (`word (9004h)`, `DE`, `IYh`), how the value
 gives the pitch (`counter x1`: that many passes of the loop; `16-bit accumulator`: a step added
 each pass) and its score (the share of the music in which the predicted pitch was heard), its
-replay, and `learned by observation: 2 channels` or `observation:` and why not. The games are
+replay, and `learned by observation: 2 channels` or `observation:` and why not. A routine that
+could have a score ends with it, `recorded score: 168.5 s from frame 505, 3 voices, 2351 notes,
+23.1 KB` (its length, the frame of its first edge, its voices, notes and size), or `no score:`
+and why not; the game's line counts the scores (`music learned (1 routine, heard, 2 channels;
+1 score)`). The games are
 learned in parallel, a few seconds each; the results are cached in `DIR/sound-cache/` (by the
 converted game's CRC, its key script, its instrument overrides and the learner's version), which
 runs keep, so a re-run learns only new or changed games.
@@ -509,7 +531,7 @@ frame, about 2.9M estimated, under the cap.)
 
 The LCD compose path uses about 3 KB of the 8 KB user stack, measured from the disassembly: `pix_compose_rows` has a frame of 2,524 bytes plus its callees, and is called only from the main loop.
 
-Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,012 of 49,152 bytes. The flash
+Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,108 of 49,152 bytes. The flash
 driver 2,932 bytes in the RAM region, which holds 30,708 of 65,536 bytes. Image
 + pack 216,768 of 581,564 (0x8DFBC) bytes. POOL 275,800 bytes, 92,840 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
 platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and

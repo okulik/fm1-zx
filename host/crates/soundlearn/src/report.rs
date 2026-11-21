@@ -8,7 +8,10 @@
 //!
 //! - `music learned (1 routine, heard, 2 channels)`: the routines learned; heard, code-only or
 //!   both; `observed` when they were all learned by observation (`1 observed` when some were);
-//!   the most channels of any of them;
+//!   the most channels of any of them; `; 1 score` after them when scores were recorded too
+//!   ([`crate::scores`]);
+//! - `music recorded (1 score, 3 voices)`: no routine learned, the scores recorded; the most
+//!   voices of any of them;
 //! - `no music learned (<reason>)`: the first routine's refusal, heard routines first (the one
 //!   heard in the most frames first), then those found in the code only that the reader could
 //!   read;
@@ -27,11 +30,17 @@
 //! observation learned it), the routine observed with its `OUT`s and pass, each channel's input,
 //! mapping and score (and any channel dropped), the replay of its entry, and then
 //! `learned by observation: 3 channels` or `observation: <reason>`.
+//!
+//! A routine a score may be recorded for ends its block with the score
+//! (`recorded score: 168.5 s from frame 505, 3 voices, 2351 notes, 23.1 KB`: its length, its
+//! trigger's frame, its voices, notes and bytes; `, shortened ...` when it was cut) or
+//! `no score: <reason>`.
 
 use crate::fit::FitResult;
 use crate::gate::ReplayStats;
 use crate::model::{ChannelModel, EngineModel, Family, Input, Refusal, Term};
 use crate::observe::{Mapping, ObservedChannel, ObservedModel};
+use crate::scores::ScoreSummary;
 use zx_sys::{SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD};
 
 /// One routine the learner looked at.
@@ -53,6 +62,8 @@ pub struct Routine {
     pub roles: Vec<ChannelRole>,
     /// The observation tried when its code did not give the routine.
     pub observation: Option<Observation>,
+    /// Its recorded score ([`crate::scores`]), or why it has none; None: not a routine for one.
+    pub score: Option<Result<ScoreSummary, String>>,
 }
 
 /// A heard routine observed ([`crate::observe`]) because its code did not give it.
@@ -129,8 +140,12 @@ fn count(n: usize, noun: &str) -> String {
 }
 
 /// The summary line: `learned` holds each learned routine's (heard, observed, channels),
-/// `refused` the first refusal's text ([`reason`]).
-pub fn line(learned: &[(bool, bool, usize)], refused: Option<&str>) -> String {
+/// `scores` each recorded score's voices, `refused` the first refusal's text ([`reason`]).
+pub fn line(learned: &[(bool, bool, usize)], scores: &[u8], refused: Option<&str>) -> String {
+    let voices = scores.iter().copied().max().unwrap_or(0);
+    if learned.is_empty() && !scores.is_empty() {
+        return format!("music recorded ({}, {})", count(scores.len(), "score"), count(usize::from(voices), "voice"));
+    }
     if learned.is_empty() {
         return format!("no music learned ({})", refused.unwrap_or("no speaker routine found"));
     }
@@ -146,7 +161,26 @@ pub fn line(learned: &[(bool, bool, usize)], refused: Option<&str>) -> String {
         o => format!(", {o} observed"),
     };
     let channels = learned.iter().map(|r| r.2).max().unwrap_or(0);
-    format!("music learned ({}, {how}{observed}, {})", count(learned.len(), "routine"), count(channels, "channel"))
+    let recorded = if scores.is_empty() { String::new() } else { format!("; {}", count(scores.len(), "score")) };
+    format!("music learned ({}, {how}{observed}, {}{recorded})", count(learned.len(), "routine"), count(channels, "channel"))
+}
+
+/// A score's line of a block.
+fn score_line(score: &Result<ScoreSummary, String>) -> String {
+    match score {
+        Ok(s) => {
+            let shortened = s.shortened.as_ref().map_or(String::new(), |w| format!(", shortened {w}"));
+            format!(
+                "    recorded score: {:.1} s from frame {}, {}, {}, {:.1} KB{shortened}\n",
+                s.seconds,
+                s.frame,
+                count(usize::from(s.voices), "voice"),
+                count(s.notes, "note"),
+                s.bytes as f64 / 1024.0
+            )
+        }
+        Err(why) => format!("    no score: {why}\n"),
+    }
 }
 
 /// A refusal of the code reader.
@@ -335,7 +369,7 @@ pub fn block(r: &Routine) -> String {
         (None, Ok(())) => "    learned\n".to_string(),
         (None, Err(why)) => format!("    left out: {why}\n"),
     };
-    s + &roles_line(&r.roles)
+    s + &roles_line(&r.roles) + &r.score.as_ref().map_or(String::new(), score_line)
 }
 
 #[cfg(test)]
@@ -344,9 +378,16 @@ mod tests {
 
     #[test]
     fn the_line_says_observed() {
-        assert_eq!(line(&[(true, false, 1)], None), "music learned (1 routine, heard, 1 channel)");
-        assert_eq!(line(&[(true, true, 3)], None), "music learned (1 routine, heard, observed, 3 channels)");
-        assert_eq!(line(&[(true, true, 2), (false, false, 1)], None), "music learned (2 routines, both, 1 observed, 2 channels)");
-        assert_eq!(line(&[], Some("a sweep, not music")), "no music learned (a sweep, not music)");
+        assert_eq!(line(&[(true, false, 1)], &[], None), "music learned (1 routine, heard, 1 channel)");
+        assert_eq!(line(&[(true, true, 3)], &[], None), "music learned (1 routine, heard, observed, 3 channels)");
+        assert_eq!(line(&[(true, true, 2), (false, false, 1)], &[], None), "music learned (2 routines, both, 1 observed, 2 channels)");
+        assert_eq!(line(&[], &[], Some("a sweep, not music")), "no music learned (a sweep, not music)");
+    }
+
+    #[test]
+    fn the_line_counts_scores() {
+        assert_eq!(line(&[(true, true, 3)], &[2], None), "music learned (1 routine, heard, observed, 3 channels; 1 score)");
+        assert_eq!(line(&[], &[3], Some("a sweep, not music")), "music recorded (1 score, 3 voices)");
+        assert_eq!(line(&[], &[1, 2], None), "music recorded (2 scores, 2 voices)");
     }
 }

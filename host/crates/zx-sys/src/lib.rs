@@ -869,8 +869,11 @@ struct Learned {
     table: Box<[sys::snd_engine]>,
     /// The entries' programs and rules (each learned entry's `data`).
     _ext: Box<[sys::snd_learned_ext]>,
-    /// A copy of the list, as words (4-byte aligned): the entries' arrays and programs point into it.
+    /// A copy of the list, as words (4-byte aligned): the entries' arrays and programs, and the
+    /// scores, point into it.
     _list: Box<[u32]>,
+    /// The list's length in bytes.
+    len: u32,
 }
 
 impl Learned {
@@ -906,7 +909,14 @@ impl Learned {
         // learned_start does, whether or not the list holds learned entries)
         // SAFETY: `words` holds the list the decoder accepted; `table` holds table.len() entries.
         unsafe { sys::snd_learned_roles(words.as_ptr().cast(), list.len() as u32, table.as_mut_ptr(), table.len() as u32) };
-        Ok(Learned { table: table.into_boxed_slice(), _ext: ext, _list: words })
+        Ok(Learned { table: table.into_boxed_slice(), _ext: ext, _list: words, len: list.len() as u32 })
+    }
+
+    /// Gives `b` (just initialised with this table) the list's recorded scores (`snd_b_scores`).
+    fn give_scores(&self, b: &mut sys::snd_b) {
+        // SAFETY: `_list` holds the list the decoder accepted, 4-byte aligned, and stays with `b`'s
+        // table as long as `b` uses it (the records point into it).
+        unsafe { sys::snd_b_scores(b, self._list.as_ptr().cast(), self.len) };
     }
 }
 
@@ -971,6 +981,7 @@ impl SndEngines {
         // SAFETY: `raw` is a valid, exclusively owned snd_b; the table, the records' ext data and
         // the list copy are heap buffers kept with it in `_learned`, so they outlive its use.
         unsafe { sys::snd_b_init(&mut *raw, learned.table.as_ptr(), learned.table.len() as u32) };
+        learned.give_scores(&mut raw);
         Ok(SndEngines { raw, _learned: Some(learned) })
     }
 
@@ -994,9 +1005,13 @@ impl SndEngines {
         out
     }
 
-    /// The name of a frame's `engine` (1 + index in this table); "" for 0 or an unknown one.
+    /// The name of a frame's `engine` (1 + index in this table; past the table's entries, a
+    /// recorded score's: "score 1" for the list's first); "" for 0 or an unknown one.
     pub fn name(&self, engine: u8) -> String {
         let i = u32::from(engine);
+        if i > self.raw.n && i <= self.raw.n + u32::from(self.raw.n_scores) {
+            return format!("score {}", i - self.raw.n);
+        }
         if i == 0 || i > self.raw.n {
             return String::new();
         }
@@ -1010,6 +1025,12 @@ impl SndEngines {
         assert!(index < self.raw.n as usize, "entry {index}");
         // SAFETY: the table holds `n` entries and index < n; `m.raw` is an initialised machine.
         unsafe { sys::snd_engine_digest(&*m.raw, self.raw.table.add(index), anchor) }
+    }
+
+    /// The recorded scores method B plays (the list's kind-2 records); their frames' `engine` is
+    /// the table's entries + 1 + the score's index.
+    pub fn scores(&self) -> usize {
+        usize::from(self.raw.n_scores)
     }
 
     /// The shape of this table's entries (host tests: the table's own consistency).
@@ -1113,6 +1134,10 @@ pub const SND_LEARNED_LEN_MAX: u16 = sys::SND_LEARNED_LEN_MAX as u16;
 pub const SND_LEARNED_SITES_MAX: usize = sys::SND_LEARNED_SITES_MAX as usize;
 /// Most site-signature bytes (sites x len) over a game's learned entries.
 pub const SND_LEARNED_WORK_MAX: usize = sys::SND_LEARNED_WORK_MAX as usize;
+/// Most recorded scores (kind-2 records) a game's list may hold.
+pub const SND_SCORES_MAX: usize = sys::SND_SCORES_MAX as usize;
+/// Most buckets (frames) of a recorded score's fingerprint.
+pub const SND_SCORE_BUCKETS_MAX: usize = sys::SND_SCORE_BUCKETS_MAX as usize;
 
 impl Default for SndEngines {
     fn default() -> Self {
@@ -1181,6 +1206,7 @@ impl SndMixer {
         // SAFETY: `raw` was initialised by snd_mixer_init; the table and what it points to are
         // heap buffers kept in `self._learned` until the engines change again.
         unsafe { sys::snd_mixer_set_engines(&mut *self.raw, learned.table.as_ptr(), learned.table.len() as u32) };
+        learned.give_scores(&mut self.raw.b);
         self._learned = Some(learned);
         Ok(())
     }

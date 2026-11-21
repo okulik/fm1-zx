@@ -463,13 +463,27 @@ int snd_prog_eval(const uint8_t *p, uint32_t len, const zx_machine *m, uint16_t 
  * bound or program that is not valid, or more than max entries. A learned entry's role[c] is its
  * instrument[c] (above SND_ROLE_PAD: SND_ROLE_AUTO). The list may also hold kind-1 records (roles
  * for a built-in entry), checked and counted like entries but decoded into no engine, so *n
- * counts the learned entries alone. */
+ * counts the learned entries alone, and up to SND_SCORES_MAX kind-2 records (recorded scores),
+ * checked whole (snd_b_scores gives them to method B). */
 int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_learned_ext *ext, uint32_t max, uint32_t *n);
 /* For each kind-1 record of a list snd_learned_decode accepted: sets role[] of the entries of
  * table[0..n) that are not learned and whose digest is the record's (roles above SND_ROLE_PAD, or
  * for channels past the record's or the entry's: SND_ROLE_AUTO). A record matching no such entry
  * changes nothing; a later record for the same digest wins. */
 void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, uint32_t n);
+
+/* Recorded scores (kind-2 records, learned.c): a stretch of a game's music that plays the same
+ * every time from its first edge, which the personal-pack builder recorded as note events with
+ * the speaker edges of each frame-long bucket from that edge (its fingerprint). Method B plays a
+ * score from its trigger edge while the live edges keep agreeing with the fingerprint
+ * (snd_b_scores; the rules in learned.c). */
+#define SND_SCORES_MAX 4u             /* kind-2 records per game */
+#define SND_SCORE_BUCKETS_MAX 12000u  /* buckets of a score's fingerprint (4 minutes) */
+
+struct snd_b;
+/* Method B (snd_b_init just run on b) plays the scores of a list snd_learned_decode accepted;
+ * their records stay in the list, which must outlive b's use of them. */
+void snd_b_scores(struct snd_b *b, const uint8_t *list, uint32_t avail);
 
 #define SND_B_MATCHES 8u      /* anchors remembered */
 #define SND_B_UNKNOWN 8u      /* OUT addresses remembered as matching no entry */
@@ -538,6 +552,21 @@ typedef struct {          /* what B saw in one frame, when it arrived */
 	uint8_t cont;         /* the frame's first edges carry on the note the frame before ended with */
 } snd_b_rec;
 
+typedef struct {          /* the recorded score playing (learned.c) */
+	const uint8_t *rec;   /* its record in the list; NULL: none */
+	uint32_t f0;          /* the frame of its trigger edge (snd_b.frames counting it) */
+	uint32_t t0;          /* the trigger edge's T-state in frame f0: T0 */
+	uint32_t frames;      /* frames it plays from f0 (fewer once it stops) */
+	uint32_t at;          /* its next event: offset in rec (past the event's time) */
+	uint32_t u;           /* that event's time from T0, in 64-T units */
+	uint16_t left;        /* events not yet decided */
+	uint16_t bucket;      /* the next bucket to compare; the fingerprint's length: following ended */
+	uint16_t count;       /* speaker edges in that bucket so far */
+	uint8_t bad;          /* buckets in a row that disagreed */
+	uint8_t index;        /* 1 + its index in snd_b.score */
+	snd_voice v[SND_TONAL];   /* its voices, as decided so far */
+} snd_b_score;
+
 typedef struct snd_b {        /* method B's state */
 	const snd_engine *table;
 	uint32_t n;               /* entries in table */
@@ -555,12 +584,22 @@ typedef struct snd_b {        /* method B's state */
 	uint8_t engine;           /* 1 + index of the engine holding, 0 = none */
 	uint32_t held;            /* frames decided since the engine's last edge */
 	uint32_t carry[SND_TONAL + 1u];   /* offs falling past the frame: T-state in the next, or ~0 */
+	/* the recorded scores (snd_b_scores): the player, once a frame after the decision (NULL: no
+	 * score), their records, and per score the frames in a row with no edge from its site, up to
+	 * 0xFFFF */
+	void (*scores)(struct snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
+	const uint8_t *score[SND_SCORES_MAX];
+	uint16_t quiet[SND_SCORES_MAX];
+	uint8_t n_scores;
+	snd_b_score sc;
 } snd_b;
 
 void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n);
 /* Feeds frame t (zm right after zx_run_frame; zm may be NULL: nothing is B's); fills *out with
  * the decision for frame t - SND_DELAY_FRAMES. A frame an engine claims carries that table
- * entry's stored roles (snd_engine.role), any other frame SND_ROLE_AUTO for every voice. */
+ * entry's stored roles (snd_engine.role), any other frame SND_ROLE_AUTO for every voice. A frame
+ * a recorded score plays (and no table entry claims) has engine n + 1 + the score's index (n the
+ * table's entries) and the score's stored roles. */
 void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
 
 /* ---- effects follower (fx_read.c, fx.c) --------------------------------

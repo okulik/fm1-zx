@@ -55,10 +55,12 @@
 //! CRC-32. The games are learned in parallel, one thread per core. The pack's sound section holds each
 //! game's learned entries and the stored roles of its routines' channels ([`attach_sound`]:
 //! learned entries' `instrument[]`, built-in entries' kind-1 records), the game's
-//! `[game.instruments]` overrides ([`crate::manifest`]) winning over the learner's analysis; an
+//! `[game.instruments]` overrides ([`crate::manifest`]) winning over the learner's analysis, and
+//! its recorded scores (kind-2 records); an
 //! override that names no learned or built-in routine of the game (or more channels than it has)
 //! fails the run, naming the game and the key, and no pack is written. [`table`] ends with one
-//! line per game (`<name>: music learned (...)` or `<name>: no music learned (<reason>)`), and
+//! line per game (`<name>: music learned (...)`, `<name>: music recorded (...)` or
+//! `<name>: no music learned (<reason>)`), and
 //! `<out>/sound-report.txt` holds them with each routine's details and its channels' roles. The
 //! results are cached in `<out>/sound-cache/<crc>-<version>.bin` (one CRC-32 over the converted
 //! file's data followed by the key script's text, if there is one, and the overrides; the
@@ -74,7 +76,7 @@ use crate::manifest::{game_path, parse_manifest, parse_personal_manifest, Game, 
 use crate::pack::{attach_sound, build_pack};
 use crate::tapeload::{self, Kind, Loaded};
 use soundlearn::listen::{choose_run, Inputs, RunKind};
-use soundlearn::{encode_list_with, learn_with, LearnOptions, LEARNER_VERSION};
+use soundlearn::{encode_list_scores, learn_with, LearnOptions, LEARNER_VERSION};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -289,6 +291,9 @@ const REPORT_HEAD: &str = "\
 # (from the analysis of the run, or your override in [game.instruments]). A heard routine whose
 # code was not used is observed instead: each channel's value, how it gives the pitch, its score
 # (the share of the music in which that pitch was heard), and whether it was learned or why not.
+# Music no routine gives that played long enough is recorded as a score instead: from the edge
+# that starts it, its length, voices, notes and bytes (FM: engines plays it in step with the
+# beeper), or why it has none.
 ";
 
 /// A packed game, for learning its music: its name, its converted file's bytes and name, where
@@ -447,7 +452,7 @@ fn learn_converted(
     };
     let opts = LearnOptions { instruments: instruments.clone(), ..LearnOptions::default() };
     let got = learn_with(&load, &run, &opts);
-    let list = (!got.entries.is_empty() || !got.roles.is_empty()).then(|| encode_list_with(&got.entries, &got.roles));
+    let list = (!got.entries.is_empty() || !got.roles.is_empty() || !got.scores.is_empty()).then(|| encode_list_scores(&got.entries, &got.roles, &got.scores));
     (list, got.line, run_line + &got.details, got.override_error)
 }
 
