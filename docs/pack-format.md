@@ -89,37 +89,51 @@ zero padding up to `size`
 
 It produces no engine: once the list is decoded, `snd_learned_roles` gives the built-in entry with that `digest` these roles for this game (roles above 3, and those of channels past the record's `channels` or the entry's, count as 0). A record whose `digest` names no built-in entry (or names a learned entry) changes nothing; of two records for the same entry, the later wins. The firmware assembles its table (the built-in entries, then the learned ones) whenever the list decodes, so a game whose list holds kind-1 records and no learned entry still gets its built-in entries' roles.
 
-A kind-2 record, a recorded score, is a stretch of music that plays the same every time from its first speaker edge (the *trigger edge*, at T0). Its times are T-states from T0; bucket b is the frame-long span from b x 69,888 to (b + 1) x 69,888 T after T0. Kind-2 records follow the other kinds in a list:
+A kind-2 record, a recorded score, is a stretch of music that plays the same every time from its first speaker edge (the *trigger edge*, at T0): an *intro*, then optionally a *loop* that repeats. The intro runs from T0 for `intro_t` T-states; with no loop it is the whole score. The loop's passes follow it: pass k (k = 0, 1, 2, ...) starts at T0 + `intro_t` + k x `loop_t`. A section's times (the intro's, or one pass's) are T-states from its start. Its *buckets* are frame-long spans from its start: bucket b covers b x 69,888 to (b + 1) x 69,888 T after it. Only whole buckets are stored and compared: the intro has `intro_t` / 69,888 of them and the loop `loop_t` / 69,888 (rounded down); the partial bucket at a section's end is neither stored nor compared. Kind-2 records follow the other kinds in a list:
 
 ```
 u16 size (a multiple of 4: the whole record), u8 kind = 2, u8 voices (1-3)
-u16 site        the address of the OUT that makes the trigger edge (its first byte)
-u16 quiet       frames with no speaker edge from `site` before the trigger edge, at least
-u32 code        FNV-1a 32 of the 32 bytes from site - 16 to site + 15: the code must be the same
-u16 buckets     the fingerprint's length (1-12,000: SND_SCORE_BUCKETS_MAX)
-u16 n_events
-u8 role[3]      each voice's stored role, as instrument[] above
-u8 0
-u8 fingerprint[buckets]   the speaker edges in each bucket, capped at 255
-events[n_events], then zero padding up to `size`; an event:
-  varint dt     64-T units since the event before (the first: since T0); LEB128, at most 4 bytes
-  u8 vf         bits 0-1 the voice, bit 7 set: a note off (nothing follows), clear: a note on
-  a note on:    u24 period (the full period in T-states, at least 64), u8 level (1-255)
+u16 site            the address of the OUT that makes the trigger edge (its first byte)
+u16 quiet           frames with no speaker edge from `site` before the trigger edge, at least
+u32 code            FNV-1a 32 of the 32 bytes from site - 16 to site + 15: the code must be the same
+u32 intro_t         the intro's length in T-states
+u32 loop_t          one pass of the loop in T-states; 0: no loop
+u16 intro_buckets   intro_t / 69,888 (rounded down)
+u16 loop_buckets    loop_t / 69,888 (rounded down)
+u16 intro_events, u16 loop_events   each section's events
+u8 n_pitches        1-255
+u8 role[3]          each voice's stored role, as instrument[] above
+u24 pitch[n_pitches]   full periods in T-states (at least 64), 3 bytes each
+fingerprint         the intro's buckets, then the loop's: one nibble stream (below)
+events              the intro's, then the loop's (below)
+zero padding up to `size`
 ```
 
-A speaker edge is a change of the EAR level (bit 4 of the value written to port `FEh`), from any `OUT`. Events are in time order; a note on for a voice that sounds changes its pitch. The record produces no engine: the scores keep pointing into the list, and method B plays them (`snd_b_scores`, `core/sound/learned.c`, which also states the rules exactly):
+The fingerprint is the speaker edges in each whole bucket, capped at 255, as a stream of nibbles, the low nibble of each byte first. In each section, the first bucket is an escape (nibble 8) and its count as two nibbles, low first. Each next bucket is one nibble: the count's change from the bucket before as a 4-bit signed value (-7 to +7), or 8 (the escape) followed by the count as two nibbles. The stream ends on a whole byte (a spare nibble 0); the events start at the next byte.
+
+The events of each section are in time order. An event:
+
+```
+varint dt     64-T units since the section's event before (its first: since the section's start); LEB128, at most 4 bytes
+u8 b          bits 0-1 the voice; bits 2-7: 0 a note off, else a note on of level b >> 2 (1-63; the FM level is (b >> 2) x 4 + 3)
+u8 pitch      a note on's: its index in the pitch table
+```
+
+A speaker edge is a change of the EAR level (bit 4 of the value written to port `FEh`), from any `OUT`. A note on for a voice that sounds changes its pitch. The loop's first events restate every voice sounding at the loop's start (a note on at dt 0); at the start of each pass the player releases every sounding voice they do not restate.
+
+The record produces no engine: the scores keep pointing into the list, and method B plays them (`snd_b_scores`, `core/sound/learned.c`, which also states the rules exactly):
 
 - a score arms while no score plays, in a frame where `site` makes a speaker edge after at least `quiet` frames with none from it (a game's first frames count as quiet) and the 32 bytes around it hash to `code`: T0 is that edge. Every score that arms at the same edge (scores sharing `site` and `code`, such as the tunes of one music routine) is a candidate; a score whose trigger holds while another plays does not interrupt it;
-- while a score is followed, each bucket, once complete, is compared with its fingerprint: the live edges agree when they are within max(2, fingerprint / 8) of it; three buckets in a row that disagree stop it, and the fingerprint's end ends its following. Candidates are followed side by side;
-- when the decision for T0's frame is due (3 buckets compared), the candidates stopped by then are dropped, and of the rest the one with the fewest disagreeing buckets plays (of those tied, the first in the list); the others are dropped. From then on only that score is followed: when it stops, no other takes over;
-- method B decides each frame 3 frames late (`SND_DELAY_FRAMES`), so a stop cancels the frames not yet decided: those from the frame the first of the three buckets began in. The score plays its frames from T0's to the one its fingerprint ends in (the voices still sounding are released there), each with the events whose times fall in it, unless a table entry claims the frame (the table wins). Its frames name the engine after the table's entries and learned entries: the first score's is `score 1`.
+- while a score is followed, each whole bucket, once complete, is compared with its fingerprint, on the grid of its section (the intro's from T0, each pass's from that pass's start, the loop's buckets again for every pass): the live edges agree when they are within max(2, fingerprint / 8) of it; three buckets in a row that disagree stop it. A score with no loop ends its following with its intro; a score with a loop is followed round it, pass after pass, for as long as it agrees. Candidates are followed side by side;
+- when the decision for T0's frame is due (3 frames of buckets compared), the candidates stopped by then are dropped, and of the rest the one with the fewest disagreeing buckets plays (of those tied, the first in the list); the others are dropped. From then on only that score is followed: when it stops, no other takes over;
+- method B decides each frame 3 frames late (`SND_DELAY_FRAMES`), so a stop cancels the frames not yet decided: those from the frame the first of the three buckets began in. The score plays its frames from T0's on, each with the events whose times fall in it: with no loop, to the frame its intro ends in (the voices still sounding are released where it ends); with a loop, until it stops. A frame a table entry claims is the table's. A score's frames name the engine after the table's entries and learned entries: the first score's is `score 1`.
 
 The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole list (`ZX_ERR_FORMAT`, no entries) unless all of this holds, for every entry:
 
 - the list is at least 4 bytes and 4-byte aligned in memory; it holds at most 8 entries of kinds 0 and 1 and at most 8 of kind 2 (so `count` is at most 16);
-- the entry's `size` and `kind` lie in the list; `kind` is 0, 1 or 2; `size` is at least 36 (a kind-1 record: 16; a kind-2 record: 20), a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
+- the entry's `size` and `kind` lie in the list; `kind` is 0, 1 or 2; `size` is at least 36 (a kind-1 record: 16; a kind-2 record: 32), a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
 - a kind-1 record's `channels` is 1-3; it counts towards the 8 of kinds 0 and 1, has no sites and adds no work; nothing else in it is checked (its roles are read as above);
-- for a kind-2 record: `voices` is 1-3; `buckets` is 1-12,000 and the fingerprint lies in the record; every event lies in the record, its `dt` a varint of at most 4 bytes, its time (the sum of the `dt`s) before the fingerprint's end (`buckets` x 1,092 units), its voice below `voices`, bits 2-6 of `vf` clear, and a note on's period at least 64 and its level not 0; its roles are read as a kind-1 record's, and it adds no work;
+- for a kind-2 record: `voices` is 1-3; `intro_t` + `loop_t` is not 0; `intro_buckets` and `loop_buckets` are `intro_t` / 69,888 and `loop_t` / 69,888, together at most 12,000 (`SND_SCORE_BUCKETS_MAX`), and a loop has a whole bucket (`loop_t` 0 or at least 69,888); `n_pitches` is 1-255, the pitch table lies in the record and every period is at least 64; the fingerprint's nibbles lie in the record, each section's first bucket is an escape, every count is 0-255 and the spare nibble is 0; every event lies in the record, its `dt` a varint of at most 4 bytes, its time inside its section (below `intro_t`, or below `loop_t`: with no loop, the loop has no event), its voice below `voices`, and a note on's pitch index below `n_pitches`; its roles are read as a kind-1 record's, and it adds no work;
 - for a learned entry (kind 0):
   - `channels` is 1-3; `flags` is 0, 1 or 2 (no other bit, not `flips` and `observed` together); `timing` is 0 or 1;
   - `len` is 1 to 512 (`SND_LEARNED_LEN_MAX`) and `n_sites` at most 16 (`SND_LEARNED_SITES_MAX`);
@@ -130,7 +144,7 @@ The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole lis
   - every program is valid (below);
 - over the whole list, the sum of the learned entries' `n_sites x len` is at most 4096 (`SND_LEARNED_WORK_MAX`): method B hashes each site's signature for an `OUT` no entry is known at yet, so this bounds that work per frame.
 
-The reserved bytes (the 2 after the list's `count`, a record's byte after its roles, the padding) are ignored.
+The reserved bytes (the 2 after the list's `count`, a kind-1 record's byte after its roles, the padding) are ignored.
 
 A game whose list is rejected plays as if it had no learned entries. A bad sound section never affects the games; a bad section (or list) is the same as none.
 

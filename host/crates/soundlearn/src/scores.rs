@@ -20,7 +20,7 @@
 //!    (the built-in and kept entries) claims: that music is played already. Times are T-states
 //!    from the trigger edge (T0); a bucket is a frame long from T0, and a stretch is whole
 //!    buckets.
-//! 3. **The extra runs**, when the learner's run gives a score (step 6): each key of 1-9, 0,
+//! 3. **The extra runs**, when the learner's run gives a score (step 7): each key of 1-9, 0,
 //!    ENTER and SPACE but the one the learner's run presses once
 //!    ([`key_runs`](crate::listen::key_runs)), held 5 frames at frame 500, then nothing (as
 //!    [`choose_run`](crate::listen::choose_run)'s runs press their start keys): a menu of tunes
@@ -33,34 +33,52 @@
 //!    max(2, b / 8)) over their first [`SAME_BUCKETS`] buckets (or the shorter's length): the
 //!    longer is kept (of two as long, the earlier run's, then the earlier). A run that sounds no
 //!    different from those before (the same tunes, or none) costs its replay alone.
-//! 5. **The record.** Its fingerprint is the speaker edges per bucket ([`score_fingerprint`]),
-//!    its code the hash of the bytes around the `OUT` at the trigger's frame ([`score_code`]),
-//!    its `quiet` the frames with no edge from the `OUT` before the trigger, at most
-//!    [`TRIGGER_QUIET`]: the device arms at every edge the learner would call a trigger (and,
-//!    for a trigger with fewer quiet frames since the run's start, at the same edge: the device
-//!    counts a game's first frames as quiet). The notes come from the transcriber
-//!    ([`crate::transcribe`]), at least [`MUSIC_NOTES`] over [`MUSIC_PITCHES`] pitches (a held
-//!    tone is not music): a note on with its period and level at each note's start, a note
-//!    off at its end unless the voice's next note starts there (a legato change of pitch); a
-//!    note's end at or past the fingerprint's end is left to the player, which releases the
-//!    voices there. Its voices are the most notes sounding at once (the notes moved to voices
-//!    below that where needed), its roles by pitch: the voice lowest on average the bass, the
-//!    highest the lead, a third the pad, a lone voice the lead.
-//! 6. **Kept** ([`record`]): the learner's run's stretches are chosen first; when that keeps a
+//! 5. **The loop** ([`find_loop`]): most tunes loop, so a stretch's music is looked at for a
+//!    loop, on its speaker edges (the engines are deterministic, so a loop's edges repeat): the
+//!    shortest `loop_t`, and for it the earliest `intro_t`, such that from the edge at T0 +
+//!    `intro_t` to the stretch's end every edge comes again `loop_t` later (the same `OUT`
+//!    setting the same level, the gap to the next the same within contention's jitter), with a
+//!    whole repeat seen (`intro_t + 2 loop_t` within the stretch) and `loop_t` at least
+//!    [`LOOP_FRAMES`] frames. The edges decide: the notes transcribed from two passes may differ
+//!    a little. A stretch whose music does not repeat has no loop: its intro is the whole
+//!    stretch.
+//! 6. **The record.** An intro (`intro_t` from T0) and, with a loop, one pass of it (`loop_t`
+//!    from T0 + `intro_t`), which the device follows round for as long as the beeper agrees.
+//!    Each section's fingerprint is the speaker edges of each of its whole buckets, on its own
+//!    grid from its start ([`score_fingerprint`]); its code is the hash of the bytes around the
+//!    `OUT` at the trigger's frame ([`score_code`]), its `quiet` the frames with no edge from the
+//!    `OUT` before the trigger, at most [`TRIGGER_QUIET`]: the device arms at every edge the
+//!    learner would call a trigger (and, for a trigger with fewer quiet frames since the run's
+//!    start, at the same edge: the device counts a game's first frames as quiet). The notes come
+//!    from the transcriber ([`crate::transcribe`]) over the intro and the loop's first pass (and
+//!    a second more), at least [`MUSIC_NOTES`] over [`MUSIC_PITCHES`] pitches (a held tone is not
+//!    music): the intro's events those before `intro_t` (times since T0), the loop's those of its
+//!    first pass (times since its start), each voice sounding at the loop's start restated there
+//!    by a note on at 0; a note on with its period and level at each note's start, a note off at
+//!    its end unless the voice's next note starts there (a legato change of pitch); a note
+//!    sounding at its section's end is cut there with no note off, left to the player (which
+//!    releases or restates the voices at a pass's start, and releases them at the end of an
+//!    intro with no loop). Its voices are the most notes sounding at once (the notes moved to
+//!    voices below that where needed), its roles by pitch: the voice lowest on average the bass,
+//!    the highest the lead, a third the pad, a lone voice the lead.
+//! 7. **Kept** ([`record`]): the learner's run's stretches are chosen first; when that keeps a
 //!    score, the extra runs are taken and the choice is made again over all the runs. A choice
 //!    takes the stretches the longest first: at most [`SND_SCORES_MAX`] scores, within
-//!    [`SCORES_BYTES_MAX`] bytes in all (the longest cut to fit when it alone does not), none
-//!    whose stretch plays with a kept one's in the same run (method B plays one score at a
-//!    time), each built only then.
-//! 7. **Verified by replay:** the game is run again under the score's run's inputs through
+//!    [`SCORES_BYTES_MAX`] bytes in all (the longest with no loop cut to fit when it alone does
+//!    not), none whose stretch plays with a kept one's in the same run (method B plays one score
+//!    at a time), each built only then.
+//! 8. **Verified by replay:** the game is run again under the score's run's inputs through
 //!    method B with the game's whole list (its entries, roles and every score kept so far, it
-//!    last), and the score must arm at its trigger, follow its fingerprint to the end and get
-//!    at least [`CLAIM_SHARE`] of the frames its stretch sounds in, while each score kept before
-//!    still does in its own run (replayed again where the new score's `OUT` sounds): with
+//!    last), and the score must arm at its trigger, follow its fingerprint over its whole
+//!    stretch (round its loop as many times as the stretch repeats it; the frames within the
+//!    delay of the stretch's end aside, where the music may change after it and stop the loop)
+//!    and get at least [`CLAIM_SHARE`] of the frames its stretch sounds in, while each score kept
+//!    before still does in its own run (replayed again where the new score's `OUT` sounds): with
 //!    several scores sharing a trigger (the same `OUT` and code), the one whose fingerprint the
-//!    beeper follows plays. One that stops early is shortened to the frames it held (and
-//!    verified again, once) if that leaves [`SCORE_FRAMES`] frames; otherwise it is left out,
-//!    with the reason.
+//!    beeper follows plays. A score whose loop fails is recorded with none instead (the intro the
+//!    whole stretch) and verified again. One with no loop that stops early is shortened to the
+//!    frames it held (and verified again, once) if that leaves [`SCORE_FRAMES`] frames; otherwise
+//!    it is left out, with the reason.
 
 use crate::entry::{ear_edges, encode_list_scores, score_code, score_fingerprint, BuiltinRoles, LearnedEntry, ScoreEvent, ScoreRecord};
 use crate::listen::{Inputs, LISTEN_FRAMES};
@@ -89,8 +107,10 @@ pub const MUSIC_NOTES: usize = 8;
 pub const MUSIC_PITCHES: usize = 3;
 /// Extra runs replayed at once (each holds its tap).
 const EXTRA_AT_ONCE: usize = 4;
-/// A record's fixed part, before its fingerprint.
-const RECORD_HEAD: usize = 20;
+/// A record's fixed part, before its pitches.
+const RECORD_HEAD: usize = 32;
+/// Frames transcribed past a score's last section, so that its last notes are read whole.
+const TRANSCRIBE_MORE: usize = 50;
 /// 64-T units a bucket (a frame).
 const UNITS: u64 = ZX_FRAME_TSTATES as u64 / 64;
 
@@ -216,13 +236,146 @@ fn stretch(tap: &Tap, inputs: &Inputs, tr: Trigger) -> Stretch {
     Stretch { tr, buckets, end }
 }
 
+/// The shortest loop a score may have, in buckets.
+pub const LOOP_FRAMES: usize = 50;
+/// The share of a stretch's last lag of buckets that may disagree with the lag before it for
+/// that lag to be tried as a loop (see [`find_loop`]).
+const LOOP_COARSE: f64 = 0.15;
+/// How far two edges a loop apart may stray from the loop's length (the 48K's contention and
+/// interrupts slow the music by an amount that depends on where in the frame it is).
+const LOOP_WOBBLE: u64 = ZX_FRAME_TSTATES as u64 / 8;
+
+/// A speaker edge of a stretch: its time since T0, its `OUT` and the level it sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Edge {
+    t: u64,
+    pc: u16,
+    level: u8,
+}
+
+/// The speaker edges ([`ear_edges`] of `frames`, each frame's edges and the level before them)
+/// in the first `len_t` T-states from T0, T-state `t0` of the first frame.
+fn edge_times(frames: &[(Vec<zx_edge>, u8)], t0: u32, len_t: u64) -> Vec<Edge> {
+    let mut out = Vec::new();
+    for (f, (edges, level)) in frames.iter().enumerate() {
+        for e in ear_edges(*level, edges) {
+            let Some(t) = (f as u64 * u64::from(ZX_FRAME_TSTATES) + u64::from(e.tstate)).checked_sub(u64::from(t0)) else { continue };
+            if t < len_t {
+                out.push(Edge { t, pc: e.pc, level: e.level & 2 });
+            }
+        }
+    }
+    out
+}
+
+/// A score's loop: the music from T0 + `intro_t` repeats every `loop_t` T-states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Loop {
+    pub intro_t: u32,
+    pub loop_t: u32,
+}
+
+/// The loop of a stretch's music (`frames` from the trigger's, T0 T-state `t0` of the first, the
+/// stretch `buckets` long), if it has one (see the module docs).
+fn stretch_loop(frames: &[(Vec<zx_edge>, u8)], t0: u32, buckets: usize) -> Option<Loop> {
+    let len_t = buckets as u64 * u64::from(ZX_FRAME_TSTATES);
+    find_loop(&edge_times(frames, t0, len_t), len_t)
+}
+
+/// The loop of the speaker edges `e` (times since T0) of a stretch `len_t` T-states long: the
+/// shortest `loop_t`, and for it the earliest `intro_t`, such that from the edge at `intro_t` on
+/// every edge is followed `loop_t` later by one from the same `OUT` setting the same level, the
+/// gaps between them the same, to the stretch's end, with a whole repeat at least (`intro_t + 2
+/// loop_t` within the stretch). The music engines are deterministic, but the 48K's contention
+/// (and interrupts) slow them by an amount that depends on where in the frame they are: a gap
+/// may differ by 1/16 of it (32 T at least), an edge stray up to [`LOOP_WOBBLE`] from where the
+/// loop's length puts it, and `loop_t` is the mean distance of the edges paired.
+///
+/// The lags are found coarsely first, on the edges counted per bucket: a lag of `p` buckets is
+/// tried when the last `p` buckets agree with the `p` before them (each within the two buckets
+/// the lag falls between, or 1/8 off) for all but [`LOOP_COARSE`] of their edges; then each
+/// edge of the stretch's last edge's kind that lies a lag back is tried as its pair, the shortest
+/// lag first.
+fn find_loop(e: &[Edge], len_t: u64) -> Option<Loop> {
+    let frame = u64::from(ZX_FRAME_TSTATES);
+    let n = (len_t / frame) as usize;
+    if e.len() < 2 || n <= 2 * LOOP_FRAMES {
+        return None;
+    }
+    let mut f = vec![0u32; n];
+    for x in e {
+        if let Some(c) = f.get_mut((x.t / frame) as usize) {
+            *c += 1;
+        }
+    }
+    let mut lags: Vec<usize> = Vec::new();
+    for p in LOOP_FRAMES..=(n - 1) / 2 {
+        let (mut off, mut all) = (0u64, 0u64);
+        for b in n - p..n {
+            let (a, c) = (f[b - p], f[b - p - 1]);
+            let (lo, hi) = (a.min(c), a.max(c));
+            let v = f[b];
+            let slack = (v / 8).max(2);
+            off += u64::from(lo.saturating_sub(v).saturating_sub(slack) + v.saturating_sub(hi).saturating_sub(slack));
+            all += u64::from(v);
+        }
+        if all > 0 && (off as f64) <= LOOP_COARSE * all as f64 {
+            lags.push(p);
+        }
+    }
+    let r = e.len() - 1;
+    let last = e[r];
+    let gap = |i: usize| e[i + 1].t - e[i].t;
+    let close = |a: u64, b: u64| a.abs_diff(b) <= (a.max(b) / 16).max(32);
+    let mut tried = 0..0;
+    for p in lags {
+        // the pairs a lag of p buckets (and the wobble) back, not tried before: the shortest first
+        let from = last.t.saturating_sub((p as u64 + 1) * frame + LOOP_WOBBLE);
+        let to = last.t.saturating_sub((p as u64 * frame).saturating_sub(LOOP_WOBBLE));
+        let lo = e.partition_point(|x| x.t < from);
+        let hi = e.partition_point(|x| x.t <= to).min(r);
+        for c in (lo..hi).rev().filter(|c| !tried.contains(c)) {
+            if (e[c].pc, e[c].level) != (last.pc, last.level) {
+                continue;
+            }
+            let (k, l0) = (r - c, last.t - e[c].t);
+            if l0 < LOOP_FRAMES as u64 * frame {
+                continue;
+            }
+            // back from the last pair while the pairs hold
+            let mut j = c;
+            let mut sum = u128::from(l0);
+            while j > 0 {
+                let i = j - 1;
+                let (a, b) = (e[i], e[i + k]);
+                if (a.pc, a.level) != (b.pc, b.level) || !close(gap(i), gap(i + k)) || (b.t - a.t).abs_diff(l0) > LOOP_WOBBLE {
+                    break;
+                }
+                sum += u128::from(b.t - a.t);
+                j = i;
+            }
+            let loop_t = (sum / (c - j + 1) as u128) as u64;
+            let intro_t = e[j].t;
+            if intro_t + 2 * loop_t <= len_t {
+                return Some(Loop { intro_t: intro_t as u32, loop_t: loop_t as u32 });
+            }
+        }
+        // the windows move back as the lag grows: joined while they overlap
+        tried = if tried.is_empty() || hi < tried.start { lo..hi } else { lo.min(tried.start)..hi.max(tried.end) };
+    }
+    None
+}
+
 /// A score recorded for a routine: what the report says of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScoreSummary {
     /// The frame of its trigger.
     pub frame: u32,
     pub seconds: f64,
+    /// Its loop: the intro's seconds and a pass's.
+    pub looped: Option<(f64, f64)>,
     pub voices: u8,
+    /// The note ons stored.
     pub notes: usize,
     /// Its record's bytes.
     pub bytes: usize,
@@ -250,19 +403,25 @@ fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { es })
 }
 
-/// The record of a stretch, its notes counted.
-fn build(tap: &Tap, st: &Stretch) -> Result<(ScoreRecord, usize), String> {
+/// The record of a stretch with its loop `lp` (None: none, the intro the whole stretch), its
+/// notes counted.
+fn build(tap: &Tap, st: &Stretch, lp: Option<Loop>) -> Result<(ScoreRecord, usize), String> {
     let span = st.span();
     let frames = &tap.frames[span.clone()];
-    let notes = transcribe(frames, st.tr.t0);
-    let (events, voices, roles, count) = score_events(&notes, st.buckets);
-    let mut pitches: Vec<i64> = notes.iter().map(|n| (12.0 * f64::from(n.period_t.max(1)).log2()).round() as i64).collect();
+    let len_t = st.buckets as u64 * u64::from(ZX_FRAME_TSTATES);
+    let (intro_t, loop_t) = lp.map_or((len_t, 0), |l| (u64::from(l.intro_t), u64::from(l.loop_t)));
+    // the frames the notes are read from: the intro and the loop's first pass, and a second more
+    let needed = (intro_t + loop_t).div_ceil(u64::from(ZX_FRAME_TSTATES)) as usize + 1 + TRANSCRIBE_MORE;
+    let notes = transcribe(&frames[..needed.min(frames.len())], st.tr.t0);
+    let ev = score_events(&notes, intro_t, loop_t);
+    let semitone = |n: &Note| (12.0 * f64::from(n.period_t.max(1)).log2()).round() as i64;
+    let mut pitches: Vec<i64> = notes.iter().filter(|n| n.start_t < intro_t + loop_t).map(semitone).collect();
     pitches.sort_unstable();
     pitches.dedup();
-    if count < MUSIC_NOTES || pitches.len() < MUSIC_PITCHES {
+    if ev.notes < MUSIC_NOTES || pitches.len() < MUSIC_PITCHES {
         return Err(format!(
             "not music: the transcription finds {} over {} in its stretch (at least {MUSIC_NOTES} notes over {MUSIC_PITCHES} pitches)",
-            plural(count, "note"),
+            plural(ev.notes, "note"),
             plural(pitches.len(), "pitch")
         ));
     }
@@ -270,26 +429,62 @@ fn build(tap: &Tap, st: &Stretch) -> Result<(ScoreRecord, usize), String> {
         site: st.tr.site,
         quiet: st.tr.quiet,
         code: st.tr.code,
-        roles,
-        voices,
-        fingerprint: score_fingerprint(frames, 0, st.tr.t0, st.buckets),
-        events,
+        roles: ev.roles,
+        voices: ev.voices,
+        intro_t: intro_t as u32,
+        loop_t: loop_t as u32,
+        intro_fp: score_fingerprint(frames, st.tr.t0, 0, intro_t),
+        loop_fp: score_fingerprint(frames, st.tr.t0, intro_t, loop_t),
+        intro_events: ev.intro,
+        loop_events: ev.looped,
     };
-    Ok((rec, count))
+    Ok((rec, ev.notes))
 }
 
-/// A score's events from the transcriber's notes, within `buckets` from T0: the events, the
-/// voices, their roles and the notes (see the module docs).
-pub fn score_events(notes: &[Note], buckets: usize) -> (Vec<ScoreEvent>, u8, [u8; SND_TONAL], usize) {
-    let limit = buckets as u64 * UNITS;
+/// A score's events ([`score_events`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScoreEvents {
+    /// The intro's events (times since T0).
+    pub intro: Vec<ScoreEvent>,
+    /// The loop's first pass's events (times since its start).
+    pub looped: Vec<ScoreEvent>,
+    /// The voices (1-3) and their roles.
+    pub voices: u8,
+    pub roles: [u8; SND_TONAL],
+    /// The note ons stored.
+    pub notes: usize,
+}
+
+/// A score's events from the transcriber's notes: the intro's, `intro_t` from T0, and the loop's
+/// first pass's, `loop_t` from there (0: no loop), each section's notes cut at its ends, the
+/// voices and their roles (see the module docs).
+pub fn score_events(notes: &[Note], intro_t: u64, loop_t: u64) -> ScoreEvents {
     let unit = |t: u64| t.saturating_add(32) / 64;
-    // (start, end, period, level, voice) in 64-T units; the end at the fingerprint's end when past it
-    let mut ns: Vec<(u64, u64, u32, u8, u8)> = notes
-        .iter()
-        .filter(|n| unit(n.start_t) < limit)
-        .map(|n| (unit(n.start_t), unit(n.end_t).min(limit), n.period_t.clamp(64, 0xFF_FFFF), n.level.max(1), n.voice))
-        .filter(|n| n.1 > n.0)
-        .collect();
+    // each section's start (T from T0) and its units: an event's unit u holds 64 u < the length
+    let secs = [(0, intro_t.div_ceil(64)), (intro_t, loop_t.div_ceil(64))];
+    // a time in a section as one order: the section above the units
+    let at = |sec: usize, u: u64| (sec as u64) << 40 | u;
+    // the pieces of the notes in each section: (start, end, period, level, voice, cut at the
+    // section's end) in that order; a note sounding at the loop's start restated there
+    let mut ns: Vec<(u64, u64, u32, u8, u8, bool)> = Vec::new();
+    for (sec, &(from, lim)) in secs.iter().enumerate() {
+        for n in notes {
+            let to = from + lim * 64;
+            if n.end_t <= from || n.start_t >= to {
+                continue;
+            }
+            let start = unit(n.start_t.max(from) - from);
+            let end = unit(n.end_t.min(to) - from);
+            if start >= lim {
+                continue;
+            }
+            let cut = end >= lim;
+            if !cut && end <= start {
+                continue;
+            }
+            ns.push((at(sec, start), at(sec, end.min(lim)), n.period_t.clamp(64, 0xFF_FFFF), n.level.max(1), n.voice, cut));
+        }
+    }
     ns.sort_by_key(|n| (n.0, n.4));
     // the voices: the most notes sounding at once
     let mut marks: Vec<(u64, i32)> = ns.iter().flat_map(|n| [(n.0, 1), (n.1, -1)]).collect();
@@ -312,29 +507,26 @@ pub fn score_events(notes: &[Note], buckets: usize) -> (Vec<ScoreEvent>, u8, [u8
         free[v] = n.1;
         n.4 = v as u8;
     }
-    // events: (time, off before on, voice), on
+    // events: (time, off before on, voice), on; no off where a note is cut or the voice's next
+    // note starts (a legato change of pitch)
     type Key = (u64, u8, u8);
     let mut ev: Vec<(Key, Option<(u32, u8)>)> = Vec::new();
     for v in 0..voices as u8 {
-        let mine: Vec<&(u64, u64, u32, u8, u8)> = ns.iter().filter(|n| n.4 == v).collect();
+        let mine: Vec<&(u64, u64, u32, u8, u8, bool)> = ns.iter().filter(|n| n.4 == v).collect();
         for (i, n) in mine.iter().enumerate() {
             ev.push(((n.0, 1, v), Some((n.2, n.3))));
             let legato = mine.get(i + 1).is_some_and(|next| next.0 == n.1);
-            if n.1 < limit && !legato {
+            if !n.5 && !legato {
                 ev.push(((n.1, 0, v), None));
             }
         }
     }
     ev.sort_by_key(|e| e.0);
-    let mut prev = 0;
-    let events = ev
-        .iter()
-        .map(|&((u, _, voice), on)| {
-            let e = ScoreEvent { dt_t: (u - prev) * 64, voice, on };
-            prev = u;
-            e
-        })
-        .collect();
+    let (mut intro, mut looped) = (Vec::new(), Vec::new());
+    for &((key, _, voice), on) in &ev {
+        let e = ScoreEvent { t: ((key & ((1 << 40) - 1)) * 64) as u32, voice, on };
+        if key >> 40 == 0 { intro.push(e) } else { looped.push(e) }
+    }
     // roles by each voice's mean pitch (log period, weighted by duration): high period is low
     let mut by: Vec<(f64, usize)> = (0..voices)
         .map(|v| {
@@ -359,25 +551,17 @@ pub fn score_events(notes: &[Note], buckets: usize) -> (Vec<ScoreEvent>, u8, [u8
             }
         }
     }
-    (events, voices as u8, roles, ns.len())
+    ScoreEvents { intro, looped, voices: voices as u8, roles, notes: ns.len() }
 }
 
 /// `r` cut to its first `buckets` buckets: its events from there on dropped (the player releases
 /// the voices where the fingerprint ends); the notes left.
 fn cut(r: &ScoreRecord, buckets: usize) -> (ScoreRecord, usize) {
     let limit = buckets as u64 * UNITS * 64;
-    let mut t = 0;
-    let events: Vec<ScoreEvent> = r
-        .events
-        .iter()
-        .take_while(|e| {
-            t += e.dt_t;
-            t < limit
-        })
-        .copied()
-        .collect();
+    let events: Vec<ScoreEvent> = r.intro_events.iter().take_while(|e| u64::from(e.t) < limit).copied().collect();
     let notes = events.iter().filter(|e| e.on.is_some()).count();
-    (ScoreRecord { fingerprint: r.fingerprint[..buckets.min(r.fingerprint.len())].to_vec(), events, ..r.clone() }, notes)
+    let intro_fp = r.intro_fp[..buckets.min(r.intro_fp.len())].to_vec();
+    (ScoreRecord { intro_t: limit as u32, intro_fp, intro_events: events, ..r.clone() }, notes)
 }
 
 /// A record's bytes in the list.
@@ -423,13 +607,16 @@ enum Fail {
     Share(String),
 }
 
-/// Whether score `index` (of the list, method B's table `table` entries long) fared well in the
-/// replay `dec` for its stretch `st` (see the module docs).
-fn check(tap: &Tap, dec: &[(bool, u8)], table: usize, index: usize, st: &Stretch) -> Result<(), Fail> {
+/// Whether score `index` (of the list, method B's table `table` entries long; `looped`: it has a
+/// loop) fared well in the replay `dec` for its stretch `st` (see the module docs).
+fn check(tap: &Tap, dec: &[(bool, u8)], table: usize, index: usize, st: &Stretch, looped: bool) -> Result<(), Fail> {
     let id = (table + 1 + index) as u8;
     let span = st.span();
     let j = span.start;
-    if let Some(f) = span.clone().find(|&f| !dec.get(f).is_some_and(|d| d.0)) {
+    // a loop is followed past the stretch's end: where the music then changes, the frames within
+    // the delay of the third bucket that disagrees are not its
+    let held = if looped { j..(span.end + 2).saturating_sub(SND_DELAY_FRAMES as usize).max(j + 1) } else { span.clone() };
+    if let Some(f) = held.clone().find(|&f| !dec.get(f).is_some_and(|d| d.0)) {
         let why = if f == j {
             format!("method B does not arm it at its trigger (frame {j})")
         } else {
@@ -482,8 +669,12 @@ struct Take {
     claimed: bool,
     /// Left out because it plays with a score kept.
     overlap: bool,
-    /// Its record and notes, once built.
+    /// Its loop, once looked for (None inside: it has none).
+    lp: Option<Option<Loop>>,
+    /// Its record and notes, once built (with its loop, if it has one).
     built: Option<(ScoreRecord, usize)>,
+    /// Its record with no loop, once built (when the one with its loop is not kept), or why not.
+    plain: Option<Result<(ScoreRecord, usize), String>>,
     /// The choice's outcome.
     got: Option<Result<ScoreSummary, String>>,
 }
@@ -533,8 +724,8 @@ fn gather(run: &Run, r: usize, outs: &[(Option<usize>, u16)], takes: &mut Vec<Ta
             continue;
         }
         for st in all.into_iter().filter(|s| s.buckets >= SCORE_FRAMES as usize) {
-            let fp = score_fingerprint(&run.tap.frames[st.span()], 0, st.tr.t0, st.buckets);
-            add(takes, Take { run: r, block, st, fp, same: None, left: None, claimed: false, overlap: false, built: None, got: None });
+            let fp = score_fingerprint(&run.tap.frames[st.span()], st.tr.t0, 0, st.buckets as u64 * UNITS * 64);
+            add(takes, Take { run: r, block, st, fp, same: None, left: None, claimed: false, overlap: false, lp: None, built: None, plain: None, got: None });
         }
     }
     none
@@ -583,6 +774,7 @@ fn summary(st: &Stretch, rec: &ScoreRecord, notes: usize, shortened: Option<Stri
     ScoreSummary {
         frame: st.tr.frame,
         seconds: st.buckets as f64 * f64::from(ZX_FRAME_TSTATES) / crate::spectrum::CLOCK_HZ,
+        looped: (rec.loop_t > 0).then(|| (f64::from(rec.intro_t) / crate::spectrum::CLOCK_HZ, f64::from(rec.loop_t) / crate::spectrum::CLOCK_HZ)),
         voices: rec.voices,
         notes,
         bytes: bytes(rec),
@@ -612,14 +804,19 @@ fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool) -> Vec<Kept> 
             t.overlap = overlap;
             continue;
         }
-        // a record holds its fingerprint: one that cannot fit is not built
+        let tap = &runs[t.run].tap;
+        let lp = *t.lp.get_or_insert_with(|| stretch_loop(&tap.frames[t.st.span()], t.st.tr.t0, t.st.buckets));
+        // a record holds a nibble at least for each bucket of its sections: one that cannot fit
+        // is not built
         let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
-        if !kept.is_empty() && used + RECORD_HEAD + t.st.buckets > SCORES_BYTES_MAX {
+        let stored = lp.map_or(t.st.buckets, |l| ((u64::from(l.intro_t) + u64::from(l.loop_t)) / u64::from(ZX_FRAME_TSTATES)) as usize);
+        if !kept.is_empty() && used + RECORD_HEAD + stored / 2 > SCORES_BYTES_MAX {
             t.got = Some(Err(over_bytes()));
             continue;
         }
         if t.built.is_none() {
-            match build(&runs[t.run].tap, &t.st) {
+            // with its loop; one whose loop is not music, with none
+            match build(tap, &t.st, lp).or_else(|why| if lp.is_some() { plain(tap, t) } else { Err(why) }) {
                 Ok(b) => t.built = Some(b),
                 Err(why) => {
                     t.left = Some(why);
@@ -628,16 +825,24 @@ fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool) -> Vec<Kept> 
             }
         }
         let Some((rec, notes)) = t.built.clone() else { continue };
-        t.got = Some(match keep_one(g, runs, &kept, t.run, t.st, rec, notes) {
-            Ok(k) => {
-                let sum = k.sum.clone();
-                kept.push(k);
-                Ok(sum)
-            }
-            Err(why) => Err(why),
-        });
+        let looped = rec.loop_t > 0;
+        let mut got = keep_one(g, runs, &kept, t.run, t.st, rec, notes);
+        if got.is_err() && looped {
+            // its loop not followed: the record with none
+            got = plain(tap, t).and_then(|(rec, notes)| keep_one(g, runs, &kept, t.run, t.st, rec, notes));
+        }
+        t.got = Some(got.map(|k| {
+            let sum = k.sum.clone();
+            kept.push(k);
+            sum
+        }));
     }
     kept
+}
+
+/// Take `t`'s record with no loop (built once).
+fn plain(tap: &Tap, t: &mut Take) -> Result<(ScoreRecord, usize), String> {
+    t.plain.get_or_insert_with(|| build(tap, &t.st, None)).clone()
 }
 
 /// The outcomes of `takes` for the report, in the order of the runs and then of the frames, the
@@ -819,7 +1024,7 @@ fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mu
     let mut shortened = None;
     let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
     if used + bytes(&rec) > SCORES_BYTES_MAX {
-        if !kept.is_empty() {
+        if !kept.is_empty() || rec.loop_t > 0 {
             return Err(over_bytes());
         }
         // the longest alone: cut to the most buckets that fit
@@ -858,13 +1063,13 @@ fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mu
         let Some((dec, table)) = &mine else {
             return Err("method B's decoder refuses its record".into());
         };
-        match check(&runs[r].tap, dec, *table, kept.len(), &st) {
+        match check(&runs[r].tap, dec, *table, kept.len(), &st, rec.loop_t > 0) {
             Ok(()) => {}
             Err(Fail::Share(why)) => return Err(why),
             Err(Fail::Held(f, why)) => {
                 let lead = usize::from(st.tr.t0 != 0);
                 let held = (f - st.span().start).saturating_sub(lead);
-                if retried || held < SCORE_FRAMES as usize {
+                if retried || held < SCORE_FRAMES as usize || rec.loop_t > 0 {
                     return Err(why);
                 }
                 retried = true;
@@ -880,7 +1085,7 @@ fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mu
             let Some((dec, table)) = got else {
                 return Err("method B's decoder refuses its record".into());
             };
-            if let Some(k) = kept.iter().enumerate().find(|(i, k)| k.run == q && check(&runs[q].tap, &dec, table, *i, &k.st).is_err()).map(|(_, k)| k) {
+            if let Some(k) = kept.iter().enumerate().find(|(i, k)| k.run == q && check(&runs[q].tap, &dec, table, *i, &k.st, k.rec.loop_t > 0).is_err()).map(|(_, k)| k) {
                 return Err(format!("it keeps {} from playing", whose(runs, k)));
             }
         }
@@ -902,13 +1107,14 @@ mod tests {
 
     /// The events as (time in 64-T units, voice, on).
     fn timed(ev: &[ScoreEvent]) -> Vec<Timed> {
-        let mut t = 0;
-        ev.iter()
-            .map(|e| {
-                t += e.dt_t;
-                (t / 64, e.voice, e.on)
-            })
-            .collect()
+        ev.iter().map(|e| (u64::from(e.t) / 64, e.voice, e.on)).collect()
+    }
+
+    /// [`score_events`] with no loop, `buckets` long: (events, voices, roles, notes).
+    fn plain(notes: &[Note], buckets: u64) -> (Vec<ScoreEvent>, u8, [u8; SND_TONAL], usize) {
+        let ev = score_events(notes, buckets * UNITS * 64, 0);
+        assert!(ev.looped.is_empty());
+        (ev.intro, ev.voices, ev.roles, ev.notes)
     }
 
     #[test]
@@ -916,7 +1122,7 @@ mod tests {
         // a high line with a legato change and a rest, a low note under it; the transcriber's
         // voice 2 moves to voice 1 (two notes at most sound at once)
         let notes = [note(0, 0, 100, 2000), note(2, 10, 300, 8000), note(0, 100, 200, 1800), note(0, 250, 400, 1600)];
-        let (ev, voices, roles, n) = score_events(&notes, 1);
+        let (ev, voices, roles, n) = plain(&notes, 1);
         assert_eq!((voices, n), (2, 4));
         assert_eq!(roles, [SND_ROLE_LEAD, SND_ROLE_BASS, 0]);
         assert_eq!(
@@ -933,22 +1139,97 @@ mod tests {
         );
         // cut at the fingerprint's end: a note ending there or past it has no off, one starting
         // there is left out
-        let (ev, _, _, n) = score_events(&[note(0, 0, 1092, 2000), note(1, 500, 2000, 4000), note(1, 1092, 1500, 3000)], 1);
+        let (ev, _, _, n) = plain(&[note(0, 0, 1092, 2000), note(1, 500, 2000, 4000), note(1, 1092, 1500, 3000)], 1);
         assert_eq!(n, 2);
         assert_eq!(timed(&ev), [(0, 0, Some((2000, 100))), (500, 1, Some((4000, 100)))]);
         // three voices: low bass, middle pad, high lead; a lone voice the lead
-        let (_, voices, roles, _) = score_events(&[note(0, 0, 50, 1000), note(1, 0, 50, 9000), note(2, 0, 50, 3000)], 1);
+        let (_, voices, roles, _) = plain(&[note(0, 0, 50, 1000), note(1, 0, 50, 9000), note(2, 0, 50, 3000)], 1);
         assert_eq!((voices, roles), (3, [SND_ROLE_LEAD, SND_ROLE_BASS, SND_ROLE_PAD]));
-        assert_eq!(score_events(&[note(1, 5, 50, 1000)], 1).2, [SND_ROLE_LEAD, 0, 0]);
+        assert_eq!(plain(&[note(1, 5, 50, 1000)], 1).2, [SND_ROLE_LEAD, 0, 0]);
+    }
+
+    #[test]
+    fn events_of_an_intro_and_a_loop() {
+        // the intro 1000 units, the loop 2000 from there: a note across the intro's end is cut
+        // there and restated at the loop's start; one across the loop's end is cut there; one
+        // after the loop's first pass is left out; times from each section's start
+        let notes = [note(0, 0, 400, 2000), note(1, 900, 1300, 4000), note(0, 1000, 1500, 1800), note(0, 2800, 3200, 1600), note(1, 3000, 3100, 3000)];
+        let ev = score_events(&notes, 1000 * 64, 2000 * 64);
+        assert_eq!((ev.voices, ev.notes), (2, 5));
+        assert_eq!(timed(&ev.intro), [(0, 0, Some((2000, 100))), (400, 0, None), (900, 1, Some((4000, 100)))]);
+        assert_eq!(timed(&ev.looped), [(0, 0, Some((1800, 100))), (0, 1, Some((4000, 100))), (300, 1, None), (500, 0, None), (1800, 0, Some((1600, 100)))]);
+        // a section's length not a whole unit: the last unit inside it holds an event, none past
+        let ev = score_events(&[note(0, 0, 2000, 2000), note(1, 999, 2000, 3000)], 999 * 64 + 10, 500 * 64);
+        assert_eq!(timed(&ev.intro), [(0, 0, Some((2000, 100))), (999, 1, Some((3000, 100)))]);
+        assert_eq!(timed(&ev.looped), [(0, 0, Some((2000, 100))), (0, 1, Some((3000, 100)))]);
+    }
+
+    /// Speaker edges of a tune at `out`: each note (half period in T, its length in T) a square
+    /// wave from its start, the notes one after another from `from`; `jitter` adds (edge index x
+    /// 7) mod `jitter` T to each edge, as contention does.
+    fn square(notes: &[(u64, u64)], from: u64, jitter: u64) -> Vec<Edge> {
+        let mut out = Vec::new();
+        let mut t = from;
+        for &(half, len) in notes {
+            let mut level = 0;
+            let mut x = t;
+            while x < t + len {
+                level ^= 2;
+                let j = if jitter > 0 { (out.len() as u64 * 7) % jitter } else { 0 };
+                out.push(Edge { t: x + j, pc: 0x8000, level });
+                x += half;
+            }
+            t += len;
+        }
+        out
+    }
+
+    const F: u64 = ZX_FRAME_TSTATES as u64;
+
+    #[test]
+    fn finds_the_loop_of_a_tune() {
+        // an intro of three notes, then a phrase of five, four times over, cut mid-pass
+        let intro = [(900, 20 * F + 123), (1200, 15 * F + 7), (1500, 30 * F)];
+        let phrase = [(600, 25 * F), (700, 10 * F + 500), (800, 40 * F), (650, 12 * F + 1), (1000, 33 * F)];
+        let intro_t: u64 = intro.iter().map(|n| n.1).sum();
+        let loop_t: u64 = phrase.iter().map(|n| n.1).sum();
+        let mut notes = intro.to_vec();
+        for _ in 0..4 {
+            notes.extend(phrase);
+        }
+        for jitter in [0, 5] {
+            let e: Vec<Edge> = square(&notes, 0, jitter).into_iter().filter(|e| e.t < intro_t + 3 * loop_t + 50 * F).collect();
+            let len_t = intro_t + 3 * loop_t + 60 * F;
+            let lp = find_loop(&e, len_t).expect("a loop");
+            assert_eq!(u64::from(lp.intro_t), intro_t + if jitter > 0 { (e.iter().position(|x| x.t >= intro_t).unwrap() as u64 * 7) % jitter } else { 0 });
+            assert!(u64::from(lp.loop_t).abs_diff(loop_t) <= jitter, "{lp:?} {loop_t}");
+            // under two whole passes: no loop
+            assert_eq!(find_loop(&e, intro_t + 2 * loop_t - F), None);
+        }
+        // a tune that never repeats
+        let e = square(&intro.iter().chain(&phrase).copied().cycle().take(40).enumerate().map(|(i, n)| (n.0 + i as u64, n.1)).collect::<Vec<_>>(), 0, 0);
+        assert_eq!(find_loop(&e, e.last().unwrap().t + F), None);
     }
 
     #[test]
     fn a_cut_score_keeps_its_first_buckets() {
-        let (events, voices, roles, _) = score_events(&[note(0, 0, 1000, 2000), note(0, 1500, 2500, 1000)], 3);
-        let r = ScoreRecord { site: 0x8000, quiet: 25, code: 1, roles, voices, fingerprint: vec![9, 8, 7], events };
+        let (events, voices, roles, _) = plain(&[note(0, 0, 1000, 2000), note(0, 1500, 2500, 1000)], 3);
+        let r = ScoreRecord {
+            site: 0x8000,
+            quiet: 25,
+            code: 1,
+            roles,
+            voices,
+            intro_t: 3 * UNITS as u32 * 64,
+            loop_t: 0,
+            intro_fp: vec![9, 8, 7],
+            loop_fp: vec![],
+            intro_events: events,
+            loop_events: vec![],
+        };
         let (c, n) = cut(&r, 2);
-        assert_eq!((c.fingerprint.as_slice(), n), (&[9u8, 8][..], 2));
-        assert_eq!(timed(&c.events), [(0, 0, Some((2000, 100))), (1000, 0, None), (1500, 0, Some((1000, 100)))]);
+        assert_eq!((c.intro_fp.as_slice(), n), (&[9u8, 8][..], 2));
+        assert_eq!(timed(&c.intro_events), [(0, 0, Some((2000, 100))), (1000, 0, None), (1500, 0, Some((1000, 100)))]);
         assert!(bytes(&c) < bytes(&r) && bytes(&c).is_multiple_of(4));
     }
 }

@@ -239,16 +239,23 @@ from the same `OUT`s and from any other `OUT` that sounded there in 250 frames a
 routine already known. Two stretches whose speaker edges agree frame by frame over their first 100
 frames (2 s) are the same tune: the longer is kept. Each extra run costs a replay of the game, and
 each new tune a transcription and the replays that verify it, so a menu of tunes takes several
-times as long as a game with one. A score's notes are read from the speaker's sound alone (up to 3
-voices, by their spectrum; a held tone, under 8 notes or 3 pitches, is not music), and the pack
-stores them with the speaker edges of each frame-long stretch from that first edge. Method B,
-replaying the score's own run with the game's whole list, must play the score from that edge to
-its end while every score kept before still plays in its run; one it stops following is cut to
-where it held, if 250 frames remain. At most 8 scores a game, the longest first, within 128 KB in
-all. On the FM-1, FM: engines starts a score when its `OUT` makes that first edge after the same
-silence with the same code around it (several scores of one `OUT` start together, and the one
-whose recorded edges the beeper follows plays), and plays it in step with the beeper, comparing
-the beeper's edges with the recorded ones as it goes: when the game does something else (a key
+times as long as a game with one. Most tunes loop: when a stretch's speaker edges repeat (from
+some point on, every edge comes again one loop later, to the stretch's end, with a whole repeat
+heard and the loop at least a second long), the score is an intro and one pass of the loop, the
+shortest that repeats, and the FM-1 goes round the loop for as long as the beeper keeps to it;
+music that does not repeat is all intro. A score's notes are read from the speaker's sound alone
+(up to 3 voices, by their spectrum; a held tone, under 8 notes or 3 pitches, is not music), and
+the pack stores them compactly: each pitch once in a table, each note a byte or two and a short
+time, and the speaker edges of each frame-long stretch of the intro and of the loop as small
+changes from the stretch before. Method B, replaying the score's own run with the game's whole
+list, must play the score over the whole stretch (round its loop as often as the run repeats
+it) while every score kept before still plays in its run; a score whose loop it does not follow
+is recorded with no loop instead, and one with no loop it stops following is cut to where it
+held, if 250 frames remain. At most 8 scores a game, the longest first, within 128 KB in all. On
+the FM-1, FM: engines starts a score when its `OUT` makes that first edge after the same silence
+with the same code around it (several scores of one `OUT` start together, and the one whose
+recorded edges the beeper follows plays), and plays it in step with the beeper, comparing the
+beeper's edges with the recorded ones as it goes: when the game does something else (a key
 pressed during the tune, another tune), the score stops within a few frames and the beeper
 plays. Its voices take their instruments by pitch, as a routine's channels do.
 
@@ -266,8 +273,9 @@ not used, the routine observed, each channel's value (`word (9004h)`, `DE`, `IYh
 gives the pitch (`counter x1`: that many passes of the loop; `16-bit accumulator`: a step added
 each pass) and its score (the share of the music in which the predicted pitch was heard), its
 replay, and `learned by observation: 2 channels` or `observation:` and why not. A routine that
-could have a score ends with its scores, `recorded score: 168.5 s from frame 505, 3 voices,
-2351 notes, 23.1 KB` (its length, the frame of its first edge, its voices, notes and size), the
+could have a score ends with its scores, `recorded score: 169.5 s from frame 506 (intro 4.2 s,
+loop 41.6 s), 3 voices, 1074 notes, 4.1 KB` (its stretch's length, the frame of its first edge,
+its intro and loop when it loops, its voices, the notes stored and its size), the
 run named when it is an extra one (`recorded score (key 3 once): ...`), and its stretches left
 out, `no score:` and why not; an `OUT` heard only in the extra runs has a block of its own
 (`OUT at 9A12h, heard only in other runs`) unless it was found in the code; the game's line counts

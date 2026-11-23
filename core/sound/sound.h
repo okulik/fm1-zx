@@ -473,12 +473,12 @@ int snd_learned_decode(const uint8_t *list, uint32_t avail, snd_engine *en, snd_
 void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, uint32_t n);
 
 /* Recorded scores (kind-2 records, learned.c): a stretch of a game's music that plays the same
- * every time from its first edge, which the personal-pack builder recorded as note events with
- * the speaker edges of each frame-long bucket from that edge (its fingerprint). Method B plays a
- * score from its trigger edge while the live edges keep agreeing with the fingerprint
- * (snd_b_scores; the rules in learned.c). */
+ * every time from its first edge, an intro and optionally a loop that repeats, which the
+ * personal-pack builder recorded as note events with the speaker edges of each frame-long bucket
+ * (its fingerprint). Method B plays a score from its trigger edge, round its loop, while the live
+ * edges keep agreeing with the fingerprint (snd_b_scores; the rules in learned.c). */
 #define SND_SCORES_MAX 8u             /* kind-2 records per game */
-#define SND_SCORE_BUCKETS_MAX 12000u  /* buckets of a score's fingerprint (4 minutes) */
+#define SND_SCORE_BUCKETS_MAX 12000u  /* whole buckets of a score's fingerprint, intro and loop (4 minutes) */
 
 struct snd_b;
 /* Method B (snd_b_init just run on b) plays the scores of a list snd_learned_decode accepted;
@@ -552,21 +552,34 @@ typedef struct {          /* what B saw in one frame, when it arrived */
 	uint8_t cont;         /* the frame's first edges carry on the note the frame before ended with */
 } snd_b_rec;
 
+typedef struct {          /* a score followed: where its fingerprint stands (learned.c) */
+	uint32_t end;         /* where its current bucket ends: T from the start of the frame fed next */
+	uint32_t nib;         /* its next bucket's nibble in the fingerprint */
+	uint32_t loop_nib;    /* the loop's first nibble (once the loop is reached) */
+	uint16_t bucket;      /* the current bucket of its section (its whole buckets: the partial one) */
+	uint16_t count;       /* speaker edges in the current bucket so far, up to 255 */
+	uint8_t sec;          /* 0 the intro, 1 the loop, 2 its following ended */
+	uint8_t prev;         /* the last bucket's recorded count */
+	uint8_t run;          /* its buckets in a row that disagreed */
+	uint8_t miss;         /* its buckets that disagreed */
+} snd_b_follow;
+
 typedef struct {          /* the recorded score playing, or its candidates (learned.c) */
 	const uint8_t *rec;   /* its record in the list (the first candidate's until one is chosen);
 	                       * NULL: none */
 	uint32_t f0;          /* the frame of its trigger edge (snd_b.frames counting it) */
 	uint32_t t0;          /* the trigger edge's T-state in frame f0: T0 */
-	uint32_t frames;      /* frames it plays from f0 (fewer once it stops) */
+	uint32_t frames;      /* frames it plays from f0 (~0: a loop, until it stops) */
+	int32_t start;        /* its current section's (or pass's) start: T from the start of the
+	                       * frame decided next */
 	uint32_t at;          /* its next event: offset in rec (past the event's time) */
-	uint32_t u;           /* that event's time from T0, in 64-T units */
-	uint16_t left;        /* events not yet decided */
-	uint16_t bucket;      /* the next bucket to compare */
-	uint16_t count;       /* speaker edges in that bucket so far */
+	uint32_t u;           /* that event's time from the section's start, in 64-T units */
+	uint32_t loop_at;     /* the loop's first event: offset in rec (once the loop is reached) */
+	uint16_t left;        /* the section's events not yet decided */
+	uint8_t sec;          /* the section playing: 0 the intro, 1 the loop */
 	uint8_t live;         /* bit k: score k followed (a candidate, or the score chosen); 0: stopped */
 	uint8_t index;        /* 1 + its index in snd_b.score */
-	uint8_t run[SND_SCORES_MAX];    /* per score followed: its buckets in a row that disagreed */
-	uint8_t miss[SND_SCORES_MAX];   /* per score followed: its buckets that disagreed */
+	snd_b_follow fl[SND_SCORES_MAX];   /* per score followed */
 	snd_voice v[SND_TONAL];   /* its voices, as decided so far */
 } snd_b_score;
 

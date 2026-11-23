@@ -255,12 +255,12 @@ fn records_a_score_for_music_nothing_reads() {
     assert_eq!(s.code, soundlearn::entry::score_code(|a| fixtures::bare(&code).peek(a), l["out1"]));
     // to the frames method B decides: 9000 - its delay
     let decided = 9000 - zx_sys::SND_DELAY_FRAMES as usize;
-    assert_eq!(s.fingerprint.len(), decided - f0 - usize::from(t0 != 0));
+    assert_eq!(s.intro_fp.len(), decided - f0 - usize::from(t0 != 0));
     assert!(s.roles[..usize::from(s.voices)].contains(&zx_sys::SND_ROLE_BASS) && s.roles.contains(&SND_ROLE_LEAD), "{s:?}");
     let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
     assert_eq!(SndEngines::with_learned(&list).expect("the list decodes").scores(), 1);
     let d = &got.details;
-    assert!(d.contains(&format!("\n    recorded score: {:.1} s from frame {f0}, {} voices, ", s.fingerprint.len() as f64 * 0.019968, s.voices)), "{d}");
+    assert!(d.contains(&format!("\n    recorded score: {:.1} s from frame {f0}, {} voices, ", s.intro_fp.len() as f64 * 0.019968, s.voices)), "{d}");
     assert!(!d.contains("shortened") && !d.contains("no score"), "{d}");
     // the same game and inputs give the same score
     assert_eq!(learn(&|| fixtures::bare(&code), &quiet()), got);
@@ -284,8 +284,8 @@ fn a_key_press_ends_the_stretch() {
     assert_eq!(got.scores.len(), 1, "{}", got.details);
     let s = &got.scores[0];
     let (f0, t0) = first_edge_from(&code, &space, l["out1"]);
-    assert_eq!(s.fingerprint.len(), PRESS as usize - f0 - usize::from(t0 != 0), "the last bucket ends in frame {}", PRESS - 1);
-    assert!(got.details.contains(&format!("\n    recorded score: {:.1} s from frame {f0}, ", s.fingerprint.len() as f64 * 0.019968)), "{}", got.details);
+    assert_eq!(s.intro_fp.len(), PRESS as usize - f0 - usize::from(t0 != 0), "the last bucket ends in frame {}", PRESS - 1);
+    assert!(got.details.contains(&format!("\n    recorded score: {:.1} s from frame {f0}, ", s.intro_fp.len() as f64 * 0.019968)), "{}", got.details);
 }
 
 /// The second tune of [`jukebox`] and [`medley`].
@@ -427,7 +427,7 @@ fn score_frames(code: &[u8], inputs: &Inputs, list: &[u8]) -> Vec<Vec<usize>> {
 /// nowhere else).
 fn plays_through(s: &soundlearn::ScoreRecord, f0: usize, frames: &[usize]) -> bool {
     let n = frames.len();
-    n >= s.fingerprint.len() && n <= s.fingerprint.len() + 1 && frames.first() == Some(&f0) && frames.windows(2).all(|w| w[1] == w[0] + 1)
+    n >= s.intro_fp.len() && n <= s.intro_fp.len() + 1 && frames.first() == Some(&f0) && frames.windows(2).all(|w| w[1] == w[0] + 1)
 }
 
 /// Key 1 learned: key 1 once is the learner's run (as [`choose_run`] picks it for a menu of
@@ -493,6 +493,7 @@ fn records_each_tune_of_a_run() {
     println!("{}\n{}", got.line, got.details);
     assert_eq!(got.scores.len(), 2, "{}", got.details);
     assert!(got.scores.iter().all(|s| s.site == l["out1"]) && got.scores[0].code == got.scores[1].code, "one trigger");
+    assert!(got.scores.iter().all(|s| s.loop_t == 0 && s.loop_fp.is_empty() && s.loop_events.is_empty()), "tunes that do not repeat: no loop");
     assert_eq!(got.details.matches("\n    recorded score: ").count(), 2, "{}", got.details);
     assert!(!got.details.contains("once)") && !got.details.contains("no score"), "{}", got.details);
     let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
@@ -527,4 +528,160 @@ fn records_a_tune_heard_only_in_an_extra_run() {
     let b = sites.iter().position(|&s| s == l["out1_b"]).unwrap();
     let (f0, _) = first_edge_from(&code, &key2, l["out1_b"]);
     assert!(plays_through(&got.scores[b], f0, &score_frames(&code, &key2, &list)[b]));
+}
+
+/// [`looping_tune`]'s intro: steps of channels 0 and 1 and a length in frames each; the last a
+/// rest (steps too small to carry within it).
+const INTRO: [(u16, u16, u8); 4] = [(265, 662, 40), (334, 835, 30), (445, 1112, 50), (1, 1, 20)];
+/// The phrase [`looping_tune`] loops after its intro.
+const PHRASE: [(u16, u16, u8); 6] = [(297, 891, 40), (354, 1062, 30), (396, 990, 40), (499, 1497, 30), (315, 788, 50), (600, 1500, 40)];
+/// The phrase it loops once SPACE is pressed.
+const PHRASE2: [(u16, u16, u8); 3] = [(530, 1590, 30), (700, 1400, 30), (450, 1350, 30)];
+
+/// A tune paced by the frame interrupt (IM 2, an `EI ; RET` at 9191h): about 70 frames of
+/// silence, then an intro and a phrase it loops, each note's accumulators from 0, so that each
+/// pass of the phrase makes the same speaker edges at the same T-states in its frames. Each
+/// note is a number of frames, each frame 512 passes of [`mixing_tune`]'s loop after the
+/// interrupt (the speaker left low). Each frame it reads SPACE: while held, it plays
+/// [`PHRASE2`] from its start, which it loops from then on.
+///
+/// ```text
+/// start: DI ; LD A,90h ; LD I,A ; IM 2 ; EI ; LD H,70
+/// quiet: HALT ; DEC H ; JR NZ,quiet
+///        LD IX,intro ; CALL play
+/// again: LD IX,(cur) ; CALL play ; JR again
+/// play:  LD E,(IX+0) ; LD D,(IX+1) ; LD A,D ; OR E ; RET Z
+///        EXX ; LD E,(IX+2) ; LD D,(IX+3) ; LD HL,0 ; EXX ; LD HL,0
+///        LD A,(IX+4) ; LD (dur),A ; INC IX x5
+/// frame: HALT ; LD A,7Fh ; IN A,(FEh) ; RRA ; JR NC,other ; LD A,2 ; LD (reps),A
+/// loop:  ADD HL,DE ; SBC A,A ; AND 16 ; LD B,A ; EXX ; ADD HL,DE ; SBC A,A ; AND 16 ; EXX ; OR B
+/// out1:  OUT (254),A ; XOR A ; EXX ; NOP
+/// out2:  OUT (254),A ; EXX ; DEC C ; JP NZ,loop
+///        LD A,(reps) ; DEC A ; LD (reps),A ; JP NZ,loop
+///        LD A,(dur) ; DEC A ; LD (dur),A ; JP NZ,frame ; JP play
+/// other: LD IX,phrase2 ; LD (cur),IX ; JP play
+/// ```
+fn looping_tune() -> (Vec<u8>, fixtures::Labels) {
+    let mut a = fixtures::Asm::default();
+    a.label("start").b(&[0xF3, 0x3E, 0x90, 0xED, 0x47, 0xED, 0x5E, 0xFB, 0x26, 70]);
+    a.label("quiet").b(&[0x76, 0x25]).r(0x20, "quiet");
+    a.w(&[0xDD, 0x21], "intro").w(&[0xCD], "play");
+    a.label("again").w(&[0xDD, 0x2A], "cur").w(&[0xCD], "play").r(0x18, "again");
+    a.label("play").b(&[0xDD, 0x5E, 0x00, 0xDD, 0x56, 0x01, 0x7A, 0xB3, 0xC8]);
+    a.b(&[0xD9, 0xDD, 0x5E, 0x02, 0xDD, 0x56, 0x03, 0x21, 0, 0, 0xD9, 0x21, 0, 0]);
+    a.b(&[0xDD, 0x7E, 0x04]).w(&[0x32], "dur").b(&[0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23]);
+    a.label("frame").b(&[0x76, 0x3E, 0x7F, 0xDB, 0xFE, 0x1F]).r(0x30, "other").b(&[0x3E, 0x02]).w(&[0x32], "reps");
+    a.label("loop").b(&[0x19, 0x9F, 0xE6, 0x10, 0x47, 0xD9, 0x19, 0x9F, 0xE6, 0x10, 0xD9, 0xB0]);
+    a.label("out1").b(&[0xD3, 0xFE, 0xAF, 0xD9, 0x00]);
+    a.label("out2").b(&[0xD3, 0xFE, 0xD9, 0x0D]).w(&[0xC2], "loop");
+    a.w(&[0x3A], "reps").b(&[0x3D]).w(&[0x32], "reps").w(&[0xC2], "loop");
+    a.w(&[0x3A], "dur").b(&[0x3D]).w(&[0x32], "dur").w(&[0xC2], "frame").w(&[0xC3], "play");
+    a.label("other").w(&[0xDD, 0x21], "phrase2").w(&[0xDD, 0x22], "cur").w(&[0xC3], "play");
+    a.label("dur").b(&[0]);
+    a.label("reps").b(&[0]);
+    a.label("cur").w(&[], "phrase");
+    for (name, notes) in [("intro", &INTRO[..]), ("phrase", &PHRASE[..]), ("phrase2", &PHRASE2[..])] {
+        a.label(name);
+        for &(s0, s1, len) in notes {
+            a.b(&s0.to_le_bytes()).b(&s1.to_le_bytes()).b(&[len]);
+        }
+        a.b(&[0, 0]);
+    }
+    // the interrupt's table at 9000h (257 bytes of 91h) and its routine at 9191h
+    let pad = 0x9000 - usize::from(a.pc());
+    a.b(&vec![0; pad]).b(&[0x91; 257]);
+    let pad = 0x9191 - usize::from(a.pc());
+    a.b(&vec![0; pad]).label("isr").b(&[0xFB, 0xC9]);
+    a.finish()
+}
+
+/// The first speaker edge of frame `frame` of a run of `code` under `inputs`: its T-state.
+fn first_edge_in(code: &[u8], inputs: &Inputs, frame: usize) -> u32 {
+    let mut m = fixtures::bare(code);
+    for f in 0..=frame {
+        let (rows, kemp) = inputs(f as u32);
+        m.set_keys(rows);
+        m.set_kempston(kemp);
+        m.run_frame();
+    }
+    let level = m.edges_start_level();
+    let t = soundlearn::entry::ear_edges(level, m.edges()).next().expect("an edge").tstate;
+    t
+}
+
+/// The frames of the notes of a tune.
+fn frames_of(notes: &[(u16, u16, u8)]) -> usize {
+    notes.iter().map(|n| usize::from(n.2)).sum()
+}
+
+/// A tune that plays an intro and then loops a phrase: its score stores the intro and one pass
+/// of the loop, the loop's start the phrase's first edge (the intro ends in a rest) and its
+/// length the phrase's frames exactly (the tune is paced by the frame interrupt); method B
+/// follows it round the loop to the end of the frames it decides.
+#[test]
+fn records_a_tune_that_loops_once_with_its_loop() {
+    let (code, l) = looping_tune();
+    let got = learn(&|| fixtures::bare(&code), &quiet());
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 1, "{}", got.details);
+    let s = &got.scores[0];
+    let (f0, t0) = first_edge_from(&code, &quiet(), l["out1"]);
+    let frame = zx_sys::ZX_FRAME_TSTATES;
+    let p0 = f0 + frames_of(&INTRO);
+    let intro_t = frames_of(&INTRO) as u32 * frame + first_edge_in(&code, &quiet(), p0) - t0;
+    assert_eq!((s.intro_t, s.loop_t), (intro_t, frames_of(&PHRASE) as u32 * frame), "{s:?}");
+    assert_eq!((s.intro_fp.len(), s.loop_fp.len()), ((intro_t / frame) as usize, frames_of(&PHRASE)));
+    // the intro's notes and one pass's (each frame's burst of sound splits a note into more)
+    let ons = |ev: &[soundlearn::ScoreEvent]| ev.iter().filter(|e| e.on.is_some()).count();
+    assert!(ons(&s.intro_events) >= 3 && ons(&s.loop_events) >= 6, "{s:?}");
+    assert!(s.intro_events.iter().all(|e| e.t < s.intro_t) && s.loop_events.iter().all(|e| e.t < s.loop_t));
+    assert!(s.loop_events.iter().take_while(|e| e.t == 0).all(|e| e.on.is_some()), "the loop's start restates its voices");
+    let d = &got.details;
+    let decided = 9000 - zx_sys::SND_DELAY_FRAMES as usize;
+    let seconds = |t: u32| f64::from(t) / 3_500_000.0;
+    let line = format!(
+        "\n    recorded score: {:.1} s from frame {f0} (intro {:.1} s, loop {:.1} s), {} voices, {} notes, ",
+        (decided - f0 - usize::from(t0 != 0)) as f64 * 0.019968,
+        seconds(s.intro_t),
+        seconds(s.loop_t),
+        s.voices,
+        ons(&s.intro_events) + ons(&s.loop_events)
+    );
+    assert!(d.contains(&line), "{line}\n{d}");
+    // method B plays it from its trigger to the end of the frames it decides, round the loop
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let frames = &score_frames(&code, &quiet(), &list)[0];
+    assert_eq!(frames.first(), Some(&f0));
+    assert_eq!(frames.len(), decided - f0, "{frames:?}");
+    assert!(frames.windows(2).all(|w| w[1] == w[0] + 1));
+    assert_eq!(learn(&|| fixtures::bare(&code), &quiet()), got);
+}
+
+/// [`looping_tune`] with SPACE pressed in its loop: the stretch ends with the frame before the
+/// press, and the score keeps its loop (the music changes only after the stretch): method B
+/// follows it round the loop to the press (the frames within its delay of the third bucket that
+/// disagrees not the score's).
+#[test]
+fn a_loop_that_changes_after_its_stretch() {
+    let (code, l) = looping_tune();
+    const PRESS: u32 = 4000;
+    let space: Inputs = Box::new(|f| {
+        let mut rows = [0u8; 8];
+        if (PRESS..PRESS + 5).contains(&f) {
+            rows[7] = 1;
+        }
+        (rows, 0)
+    });
+    let got = learn(&|| fixtures::bare(&code), &space);
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 1, "{}", got.details);
+    let s = &got.scores[0];
+    let (f0, _) = first_edge_from(&code, &space, l["out1"]);
+    assert_eq!(s.loop_t, frames_of(&PHRASE) as u32 * zx_sys::ZX_FRAME_TSTATES, "{s:?}");
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let frames = &score_frames(&code, &space, &list)[0];
+    assert_eq!(frames.first(), Some(&f0));
+    assert!(frames.windows(2).all(|w| w[1] == w[0] + 1));
+    let end = *frames.last().unwrap() as u32;
+    assert!((PRESS - zx_sys::SND_DELAY_FRAMES..PRESS).contains(&end), "to the press: {end}");
 }

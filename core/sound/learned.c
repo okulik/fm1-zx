@@ -31,19 +31,28 @@
  *
  * Besides learned entries (kind 0), a list may hold kind-1 records: stored roles for a built-in
  * entry, by its digest, which snd_learned_roles copies into the firmware's assembled table; and
- * kind-2 records, recorded scores, which the decoder checks whole (every size, count and event)
- * and the player below plays.
+ * kind-2 records, recorded scores, which the decoder checks whole (every size, count, bucket and
+ * event) and the player below plays.
  *
- * A recorded score: its times are T-states from its trigger edge (T0); bucket b is the frame-long
- * span [b x ZX_FRAME_TSTATES, (b + 1) x ZX_FRAME_TSTATES) from T0, and the fingerprint the speaker
- * edges (EAR level changes, from any OUT) of each bucket, capped at 255. Method B's player, once
- * a frame after the decision (snd_b.scores), with frame j just fed:
- *  - following: each score followed (the candidates, then the score chosen) has the bucket that
- *    ends in frame j (from T0's T-state in frame j - 1 to T0's in frame j) compared with its
- *    fingerprint: they agree when |live - recorded| <= max(2, recorded / 8). Three buckets in a
- *    row that disagree stop it; when none is left followed, the score stops: the frames from
- *    j - SND_DELAY_FRAMES on, not yet decided, are not its (the first of the three buckets began
- *    in frame j - SND_DELAY_FRAMES). A score's last bucket compared ends its following.
+ * A recorded score (docs/pack-format.md): an intro of intro_t T from its trigger edge (T0) and,
+ * with loop_t not 0, a loop whose passes follow one another from T0 + intro_t, each loop_t long.
+ * A section's (a pass's) times are T-states from its start; its buckets are frame-long spans from
+ * its start, the whole ones alone stored and compared (the partial one at a section's end is
+ * neither), and the fingerprint is the speaker edges (EAR level changes, from any OUT) of each,
+ * capped at 255: a nibble stream, each section's first bucket an escape (nibble 8) and its count
+ * (two nibbles, low first), each next the change from the bucket before (-7..+7) or an escape.
+ * Events: a varint (64-T units since the section's event before, or its start), a byte (bits 0-1
+ * the voice, bits 2-7 0 a note off, else a note on of level (b >> 2) x 4 + 3) and a note on's
+ * index in the record's pitch table (each pitch a full period in T, 3 bytes). Method B's player,
+ * once a frame after the decision (snd_b.scores), with frame j just fed:
+ *  - following: each score followed (the candidates, then the score chosen) has each of its whole
+ *    buckets that ends in frame j compared with its fingerprint, on its own sections' grids (the
+ *    intro's from T0, each pass's from its start, the loop's buckets again for every pass): they
+ *    agree when |live - recorded| <= max(2, recorded / 8). Three buckets in a row that disagree
+ *    stop it; when none is left followed, the score stops: the frames from j - SND_DELAY_FRAMES
+ *    on, not yet decided, are not its (the first of the three buckets began in frame
+ *    j - SND_DELAY_FRAMES). A score with no loop ends its following with its intro; one with a
+ *    loop is followed round it for as long as it agrees.
  *  - arming: while no score plays (from its trigger to its last frame decided), every score whose
  *    site makes a speaker edge in frame j, after at least `quiet` frames with none from it (a
  *    game's first frames count as quiet), and whose code (the FNV-1a 32 of the 32 bytes from
@@ -55,8 +64,10 @@
  *    fewest disagreeing buckets (the lowest index of those) plays and the others are dropped. It
  *    then stops by its own buckets alone (no other takes over). With none left, no score plays.
  *  - the decision for frame j - SND_DELAY_FRAMES, if the score plays it (from frame f0, T0's, to
- *    the one its fingerprint ends in, or up to the frame before it stopped): its events whose times
- *    fall in the frame (each at its T-state in the frame) and, in the frame its fingerprint ends,
+ *    the one its intro ends in when it has no loop, or up to the frame before it stopped): its
+ *    events whose times fall in the frame (each at its T-state in the frame); at each pass's start
+ *    the voices sounding that the loop's first events (at the pass's start) do not restate
+ *    released, the loop's events then from its first; with no loop, in the frame its intro ends,
  *    the voices still sounding released where it ends. Unless the decision has the frame
  *    confident (a table entry claims it: the table wins, its events stand), the frame becomes the
  *    score's: confident, its voices at the frame's start and its events (the first SND_EVENTS),
@@ -66,8 +77,9 @@
  * it): B's voices are silenced there and the mixer leaves FM.
  *
  * Built into flash, not SRAM, on the device (the reader runs only for frames a learned entry
- * claims; the player, a pass or two over a frame's edges, through snd_b.scores). uint32_t
- * arithmetic only (no 64-bit division). */
+ * claims; the player, a pass or two over a frame's edges per score followed, through
+ * snd_b.scores). 32-bit arithmetic only (no 64-bit division); a score's times are kept from its
+ * section's start and the frame's, so a loop followed for hours does not overflow them. */
 
 #include "sound_internal.h"
 
@@ -78,10 +90,10 @@
 #define REGS 18u      /* register numbers 0-17 */
 #define FLIPS 1u      /* an entry's flags byte: snd_engine.flips */
 #define OBSERVED 2u   /* snd_engine.observed */
-#define SCORE 20u     /* a kind-2 record's fixed part (a recorded score) */
-#define UNITS 1092u   /* a bucket (one frame) in the 64-T units of a score's times */
+#define SCORE 32u     /* a kind-2 record's fixed part (a recorded score) */
+#define ESC 8u        /* a score's fingerprint: the nibble before a count */
+#define FRAME ((int32_t)ZX_FRAME_TSTATES)
 
-_Static_assert(ZX_FRAME_TSTATES == UNITS * 64u, "a bucket is a whole number of 64-T units");
 _Static_assert(SND_SCORES_MAX <= 8u, "a bit per score in snd_b_score.live");
 
 static uint32_t rd16(const uint8_t *p)
@@ -341,28 +353,103 @@ static int varint(const uint8_t *e, uint32_t size, uint32_t *at, uint32_t *v)
 	return 0;
 }
 
-/* Is the kind-2 record at e (size bytes, within the list) valid? 1-3 voices, 1 to
- * SND_SCORE_BUCKETS_MAX buckets, the fingerprint and every event within the record, each event's
- * time a varint and before the fingerprint's end, its voice below `voices`, no other flag bit,
- * and a note on's period at least 64 T and its level not 0. */
-static int score_ok(const uint8_t *e, uint32_t size)
+static uint32_t rd24(const uint8_t *p)
 {
-	const uint32_t voices = e[3], buckets = rd16(e + 12);
-	uint32_t k, at = SCORE + buckets, u = 0, dt, vf;
+	return rd16(p) | (uint32_t)p[2] << 16;
+}
 
-	if (voices < 1u || voices > SND_TONAL || buckets < 1u || buckets > SND_SCORE_BUCKETS_MAX || at > size) return 0;
-	for (k = rd16(e + 14); k > 0; k--) {
-		if (!varint(e, size, &at, &dt)) return 0;
-		u += dt;   /* (dt < 2^28, u below 2^24 before it: no wrap) */
-		if (u >= buckets * UNITS || at >= size) return 0;
-		vf = e[at++];
-		if ((vf & 0x7Cu) || (vf & 3u) >= voices) return 0;
-		if (!(vf & 0x80u)) {
-			if (size - at < 4u || (rd16(e + at) | (uint32_t)e[at + 2] << 16) < 64u || !e[at + 3]) return 0;
-			at += 4u;
+/* A score's section: its length in T (0 the intro, 1 the loop), its whole buckets, its events. */
+static uint32_t sec_len(const uint8_t *r, uint32_t sec)
+{
+	return rd32(r + 12u + 4u * sec);
+}
+
+static uint32_t sec_buckets(const uint8_t *r, uint32_t sec)
+{
+	return rd16(r + 20u + 2u * sec);
+}
+
+static uint32_t sec_events(const uint8_t *r, uint32_t sec)
+{
+	return rd16(r + 24u + 2u * sec);
+}
+
+/* Nibble i of the fingerprint at fp (the low nibble of a byte first). */
+static uint32_t nibble(const uint8_t *fp, uint32_t i)
+{
+	return (uint32_t)(fp[i >> 1] >> ((i & 1u) * 4u)) & 15u;
+}
+
+/* The recorded count of the bucket at nibble *i of the fingerprint fp, the bucket before it
+ * `prev`: an escape and the count, or the change from prev (-7..+7); *i moved past it. */
+static uint32_t bucket_count(const uint8_t *fp, uint32_t *i, uint32_t prev)
+{
+	const uint32_t d = nibble(fp, (*i)++);
+	uint32_t v;
+
+	if (d != ESC) return prev + d - (d & 8u ? 16u : 0u);
+	v = nibble(fp, *i) | nibble(fp, *i + 1u) << 4;
+	*i += 2u;
+	return v;
+}
+
+/* Is the fingerprint at fp (within `bytes` bytes) valid for ib intro and lb loop buckets? Each
+ * section's first bucket an escape, every count 0-255, the stream within the bytes, a spare nibble
+ * at its end 0; its bytes in *len. */
+static int fp_ok(const uint8_t *fp, uint32_t bytes, uint32_t ib, uint32_t lb, uint32_t *len)
+{
+	uint32_t i = 0, s, k, d, v = 0;
+
+	for (s = 0; s < 2u; s++)
+		for (k = 0; k < (s ? lb : ib); k++) {
+			if (i >= 2u * bytes) return 0;
+			d = nibble(fp, i);
+			if ((!k && d != ESC) || (d == ESC && i + 3u > 2u * bytes)) return 0;
+			v = bucket_count(fp, &i, v);
+			if (v > 255u) return 0;
 		}
+	if ((i & 1u) && nibble(fp, i)) return 0;
+	*len = (i + 1u) / 2u;
+	return 1;
+}
+
+/* Are a section's n events at e + *at (within size) valid? Each time a varint, inside the
+ * section (below len T), its voice below `voices`, a note on's pitch index below np; *at moved
+ * past them. */
+static int events_ok(const uint8_t *e, uint32_t size, uint32_t *at, uint32_t n, uint32_t len, uint32_t voices, uint32_t np)
+{
+	const uint32_t units = (len + 63u) / 64u;   /* a time below len T: below this in 64-T units */
+	uint32_t u = 0, dt, vb;
+
+	for (; n > 0; n--) {
+		if (!varint(e, size, at, &dt)) return 0;
+		u += dt;   /* (dt < 2^28, u below 2^24 before it: no wrap) */
+		if (u >= units || *at >= size) return 0;
+		vb = e[(*at)++];
+		if ((vb & 3u) >= voices) return 0;
+		if ((vb >> 2) && (*at >= size || e[(*at)++] >= np)) return 0;
 	}
 	return 1;
+}
+
+/* Is the kind-2 record at e (size bytes, within the list) valid? 1-3 voices, an intro or a loop,
+ * each section's whole buckets its length's (SND_SCORE_BUCKETS_MAX of both at most; a loop one at
+ * least), 1-255 pitches of 64 T at least, the fingerprint (fp_ok) and every event (events_ok)
+ * within the record. */
+static int score_ok(const uint8_t *e, uint32_t size)
+{
+	const uint32_t voices = e[3], intro_t = sec_len(e, 0), loop_t = sec_len(e, 1), ib = sec_buckets(e, 0), lb = sec_buckets(e, 1);
+	const uint32_t np = e[28];
+	uint32_t k, at = SCORE + 3u * np, len;
+
+	if (voices < 1u || voices > SND_TONAL || !np || at > size) return 0;
+	if (ib != intro_t / ZX_FRAME_TSTATES || lb != loop_t / ZX_FRAME_TSTATES || ib + lb > SND_SCORE_BUCKETS_MAX) return 0;
+	if ((!intro_t && !loop_t) || (loop_t && !lb)) return 0;
+	for (k = 0; k < np; k++)
+		if (rd24(e + SCORE + 3u * k) < 64u) return 0;
+	if (!fp_ok(e + at, size - at, ib, lb, &len)) return 0;
+	at += len;
+	return events_ok(e, size, &at, sec_events(e, 0), intro_t, voices, np) && events_ok(e, size, &at, sec_events(e, 1), loop_t, voices, np);
 }
 
 /* The size of the list's entry at list + off, checked (within the list, a multiple of 4, at least
@@ -446,19 +533,15 @@ static uint32_t code_at(const zx_machine *m, uint32_t site)
 	return h;
 }
 
-/* The frame's speaker edges (EAR changes, from level lvl before the first) at T-state t or after;
- * those before it in *before. */
-static uint32_t ear_edges(const zx_edge *e, uint32_t n, uint32_t lvl, uint32_t t, uint32_t *before)
+/* The frame's speaker edges (EAR changes, from level lvl before the first) at T-states from a to
+ * below b. */
+static uint32_t span(const zx_edge *e, uint32_t n, uint32_t lvl, uint32_t a, uint32_t b)
 {
-	uint32_t i, after = 0;
+	uint32_t i, c = 0;
 
-	*before = 0;
-	for (i = 0; i < n; lvl = e[i++].level) {
-		if (!((e[i].level ^ lvl) & 2u)) continue;
-		if (e[i].tstate < t) ++*before;
-		else after++;
-	}
-	return after;
+	for (i = 0; i < n; lvl = e[i++].level)
+		if (((e[i].level ^ lvl) & 2u) && e[i].tstate >= a && e[i].tstate < b) c++;
+	return c;
 }
 
 /* The T-state of the frame's first speaker edge from site; NOWHERE if none. */
@@ -471,6 +554,92 @@ static uint32_t first_from(const zx_edge *e, uint32_t n, uint32_t lvl, uint32_t 
 	return NOWHERE;
 }
 
+/* The length (T) of f's current bucket: a whole bucket, or the partial one at its section's end
+ * (0: none). */
+static uint32_t seg(const uint8_t *r, const snd_b_follow *f)
+{
+	const uint32_t nb = sec_buckets(r, f->sec);
+
+	return f->bucket < nb ? ZX_FRAME_TSTATES : sec_len(r, f->sec) - nb * ZX_FRAME_TSTATES;
+}
+
+/* f moved to its next bucket, its end that bucket's: the next of its section, else the loop's
+ * first (its fingerprint's again for each pass); sec 2 past the intro of a score with no loop. */
+static void advance(const uint8_t *r, snd_b_follow *f)
+{
+	uint32_t len;
+
+	do {
+		if (f->bucket < sec_buckets(r, f->sec)) {
+			f->bucket++;
+		} else if (!sec_len(r, 1)) {
+			f->sec = 2;
+			return;
+		} else {
+			if (!f->sec) f->loop_nib = f->nib;   /* the intro's buckets read: the loop's follow */
+			f->sec = 1;
+			f->nib = f->loop_nib;
+			f->bucket = 0;
+		}
+		len = seg(r, f);
+	} while (!len);
+	f->end += len;
+}
+
+/* Score k followed from T0 (T-state t0 of the frame fed now). */
+static void begin(snd_b *b, uint32_t k, uint32_t t0)
+{
+	snd_b_follow *f = &b->sc.fl[k];
+	const uint8_t *r = b->score[k];
+
+	f->sec = 0;
+	f->bucket = 0;
+	f->nib = 0;
+	f->count = 0;
+	f->prev = 0;
+	f->run = 0;
+	f->miss = 0;
+	f->end = t0;
+	if (seg(r, f)) f->end += seg(r, f);
+	else advance(r, f);
+}
+
+/* Score k followed through the frame's edges from T-state `from` on: each of its whole buckets
+ * that ends in the frame compared with its fingerprint; three in a row that disagree stop it. */
+static void step(snd_b *b, uint32_t k, const zx_edge *e, uint32_t n, uint32_t lvl, uint32_t from)
+{
+	snd_b_follow *f = &b->sc.fl[k];
+	const uint8_t *r = b->score[k];
+	uint32_t live, rec, tol;
+
+	while (f->sec < 2u && f->end <= ZX_FRAME_TSTATES) {
+		if (f->bucket < sec_buckets(r, f->sec)) {   /* a whole bucket: compared */
+			live = f->count + span(e, n, lvl, from, f->end);
+			if (live > 255u) live = 255u;
+			rec = bucket_count(r + SCORE + 3u * r[28], &f->nib, f->prev);
+			f->prev = (uint8_t)rec;
+			tol = rec / 8u > 2u ? rec / 8u : 2u;
+			if (live + tol >= rec && live <= rec + tol) {
+				f->run = 0;
+			} else {
+				if (f->miss < 255u) f->miss++;
+				if (++f->run == 3u) {   /* it stops */
+					b->sc.live &= (uint8_t)~(1u << k);
+					return;
+				}
+			}
+		}
+		from = f->end;
+		f->count = 0;
+		advance(r, f);
+	}
+	if (f->sec < 2u) {
+		live = f->count + span(e, n, lvl, from, ~0u);
+		f->count = (uint16_t)(live > 255u ? 255u : live);
+		f->end -= ZX_FRAME_TSTATES;
+	}
+}
+
 /* The playing score's next event's time. */
 static void next_time(snd_b_score *sc)
 {
@@ -478,6 +647,32 @@ static void next_time(snd_b_score *sc)
 
 	varint(sc->rec, rd16(sc->rec), &sc->at, &dt);
 	sc->u += dt;
+}
+
+/* The playing score's section sec begins (its start already set): its events from offset at. */
+static void section(snd_b_score *sc, uint32_t sec, uint32_t at)
+{
+	sc->sec = (uint8_t)sec;
+	sc->at = at;
+	sc->u = 0;
+	sc->left = (uint16_t)sec_events(sc->rec, sec);
+	if (sc->left) next_time(sc);
+}
+
+/* The voices a section's first events (n of them, from offset at) give a note on at its start. */
+static uint32_t restated(const uint8_t *r, uint32_t at, uint32_t n)
+{
+	uint32_t mask = 0, dt, vb;
+
+	for (; n > 0; n--) {
+		if (!varint(r, rd16(r), &at, &dt) || dt) break;
+		vb = r[at++];
+		if (vb >> 2) {
+			mask |= 1u << (vb & 3u);
+			at++;
+		}
+	}
+	return mask;
 }
 
 /* Event i of out (if i < SND_EVENTS); the events out has then. */
@@ -491,41 +686,62 @@ static uint32_t event(snd_frame *out, uint32_t i, uint32_t t, uint32_t voice, ui
 	return i + 1u;
 }
 
+/* The playing score's sounding voices but those of mask released at T-state t of out's frame
+ * (into out from event i if mine); the events out has then. */
+static uint32_t release(snd_b_score *sc, snd_frame *out, uint32_t i, uint32_t t, uint32_t mask, uint32_t mine)
+{
+	uint32_t k;
+
+	for (k = 0; k < SND_TONAL; k++) {
+		if (!sc->v[k].period_q8 || (mask >> k & 1u)) continue;
+		if (mine) i = event(out, i, t, k, 0, 0);
+		sc->v[k].period_q8 = 0;
+		sc->v[k].level = 0;
+	}
+	return i;
+}
+
 /* Frame f0 + rel, which the playing score plays: its events (into out unless the decision has the
- * frame confident), then the frame the score's. */
+ * frame confident), each pass of the loop that begins in it, then the frame the score's. */
 static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 {
 	snd_b_score *sc = &b->sc;
 	const uint8_t *r = sc->rec;
-	const uint32_t d = rel * ZX_FRAME_TSTATES, buckets = rd16(r + 12), mine = !out->confident;
+	const uint32_t loop = sec_len(r, 1) != 0, mine = !out->confident;
 	uint32_t i = 0, k;
+	int32_t t;
 
 	if (mine)
 		for (k = 0; k < SND_TONAL; k++) {
 			out->tone[k].period_q8 = sc->v[k].period_q8;
 			out->tone[k].level = sc->v[k].level;
 		}
-	while (sc->left && sc->u * 64u + sc->t0 < d + ZX_FRAME_TSTATES) {
-		const uint32_t t = sc->u * 64u + sc->t0 - d, vf = r[sc->at++];
-		uint32_t p = 0, level = 0;
-		if (!(vf & 0x80u)) {
-			p = (rd16(r + sc->at) | (uint32_t)r[sc->at + 2] << 16) << 8;
-			level = r[sc->at + 3];
-			sc->at += 4u;
+	for (;;) {
+		while (sc->left && (t = sc->start + (int32_t)(sc->u * 64u)) < FRAME) {
+			const uint32_t vb = r[sc->at++];
+			uint32_t p = 0, level = 0;
+			if (vb >> 2) {
+				p = rd24(r + SCORE + 3u * r[sc->at++]) << 8;
+				level = (vb >> 2) * 4u + 3u;
+			}
+			k = vb & 3u;
+			sc->v[k].period_q8 = p;
+			sc->v[k].level = (uint8_t)level;
+			if (mine) i = event(out, i, (uint32_t)t, k, p, level);
+			if (--sc->left) next_time(sc);
 		}
-		k = vf & 3u;
-		sc->v[k].period_q8 = p;
-		sc->v[k].level = (uint8_t)level;
-		if (mine) i = event(out, i, t, k, p, level);
-		if (--sc->left) next_time(sc);
+		t = sc->start + (int32_t)sec_len(r, sc->sec);   /* the section's end */
+		if (!loop || t >= FRAME) break;
+		/* a pass of the loop begins in this frame: the voices its first events do not restate
+		 * released */
+		if (!sc->sec) sc->loop_at = sc->at;   /* the intro's events read: the loop's follow */
+		sc->start = t;
+		section(sc, 1, sc->loop_at);
+		i = release(sc, out, i, (uint32_t)t, restated(r, sc->loop_at, sc->left), mine);
 	}
-	if (rel + 1u == buckets + (sc->t0 != 0))   /* the fingerprint ends in this frame */
-		for (k = 0; k < SND_TONAL; k++) {
-			if (!sc->v[k].period_q8) continue;
-			if (mine) i = event(out, i, buckets * ZX_FRAME_TSTATES + sc->t0 - d, k, 0, 0);
-			sc->v[k].period_q8 = 0;
-			sc->v[k].level = 0;
-		}
+	if (!loop && rel + 1u == sc->frames)   /* the intro ends in this frame: the score's end */
+		i = release(sc, out, i, (uint32_t)(sc->start + (int32_t)sec_len(r, 0)), 0, mine);
+	sc->start -= FRAME;
 	if (!mine) return;   /* the table's */
 	out->n_ev = (uint8_t)i;
 	out->drum = 0;
@@ -534,7 +750,7 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 	out->engine = (uint8_t)(b->n + sc->index);
 	silence(b);
 	for (k = 0; k < SND_TONAL; k++) {
-		out->role[k] = k < r[3] && r[16 + k] <= SND_ROLE_PAD ? r[16 + k] : SND_ROLE_AUTO;
+		out->role[k] = k < r[3] && r[29 + k] <= SND_ROLE_PAD ? r[29 + k] : SND_ROLE_AUTO;
 		b->tone[k].period_q8 = sc->v[k].period_q8;
 		b->tone[k].level = sc->v[k].level;
 	}
@@ -547,11 +763,11 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 static uint32_t choose(snd_b *b)
 {
 	snd_b_score *sc = &b->sc;
-	uint32_t k, best = SND_SCORES_MAX;
+	uint32_t k, best = SND_SCORES_MAX, at, len = 0;
 	const uint8_t *r;
 
 	for (k = 0; k < b->n_scores; k++)
-		if ((sc->live >> k & 1u) && (best == SND_SCORES_MAX || sc->miss[k] < sc->miss[best])) best = k;
+		if ((sc->live >> k & 1u) && (best == SND_SCORES_MAX || sc->fl[k].miss < sc->fl[best].miss)) best = k;
 	if (best == SND_SCORES_MAX) {
 		sc->rec = 0;
 		return 0;
@@ -560,11 +776,11 @@ static uint32_t choose(snd_b *b)
 	sc->rec = r;
 	sc->index = (uint8_t)(best + 1u);
 	sc->live = (uint8_t)(1u << best);
-	sc->frames = rd16(r + 12) + (sc->t0 != 0);
-	sc->left = (uint16_t)rd16(r + 14);
-	sc->at = SCORE + rd16(r + 12);
-	sc->u = 0;
-	if (sc->left) next_time(sc);
+	sc->frames = sec_len(r, 1) ? ~0u : (sc->t0 + sec_len(r, 0) + ZX_FRAME_TSTATES - 1u) / ZX_FRAME_TSTATES;
+	sc->start = (int32_t)sc->t0;
+	at = SCORE + 3u * r[28];
+	fp_ok(r + at, rd16(r) - at, sec_buckets(r, 0), sec_buckets(r, 1), &len);   /* (valid: its length) */
+	section(sc, 0, at + len);
 	for (k = 0; k < SND_TONAL; k++) {
 		sc->v[k].period_q8 = 0;
 		sc->v[k].level = 0;
@@ -578,27 +794,11 @@ static void play(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 {
 	snd_b_score *sc = &b->sc;
 	const uint32_t j = b->frames - 1u;
-	uint32_t k, lo, rel;
+	uint32_t k, rel;
 
-	if (sc->rec && sc->live) {   /* the bucket that ends in frame j, for each score followed */
-		const uint32_t hi = ear_edges(e, n, lvl, sc->t0, &lo);
-		lo += sc->count;
-		if (lo > 255u) lo = 255u;
-		for (k = 0; k < b->n_scores; k++) {
-			const uint8_t *r = b->score[k];
-			uint32_t rec, tol;
-			if (!(sc->live >> k & 1u) || sc->bucket >= rd16(r + 12)) continue;
-			rec = r[SCORE + sc->bucket];
-			tol = rec / 8u > 2u ? rec / 8u : 2u;
-			if (lo + tol >= rec && lo <= rec + tol) {
-				sc->run[k] = 0;
-				continue;
-			}
-			sc->miss[k]++;
-			if (++sc->run[k] == 3u) sc->live &= (uint8_t)~(1u << k);   /* it stops */
-		}
-		sc->count = (uint16_t)hi;
-		sc->bucket++;
+	if (sc->rec && sc->live) {   /* each score followed through frame j */
+		for (k = 0; k < b->n_scores; k++)
+			if (sc->live >> k & 1u) step(b, k, e, n, lvl, 0);
 		/* none followed: the frames not yet decided are not the score's */
 		if (!sc->live && sc->frames > j - SND_DELAY_FRAMES - sc->f0) sc->frames = j - SND_DELAY_FRAMES - sc->f0;
 	}
@@ -616,13 +816,11 @@ static void play(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 				sc->f0 = j;
 				sc->t0 = t;
 				sc->frames = ~0u;
-				sc->bucket = 0;
 				sc->live = 0;
-				sc->count = (uint16_t)ear_edges(e, n, lvl, t, &lo);
 			}
 			sc->live |= (uint8_t)(1u << k);
-			sc->run[k] = 0;
-			sc->miss[k] = 0;
+			begin(b, k, t);
+			step(b, k, e, n, lvl, t);
 		}
 		b->quiet[k] = 0;
 	}

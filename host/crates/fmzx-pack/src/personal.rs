@@ -294,8 +294,9 @@ const REPORT_HEAD: &str = "\
 # (the share of the music in which that pitch was heard), and whether it was learned or why not.
 # Music no routine gives that played long enough is recorded as scores instead, a score per tune
 # (from the run listened to and, when that gives one, from a run per key: the key named on its
-# line): from the edge that starts it, its length, voices, notes and bytes (FM: engines plays it
-# in step with the beeper), or why it has none.
+# line): from the edge that starts it, its length, its intro and loop when its music loops (the
+# loop stored once, played round for as long as the beeper keeps to it), voices, notes and bytes
+# (FM: engines plays it in step with the beeper), or why it has none.
 ";
 
 /// A packed game, for learning its music: its name, its converted file's bytes and name, where

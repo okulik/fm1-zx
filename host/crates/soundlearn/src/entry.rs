@@ -21,12 +21,18 @@
 //!   channel programs (prog_len[c] bytes each, c < channels), timing program, zero padding to size
 //! a kind-1 record (roles for a built-in entry):
 //!   u16 size (16), u8 kind (1), u8 channels (1-3), u64 digest (the built-in entry's), u8 role[3], u8 0
-//! a kind-2 record (a recorded score; times in T-states from its trigger edge, T0):
+//! a kind-2 record (a recorded score: an intro and optionally a loop, times from each section's start):
 //!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (1-3)
-//!   u16 site, u16 quiet, u32 code, u16 buckets, u16 n_events, u8 role[3], u8 0
-//!   u8 fingerprint[buckets], events[n_events], zero padding to size; an event:
-//!     varint dt (64-T units since the event before or T0; LEB128, <= 4 bytes)
-//!     u8 vf (bits 0-1 the voice, bit 7 a note off), a note on's u24 period (T), u8 level
+//!   u16 site, u16 quiet, u32 code, u32 intro_t, u32 loop_t (0: no loop)
+//!   u16 intro_buckets, u16 loop_buckets (each section's whole buckets), u16 intro_events, u16 loop_events
+//!   u8 n_pitches (1-255), u8 role[3], u24 pitch[n_pitches] (full periods, T)
+//!   fingerprint: the intro's buckets then the loop's, one nibble stream (low nibble first; a spare
+//!     nibble 0 to a whole byte): each section's first bucket nibble 8 and the count (two nibbles,
+//!     low first), each next the change (-7..+7, 4-bit signed) or nibble 8 and the count
+//!   events: the intro's, then the loop's; an event:
+//!     varint dt (64-T units since the section's event before or its start; LEB128, <= 4 bytes)
+//!     u8 b (bits 0-1 the voice; bits 2-7: 0 a note off, else a note on of level b >> 2), a note on's u8 pitch index
+//!   zero padding to size
 //! ```
 //!
 //! Each kind has its own type and encoder ([`LearnedEntry`], [`BuiltinRoles`], [`ScoreRecord`]),
@@ -94,9 +100,10 @@ pub struct BuiltinRoles {
 }
 
 /// A recorded score (a kind-2 record): a stretch of a game's music that plays the same every
-/// time from its trigger edge (the first speaker edge of `site` after `quiet` frames with none
-/// from it), as note events, with the speaker edges of each frame-long bucket from that edge
-/// ([`score_fingerprint`]) that method B follows it by.
+/// time from its trigger edge, T0 (the first speaker edge of `site` after `quiet` frames with
+/// none from it): an intro, then optionally a loop that repeats, as note events, with the speaker
+/// edges of each frame-long bucket of each section ([`score_fingerprint`]) that method B follows
+/// it by, round the loop for as long as the live edges agree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScoreRecord {
     /// The trigger `OUT`'s address (its first byte).
@@ -105,26 +112,39 @@ pub struct ScoreRecord {
     pub quiet: u16,
     /// FNV-1a 32 of the 32 bytes from `site - 16` ([`score_code`]): the code must be the same.
     pub code: u32,
-    /// Per voice: its stored role in the FM synth (`SND_ROLE_*`; 0: none).
-    pub roles: [u8; SND_TONAL],
     /// The voices the events use (1-3).
     pub voices: u8,
-    /// Per bucket: its speaker edges, capped at 255 (1 to `SND_SCORE_BUCKETS_MAX` buckets).
-    pub fingerprint: Vec<u8>,
-    /// The events, in time order.
-    pub events: Vec<ScoreEvent>,
+    /// Per voice: its stored role in the FM synth (`SND_ROLE_*`; 0: none).
+    pub roles: [u8; SND_TONAL],
+    /// The intro's length: T from T0 (with no loop, the whole score).
+    pub intro_t: u32,
+    /// One pass of the loop: T (0: no loop). Pass k starts at T0 + `intro_t` + k x `loop_t`.
+    pub loop_t: u32,
+    /// The intro's whole buckets from T0: each one's speaker edges, capped at 255
+    /// (`intro_t / ZX_FRAME_TSTATES` of them).
+    pub intro_fp: Vec<u8>,
+    /// The loop's whole buckets from a pass's start (`loop_t / ZX_FRAME_TSTATES` of them).
+    pub loop_fp: Vec<u8>,
+    /// The intro's events, in time order, below `intro_t`.
+    pub intro_events: Vec<ScoreEvent>,
+    /// One pass's events, in time order, below `loop_t`: its first restate every voice sounding
+    /// at its start (a note on at 0; the player releases at a pass's start the voices they do
+    /// not restate).
+    pub loop_events: Vec<ScoreEvent>,
 }
 
 /// One event of a [`ScoreRecord`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScoreEvent {
-    /// T-states since the event before (the first: since T0). The record holds times in 64-T
-    /// units: the encoder rounds each event's time from T0, so the rounding does not add up.
-    pub dt_t: u64,
+    /// T-states since its section's start (T0, or its pass's). The record holds times in 64-T
+    /// units: the encoder rounds each event's time from its section's start, so the rounding does
+    /// not add up.
+    pub t: u32,
     /// The voice (0-2, below the record's `voices`).
     pub voice: u8,
-    /// A note on: its full period in T-states (64 to 2^24 - 1) and its level (1-255); a note on
-    /// for a sounding voice changes its pitch. None: a note off.
+    /// A note on: its full period in T-states (64 to 2^24 - 1) and its level (1-255, stored as
+    /// (level + 2) / 4 of 1-63, which the device plays as that x 4 + 3); a note on for a sounding
+    /// voice changes its pitch. None: a note off.
     pub on: Option<(u32, u8)>,
 }
 
@@ -145,16 +165,18 @@ pub fn ear_edges(start_level: u8, edges: &[zx_edge]) -> impl Iterator<Item = &zx
     })
 }
 
-/// A score's fingerprint: the speaker edges ([`ear_edges`]) of `buckets` frame-long buckets from
-/// T0, T-state `t0` of frame `frame0` of `frames` (each frame's edges and the level before them),
-/// each capped at 255. Buckets past the frames given count what they hold.
-pub fn score_fingerprint(frames: &[(Vec<zx_edge>, u8)], frame0: usize, t0: u32, buckets: usize) -> Vec<u8> {
-    let mut fp = vec![0u32; buckets];
-    for (f, (edges, level)) in frames.iter().enumerate().skip(frame0) {
+/// A section's fingerprint: the speaker edges ([`ear_edges`]) of each whole frame-long bucket of
+/// `[from_t, from_t + len_t)` T from T0, T-state `t0` of frame 0 of `frames` (each frame's edges
+/// and the level before them), each capped at 255; buckets past the frames given count what they
+/// hold.
+pub fn score_fingerprint(frames: &[(Vec<zx_edge>, u8)], t0: u32, from_t: u64, len_t: u64) -> Vec<u8> {
+    let f = u64::from(ZX_FRAME_TSTATES);
+    let mut fp = vec![0u32; (len_t / f) as usize];
+    for (k, (edges, level)) in frames.iter().enumerate() {
         for e in ear_edges(*level, edges) {
-            let t = (f - frame0) as u64 * u64::from(ZX_FRAME_TSTATES) + u64::from(e.tstate);
-            let Some(b) = t.checked_sub(u64::from(t0)).map(|d| (d / u64::from(ZX_FRAME_TSTATES)) as usize) else { continue };
-            if let Some(x) = fp.get_mut(b) {
+            let t = k as u64 * f + u64::from(e.tstate);
+            let Some(d) = t.checked_sub(u64::from(t0) + from_t) else { continue };
+            if let Some(x) = fp.get_mut((d / f) as usize) {
                 *x += 1;
             }
         }
@@ -169,7 +191,11 @@ const KIND_LEARNED: u8 = 0;
 const KIND_ROLES: u8 = 1;
 const KIND_SCORE: u8 = 2;
 /// A kind-2 record's fixed part.
-const SCORE_HEAD: usize = 20;
+const SCORE_HEAD: usize = 32;
+/// A score's fingerprint: the nibble before a count.
+const ESC: u8 = 8;
+/// A score's most pitches.
+const PITCHES_MAX: usize = 255;
 /// A kind-1 record's size: 15 bytes and a byte of padding.
 const ROLES_SIZE: u8 = 16;
 
@@ -219,26 +245,71 @@ fn encode_roles(r: &BuiltinRoles) -> Vec<u8> {
     b
 }
 
-fn encode_score(r: &ScoreRecord) -> Vec<u8> {
-    let mut b = vec![0, 0, KIND_SCORE, r.voices];
-    for w in [r.site, r.quiet] {
-        b.extend(w.to_le_bytes());
+/// A score's pitch table: its note ons' periods, each once, ascending; over [`PITCHES_MAX`], the
+/// two nearest (by cents) merged, the one more notes use kept, until that many. With no note on,
+/// one pitch (unused).
+fn score_pitches(r: &ScoreRecord) -> Vec<u32> {
+    let mut uses: Vec<(u32, usize)> = Vec::new();
+    for p in r.intro_events.iter().chain(&r.loop_events).filter_map(|e| e.on.map(|o| o.0 & 0xFF_FFFF)) {
+        match uses.binary_search_by_key(&p, |u| u.0) {
+            Ok(i) => uses[i].1 += 1,
+            Err(i) => uses.insert(i, (p, 1)),
+        }
     }
-    b.extend(r.code.to_le_bytes());
-    for w in [r.fingerprint.len() as u16, r.events.len() as u16] {
-        b.extend(w.to_le_bytes());
+    while uses.len() > PITCHES_MAX {
+        let gap = |i: usize| f64::from(uses[i + 1].0.max(1)).log2() - f64::from(uses[i].0.max(1)).log2();
+        let i = (0..uses.len() - 1).min_by(|&a, &b| gap(a).total_cmp(&gap(b))).unwrap_or(0);
+        let keep = if uses[i + 1].1 > uses[i].1 { uses[i + 1].0 } else { uses[i].0 };
+        uses[i] = (keep, uses[i].1 + uses[i + 1].1);
+        uses.remove(i + 1);
     }
-    b.extend(r.roles);
-    b.push(0);
-    debug_assert_eq!(b.len(), SCORE_HEAD);
-    b.extend(&r.fingerprint);
-    // each event's time from T0, rounded to 64-T units; dt the units since the event before
-    let (mut t, mut prev) = (0u64, 0u64);
-    for e in &r.events {
-        t += e.dt_t;
-        let u = (t + 32) / 64;
-        let mut dt = u - prev;
-        prev = u;
+    if uses.is_empty() {
+        return vec![64];
+    }
+    uses.into_iter().map(|u| u.0).collect()
+}
+
+/// A note on's level (1-255) as a score stores it: 1-63.
+fn score_level6(level: u8) -> u8 {
+    ((u32::from(level) + 2) / 4).clamp(1, 63) as u8
+}
+
+/// A note on's level (1-255) as the device plays it from a score: the stored level x 4 + 3.
+pub fn score_level(level: u8) -> u8 {
+    score_level6(level) * 4 + 3
+}
+
+/// A score's fingerprint nibbles: each section's buckets, its first an escape and the count.
+fn score_nibbles(r: &ScoreRecord) -> Vec<u8> {
+    let mut n = Vec::new();
+    for fp in [&r.intro_fp, &r.loop_fp] {
+        let mut prev: Option<u8> = None;
+        for &c in fp.iter() {
+            let d = prev.map_or(i32::from(ESC), |p| i32::from(c) - i32::from(p));
+            if prev.is_some() && (-7..=7).contains(&d) {
+                n.push((d & 15) as u8);
+            } else {
+                n.extend([ESC, c & 15, c >> 4]);
+            }
+            prev = Some(c);
+        }
+    }
+    n
+}
+
+/// A section's events (`len` T long) into `b`: each time rounded from the section's start to
+/// 64-T units (the last unit inside the section at most).
+fn score_events_into(b: &mut Vec<u8>, events: &[ScoreEvent], len: u32, pitches: &[u32]) {
+    let last = (len.max(1) - 1) / 64;
+    let index = |p: u32| -> u8 {
+        let cents = |q: u32| (f64::from(q.max(1)).log2() - f64::from(p.max(1)).log2()).abs();
+        (0..pitches.len()).min_by(|&a, &b| cents(pitches[a]).total_cmp(&cents(pitches[b]))).unwrap_or(0) as u8
+    };
+    let mut prev = 0u32;
+    for e in events {
+        let u = (e.t.saturating_add(32) / 64).min(last);
+        let mut dt = u.saturating_sub(prev);
+        prev = prev.max(u);
         loop {
             let more = dt >= 0x80;
             b.push((dt & 0x7F) as u8 | u8::from(more) << 7);
@@ -249,13 +320,35 @@ fn encode_score(r: &ScoreRecord) -> Vec<u8> {
         }
         match e.on {
             Some((period, level)) => {
-                b.push(e.voice & 3);
-                b.extend(&period.to_le_bytes()[..3]);
-                b.push(level);
+                b.extend([e.voice & 3 | score_level6(level) << 2, index(period & 0xFF_FFFF)]);
             }
-            None => b.push(e.voice & 3 | 0x80),
+            None => b.push(e.voice & 3),
         }
     }
+}
+
+fn encode_score(r: &ScoreRecord) -> Vec<u8> {
+    let pitches = score_pitches(r);
+    let mut b = vec![0, 0, KIND_SCORE, r.voices];
+    for w in [r.site, r.quiet] {
+        b.extend(w.to_le_bytes());
+    }
+    for d in [r.code, r.intro_t, r.loop_t] {
+        b.extend(d.to_le_bytes());
+    }
+    for w in [r.intro_fp.len(), r.loop_fp.len(), r.intro_events.len(), r.loop_events.len()] {
+        b.extend((w as u16).to_le_bytes());
+    }
+    b.push(pitches.len() as u8);
+    b.extend(r.roles);
+    debug_assert_eq!(b.len(), SCORE_HEAD);
+    for p in &pitches {
+        b.extend(&p.to_le_bytes()[..3]);
+    }
+    let nib = score_nibbles(r);
+    b.extend(nib.chunks(2).map(|c| c[0] | c.get(1).map_or(0, |h| h << 4)));
+    score_events_into(&mut b, &r.intro_events, r.intro_t, &pitches);
+    score_events_into(&mut b, &r.loop_events, r.loop_t, &pitches);
     b.resize(b.len().next_multiple_of(4), 0);
     let size = b.len() as u16;
     b[..2].copy_from_slice(&size.to_le_bytes());

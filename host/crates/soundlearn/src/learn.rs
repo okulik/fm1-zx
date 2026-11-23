@@ -49,11 +49,11 @@
 //!    [`SCORE_FRAMES`] frames, that no kept entry gives and no built-in entry matches (refused as
 //!    one, or its observation refused for one), and whose `OUT` lies in no routine before it (a
 //!    learned one, or one taken for a score: its `OUT`s and its span as read or observed), gets
-//!    a recorded score for each tune of the run listened to and, when that gives one, of the
-//!    extra runs (each key of 1-9, 0, ENTER and SPACE once, but the one of the learner's run,
-//!    [`LearnOptions::run`]), which may give scores to `OUT`s heard there only too; each is
-//!    verified by a replay of its run with the game's whole list (kind-2 records, after the
-//!    roles). An `OUT` heard in the extra runs only says its scores in its block if it has one
+//!    a recorded score (an intro and, when its music loops, one pass of the loop) for each tune
+//!    of the run listened to and, when that gives one, of the extra runs (each key of 1-9, 0,
+//!    ENTER and SPACE once, but the one of the learner's run, [`LearnOptions::run`]), which may
+//!    give scores to `OUT`s heard there only too; each is verified by a replay of its run with
+//!    the game's whole list (kind-2 records, after the roles). An `OUT` heard in the extra runs only says its scores in its block if it has one
 //!    (found in the code), else in a block after the others.
 //!
 //! What it says is in [`crate::report`].
@@ -76,7 +76,7 @@ use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_SITES_MAX, SND_LE
 /// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
 /// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
 /// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
-pub const LEARNER_VERSION: u32 = 8;
+pub const LEARNER_VERSION: u32 = 9;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
