@@ -31,16 +31,22 @@
 //! mapping and score (and any channel dropped), the replay of its entry, and then
 //! `learned by observation: 3 channels` or `observation: <reason>`.
 //!
-//! A routine a score may be recorded for ends its block with the score
+//! A routine a score may be recorded for ends its block with its scores
 //! (`recorded score: 168.5 s from frame 505, 3 voices, 2351 notes, 23.1 KB`: its length, its
-//! trigger's frame, its voices, notes and bytes; `, shortened ...` when it was cut) or
-//! `no score: <reason>`.
+//! trigger's frame, its voices, notes and bytes; `, shortened ...` when it was cut) and its
+//! stretches left out (`no score: <reason>`), in the order of the runs and then of the frames,
+//! each from a run not the learner's naming it (`recorded score (key 3 once): ...`), the same
+//! reasons once (`... (3 stretches)`); or, with none, `no score: <reason>`. An `OUT` heard in
+//! the extra runs only ([`crate::scores`]) gives its scores and its stretches left out (but
+//! those method B's table claims, or that play with a score kept) in its block if it has one,
+//! else in one of its own after the others ([`heard_only_block`]: `OUT at 9A12h, heard only in
+//! other runs`).
 
 use crate::fit::FitResult;
 use crate::gate::ReplayStats;
 use crate::model::{ChannelModel, EngineModel, Family, Input, Refusal, Term};
 use crate::observe::{Mapping, ObservedChannel, ObservedModel};
-use crate::scores::ScoreSummary;
+use crate::scores::ScoreOutcome;
 use zx_sys::{SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD};
 
 /// One routine the learner looked at.
@@ -62,8 +68,9 @@ pub struct Routine {
     pub roles: Vec<ChannelRole>,
     /// The observation tried when its code did not give the routine.
     pub observation: Option<Observation>,
-    /// Its recorded score ([`crate::scores`]), or why it has none; None: not a routine for one.
-    pub score: Option<Result<ScoreSummary, String>>,
+    /// Its recorded scores ([`crate::scores`]) and its stretches left out, or why it has none;
+    /// empty: not a routine for one.
+    pub scores: Vec<ScoreOutcome>,
 }
 
 /// A heard routine observed ([`crate::observe`]) because its code did not give it.
@@ -166,12 +173,13 @@ pub fn line(learned: &[(bool, bool, usize)], scores: &[u8], refused: Option<&str
 }
 
 /// A score's line of a block.
-fn score_line(score: &Result<ScoreSummary, String>) -> String {
-    match score {
+fn score_line(score: &ScoreOutcome) -> String {
+    let run = score.run.as_ref().map_or(String::new(), |r| format!(" ({r})"));
+    match &score.got {
         Ok(s) => {
             let shortened = s.shortened.as_ref().map_or(String::new(), |w| format!(", shortened {w}"));
             format!(
-                "    recorded score: {:.1} s from frame {}, {}, {}, {:.1} KB{shortened}\n",
+                "    recorded score{run}: {:.1} s from frame {}, {}, {}, {:.1} KB{shortened}\n",
                 s.seconds,
                 s.frame,
                 count(usize::from(s.voices), "voice"),
@@ -179,7 +187,7 @@ fn score_line(score: &Result<ScoreSummary, String>) -> String {
                 s.bytes as f64 / 1024.0
             )
         }
-        Err(why) => format!("    no score: {why}\n"),
+        Err(why) => format!("    no score{run}: {why}\n"),
     }
 }
 
@@ -321,7 +329,7 @@ pub fn block(r: &Routine) -> String {
         None if r.model.is_none() && r.observation.is_none() => {
             // a site found in the code that the reader could not read: one line
             let why = r.outcome.as_ref().err().map_or("", String::as_str);
-            return format!("  OUT at {:04X}h, code only: {why}\n", r.site);
+            return format!("  OUT at {:04X}h, code only: {why}\n", r.site) + &r.scores.iter().map(score_line).collect::<String>();
         }
         None => format!("  OUT at {:04X}h, code only\n", r.site),
     };
@@ -369,7 +377,13 @@ pub fn block(r: &Routine) -> String {
         (None, Ok(())) => "    learned\n".to_string(),
         (None, Err(why)) => format!("    left out: {why}\n"),
     };
-    s + &roles_line(&r.roles) + &r.score.as_ref().map_or(String::new(), score_line)
+    s + &roles_line(&r.roles) + &r.scores.iter().map(score_line).collect::<String>()
+}
+
+/// The block of an `OUT` heard in the scores' extra runs only: its scores and its stretches left
+/// out.
+pub fn heard_only_block(site: u16, scores: &[ScoreOutcome]) -> String {
+    format!("  OUT at {site:04X}h, heard only in other runs\n") + &scores.iter().map(score_line).collect::<String>()
 }
 
 #[cfg(test)]

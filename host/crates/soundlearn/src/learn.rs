@@ -49,15 +49,19 @@
 //!    [`SCORE_FRAMES`] frames, that no kept entry gives and no built-in entry matches (refused as
 //!    one, or its observation refused for one), and whose `OUT` lies in no routine before it (a
 //!    learned one, or one taken for a score: its `OUT`s and its span as read or observed), gets
-//!    a recorded score from the run listened to, verified by a replay with the game's whole list
-//!    (kind-2 records, after the roles).
+//!    a recorded score for each tune of the run listened to and, when that gives one, of the
+//!    extra runs (each key of 1-9, 0, ENTER and SPACE once, but the one of the learner's run,
+//!    [`LearnOptions::run`]), which may give scores to `OUT`s heard there only too; each is
+//!    verified by a replay of its run with the game's whole list (kind-2 records, after the
+//!    roles). An `OUT` heard in the extra runs only says its scores in its block if it has one
+//!    (found in the code), else in a block after the others.
 //!
 //! What it says is in [`crate::report`].
 
 use crate::entry::{encode_list, BuiltinRoles, LearnedEntry};
 use crate::fit::{check_fit, digest, to_entry, FitResult};
 use crate::gate::{ReplayStats, add_drum, builtin_at, drum_ok, judge_table, replay_table, Verdict, BUILTIN, NOT_REPLAYED};
-use crate::listen::{listen_observed, Inputs, SiteHeard, LISTEN_FRAMES};
+use crate::listen::{key_runs, listen_observed, run_inputs, Inputs, RunKind, SiteHeard, LISTEN_FRAMES};
 use crate::model::{read_engine, scan_out_sites, EngineModel, Input, Refusal};
 use crate::observe::{observe, ObservedModel};
 use crate::report::{self, ChannelRole, Observation, Routine};
@@ -72,7 +76,7 @@ use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_SITES_MAX, SND_LE
 /// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
 /// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
 /// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
-pub const LEARNER_VERSION: u32 = 7;
+pub const LEARNER_VERSION: u32 = 8;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
@@ -114,17 +118,20 @@ pub struct LearnOptions {
     /// The owner's stored roles: a routine's speaker `OUT` (as the report shows it) to its
     /// channels' roles (`SND_ROLE_*`, 1-3), from channel 0; they win over the analysis.
     pub instruments: BTreeMap<u16, Vec<u8>>,
+    /// The learner's run when it is one of [`choose_run`](crate::listen::choose_run)'s: the key
+    /// it presses once is not run again for the recorded scores (step 8 of the module docs).
+    pub run: Option<RunKind>,
 }
 
 /// Learns the music routines of the game `load` gives (time 0 of the run), under `inputs` (see
 /// the module docs). Never panics: a panic in the learner is caught and gives
 /// `no music learned (learner error: ...)`.
-pub fn learn(load: &dyn Fn() -> Machine, inputs: &Inputs) -> GameSound {
+pub fn learn(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs) -> GameSound {
     learn_with(load, inputs, &LearnOptions::default())
 }
 
 /// [`learn`] with options.
-pub fn learn_with(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) -> GameSound {
+pub fn learn_with(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &LearnOptions) -> GameSound {
     match catch_unwind(AssertUnwindSafe(|| learn_game(load, inputs, opts))) {
         Ok(s) => s,
         Err(p) => {
@@ -188,7 +195,7 @@ struct Judged {
     sounding: u32,
 }
 
-fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) -> GameSound {
+fn learn_game(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &LearnOptions) -> GameSound {
     let builtins = !opts.ignore_builtins;
     let start = load();
     let mut end = load();
@@ -225,7 +232,7 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
         let (model, mem) = match read_site(pc, &mems, builtins) {
             Ok(got) => got,
             Err(why) => {
-                let routine = Routine { site: pc, heard: site_heard, model: None, fit: None, replay: None, drums: Vec::new(), outcome: Err(why), roles: Vec::new(), observation: None, score: None };
+                let routine = Routine { site: pc, heard: site_heard, model: None, fit: None, replay: None, drums: Vec::new(), outcome: Err(why), roles: Vec::new(), observation: None, scores: Vec::new() };
                 done.push(Judged { routine, entry: None, sounding: 0 });
                 continue;
             }
@@ -259,11 +266,21 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
     let builtin_heard = builtin_run.map_or_else(Vec::new, |r| r.heard());
     let (roles, override_error) = stored_roles(&mut done, &kept, &builtin_heard, &opts.instruments);
     let entries: Vec<LearnedEntry> = kept.iter().filter_map(|&k| done[k].entry.clone()).collect();
-    let cands = score_candidates(&done);
-    let (scores, outcomes) = record(load, inputs, &tap, &cands, &entries, &roles, builtins);
-    drop(tap);
-    for (k, got) in outcomes {
-        done[k].routine.score = Some(got);
+    let (cands, groups) = score_candidates(&done);
+    let covered = |pc: u16| groups.iter().any(|(outs, spans)| outs.contains(&pc) || spans.iter().any(|&(a, len)| pc.wrapping_sub(a) < len));
+    let extra: Vec<(String, Inputs)> = key_runs(opts.run).into_iter().map(|k| (k.short(), run_inputs(k, 0))).collect();
+    let got = record(load, inputs, tap, &extra, &cands, &covered, &entries, &roles, builtins);
+    let scores = got.scores;
+    for (k, o) in got.outcomes {
+        done[k].routine.scores.push(o);
+    }
+    // an OUT heard in the extra runs only: in its block if it has one, else in one after them
+    let mut heard_only = Vec::new();
+    for (site, o) in got.heard {
+        match done.iter_mut().find(|j| j.routine.site == site) {
+            Some(j) => j.routine.scores.extend(o),
+            None => heard_only.push(report::heard_only_block(site, &o)),
+        }
     }
     let learned: Vec<(bool, bool, usize)> = kept
         .iter()
@@ -277,20 +294,19 @@ fn learn_game(load: &dyn Fn() -> Machine, inputs: &Inputs, opts: &LearnOptions) 
         .iter()
         .filter(|j| j.routine.heard.is_some() || j.routine.model.is_some())
         .find_map(|j| report::reason(&j.routine));
-    let details = done.iter().map(|j| report::block(&j.routine)).collect();
+    let details = done.iter().map(|j| report::block(&j.routine)).chain(heard_only).collect();
     let voices: Vec<u8> = scores.iter().map(|s| s.voices).collect();
     GameSound { entries, line: report::line(&learned, &voices, refused.as_deref()), details, roles, scores, override_error }
 }
 
 /// The routines a score may be recorded for (step 8 of the module docs), in the order of `done`:
-/// (block, its `OUT`).
-fn score_candidates(done: &[Judged]) -> Vec<Candidate> {
+/// (block, its `OUT`); and the `OUT`s and spans of those and of the learned routines.
+fn score_candidates(done: &[Judged]) -> (Vec<Candidate>, Vec<Group>) {
     let builtin = |r: &Routine| {
         r.outcome.as_ref().is_err_and(|w| w.starts_with(BUILTIN))
             || r.observation.as_ref().is_some_and(|o| o.outcome.as_ref().is_err_and(|w| w.contains("built-in")))
     };
-    // the routines before: each one's OUTs, and its spans (start, length)
-    type Group = (BTreeSet<u16>, Vec<(u16, u16)>);
+    // the routines before
     let mut groups: Vec<Group> = Vec::new();
     let mut cands = Vec::new();
     for (k, j) in done.iter().enumerate() {
@@ -315,8 +331,11 @@ fn score_candidates(done: &[Judged]) -> Vec<Candidate> {
             cands.push((k, site));
         }
     }
-    cands
+    (cands, groups)
 }
+
+/// A routine's `OUT`s, and its spans (start, length).
+type Group = (BTreeSet<u16>, Vec<(u16, u16)>);
 
 /// A routine that takes stored roles: its block in `done`, its channels, the analysis' roles and
 /// the speaker `OUT`s that name it; a built-in one's index in the built-in table.
@@ -646,7 +665,7 @@ fn judge_routine(load: &dyn Fn() -> Machine, inputs: &Inputs, heard: &[SiteHeard
         outcome: Ok(()),
         roles: Vec::new(),
         observation: None,
-        score: None,
+        scores: Vec::new(),
     };
     let sounding = model.channels.iter().flat_map(|c| c.sites.iter()).filter_map(|&p| heard.iter().find(|s| s.pc == p)).map(|s| s.frames_with_edges).sum();
     let mut entry = to_entry(&model, peek);

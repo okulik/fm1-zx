@@ -56,7 +56,8 @@
 //! game's learned entries and the stored roles of its routines' channels ([`attach_sound`]:
 //! learned entries' `instrument[]`, built-in entries' kind-1 records), the game's
 //! `[game.instruments]` overrides ([`crate::manifest`]) winning over the learner's analysis, and
-//! its recorded scores (kind-2 records); an
+//! its recorded scores (kind-2 records; the learner is told the run it listens to, so that its
+//! extra runs for the scores skip that run's key); an
 //! override that names no learned or built-in routine of the game (or more channels than it has)
 //! fails the run, naming the game and the key, and no pack is written. [`table`] ends with one
 //! line per game (`<name>: music learned (...)`, `<name>: music recorded (...)` or
@@ -291,9 +292,10 @@ const REPORT_HEAD: &str = "\
 # (from the analysis of the run, or your override in [game.instruments]). A heard routine whose
 # code was not used is observed instead: each channel's value, how it gives the pitch, its score
 # (the share of the music in which that pitch was heard), and whether it was learned or why not.
-# Music no routine gives that played long enough is recorded as a score instead: from the edge
-# that starts it, its length, voices, notes and bytes (FM: engines plays it in step with the
-# beeper), or why it has none.
+# Music no routine gives that played long enough is recorded as scores instead, a score per tune
+# (from the run listened to and, when that gives one, from a run per key: the key named on its
+# line): from the edge that starts it, its length, voices, notes and bytes (FM: engines plays it
+# in step with the beeper), or why it has none.
 ";
 
 /// A packed game, for learning its music: its name, its converted file's bytes and name, where
@@ -440,17 +442,19 @@ fn learn_converted(
     // it loaded just now, so it loads again: the fallback is never used
     let load = || machine(file, data).unwrap_or_else(|_| Machine::new());
     let mut run_line = String::new();
+    let mut run_kind = None;
     let run: Inputs = match steps {
         Some(steps) => Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS)),
         None => {
             let (run, kind, won, generic) = choose_run(&load, u64::from(crc32fast::hash(data)));
+            run_kind = Some(kind);
             if kind != RunKind::Generic {
                 run_line = format!("  run: {} (it heard {won} music frames, the generic run {generic})\n", kind.describe());
             }
             run
         }
     };
-    let opts = LearnOptions { instruments: instruments.clone(), ..LearnOptions::default() };
+    let opts = LearnOptions { instruments: instruments.clone(), run: run_kind, ..LearnOptions::default() };
     let got = learn_with(&load, &run, &opts);
     let list = (!got.entries.is_empty() || !got.roles.is_empty() || !got.scores.is_empty()).then(|| encode_list_scores(&got.entries, &got.roles, &got.scores));
     (list, got.line, run_line + &got.details, got.override_error)

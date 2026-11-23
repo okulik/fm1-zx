@@ -57,7 +57,7 @@ A list's length is the distance from its offset to the nearest greater list offs
 
 ### Entry list
 
-A list holds up to 8 entries for one game (`SND_LEARNED_MAX`), learned entries or kind-1 records, and up to 4 recorded scores (`SND_SCORES_MAX`). A learned entry (kind 0) describes one music routine the game's own code contains: a signature to find it by, the `OUT` sites where its notes start, small programs that compute each note's period from the machine state, and each channel's instrument. A kind-1 record gives stored instruments to a built-in entry the game uses. A kind-2 record is a recorded score: a stretch of the game's music as note events, which method B plays while the speaker keeps sounding as it did when it was recorded. All fields are little-endian.
+A list holds up to 8 entries for one game (`SND_LEARNED_MAX`), learned entries or kind-1 records, and up to 8 recorded scores (`SND_SCORES_MAX`). A learned entry (kind 0) describes one music routine the game's own code contains: a signature to find it by, the `OUT` sites where its notes start, small programs that compute each note's period from the machine state, and each channel's instrument. A kind-1 record gives stored instruments to a built-in entry the game uses. A kind-2 record is a recorded score: a stretch of the game's music as note events, which method B plays while the speaker keeps sounding as it did when it was recorded. All fields are little-endian.
 
 ```
 u8 count (all kinds), u8 0, u16 0, then `count` entries, each a learned entry, a kind-1 record or a kind-2 record (below); a learned entry:
@@ -109,13 +109,14 @@ events[n_events], then zero padding up to `size`; an event:
 
 A speaker edge is a change of the EAR level (bit 4 of the value written to port `FEh`), from any `OUT`. Events are in time order; a note on for a voice that sounds changes its pitch. The record produces no engine: the scores keep pointing into the list, and method B plays them (`snd_b_scores`, `core/sound/learned.c`, which also states the rules exactly):
 
-- a score starts (arms) while no score plays, in a frame where `site` makes a speaker edge after at least `quiet` frames with none from it (a game's first frames count as quiet) and the 32 bytes around it hash to `code`: T0 is that edge;
-- while it plays, each bucket, once complete, is compared with its fingerprint: the live edges agree when they are within max(2, fingerprint / 8) of it; three buckets in a row that disagree stop it, and so does the fingerprint's end;
+- a score arms while no score plays, in a frame where `site` makes a speaker edge after at least `quiet` frames with none from it (a game's first frames count as quiet) and the 32 bytes around it hash to `code`: T0 is that edge. Every score that arms at the same edge (scores sharing `site` and `code`, such as the tunes of one music routine) is a candidate; a score whose trigger holds while another plays does not interrupt it;
+- while a score is followed, each bucket, once complete, is compared with its fingerprint: the live edges agree when they are within max(2, fingerprint / 8) of it; three buckets in a row that disagree stop it, and the fingerprint's end ends its following. Candidates are followed side by side;
+- when the decision for T0's frame is due (3 buckets compared), the candidates stopped by then are dropped, and of the rest the one with the fewest disagreeing buckets plays (of those tied, the first in the list); the others are dropped. From then on only that score is followed: when it stops, no other takes over;
 - method B decides each frame 3 frames late (`SND_DELAY_FRAMES`), so a stop cancels the frames not yet decided: those from the frame the first of the three buckets began in. The score plays its frames from T0's to the one its fingerprint ends in (the voices still sounding are released there), each with the events whose times fall in it, unless a table entry claims the frame (the table wins). Its frames name the engine after the table's entries and learned entries: the first score's is `score 1`.
 
 The decoder (`snd_learned_decode`, `core/sound/learned.c`) rejects the whole list (`ZX_ERR_FORMAT`, no entries) unless all of this holds, for every entry:
 
-- the list is at least 4 bytes and 4-byte aligned in memory; it holds at most 8 entries of kinds 0 and 1 and at most 4 of kind 2;
+- the list is at least 4 bytes and 4-byte aligned in memory; it holds at most 8 entries of kinds 0 and 1 and at most 8 of kind 2 (so `count` is at most 16);
 - the entry's `size` and `kind` lie in the list; `kind` is 0, 1 or 2; `size` is at least 36 (a kind-1 record: 16; a kind-2 record: 20), a multiple of 4 and fits in the list (entries are packed one after the other; bytes after the last entry are ignored);
 - a kind-1 record's `channels` is 1-3; it counts towards the 8 of kinds 0 and 1, has no sites and adds no work; nothing else in it is checked (its roles are read as above);
 - for a kind-2 record: `voices` is 1-3; `buckets` is 1-12,000 and the fingerprint lies in the record; every event lies in the record, its `dt` a varint of at most 4 bytes, its time (the sum of the `dt`s) before the fingerprint's end (`buckets` x 1,092 units), its voice below `voices`, bits 2-6 of `vf` clear, and a note on's period at least 64 and its level not 0; its roles are read as a kind-1 record's, and it adds no work;

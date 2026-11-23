@@ -477,7 +477,7 @@ void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, u
  * the speaker edges of each frame-long bucket from that edge (its fingerprint). Method B plays a
  * score from its trigger edge while the live edges keep agreeing with the fingerprint
  * (snd_b_scores; the rules in learned.c). */
-#define SND_SCORES_MAX 4u             /* kind-2 records per game */
+#define SND_SCORES_MAX 8u             /* kind-2 records per game */
 #define SND_SCORE_BUCKETS_MAX 12000u  /* buckets of a score's fingerprint (4 minutes) */
 
 struct snd_b;
@@ -552,18 +552,21 @@ typedef struct {          /* what B saw in one frame, when it arrived */
 	uint8_t cont;         /* the frame's first edges carry on the note the frame before ended with */
 } snd_b_rec;
 
-typedef struct {          /* the recorded score playing (learned.c) */
-	const uint8_t *rec;   /* its record in the list; NULL: none */
+typedef struct {          /* the recorded score playing, or its candidates (learned.c) */
+	const uint8_t *rec;   /* its record in the list (the first candidate's until one is chosen);
+	                       * NULL: none */
 	uint32_t f0;          /* the frame of its trigger edge (snd_b.frames counting it) */
 	uint32_t t0;          /* the trigger edge's T-state in frame f0: T0 */
 	uint32_t frames;      /* frames it plays from f0 (fewer once it stops) */
 	uint32_t at;          /* its next event: offset in rec (past the event's time) */
 	uint32_t u;           /* that event's time from T0, in 64-T units */
 	uint16_t left;        /* events not yet decided */
-	uint16_t bucket;      /* the next bucket to compare; the fingerprint's length: following ended */
+	uint16_t bucket;      /* the next bucket to compare */
 	uint16_t count;       /* speaker edges in that bucket so far */
-	uint8_t bad;          /* buckets in a row that disagreed */
+	uint8_t live;         /* bit k: score k followed (a candidate, or the score chosen); 0: stopped */
 	uint8_t index;        /* 1 + its index in snd_b.score */
+	uint8_t run[SND_SCORES_MAX];    /* per score followed: its buckets in a row that disagreed */
+	uint8_t miss[SND_SCORES_MAX];   /* per score followed: its buckets that disagreed */
 	snd_voice v[SND_TONAL];   /* its voices, as decided so far */
 } snd_b_score;
 

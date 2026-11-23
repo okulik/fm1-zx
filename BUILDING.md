@@ -228,19 +228,29 @@ it reads, without the check against the beeper's edges (its edges hold all its c
 once).
 
 Music that no routine gives (none learned, none known) is recorded instead, as a score, when its
-`OUT` sounded in at least 250 frames: from the first speaker edge of that `OUT` after at least 25
-frames without one, for as long as the keys stay as they were (a key press may change the music)
-and the `OUT` is not silent for 100 frames, to the end of the 3-minute run at most; a stretch
-under 250 frames (5 s) is not recorded. Its notes are read from the speaker's sound alone (up to 3
+`OUT` sounded in at least 250 frames: each stretch from the first speaker edge of that `OUT` after
+at least 25 frames without one, for as long as the keys stay as they were (a key press may change
+the music) and the `OUT` is not silent for 100 frames, to the end of the 3-minute run at most, so
+a run that plays several tunes with silence between gives a score each; a stretch under 250 frames
+(5 s) is not recorded. When the run gives a score, the learner also listens to the game once per
+key, 1-9, 0, ENTER and SPACE (but the key of its own run), each held 5 frames at frame 500 and then
+nothing, as a menu of tunes plays another behind each key, and takes those runs' stretches too,
+from the same `OUT`s and from any other `OUT` that sounded there in 250 frames and lies in no
+routine already known. Two stretches whose speaker edges agree frame by frame over their first 100
+frames (2 s) are the same tune: the longer is kept. Each extra run costs a replay of the game, and
+each new tune a transcription and the replays that verify it, so a menu of tunes takes several
+times as long as a game with one. A score's notes are read from the speaker's sound alone (up to 3
 voices, by their spectrum; a held tone, under 8 notes or 3 pitches, is not music), and the pack
 stores them with the speaker edges of each frame-long stretch from that first edge. Method B,
-replaying the run with the game's whole list, must play the score from that edge to its end; one
-it stops following is cut to where it held, if 250 frames remain. At most 4 scores a game, the
-longest first, within 64 KB in all. On the FM-1, FM: engines starts a score when its `OUT` makes
-that first edge after the same silence with the same code around it, and plays it in step with the
-beeper, comparing the beeper's edges with the recorded ones as it goes: when the game does
-something else (a key pressed during the tune, another tune), the score stops within a few frames
-and the beeper plays. Its voices take their instruments by pitch, as a routine's channels do.
+replaying the score's own run with the game's whole list, must play the score from that edge to
+its end while every score kept before still plays in its run; one it stops following is cut to
+where it held, if 250 frames remain. At most 8 scores a game, the longest first, within 128 KB in
+all. On the FM-1, FM: engines starts a score when its `OUT` makes that first edge after the same
+silence with the same code around it (several scores of one `OUT` start together, and the one
+whose recorded edges the beeper follows plays), and plays it in step with the beeper, comparing
+the beeper's edges with the recorded ones as it goes: when the game does something else (a key
+pressed during the tune, another tune), the score stops within a few frames and the beeper
+plays. Its voices take their instruments by pitch, as a routine's channels do.
 
 Anything else stays on the beeper. After the table it prints one line per game:
 
@@ -256,11 +266,13 @@ not used, the routine observed, each channel's value (`word (9004h)`, `DE`, `IYh
 gives the pitch (`counter x1`: that many passes of the loop; `16-bit accumulator`: a step added
 each pass) and its score (the share of the music in which the predicted pitch was heard), its
 replay, and `learned by observation: 2 channels` or `observation:` and why not. A routine that
-could have a score ends with it, `recorded score: 168.5 s from frame 505, 3 voices, 2351 notes,
-23.1 KB` (its length, the frame of its first edge, its voices, notes and size), or `no score:`
-and why not; the game's line counts the scores (`music learned (1 routine, heard, 2 channels;
-1 score)`). The games are
-learned in parallel, a few seconds each; the results are cached in `DIR/sound-cache/` (by the
+could have a score ends with its scores, `recorded score: 168.5 s from frame 505, 3 voices,
+2351 notes, 23.1 KB` (its length, the frame of its first edge, its voices, notes and size), the
+run named when it is an extra one (`recorded score (key 3 once): ...`), and its stretches left
+out, `no score:` and why not; an `OUT` heard only in the extra runs has a block of its own
+(`OUT at 9A12h, heard only in other runs`) unless it was found in the code; the game's line counts
+the scores (`music recorded (5 scores, 3 voices)`, `music learned (1 routine, heard, 2 channels;
+1 score)`). The games are learned in parallel, a few seconds each (a menu of tunes longer); the results are cached in `DIR/sound-cache/` (by the
 converted game's CRC, its key script, its instrument overrides and the learner's version), which
 runs keep, so a re-run learns only new or changed games.
 

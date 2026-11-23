@@ -9,7 +9,7 @@
 //! records, then the kind-2 records.
 //!
 //! ```text
-//! u8 count (all kinds: <= 8 of kinds 0 and 1, <= 4 of kind 2), u8 0, u16 0, then count entries; a learned entry:
+//! u8 count (all kinds: <= 8 of kinds 0 and 1, <= 8 of kind 2), u8 0, u16 0, then count entries; a learned entry:
 //!   u16 size (multiple of 4, the whole entry), u8 kind (0: a learned entry), u8 channels (1-3)
 //!   u64 digest
 //!   u16 len, u8 n_wild, u8 n_reloc
@@ -277,7 +277,7 @@ pub fn encode_list_with(entries: &[LearnedEntry], roles: &[BuiltinRoles]) -> Vec
 /// A game's entry list: the learned entries, the built-in entries' roles (kind-1 records), then
 /// the recorded scores (kind-2 records). Without scores, as [`encode_list_with`]. The encoder does
 /// not check them: the decoder refuses a list with any that is not valid (or with over 8 of kinds
-/// 0 and 1, or over 4 scores).
+/// 0 and 1, or over 8 scores).
 pub fn encode_list_scores(entries: &[LearnedEntry], roles: &[BuiltinRoles], scores: &[ScoreRecord]) -> Vec<u8> {
     let mut b = vec![(entries.len() + roles.len() + scores.len()) as u8, 0, 0, 0];
     for e in entries {

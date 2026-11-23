@@ -5,7 +5,8 @@
 //! (`core/sound/learned.c`), and method B's player on a synthetic tune recorded on the host: it
 //! claims the tune's frames and plays the score's events at their T-states whatever the tune's
 //! phase in the frame, stops within the delay when the tune changes (the beeper returns), and
-//! leaves a frame a table entry claims to the table.
+//! leaves a frame a table entry claims to the table; of several scores at one site, each tune
+//! plays its own.
 
 mod fixtures;
 
@@ -14,7 +15,7 @@ use soundlearn::entry::{ear_edges, score_code, score_fingerprint};
 use soundlearn::{encode_list, encode_list_scores, encode_list_with, BuiltinRoles, LearnedEntry, Op, ScoreEvent, ScoreRecord};
 use zx_sys::{
     zx_edge, Machine, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD,
-    SND_SITE_TONAL, ZX_FRAME_TSTATES,
+    SND_SCORES_MAX, SND_SITE_TONAL, ZX_FRAME_TSTATES,
 };
 
 const F: u64 = ZX_FRAME_TSTATES as u64;
@@ -132,8 +133,9 @@ fn decoder_takes_good_scores() {
     assert_eq!((b.entries().len(), b.scores()), (n, 1), "a score is no table entry");
     assert_eq!(b.name(n as u8 + 1), "score 1");
     assert_eq!(b.name(n as u8 + 2), "");
-    let four = SndEngines::with_learned(&list(&[score(), score(), score(), score()])).expect("four scores");
-    assert_eq!((four.scores(), four.name(n as u8 + 4).as_str()), (4, "score 4"));
+    let eight = SndEngines::with_learned(&list(&vec![score(); SND_SCORES_MAX])).expect("eight scores");
+    assert_eq!((eight.scores(), eight.name(n as u8 + 8).as_str()), (8, "score 8"));
+    assert_eq!(eight.name(n as u8 + 9), "");
     // a score with no events, one bucket, the longest fingerprint, three voices
     assert!(decodes(&list(&[ScoreRecord { events: vec![], ..score() }])));
     assert!(decodes(&list(&[ScoreRecord { fingerprint: vec![9], events: vec![], ..score() }])));
@@ -150,16 +152,16 @@ fn decoder_takes_good_scores() {
     padded[4..6].copy_from_slice(&size.to_le_bytes());
     assert!(decodes(&padded));
     assert!(decodes(&patched(16, &[9, 200, 4])));
-    // 8 entries of kinds 0 and 1 and 4 scores: 12 records
+    // 8 entries of kinds 0 and 1 and 8 scores: 16 records
     let roles = BuiltinRoles { digest: 2, channels: 1, roles: [1, 0, 0] };
-    assert!(decodes(&encode_list_scores(&[], &[roles; 8], &[score(), score(), score(), score()])));
+    assert!(decodes(&encode_list_scores(&[], &[roles; 8], &vec![score(); 8])));
     assert!(!decodes(&encode_list_scores(&[], &[roles; 9], &[score()])), "9 of kinds 0 and 1");
 }
 
 #[test]
 fn decoder_refuses_bad_scores() {
     let refused = |l: Vec<u8>, what: &str| assert!(!decodes(&l), "{what}: {l:02X?}");
-    refused(list(&[score(), score(), score(), score(), score()]), "five scores");
+    refused(list(&vec![score(); SND_SCORES_MAX + 1]), "nine scores");
     refused(patched(2, &[3]), "kind 3");
     refused(patched(3, &[0]), "no voice");
     refused(patched(3, &[4]), "four voices");
@@ -237,10 +239,20 @@ fn tune(ns: &[u8]) -> Vec<Note> {
 /// end:   JR end
 /// ```
 fn program(delay: u16) -> (Vec<u8>, Labels) {
+    program_from(delay, None)
+}
+
+/// [`program`], its notes from `TABLE`, or with `sel` from the address in the word at `sel`
+/// (`LD HL,(sel)` in place of `LD HL,TABLE`: the same code around the `OUT`s).
+fn program_from(delay: u16, sel: Option<u16>) -> (Vec<u8>, Labels) {
     let mut a = Asm::default();
     a.label("start").b(&[0x01]).b(&delay.to_le_bytes());
     a.label("dly").b(&[0x0B, 0x78, 0xB1]).r(0x20, "dly");
-    a.b(&[0x21]).b(&TABLE.to_le_bytes()).b(&[0xAF, 0x08]);
+    match sel {
+        Some(at) => a.b(&[0x2A]).b(&at.to_le_bytes()),
+        None => a.b(&[0x21]).b(&TABLE.to_le_bytes()),
+    };
+    a.b(&[0xAF, 0x08]);
     a.label("note").b(&[0x7E, 0xB7]).r(0x28, "end");
     a.b(&[0x4F, 0x23, 0x5E, 0x23, 0x56, 0x23, 0x7E, 0x23, 0xB7]).r(0x20, "togb");
     a.label("toga").b(&[0x08, 0xEE, 0x10]).label("out_a").b(&[0xD3, 0xFE, 0x08, 0x1B, 0x7A, 0xB3]).r(0x28, "note");
@@ -279,7 +291,11 @@ struct Run {
 /// Runs the tune `frames` frames, with method B on `list`'s table and scores (and the mixer in
 /// FM: engines on it too); `poke`: from that frame on, the notes are these.
 fn run(delay: u16, notes: &[Note], frames: usize, list: &[u8], poke: Option<(usize, &[Note])>) -> Run {
-    let mut m = machine(delay, notes);
+    run_on(machine(delay, notes), frames, list, poke)
+}
+
+/// [`run`] on the machine `m`.
+fn run_on(mut m: Machine, frames: usize, list: &[u8], poke: Option<(usize, &[Note])>) -> Run {
     let mut b = SndEngines::with_learned(list).expect("the list decodes");
     let mut mix = SndMixer::new(750_000, 17);
     mix.set_learned(list).expect("the mixer takes the list");
@@ -550,6 +566,93 @@ fn score_releases_its_voices_where_its_fingerprint_ends() {
     expect.push((s.fingerprint.len() as u64 * F, 0, 0, 0));
     assert_eq!(played(&r, mine), expect);
     assert_eq!(r.dec[end].events().last().map(|e| e.t), Some(t0), "released at T0's T-state in that frame");
+}
+
+// ---- several scores at one site ----------------------------------------------
+
+/// The word naming the tune the selector program plays.
+const SEL: u16 = 0x8F00;
+/// Where the selector program's tunes lie.
+const TABLES: [u16; 3] = [TABLE, 0x9200, 0x9400];
+
+/// Three tunes for one routine: A; B, A's first note with half a frame of a high note inside it
+/// (its first bucket differs from A's, the next two agree), then notes of its own; C, its own
+/// from the first note.
+fn tunes() -> [Vec<Note>; 3] {
+    let half_frame = |n: u8| Note { n, edges: (ZX_FRAME_TSTATES / 2 / (58 + 13 * u32::from(n))) as u16 & !1, b: false };
+    let mut b = vec![half_frame(100), half_frame(30)];
+    b.extend(tune(&[100, 60, 110, 75, 85]));
+    [tune(&NS), b, tune(&[20, 120, 70, 95, 55, 65])]
+}
+
+/// The selector program (`delay`) with every tune of [`tunes`] in memory, playing tune `k`: the
+/// runs differ in the word at `SEL` alone.
+fn sel_machine(delay: u16, k: usize) -> Machine {
+    let mut m = fixtures::bare(&program_from(delay, Some(SEL)).0);
+    for (t, notes) in TABLES.iter().zip(tunes()) {
+        for (i, &x) in table_bytes(&notes).iter().enumerate() {
+            m.poke(t + i as u16, x);
+        }
+    }
+    m.poke(SEL, TABLES[k] as u8);
+    m.poke(SEL + 1, (TABLES[k] >> 8) as u8);
+    m
+}
+
+/// Of a run's first three buckets (those compared when T0's frame is decided), how many disagree
+/// with the fingerprint `fp`.
+fn early_misses(r: &Run, fp: &[u8]) -> usize {
+    let (f0, t0) = first_edge(r);
+    let live = score_fingerprint(&r.frames, f0, t0, SND_DELAY_FRAMES as usize);
+    live.iter().zip(fp).filter(|(&l, &x)| !agree(l, x)).count()
+}
+
+#[test]
+fn scores_at_one_site_each_play_their_own_tune() {
+    let tunes = tunes();
+    let (code, labels) = program_from(3000, Some(SEL));
+    let rec: Vec<(ScoreRecord, Vec<Timed>)> = (0..3)
+        .map(|k| {
+            let r = run_on(sel_machine(3000, k), FRAMES, &encode_list(&[]), None);
+            record(&r, &tunes[k], &fixtures::bare(&code), &labels)
+        })
+        .collect();
+    let scores: Vec<ScoreRecord> = rec.iter().map(|r| r.0.clone()).collect();
+    assert!(scores.iter().all(|s| (s.site, s.code, s.quiet) == (scores[0].site, scores[0].code, scores[0].quiet)), "one site, one code");
+    let l = list(&scores);
+    let first = SndEngines::new().entries().len() as u8 + 1;
+    for delay in [3000u16, 7700] {
+        for (k, (s, abs)) in rec.iter().enumerate() {
+            let r = run_on(sel_machine(delay, k), FRAMES, &l, None);
+            let (f0, t0) = first_edge(&r);
+            // each tune makes its first edge at the same moment: one trigger, three candidates
+            assert_eq!((f0, t0), first_edge(&run_on(sel_machine(delay, 0), FRAMES, &encode_list(&[]), None)), "delay {delay}, tune {k}");
+            let mine = first + k as u8;
+            let frames = s.fingerprint.len() + usize::from(t0 != 0);
+            assert_eq!(claimed(&r, mine), (f0..f0 + frames).collect::<Vec<_>>(), "delay {delay}, tune {k}");
+            assert_eq!(played(&r, mine), want(abs), "delay {delay}, tune {k}");
+            assert_eq!(r.dec[f0].events()[0].t, t0, "delay {delay}, tune {k}");
+            for o in (0..3).filter(|&o| o != k) {
+                assert!(claimed(&r, first + o as u8).is_empty(), "delay {delay}: tune {k} never plays score {}", o + 1);
+            }
+            // the choice: its own score agrees throughout; A against B's run (and B against A's)
+            // disagrees once, still followed when the choice is made (the fewest disagreeing
+            // buckets win, not the lowest index); A and B against C's stop before it
+            assert_eq!(early_misses(&r, &s.fingerprint), 0, "delay {delay}, tune {k}");
+            let other = early_misses(&r, &scores[[1, 0, 0][k]].fingerprint);
+            if k < 2 {
+                assert!((1..3).contains(&other), "delay {delay}, tune {k}: {other} buckets disagree");
+            } else {
+                assert_eq!(other, 3, "delay {delay}, tune {k}");
+                assert_eq!(early_misses(&r, &scores[1].fingerprint), 3, "delay {delay}, tune {k}");
+            }
+        }
+    }
+    // a lone score of the three plays its own tune as it did in the list, and nothing in the others
+    let r = run_on(sel_machine(3000, 1), FRAMES, &list(&scores[1..2]), None);
+    assert_eq!(played(&r, first), want(&rec[1].1), "B alone");
+    let r = run_on(sel_machine(3000, 2), FRAMES, &list(&scores[1..2]), None);
+    assert!(claimed(&r, first).is_empty(), "B alone, C's run");
 }
 
 /// Random corruptions of a score's record: the decoder refuses or takes each without reading

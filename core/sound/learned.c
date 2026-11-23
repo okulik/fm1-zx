@@ -38,15 +38,22 @@
  * span [b x ZX_FRAME_TSTATES, (b + 1) x ZX_FRAME_TSTATES) from T0, and the fingerprint the speaker
  * edges (EAR level changes, from any OUT) of each bucket, capped at 255. Method B's player, once
  * a frame after the decision (snd_b.scores), with frame j just fed:
- *  - following: the playing score's bucket that ends in frame j (from T0's T-state in frame j - 1
- *    to T0's in frame j) is compared with the fingerprint: they agree when |live - recorded| <=
- *    max(2, recorded / 8). Three buckets in a row that disagree stop the score: the frames from
+ *  - following: each score followed (the candidates, then the score chosen) has the bucket that
+ *    ends in frame j (from T0's T-state in frame j - 1 to T0's in frame j) compared with its
+ *    fingerprint: they agree when |live - recorded| <= max(2, recorded / 8). Three buckets in a
+ *    row that disagree stop it; when none is left followed, the score stops: the frames from
  *    j - SND_DELAY_FRAMES on, not yet decided, are not its (the first of the three buckets began
- *    in frame j - SND_DELAY_FRAMES). Its last bucket compared ends the following.
- *  - arming: while no score plays (from its trigger to its last frame decided), a score whose site
- *    makes a speaker edge in frame j, after at least `quiet` frames with none from it (a game's
- *    first frames count as quiet), and whose code (the FNV-1a 32 of the 32 bytes from site - 16)
- *    is the record's, starts: T0 is its site's first speaker edge in frame j.
+ *    in frame j - SND_DELAY_FRAMES). A score's last bucket compared ends its following.
+ *  - arming: while no score plays (from its trigger to its last frame decided), every score whose
+ *    site makes a speaker edge in frame j, after at least `quiet` frames with none from it (a
+ *    game's first frames count as quiet), and whose code (the FNV-1a 32 of the 32 bytes from
+ *    site - 16) is the record's, is a candidate; T0 is the first candidate's site's first speaker
+ *    edge in frame j, and another score joins only at that same edge (the same site).
+ *    A score whose trigger holds while one plays does not interrupt it.
+ *  - choosing: when frame f0's decision is due (frame j = f0 + SND_DELAY_FRAMES, its buckets
+ *    compared so far), the candidates stopped by then are dropped; of the rest, the one with the
+ *    fewest disagreeing buckets (the lowest index of those) plays and the others are dropped. It
+ *    then stops by its own buckets alone (no other takes over). With none left, no score plays.
  *  - the decision for frame j - SND_DELAY_FRAMES, if the score plays it (from frame f0, T0's, to
  *    the one its fingerprint ends in, or up to the frame before it stopped): its events whose times
  *    fall in the frame (each at its T-state in the frame) and, in the frame its fingerprint ends,
@@ -75,6 +82,7 @@
 #define UNITS 1092u   /* a bucket (one frame) in the 64-T units of a score's times */
 
 _Static_assert(ZX_FRAME_TSTATES == UNITS * 64u, "a bucket is a whole number of 64-T units");
+_Static_assert(SND_SCORES_MAX <= 8u, "a bit per score in snd_b_score.live");
 
 static uint32_t rd16(const uint8_t *p)
 {
@@ -534,26 +542,65 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 	b->held = 0;
 }
 
+/* T0's frame decided: the candidate followed with the fewest disagreeing buckets (the lowest
+ * index of those) becomes the score that plays, the others are dropped; 0 if none is left. */
+static uint32_t choose(snd_b *b)
+{
+	snd_b_score *sc = &b->sc;
+	uint32_t k, best = SND_SCORES_MAX;
+	const uint8_t *r;
+
+	for (k = 0; k < b->n_scores; k++)
+		if ((sc->live >> k & 1u) && (best == SND_SCORES_MAX || sc->miss[k] < sc->miss[best])) best = k;
+	if (best == SND_SCORES_MAX) {
+		sc->rec = 0;
+		return 0;
+	}
+	r = b->score[best];
+	sc->rec = r;
+	sc->index = (uint8_t)(best + 1u);
+	sc->live = (uint8_t)(1u << best);
+	sc->frames = rd16(r + 12) + (sc->t0 != 0);
+	sc->left = (uint16_t)rd16(r + 14);
+	sc->at = SCORE + rd16(r + 12);
+	sc->u = 0;
+	if (sc->left) next_time(sc);
+	for (k = 0; k < SND_TONAL; k++) {
+		sc->v[k].period_q8 = 0;
+		sc->v[k].level = 0;
+	}
+	return 1;
+}
+
 /* The player (snd_b.scores), after the decision for frame j - SND_DELAY_FRAMES, frame j just
  * fed: following, arming, the decided frame (the rules at the top). */
 static void play(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t lvl, snd_frame *out)
 {
 	snd_b_score *sc = &b->sc;
 	const uint32_t j = b->frames - 1u;
-	uint32_t k, v, lo, rel;
+	uint32_t k, lo, rel;
 
-	if (sc->rec && sc->bucket < rd16(sc->rec + 12)) {   /* the bucket that ends in frame j */
-		const uint32_t rec = sc->rec[SCORE + sc->bucket], tol = rec / 8u > 2u ? rec / 8u : 2u;
+	if (sc->rec && sc->live) {   /* the bucket that ends in frame j, for each score followed */
 		const uint32_t hi = ear_edges(e, n, lvl, sc->t0, &lo);
 		lo += sc->count;
 		if (lo > 255u) lo = 255u;
-		sc->bad = (uint8_t)(lo + tol < rec || lo > rec + tol ? sc->bad + 1u : 0u);
+		for (k = 0; k < b->n_scores; k++) {
+			const uint8_t *r = b->score[k];
+			uint32_t rec, tol;
+			if (!(sc->live >> k & 1u) || sc->bucket >= rd16(r + 12)) continue;
+			rec = r[SCORE + sc->bucket];
+			tol = rec / 8u > 2u ? rec / 8u : 2u;
+			if (lo + tol >= rec && lo <= rec + tol) {
+				sc->run[k] = 0;
+				continue;
+			}
+			sc->miss[k]++;
+			if (++sc->run[k] == 3u) sc->live &= (uint8_t)~(1u << k);   /* it stops */
+		}
 		sc->count = (uint16_t)hi;
 		sc->bucket++;
-		if (sc->bad == 3u) {   /* it stops: the frames not yet decided are not its */
-			sc->bucket = (uint16_t)rd16(sc->rec + 12);
-			if (sc->frames > j - SND_DELAY_FRAMES - sc->f0) sc->frames = j - SND_DELAY_FRAMES - sc->f0;
-		}
+		/* none followed: the frames not yet decided are not the score's */
+		if (!sc->live && sc->frames > j - SND_DELAY_FRAMES - sc->f0) sc->frames = j - SND_DELAY_FRAMES - sc->f0;
 	}
 	for (k = 0; k < b->n_scores; k++) {
 		const uint8_t *r = b->score[k];
@@ -562,29 +609,27 @@ static void play(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, u
 			if (b->quiet[k] < 0xFFFFu) b->quiet[k]++;
 			continue;
 		}
-		if (!sc->rec && zm && b->quiet[k] >= rd16(r + 6) && code_at(zm, rd16(r + 4)) == rd32(r + 8)) {
-			sc->rec = r;
-			sc->index = (uint8_t)(k + 1u);
-			sc->f0 = j;
-			sc->t0 = t;
-			sc->frames = rd16(r + 12) + (t != 0);
-			sc->bucket = 0;
-			sc->bad = 0;
-			sc->count = (uint16_t)ear_edges(e, n, lvl, t, &lo);
-			sc->left = (uint16_t)rd16(r + 14);
-			sc->at = SCORE + rd16(r + 12);
-			sc->u = 0;
-			if (sc->left) next_time(sc);
-			for (v = 0; v < SND_TONAL; v++) {
-				sc->v[v].period_q8 = 0;
-				sc->v[v].level = 0;
+		/* a candidate: while no score plays, or with those armed at the same edge */
+		if (zm && b->quiet[k] >= rd16(r + 6) && (!sc->rec || (sc->f0 == j && sc->t0 == t)) && code_at(zm, rd16(r + 4)) == rd32(r + 8)) {
+			if (!sc->rec) {
+				sc->rec = r;
+				sc->f0 = j;
+				sc->t0 = t;
+				sc->frames = ~0u;
+				sc->bucket = 0;
+				sc->live = 0;
+				sc->count = (uint16_t)ear_edges(e, n, lvl, t, &lo);
 			}
+			sc->live |= (uint8_t)(1u << k);
+			sc->run[k] = 0;
+			sc->miss[k] = 0;
 		}
 		b->quiet[k] = 0;
 	}
 	if (!sc->rec || b->frames <= SND_DELAY_FRAMES) return;
 	rel = j - SND_DELAY_FRAMES - sc->f0;   /* the frame decided, from f0 */
 	if ((int32_t)rel < 0) return;          /* (before T0's) */
+	if (!rel && !choose(b)) return;        /* T0's frame: one candidate plays */
 	if (rel < sc->frames) score_frame(b, out, rel);
 	if (rel + 1u >= sc->frames) sc->rec = 0;   /* its last frame decided (or none left) */
 }

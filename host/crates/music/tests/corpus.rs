@@ -399,7 +399,7 @@ fn schedule_keys_match_parse_action() {
 /// entries: neither tune routine is learned from its code. The code reader leaves Castaway's out
 /// at a zero test of flags that are not a counter's (its channel counters), and Colony 8's at a
 /// stack operation (`ADD HL,SP`: SP holds a phase step). Observed instead, Castaway's is refused
-/// (its replay is not music, and its tune is recorded as a score) and Colony 8's is learned (SP as one channel's step, the others
+/// (its replay is not music, and its tunes are recorded as scores) and Colony 8's is learned (SP as one channel's step, the others
 /// dropped: they read differently at its `OUT`s); a routine learned must agree with the built-in
 /// reader: the learned periods within 0.2% of the built-in reader's on every frame both claim.
 #[test]
@@ -416,9 +416,9 @@ fn builtins_agree() {
         let why = soundlearn::report::refusal(&why);
         if !observed {
             assert!(got.entries.is_empty(), "{game}: {}\n{}", got.line, got.details);
-            // no routine learned (the built-in entries not consulted): its tune is recorded as
-            // a score instead
-            assert!(got.line.starts_with("music recorded (1 score, "), "{game}: {}", got.line);
+            // no routine learned (the built-in entries not consulted): its tunes are recorded as
+            // scores instead (the generic run's, and another the run with key 1 once plays)
+            assert!(got.line.starts_with("music recorded (2 scores, "), "{game}: {}\n{}", got.line, got.details);
             // each of the tune's heard sites is read, and left out for that reason
             for site in sites {
                 let block = format!("  OUT at {site:04X}h, heard in ");

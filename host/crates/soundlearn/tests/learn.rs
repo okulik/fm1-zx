@@ -9,8 +9,8 @@
 
 mod fixtures;
 
-use soundlearn::listen::{schedule, Inputs};
-use soundlearn::{learn, BuiltinRoles, GameSound, Op};
+use soundlearn::listen::{run_inputs, schedule, Inputs, RunKind};
+use soundlearn::{learn, learn_with, BuiltinRoles, GameSound, LearnOptions, Op};
 use std::time::Instant;
 use zx_sys::{Machine, SndEngines, SND_ROLE_LEAD, SND_SITE_TONAL};
 
@@ -286,4 +286,245 @@ fn a_key_press_ends_the_stretch() {
     let (f0, t0) = first_edge_from(&code, &space, l["out1"]);
     assert_eq!(s.fingerprint.len(), PRESS as usize - f0 - usize::from(t0 != 0), "the last bucket ends in frame {}", PRESS - 1);
     assert!(got.details.contains(&format!("\n    recorded score: {:.1} s from frame {f0}, ", s.fingerprint.len() as f64 * 0.019968)), "{}", got.details);
+}
+
+/// The second tune of [`jukebox`] and [`medley`].
+const TUNE_B: [(u16, u16); 8] = [(600, 1500), (530, 1590), (700, 1400), (450, 1350), (400, 1200), (500, 1000), (560, 1680), (640, 1280)];
+/// Each note's length in [`jukebox`] and [`medley`], frames: a tune is 320 frames (6.4 s).
+const NOTE_FRAMES: u32 = 40;
+
+/// The labels of a [`player`]: its entry, loop, `OUT`s, length and tune.
+struct Names {
+    play: &'static str,
+    looped: &'static str,
+    out1: &'static str,
+    out2: &'static str,
+    dur: &'static str,
+    tune: &'static str,
+}
+
+const PLAYER: Names = Names { play: "play", looped: "loop", out1: "out1", out2: "out2", dur: "dur", tune: "tune_a" };
+
+/// The engine of [`mixing_tune`] (nothing reads it) as a subroutine, `play`: it plays the tune
+/// at IX (step 0, step 1 and a length in 256 passes per note; 0, 0 ends it) and returns, the
+/// speaker left low; `tune` follows it, and `tune_b` too when given.
+///
+/// ```text
+/// play:  LD E,(IX+0) ; LD D,(IX+1) ; LD A,D ; OR E ; RET Z
+///        EXX ; LD E,(IX+2) ; LD D,(IX+3) ; EXX ; LD A,(IX+4) ; LD (dur),A ; INC IX x5
+/// loop:  ADD HL,DE ; SBC A,A ; AND 16 ; LD B,A ; EXX ; ADD HL,DE ; SBC A,A ; AND 16 ; EXX ; OR B
+/// out1:  OUT (254),A ; XOR A ; EXX ; NOP
+/// out2:  OUT (254),A ; EXX ; DEC C ; JP NZ,loop
+///        LD A,(dur) ; DEC A ; LD (dur),A ; JP NZ,loop ; JP play
+/// ```
+fn player(a: &mut fixtures::Asm, n: &Names, tune: &[(u16, u16)], second: Option<&[(u16, u16)]>) {
+    a.label(n.play).b(&[0xDD, 0x5E, 0x00, 0xDD, 0x56, 0x01, 0x7A, 0xB3, 0xC8]);
+    a.b(&[0xD9, 0xDD, 0x5E, 0x02, 0xDD, 0x56, 0x03, 0xD9, 0xDD, 0x7E, 0x04]).w(&[0x32], n.dur);
+    a.b(&[0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23]);
+    a.label(n.looped).b(&[0x19, 0x9F, 0xE6, 0x10, 0x47, 0xD9, 0x19, 0x9F, 0xE6, 0x10, 0xD9, 0xB0]);
+    a.label(n.out1).b(&[0xD3, 0xFE, 0xAF, 0xD9, 0x00]);
+    a.label(n.out2).b(&[0xD3, 0xFE, 0xD9, 0x0D]).w(&[0xC2], n.looped);
+    a.w(&[0x3A], n.dur).b(&[0x3D]).w(&[0x32], n.dur).w(&[0xC2], n.looped).w(&[0xC3], n.play);
+    a.label(n.dur).b(&[0]);
+    let units = (NOTE_FRAMES * zx_sys::ZX_FRAME_TSTATES / (112 * 256)) as u8;
+    for (name, notes) in [(n.tune, Some(tune)), ("tune_b", second)] {
+        let Some(notes) = notes else { continue };
+        a.label(name);
+        for &(s0, s1) in notes {
+            a.b(&s0.to_le_bytes()).b(&s1.to_le_bytes()).b(&[units]);
+        }
+        a.b(&[0, 0]);
+    }
+}
+
+/// A menu of tunes: it waits for key 1 or 2 (and for its release), plays [`TUNE`] on key 1 and
+/// `second` on key 2 through [`player`], then waits again; silence otherwise.
+///
+/// ```text
+/// start: DI
+/// wait:  LD BC,F7FEh ; IN A,(C) ; CPL ; AND 3 ; JR Z,wait ; LD E,A
+/// rel:   IN A,(C) ; CPL ; AND 1Fh ; JR NZ,rel
+///        LD IX,tune_a ; RR E ; JR C,go ; LD IX,tune_b
+/// go:    CALL play ; JR wait
+/// ```
+fn jukebox(second: &[(u16, u16)]) -> (Vec<u8>, fixtures::Labels) {
+    let mut a = fixtures::Asm::default();
+    a.label("start").b(&[0xF3]);
+    a.label("wait").b(&[0x01, 0xFE, 0xF7, 0xED, 0x78, 0x2F, 0xE6, 0x03]).r(0x28, "wait").b(&[0x5F]);
+    a.label("rel").b(&[0xED, 0x78, 0x2F, 0xE6, 0x1F]).r(0x20, "rel");
+    a.w(&[0xDD, 0x21], "tune_a").b(&[0xCB, 0x1B]).r(0x38, "go").w(&[0xDD, 0x21], "tune_b");
+    a.label("go").w(&[0xCD], "play").r(0x18, "wait");
+    player(&mut a, &PLAYER, &TUNE, Some(second));
+    a.finish()
+}
+
+/// [`jukebox`] with a player of its own for each tune: key 2's [`TUNE_B`] plays through a copy
+/// of the engine (`out1_b`), never heard in the learner's run (key 1 once).
+///
+/// ```text
+/// start: DI
+/// wait:  LD BC,F7FEh ; IN A,(C) ; CPL ; AND 3 ; JR Z,wait ; LD E,A
+/// rel:   IN A,(C) ; CPL ; AND 1Fh ; JR NZ,rel
+///        RR E ; JR NC,two ; CALL play ; JR wait
+/// two:   CALL play_b ; JR wait
+/// ```
+fn two_players() -> (Vec<u8>, fixtures::Labels) {
+    let mut a = fixtures::Asm::default();
+    a.label("start").b(&[0xF3]);
+    a.label("wait").b(&[0x01, 0xFE, 0xF7, 0xED, 0x78, 0x2F, 0xE6, 0x03]).r(0x28, "wait").b(&[0x5F]);
+    a.label("rel").b(&[0xED, 0x78, 0x2F, 0xE6, 0x1F]).r(0x20, "rel");
+    a.b(&[0xCB, 0x1B]).r(0x30, "two").w(&[0xDD, 0x21], "tune_a").w(&[0xCD], "play").r(0x18, "wait");
+    a.label("two").w(&[0xDD, 0x21], "tune_b2").w(&[0xCD], "play_b").r(0x18, "wait");
+    player(&mut a, &PLAYER, &TUNE, None);
+    let b = Names { play: "play_b", looped: "loop_b", out1: "out1_b", out2: "out2_b", dur: "dur_b", tune: "tune_b2" };
+    player(&mut a, &b, &TUNE_B, None);
+    a.finish()
+}
+
+/// Two tunes one after the other: about 70 frames of silence, [`TUNE`], about 146 frames of
+/// silence, [`TUNE_B`], then silence.
+///
+/// ```text
+/// start: DI ; LD H,3 ; CALL quiet ; LD IX,tune_a ; CALL play
+///        LD H,6 ; CALL quiet ; LD IX,tune_b ; CALL play
+/// end:   JR end
+/// quiet: LD BC,0
+/// dly:   DEC BC ; LD A,B ; OR C ; JR NZ,dly ; DEC H ; JR NZ,quiet ; RET
+/// ```
+fn medley() -> (Vec<u8>, fixtures::Labels) {
+    let mut a = fixtures::Asm::default();
+    a.label("start").b(&[0xF3, 0x26, 0x03]).w(&[0xCD], "quiet").w(&[0xDD, 0x21], "tune_a").w(&[0xCD], "play");
+    a.b(&[0x26, 0x06]).w(&[0xCD], "quiet").w(&[0xDD, 0x21], "tune_b").w(&[0xCD], "play");
+    a.label("end").r(0x18, "end");
+    a.label("quiet").b(&[0x01, 0x00, 0x00]);
+    a.label("dly").b(&[0x0B, 0x78, 0xB1]).r(0x20, "dly").b(&[0x25]).r(0x20, "quiet").b(&[0xC9]);
+    player(&mut a, &PLAYER, &TUNE, Some(&TUNE_B));
+    a.finish()
+}
+
+/// The frames method B gives each score of `list` in a run of `code` under `inputs` (the
+/// frames it decides, from the run's first).
+fn score_frames(code: &[u8], inputs: &Inputs, list: &[u8]) -> Vec<Vec<usize>> {
+    let mut b = SndEngines::with_learned(list).expect("the list decodes");
+    let (table, n) = (b.entries().len(), b.scores());
+    let mut m = fixtures::bare(code);
+    let mut got = vec![Vec::new(); n];
+    let delay = zx_sys::SND_DELAY_FRAMES as usize;
+    for f in 0..9000 {
+        let (rows, kemp) = inputs(f as u32);
+        m.set_keys(rows);
+        m.set_kempston(kemp);
+        m.run_frame();
+        let d = b.frame(&m, m.edges(), m.edges_start_level());
+        if f >= delay && d.confident != 0 && usize::from(d.engine) > table {
+            got[usize::from(d.engine) - table - 1].push(f - delay);
+        }
+    }
+    got
+}
+
+/// Whether score `s` plays its whole stretch, from its trigger's frame `f0`, in `frames` (and
+/// nowhere else).
+fn plays_through(s: &soundlearn::ScoreRecord, f0: usize, frames: &[usize]) -> bool {
+    let n = frames.len();
+    n >= s.fingerprint.len() && n <= s.fingerprint.len() + 1 && frames.first() == Some(&f0) && frames.windows(2).all(|w| w[1] == w[0] + 1)
+}
+
+/// Key 1 learned: key 1 once is the learner's run (as [`choose_run`] picks it for a menu of
+/// tunes).
+fn key1() -> (Inputs, LearnOptions) {
+    let kind = RunKind::Once(3);
+    (run_inputs(kind, 0), LearnOptions { run: Some(kind), ..LearnOptions::default() })
+}
+
+/// A menu that plays one tune on key 1 and another on key 2: the learner's run (key 1 once)
+/// gives the first score, the extra run key 2 once the second, through the same `OUT` with the
+/// same code around it (the two share a trigger); each plays in its own run with the whole list.
+#[test]
+fn records_the_tune_behind_each_key() {
+    assert_eq!(zx_sys::SND_SCORES_MAX, 8, "method B follows several scores that share a trigger");
+    let (code, l) = jukebox(&TUNE_B);
+    let (inputs, opts) = key1();
+    let got = learn_with(&|| fixtures::bare(&code), &inputs, &opts);
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 2, "{}", got.details);
+    assert!(got.scores.iter().all(|s| s.site == l["out1"]) && got.scores[0].code == got.scores[1].code, "one trigger");
+    assert_eq!(got.line, format!("music recorded (2 scores, {} voices)", got.scores.iter().map(|s| s.voices).max().unwrap()));
+    let d = &got.details;
+    assert_eq!(d.matches("\n    recorded score: ").count(), 1, "{d}");
+    assert_eq!(d.matches("\n    recorded score (key 2 once): ").count(), 1, "{d}");
+    assert!(!d.contains("no score"), "{d}");
+    // each in its run: the learner's, and key 2 once
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let key2 = run_inputs(RunKind::Key(1), 0);
+    let mut played = Vec::new();
+    for run in [&inputs, &key2] {
+        let (f0, _) = first_edge_from(&code, run, l["out1"]);
+        assert!((505..510).contains(&f0), "after the key's release: frame {f0}");
+        let frames = score_frames(&code, run, &list);
+        let who: Vec<usize> = (0..2).filter(|&i| !frames[i].is_empty()).collect();
+        assert_eq!(who.len(), 1, "one score plays: {frames:?}");
+        assert!(plays_through(&got.scores[who[0]], f0, &frames[who[0]]), "{f0}: {:?}", frames[who[0]]);
+        played.push(who[0]);
+    }
+    assert_ne!(played[0], played[1], "each run its own score");
+    assert_eq!(learn_with(&|| fixtures::bare(&code), &inputs, &opts), got);
+}
+
+/// The same tune behind keys 1 and 2: one score (key 2's stretch is the same music).
+#[test]
+fn the_same_tune_behind_two_keys_is_one_score() {
+    let (code, _) = jukebox(&TUNE);
+    let (inputs, opts) = key1();
+    let got = learn_with(&|| fixtures::bare(&code), &inputs, &opts);
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 1, "{}", got.details);
+    assert!(got.details.contains("\n    recorded score: "), "{}", got.details);
+    assert!(!got.details.contains("key 2") && !got.details.contains("no score"), "{}", got.details);
+}
+
+/// Two tunes one after the other, silence between: a score each, from the learner's run, both
+/// from the same `OUT` with the same code around it; each plays its own stretch.
+#[test]
+fn records_each_tune_of_a_run() {
+    assert_eq!(zx_sys::SND_SCORES_MAX, 8, "method B follows several scores that share a trigger");
+    let (code, l) = medley();
+    let got = learn(&|| fixtures::bare(&code), &quiet());
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 2, "{}", got.details);
+    assert!(got.scores.iter().all(|s| s.site == l["out1"]) && got.scores[0].code == got.scores[1].code, "one trigger");
+    assert_eq!(got.details.matches("\n    recorded score: ").count(), 2, "{}", got.details);
+    assert!(!got.details.contains("once)") && !got.details.contains("no score"), "{}", got.details);
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let frames = score_frames(&code, &quiet(), &list);
+    // the triggers: the first edge, and the first after the silence between the tunes
+    let (a0, _) = first_edge_from(&code, &quiet(), l["out1"]);
+    let b0 = frames.iter().flatten().copied().filter(|&f| f > a0 + 400).min().expect("the second tune plays");
+    let starts: Vec<usize> = frames.iter().map(|f| f[0]).collect();
+    let (first, second) = if starts[0] == a0 { (0, 1) } else { (1, 0) };
+    assert!(plays_through(&got.scores[first], a0, &frames[first]), "{:?}", frames[first]);
+    assert!(plays_through(&got.scores[second], b0, &frames[second]), "{:?}", frames[second]);
+    assert!(b0 > a0 + 320 + 100, "the second after the silence: {a0}, {b0}");
+}
+
+/// A tune behind key 2 played by code never heard in the learner's run (key 1 once): the block
+/// of its `OUT` (found in the code only) gives the score from the extra run.
+#[test]
+fn records_a_tune_heard_only_in_an_extra_run() {
+    let (code, l) = two_players();
+    let (inputs, opts) = key1();
+    let got = learn_with(&|| fixtures::bare(&code), &inputs, &opts);
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 2, "{}", got.details);
+    let sites: Vec<u16> = got.scores.iter().map(|s| s.site).collect();
+    assert!(sites.contains(&l["out1"]) && sites.contains(&l["out1_b"]), "{sites:04X?}");
+    let d = &got.details;
+    let block = d.split("\n  OUT at ").find(|b| b.starts_with(&format!("{:04X}h, code only", l["out1_b"]))).expect("its block");
+    assert!(block.contains("\n    recorded score (key 2 once): 6.4 s from frame "), "{d}");
+    assert!(!d.contains("heard only in other runs") && d.matches("(key 2 once)").count() == 1, "its second OUT is the same music: {d}");
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let key2 = run_inputs(RunKind::Key(1), 0);
+    let b = sites.iter().position(|&s| s == l["out1_b"]).unwrap();
+    let (f0, _) = first_edge_from(&code, &key2, l["out1_b"]);
+    assert!(plays_through(&got.scores[b], f0, &score_frames(&code, &key2, &list)[b]));
 }

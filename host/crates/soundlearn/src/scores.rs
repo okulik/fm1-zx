@@ -2,23 +2,38 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Recorded scores: the music of a game's routines that nothing else plays, recorded from the
-//! learner's run as kind-2 records ([`ScoreRecord`]) that method B plays in step with the beeper.
+//! learner's run (and from extra runs, one key each) as kind-2 records ([`ScoreRecord`]) that
+//! method B plays in step with the beeper.
 //!
 //! 1. **Which music** (chosen by the learner, [`crate::learn`]): each heard routine (the
 //!    learner's block, from its speaker `OUT` heard in the most frames) that sounded in at least
 //!    [`SCORE_FRAMES`] frames, that no kept learned entry gives and no built-in entry matches,
 //!    and whose `OUT` lies in no routine before it.
-//! 2. **The stretch.** A *trigger* is the first speaker edge from the routine's `OUT` after at
-//!    least [`TRIGGER_QUIET`] frames with none from it (or with none since the run's start). The
+//! 2. **The stretches.** A *trigger* is the first speaker edge from the routine's `OUT` after at
+//!    least [`TRIGGER_QUIET`] frames with none from it (or with none since the run's start). A
 //!    stretch runs from it while the inputs stay as they were in its frame (a key press may
 //!    change the music: it ends with the frame before they change), until the `OUT` has been
 //!    silent for [`END_SILENCE`] frames (it ends with the bucket of the `OUT`'s last edge),
 //!    [`SND_SCORE_BUCKETS_MAX`] buckets, or the end of the frames method B decides in the run.
-//!    Of the routine's stretches the longest is taken; one under [`SCORE_FRAMES`] frames is not
-//!    recorded, nor one more than a tenth of whose sounding frames method B's table (the
-//!    built-in and kept entries) claims: that music is played already. Times are T-states from
-//!    the trigger edge (T0); a bucket is a frame long from T0, and a stretch is whole buckets.
-//! 3. **The record.** Its fingerprint is the speaker edges per bucket ([`score_fingerprint`]),
+//!    Every stretch of at least [`SCORE_FRAMES`] frames is taken (a run of several tunes gives
+//!    several); none is recorded more than a tenth of whose sounding frames method B's table
+//!    (the built-in and kept entries) claims: that music is played already. Times are T-states
+//!    from the trigger edge (T0); a bucket is a frame long from T0, and a stretch is whole
+//!    buckets.
+//! 3. **The extra runs**, when the learner's run gives a score (step 6): each key of 1-9, 0,
+//!    ENTER and SPACE but the one the learner's run presses once
+//!    ([`key_runs`](crate::listen::key_runs)), held 5 frames at frame 500, then nothing (as
+//!    [`choose_run`](crate::listen::choose_run)'s runs press their start keys): a menu of tunes
+//!    plays another behind each key. Each is replayed once through method B with the table, a few
+//!    at a time, and its stretches taken as in step 2, from the candidates' `OUT`s and from the
+//!    `OUT`s it heard in at least [`SCORE_FRAMES`] frames that are none of theirs and lie in no
+//!    learned routine nor a candidate's (another tune's own player).
+//! 4. **The same music.** Two stretches are the same music when their fingerprints agree bucket
+//!    by bucket as method B compares the live edges with a recorded fingerprint (|a - b| <=
+//!    max(2, b / 8)) over their first [`SAME_BUCKETS`] buckets (or the shorter's length): the
+//!    longer is kept (of two as long, the earlier run's, then the earlier). A run that sounds no
+//!    different from those before (the same tunes, or none) costs its replay alone.
+//! 5. **The record.** Its fingerprint is the speaker edges per bucket ([`score_fingerprint`]),
 //!    its code the hash of the bytes around the `OUT` at the trigger's frame ([`score_code`]),
 //!    its `quiet` the frames with no edge from the `OUT` before the trigger, at most
 //!    [`TRIGGER_QUIET`]: the device arms at every edge the learner would call a trigger (and,
@@ -31,14 +46,21 @@
 //!    voices there. Its voices are the most notes sounding at once (the notes moved to voices
 //!    below that where needed), its roles by pitch: the voice lowest on average the bass, the
 //!    highest the lead, a third the pad, a lone voice the lead.
-//! 4. **Verified by replay** ([`record`]): the game is run again under the same inputs through
-//!    method B with the game's whole list, and the score must arm at its trigger, follow its
-//!    fingerprint to the end and get at least [`CLAIM_SHARE`] of the frames its stretch sounds
-//!    in. One that stops early is shortened to the frames it held (and verified again, once) if
-//!    that leaves [`SCORE_FRAMES`] frames; otherwise it is left out, with the reason.
-//! 5. **Kept:** at most [`SND_SCORES_MAX`], the longest first, within [`SCORES_BYTES_MAX`] bytes
-//!    in all (the longest cut to fit when it alone does not), none whose stretch plays with
-//!    another's (method B plays one score at a time).
+//! 6. **Kept** ([`record`]): the learner's run's stretches are chosen first; when that keeps a
+//!    score, the extra runs are taken and the choice is made again over all the runs. A choice
+//!    takes the stretches the longest first: at most [`SND_SCORES_MAX`] scores, within
+//!    [`SCORES_BYTES_MAX`] bytes in all (the longest cut to fit when it alone does not), none
+//!    whose stretch plays with a kept one's in the same run (method B plays one score at a
+//!    time), each built only then.
+//! 7. **Verified by replay:** the game is run again under the score's run's inputs through
+//!    method B with the game's whole list (its entries, roles and every score kept so far, it
+//!    last), and the score must arm at its trigger, follow its fingerprint to the end and get
+//!    at least [`CLAIM_SHARE`] of the frames its stretch sounds in, while each score kept before
+//!    still does in its own run (replayed again where the new score's `OUT` sounds): with
+//!    several scores sharing a trigger (the same `OUT` and code), the one whose fingerprint the
+//!    beeper follows plays. One that stops early is shortened to the frames it held (and
+//!    verified again, once) if that leaves [`SCORE_FRAMES`] frames; otherwise it is left out,
+//!    with the reason.
 
 use crate::entry::{ear_edges, encode_list_scores, score_code, score_fingerprint, BuiltinRoles, LearnedEntry, ScoreEvent, ScoreRecord};
 use crate::listen::{Inputs, LISTEN_FRAMES};
@@ -56,17 +78,23 @@ pub const TRIGGER_QUIET: u32 = 25;
 /// Frames of silence from the `OUT` that end a stretch.
 pub const END_SILENCE: u32 = 100;
 /// A game's scores' bytes in all.
-pub const SCORES_BYTES_MAX: usize = 64 * 1024;
+pub const SCORES_BYTES_MAX: usize = 128 * 1024;
+/// The buckets two fingerprints are compared over for the same music (or the shorter's length).
+pub const SAME_BUCKETS: usize = 100;
 /// The share of the frames a stretch sounds in that method B must give its score.
 pub const CLAIM_SHARE: f64 = 0.9;
 /// The least notes, and distinct pitches (a semitone apart), a score's transcription holds: a
 /// held tone is not music.
 pub const MUSIC_NOTES: usize = 8;
 pub const MUSIC_PITCHES: usize = 3;
+/// Extra runs replayed at once (each holds its tap).
+const EXTRA_AT_ONCE: usize = 4;
+/// A record's fixed part, before its fingerprint.
+const RECORD_HEAD: usize = 20;
 /// 64-T units a bucket (a frame).
 const UNITS: u64 = ZX_FRAME_TSTATES as u64 / 64;
 
-/// What the learner's run keeps for the scores ([`Tap::frame`] after each frame): each frame's
+/// What a run keeps for the scores ([`Tap::frame`] after each frame): each frame's
 /// speaker edges (EAR changes only) and the level before them, and every trigger.
 #[derive(Default)]
 pub struct Tap {
@@ -205,8 +233,16 @@ pub struct ScoreSummary {
 /// A candidate: its block (the learner's index) and its `OUT`.
 pub type Candidate = (usize, u16);
 
-/// A candidate's outcome: its block and its score, or why it has none.
-pub type Outcome = (usize, Result<ScoreSummary, String>);
+/// A score's outcome for the report: the run it is from (None: the learner's; else its short
+/// name, `key 3 once`) and the score, or why it has none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScoreOutcome {
+    pub run: Option<String>,
+    pub got: Result<ScoreSummary, String>,
+}
+
+/// A candidate's outcome: its block and a score's outcome (a candidate has one or more).
+pub type Outcome = (usize, ScoreOutcome);
 
 /// A count and a noun, the noun plural unless the count is 1.
 fn plural(n: usize, noun: &str) -> String {
@@ -353,6 +389,11 @@ fn bytes(r: &ScoreRecord) -> usize {
 /// `list`: (confident, engine); with the learned entries alone if not `builtins`. None: the
 /// decoder refuses the list.
 fn replay(load: &dyn Fn() -> Machine, inputs: &Inputs, list: &[u8], builtins: bool) -> Option<(Vec<(bool, u8)>, usize)> {
+    replay_tap(load, inputs, list, builtins, None)
+}
+
+/// [`replay`], each frame given to `tap` too.
+fn replay_tap(load: &dyn Fn() -> Machine, inputs: &Inputs, list: &[u8], builtins: bool, mut tap: Option<&mut Tap>) -> Option<(Vec<(bool, u8)>, usize)> {
     let mut b = if builtins { SndEngines::with_learned(list) } else { SndEngines::with_learned_only(list) }.ok()?;
     let table = b.entries().len();
     let mut m = load();
@@ -366,6 +407,9 @@ fn replay(load: &dyn Fn() -> Machine, inputs: &Inputs, list: &[u8], builtins: bo
         let d = b.frame(&m, m.edges(), m.edges_start_level());
         if f >= delay {
             dec.push((d.confident != 0, d.engine));
+        }
+        if let Some(t) = tap.as_deref_mut() {
+            t.frame(&m);
         }
     }
     Some((dec, table))
@@ -408,8 +452,128 @@ fn check(tap: &Tap, dec: &[(bool, u8)], table: usize, index: usize, st: &Stretch
     Ok(())
 }
 
-/// A score kept: its stretch, record and summary.
+/// A run the scores are recorded from: its name in the report (None: the learner's run), its
+/// inputs and its tap.
+struct Run<'a> {
+    name: Option<String>,
+    inputs: &'a Inputs,
+    tap: Tap,
+}
+
+impl Run<'_> {
+    /// ` (key 3 once)` after a score's words, for a run not the learner's.
+    fn suffix(&self) -> String {
+        self.name.as_ref().map_or(String::new(), |n| format!(" ({n})"))
+    }
+}
+
+/// A stretch taken from a run (see the module docs): its run, its candidate's block (None: an
+/// `OUT` heard in the extra runs only), the stretch and its fingerprint, and what became of it.
+struct Take {
+    run: usize,
+    block: Option<usize>,
+    st: Stretch,
+    fp: Vec<u8>,
+    /// The same music as this take's, which is longer (or as long and earlier).
+    same: Option<usize>,
+    /// Left out whatever the choice (method B's table claims it, or it is not music), and why.
+    left: Option<String>,
+    /// Left out because method B's table claims it.
+    claimed: bool,
+    /// Left out because it plays with a score kept.
+    overlap: bool,
+    /// Its record and notes, once built.
+    built: Option<(ScoreRecord, usize)>,
+    /// The choice's outcome.
+    got: Option<Result<ScoreSummary, String>>,
+}
+
+impl Take {
+    /// Not the same music as another's, nor left out before the choice.
+    fn open(&self) -> bool {
+        self.same.is_none() && self.left.is_none()
+    }
+}
+
+/// Whether two fingerprints are the same music: they agree bucket by bucket as method B
+/// compares the live edges with a recorded fingerprint `rec` (|live - rec| <= max(2, rec / 8)),
+/// over their first [`SAME_BUCKETS`] buckets (or the shorter's length).
+fn same(live: &[u8], rec: &[u8]) -> bool {
+    live.iter().zip(rec).take(SAME_BUCKETS).all(|(&l, &r)| l.abs_diff(r) <= (r / 8).max(2))
+}
+
+/// Adds `t` to the takes: the same music as a take as long or longer, it is that one's; else
+/// the takes it is the same music as become its.
+fn add(takes: &mut Vec<Take>, mut t: Take) {
+    if let Some(k) = takes.iter().position(|k| k.same.is_none() && k.st.buckets >= t.st.buckets && same(&t.fp, &k.fp)) {
+        t.same = Some(k);
+    } else {
+        let i = takes.len();
+        for k in takes.iter_mut().filter(|k| k.same.is_none() && same(&k.fp, &t.fp)) {
+            k.same = Some(i);
+        }
+    }
+    takes.push(t);
+}
+
+/// The stretches of at least [`SCORE_FRAMES`] frames in run `r` of each `OUT` of `outs` (its
+/// candidate's block, or None for one heard in the extra runs only), added to the takes; and
+/// each candidate with none, with why.
+fn gather(run: &Run, r: usize, outs: &[(Option<usize>, u16)], takes: &mut Vec<Take>) -> Vec<(usize, String)> {
+    let mut none = Vec::new();
+    for &(block, site) in outs {
+        let all: Vec<Stretch> = run.tap.triggers.iter().filter(|t| t.site == site).map(|&t| stretch(&run.tap, run.inputs, t)).collect();
+        let longest = all.iter().max_by_key(|s| (s.buckets, std::cmp::Reverse(s.tr.frame)));
+        if longest.is_none_or(|s| s.buckets < SCORE_FRAMES as usize) {
+            let why = match longest {
+                Some(s) => format!("its longest stretch is {} frames (at least {SCORE_FRAMES}), from frame {}, until {}", s.buckets, s.tr.frame, s.end.text()),
+                None => "no trigger in the frames method B decides".into(),
+            };
+            none.extend(block.map(|b| (b, why)));
+            continue;
+        }
+        for st in all.into_iter().filter(|s| s.buckets >= SCORE_FRAMES as usize) {
+            let fp = score_fingerprint(&run.tap.frames[st.span()], 0, st.tr.t0, st.buckets);
+            add(takes, Take { run: r, block, st, fp, same: None, left: None, claimed: false, overlap: false, built: None, got: None });
+        }
+    }
+    none
+}
+
+/// The `OUT`s of an extra run's tap heard in at least [`SCORE_FRAMES`] frames, the most first,
+/// that are no candidate's and that `covered` does not name.
+fn heard_only(tap: &Tap, cands: &[Candidate], covered: &dyn Fn(u16) -> bool) -> Vec<u16> {
+    let mut frames: HashMap<u16, u32> = HashMap::new();
+    for (edges, _) in &tap.frames {
+        let mut seen: Vec<u16> = Vec::new();
+        for e in edges {
+            if !seen.contains(&e.pc) {
+                seen.push(e.pc);
+                *frames.entry(e.pc).or_default() += 1;
+            }
+        }
+    }
+    let mut outs: Vec<(u16, u32)> = frames.into_iter().filter(|&(pc, n)| n >= SCORE_FRAMES && !cands.iter().any(|c| c.1 == pc) && !covered(pc)).collect();
+    outs.sort_by_key(|&(pc, n)| (std::cmp::Reverse(n), pc));
+    outs.into_iter().map(|o| o.0).collect()
+}
+
+/// Leaves out each open take of run `r` more than a tenth of whose sounding frames method B's
+/// table (the built-in and kept entries) claims: `table`, its decisions in the run.
+fn claims(run: &Run, r: usize, takes: &mut [Take], table: &[(bool, u8)]) {
+    for t in takes.iter_mut().filter(|t| t.run == r && t.open()) {
+        let sounding: Vec<usize> = t.st.span().filter(|&f| !run.tap.frames[f].0.is_empty()).collect();
+        let claimed = sounding.iter().filter(|&&f| table.get(f).is_some_and(|d| d.0)).count();
+        if claimed as f64 > (1.0 - CLAIM_SHARE) * sounding.len() as f64 {
+            t.left = Some(format!("method B's table claims {claimed} of the {} frames its stretch sounds in", sounding.len()));
+            t.claimed = true;
+        }
+    }
+}
+
+/// A score kept: its run, stretch, record and summary.
 struct Kept {
+    run: usize,
     st: Stretch,
     rec: ScoreRecord,
     sum: ScoreSummary,
@@ -426,91 +590,237 @@ fn summary(st: &Stretch, rec: &ScoreRecord, notes: usize, shortened: Option<Stri
     }
 }
 
+/// What the choice needs besides the runs and the takes.
+struct Game<'a> {
+    load: &'a (dyn Fn() -> Machine + Sync),
+    entries: &'a [LearnedEntry],
+    roles: &'a [BuiltinRoles],
+    builtins: bool,
+}
+
+/// The choice over the open takes (of the learner's run alone if `first`), the longest first
+/// (see the module docs): each one's outcome, and the scores kept.
+fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool) -> Vec<Kept> {
+    let mut order: Vec<usize> = (0..takes.len()).filter(|&i| takes[i].open() && (!first || takes[i].run == 0)).collect();
+    order.sort_by_key(|&i| (std::cmp::Reverse(takes[i].st.buckets), takes[i].run, takes[i].st.tr.frame, takes[i].st.tr.site));
+    let mut kept: Vec<Kept> = Vec::new();
+    for i in order {
+        let t = &mut takes[i];
+        t.got = None;
+        if let Err((why, overlap)) = room(runs, &kept, t.run, &t.st) {
+            t.got = Some(Err(why));
+            t.overlap = overlap;
+            continue;
+        }
+        // a record holds its fingerprint: one that cannot fit is not built
+        let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
+        if !kept.is_empty() && used + RECORD_HEAD + t.st.buckets > SCORES_BYTES_MAX {
+            t.got = Some(Err(over_bytes()));
+            continue;
+        }
+        if t.built.is_none() {
+            match build(&runs[t.run].tap, &t.st) {
+                Ok(b) => t.built = Some(b),
+                Err(why) => {
+                    t.left = Some(why);
+                    continue;
+                }
+            }
+        }
+        let Some((rec, notes)) = t.built.clone() else { continue };
+        t.got = Some(match keep_one(g, runs, &kept, t.run, t.st, rec, notes) {
+            Ok(k) => {
+                let sum = k.sum.clone();
+                kept.push(k);
+                Ok(sum)
+            }
+            Err(why) => Err(why),
+        });
+    }
+    kept
+}
+
+/// The outcomes of `takes` for the report, in the order of the runs and then of the frames, the
+/// same reasons together (`... (3 stretches)`); with `all`, those that play with a score kept
+/// too, and of those method B's table claims, the longest of each run.
+fn lines(runs: &[Run], takes: &[&Take], all: bool) -> Vec<ScoreOutcome> {
+    let longest = |t: &Take| !takes.iter().any(|k| k.claimed && k.same.is_none() && k.run == t.run && (k.st.buckets, std::cmp::Reverse(k.st.tr.frame)) > (t.st.buckets, std::cmp::Reverse(t.st.tr.frame)));
+    let mut mine: Vec<(usize, u32, ScoreOutcome)> = takes
+        .iter()
+        .filter(|t| t.same.is_none() && (all || !t.claimed && !t.overlap) && (!t.claimed || longest(t)))
+        .filter_map(|t| t.left.clone().map(Err).or_else(|| t.got.clone()).map(|got| (t.run, t.st.tr.frame, ScoreOutcome { run: runs[t.run].name.clone(), got })))
+        .collect();
+    mine.sort_by_key(|m| (m.0, m.1));
+    let mut out: Vec<(ScoreOutcome, usize)> = Vec::new();
+    for (_, _, o) in mine {
+        match out.iter_mut().find(|l| l.0.got.is_err() && l.0 == o) {
+            Some(l) => l.1 += 1,
+            None => out.push((o, 1)),
+        }
+    }
+    out.into_iter()
+        .map(|(mut o, n)| {
+            if n > 1 {
+                o.got = o.got.map_err(|why| format!("{why} ({n} stretches)"));
+            }
+            o
+        })
+        .collect()
+}
+
 /// Records the scores of the candidate routines `cands` (in the learner's order) from the
-/// learner's run `tap` (under `inputs`), the game's list holding `entries` and `roles`: the
-/// records (in the list's order) and each candidate's outcome (see the module docs).
+/// learner's run `tap` (under `inputs`) and, when it gives one, from the `extra` runs too (each
+/// named for the report, with its inputs): theirs, and those of the `OUT`s heard in them only
+/// that `covered` does not name; the game's list holding `entries` and `roles`. Returns the
+/// records (in the list's order), the candidates' outcomes (each candidate's in the order of the
+/// runs and then of the frames) and the outcomes of the `OUT`s heard in the extra runs only that
+/// have any but the same music as another's or one method B's table claims (see the module
+/// docs).
+#[allow(clippy::too_many_arguments)]
 pub fn record(
-    load: &dyn Fn() -> Machine,
+    load: &(dyn Fn() -> Machine + Sync),
     inputs: &Inputs,
-    tap: &Tap,
+    tap: Tap,
+    extra: &[(String, Inputs)],
     cands: &[Candidate],
+    covered: &dyn Fn(u16) -> bool,
     entries: &[LearnedEntry],
     roles: &[BuiltinRoles],
     builtins: bool,
-) -> (Vec<ScoreRecord>, Vec<Outcome>) {
-    let mut outcomes: Vec<Outcome> = Vec::new();
+) -> Recorded {
     if cands.is_empty() {
-        return (Vec::new(), outcomes);
+        return Recorded::default();
     }
-    // the frames method B's table (the built-in and kept entries) claims without scores
-    let Some((table, _)) = replay(load, inputs, &encode_list_scores(entries, roles, &[]), builtins) else {
-        return (Vec::new(), cands.iter().map(|&(block, _)| (block, Err("method B's decoder refuses the game's list".into()))).collect());
+    let refused = || Recorded {
+        outcomes: cands.iter().map(|&(block, _)| (block, ScoreOutcome { run: None, got: Err("method B's decoder refuses the game's list".into()) })).collect(),
+        ..Recorded::default()
     };
-    // each routine's longest stretch, built
-    let mut built: Vec<(usize, Stretch, ScoreRecord, usize)> = Vec::new();
-    for &(block, site) in cands {
-        let best = tap.triggers.iter().filter(|t| t.site == site).map(|&t| stretch(tap, inputs, t)).max_by_key(|s| (s.buckets, std::cmp::Reverse(s.tr.frame)));
-        let Some(st) = best.filter(|s| s.buckets >= SCORE_FRAMES as usize) else {
-            let why = match best {
-                Some(s) => format!("its longest stretch is {} frames (at least {SCORE_FRAMES}), from frame {}, until {}", s.buckets, s.tr.frame, s.end.text()),
-                None => "no trigger in the frames method B decides".into(),
-            };
-            outcomes.push((block, Err(why)));
-            continue;
-        };
-        let sounding: Vec<usize> = st.span().filter(|&f| !tap.frames[f].0.is_empty()).collect();
-        let claimed = sounding.iter().filter(|&&f| table.get(f).is_some_and(|d| d.0)).count();
-        if claimed as f64 > (1.0 - CLAIM_SHARE) * sounding.len() as f64 {
-            outcomes.push((block, Err(format!("method B's table claims {claimed} of the {} frames its stretch sounds in", sounding.len()))));
-            continue;
-        }
-        match build(tap, &st) {
-            Ok((rec, notes)) => built.push((block, st, rec, notes)),
-            Err(why) => outcomes.push((block, Err(why))),
-        }
-    }
-    built.sort_by_key(|b| std::cmp::Reverse(b.1.buckets));
-
-    let mut kept: Vec<Kept> = Vec::new();
-    let list = |k: &[&ScoreRecord]| encode_list_scores(entries, roles, &k.iter().map(|&r| r.clone()).collect::<Vec<_>>());
-    for (block, st, rec, notes) in built {
-        let got = keep_one(load, inputs, tap, &kept, st, rec, notes, &list, builtins);
-        match got {
-            Ok(k) => {
-                outcomes.push((block, Ok(k.sum.clone())));
-                kept.push(k);
+    let g = Game { load, entries, roles, builtins };
+    let base = encode_list_scores(entries, roles, &[]);
+    let mut runs = vec![Run { name: None, inputs, tap }];
+    let mut takes: Vec<Take> = Vec::new();
+    let outs: Vec<(Option<usize>, u16)> = cands.iter().map(|&(b, s)| (Some(b), s)).collect();
+    let none = gather(&runs[0], 0, &outs, &mut takes);
+    let Some((table, _)) = replay(load, inputs, &base, builtins) else { return refused() };
+    claims(&runs[0], 0, &mut takes, &table);
+    let mut kept = choose(&g, &runs, &mut takes, true);
+    // the extra runs, when the learner's run gives a score; then the choice over all the runs
+    if !kept.is_empty() && !extra.is_empty() {
+        // a few at a time, each tapped with its table's decisions in one replay
+        for chunk in extra.chunks(EXTRA_AT_ONCE) {
+            let tapped = par(chunk.len(), &|i| {
+                let mut tap = Tap::default();
+                replay_tap(load, &chunk[i].1, &base, builtins, Some(&mut tap)).map(|(table, _)| (tap, table))
+            });
+            for ((name, inputs), got) in chunk.iter().zip(tapped) {
+                let Some((tap, table)) = got else { return refused() };
+                let r = runs.len();
+                runs.push(Run { name: Some(name.clone()), inputs, tap });
+                let mut outs = outs.clone();
+                outs.extend(heard_only(&runs[r].tap, cands, covered).into_iter().map(|s| (None, s)));
+                gather(&runs[r], r, &outs, &mut takes);
+                claims(&runs[r], r, &mut takes, &table);
+                if !takes.iter().any(|t| t.run == r && t.open()) {
+                    // it sounds no different: its tap is not needed
+                    runs[r].tap = Tap::default();
+                }
             }
-            Err(why) => outcomes.push((block, Err(why))),
+        }
+        for t in &mut takes {
+            t.got = None;
+            t.overlap = false;
+        }
+        kept = choose(&g, &runs, &mut takes, false);
+    }
+
+    // the outcomes: each candidate's takes, else why it has none
+    let mut outcomes: Vec<Outcome> = Vec::new();
+    for &(block, _) in cands {
+        let mine: Vec<&Take> = takes.iter().filter(|t| t.block == Some(block)).collect();
+        let got = lines(&runs, &mine, true);
+        if !got.is_empty() {
+            outcomes.extend(got.into_iter().map(|o| (block, o)));
+            continue;
+        }
+        let why = if let Some(t) = mine.iter().find(|t| t.same.is_some()) {
+            // the same music as another take's (followed to the one that stands)
+            let mut k: &Take = t;
+            while let Some(j) = k.same {
+                k = &takes[j];
+            }
+            format!("the same music as the stretch of the OUT at {:04X}h from frame {}{}", k.st.tr.site, k.st.tr.frame, runs[k.run].suffix())
+        } else {
+            none.iter().find(|n| n.0 == block).map_or_else(|| "no stretch".into(), |n| n.1.clone())
+        };
+        outcomes.push((block, ScoreOutcome { run: None, got: Err(why) }));
+    }
+    // the OUTs heard in the extra runs only, in the order first taken
+    let mut heard: Vec<(u16, Vec<ScoreOutcome>)> = Vec::new();
+    for t in takes.iter().filter(|t| t.block.is_none()) {
+        let site = t.st.tr.site;
+        if heard.iter().any(|h| h.0 == site) {
+            continue;
+        }
+        let mine: Vec<&Take> = takes.iter().filter(|k| k.block.is_none() && k.st.tr.site == site).collect();
+        let got = lines(&runs, &mine, false);
+        if !got.is_empty() {
+            heard.push((site, got));
         }
     }
-    (kept.into_iter().map(|k| k.rec).collect(), outcomes)
+    Recorded { scores: kept.into_iter().map(|k| k.rec).collect(), outcomes, heard }
 }
 
-/// One score added to those `kept`, verified (see the module docs): it, or why not.
-#[allow(clippy::too_many_arguments)]
-fn keep_one(
-    load: &dyn Fn() -> Machine,
-    inputs: &Inputs,
-    tap: &Tap,
-    kept: &[Kept],
-    mut st: Stretch,
-    mut rec: ScoreRecord,
-    mut notes: usize,
-    list: &dyn Fn(&[&ScoreRecord]) -> Vec<u8>,
-    builtins: bool,
-) -> Result<Kept, String> {
-    if kept.len() >= SND_SCORES_MAX {
-        return Err(format!("only {SND_SCORES_MAX} scores a game: the longest first"));
-    }
+/// What [`record`] gives.
+#[derive(Debug, Default)]
+pub struct Recorded {
+    /// The records, in the list's order.
+    pub scores: Vec<ScoreRecord>,
+    /// The candidates' outcomes.
+    pub outcomes: Vec<Outcome>,
+    /// The `OUT`s heard in the extra runs only, each with its outcomes.
+    pub heard: Vec<(u16, Vec<ScoreOutcome>)>,
+}
+
+/// Whether a score from run `r` with stretch `st` has room beside those `kept`: at most
+/// [`SND_SCORES_MAX`], and none whose stretch plays with another's in the same run. Err: why
+/// not, and whether it plays with one.
+fn room(runs: &[Run], kept: &[Kept], r: usize, st: &Stretch) -> Result<(), (String, bool)> {
     let span = st.span();
-    if let Some(k) = kept.iter().find(|k| k.st.span().start < span.end && span.start < k.st.span().end) {
-        return Err(format!("its stretch plays with the score of the OUT at {:04X}h", k.rec.site));
+    if let Some(k) = kept.iter().find(|k| k.run == r && k.st.span().start < span.end && span.start < k.st.span().end) {
+        return Err((format!("its stretch plays with {}", whose(runs, k)), true));
     }
+    if kept.len() >= SND_SCORES_MAX {
+        return Err((format!("only {SND_SCORES_MAX} scores a game: the longest first"), false));
+    }
+    Ok(())
+}
+
+/// `f(0)` to `f(n - 1)`, each in a thread of its own.
+fn par<T: Send>(n: usize, f: &(dyn Fn(usize) -> T + Sync)) -> Vec<T> {
+    std::thread::scope(|s| {
+        let threads: Vec<_> = (0..n).map(|i| s.spawn(move || f(i))).collect();
+        threads.into_iter().map(|t| t.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
+    })
+}
+
+fn over_bytes() -> String {
+    format!("the game's scores would take over {} KB: the longest first", SCORES_BYTES_MAX / 1024)
+}
+
+/// `the score of the OUT at 8951h (key 3 once)`.
+fn whose(runs: &[Run], k: &Kept) -> String {
+    format!("the score of the OUT at {:04X}h{}", k.rec.site, runs[k.run].suffix())
+}
+
+/// One score from run `r` added to those `kept` (it has [`room`]), verified (see the module
+/// docs): it, or why not.
+#[allow(clippy::too_many_arguments)]
+fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mut rec: ScoreRecord, mut notes: usize) -> Result<Kept, String> {
     let mut shortened = None;
     let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
     if used + bytes(&rec) > SCORES_BYTES_MAX {
         if !kept.is_empty() {
-            return Err(format!("the game's scores would take over {} KB: the longest first", SCORES_BYTES_MAX / 1024));
+            return Err(over_bytes());
         }
         // the longest alone: cut to the most buckets that fit
         let (mut lo, mut hi) = (0usize, st.buckets);
@@ -529,23 +839,27 @@ fn keep_one(
         st.buckets = lo;
         shortened = Some(format!("to fit {} KB", SCORES_BYTES_MAX / 1024));
     }
+    // its run first, then the runs of the scores kept before in which its OUT sounds (where it
+    // never sounds, it never arms: those runs play as they did)
+    let mut order = vec![r];
+    for k in kept {
+        let sounds = || runs[k.run].tap.frames.iter().any(|(edges, _)| edges.iter().any(|e| e.pc == rec.site));
+        if !order.contains(&k.run) && sounds() {
+            order.push(k.run);
+        }
+    }
     let mut retried = false;
     loop {
-        let mut all: Vec<&ScoreRecord> = kept.iter().map(|k| &k.rec).collect();
-        all.push(&rec);
-        let l = list(&all);
-        let Some((dec, table)) = replay(load, inputs, &l, builtins) else {
+        let mut all: Vec<ScoreRecord> = kept.iter().map(|k| k.rec.clone()).collect();
+        all.push(rec.clone());
+        let l = encode_list_scores(g.entries, g.roles, &all);
+        // its run, then the others at once
+        let mine = replay(g.load, runs[r].inputs, &l, g.builtins);
+        let Some((dec, table)) = &mine else {
             return Err("method B's decoder refuses its record".into());
         };
-        // the scores kept before still play
-        if let Some(k) = kept.iter().enumerate().find(|(i, k)| check(tap, &dec, table, *i, &k.st).is_err()).map(|(_, k)| k) {
-            return Err(format!("it keeps the score of the OUT at {:04X}h from playing", k.rec.site));
-        }
-        match check(tap, &dec, table, kept.len(), &st) {
-            Ok(()) => {
-                let sum = summary(&st, &rec, notes, shortened);
-                return Ok(Kept { st, rec, sum });
-            }
+        match check(&runs[r].tap, dec, *table, kept.len(), &st) {
+            Ok(()) => {}
             Err(Fail::Share(why)) => return Err(why),
             Err(Fail::Held(f, why)) => {
                 let lead = usize::from(st.tr.t0 != 0);
@@ -557,8 +871,21 @@ fn keep_one(
                 (rec, notes) = cut(&rec, held);
                 st.buckets = held;
                 shortened = Some(format!("to the {held} frames method B followed it in"));
+                continue;
             }
         }
+        let others = par(order.len() - 1, &|i| replay(g.load, runs[order[i + 1]].inputs, &l, g.builtins));
+        // the scores kept before still play in their runs
+        for (&q, got) in order.iter().zip(std::iter::once(mine).chain(others)) {
+            let Some((dec, table)) = got else {
+                return Err("method B's decoder refuses its record".into());
+            };
+            if let Some(k) = kept.iter().enumerate().find(|(i, k)| k.run == q && check(&runs[q].tap, &dec, table, *i, &k.st).is_err()).map(|(_, k)| k) {
+                return Err(format!("it keeps {} from playing", whose(runs, k)));
+            }
+        }
+        let sum = summary(&st, &rec, notes, shortened);
+        return Ok(Kept { run: r, st, rec, sum });
     }
 }
 

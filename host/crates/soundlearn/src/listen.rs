@@ -25,7 +25,7 @@ use std::rc::Rc;
 use zx_sys::{zx_regs, Machine, TraceEv, ZX_FRAME_TSTATES, ZX_TR_INSN, ZX_TR_INTA, ZX_TR_OUT, ZX_TR_READ};
 
 /// Frame to (Spectrum key rows, Kempston bits).
-pub type Inputs = Box<dyn Fn(u32) -> ([u8; 8], u8)>;
+pub type Inputs = Box<dyn Fn(u32) -> ([u8; 8], u8) + Send + Sync>;
 
 /// Frames to listen to a game: 3 minutes of emulated time.
 pub const LISTEN_FRAMES: u32 = 9000;
@@ -143,7 +143,27 @@ pub enum RunKind {
     Nothing,
     /// The start key (an index into [`START`]) held 5 frames from frame 500, then nothing.
     Once(usize),
+    /// A key of [`KEYS`] (its index) held 5 frames from frame 500, then nothing: the recorded
+    /// scores' extra runs ([`key_runs`]).
+    Key(usize),
 }
+
+/// The keys of the recorded scores' extra runs ([`RunKind::Key`]): 1-9, 0, ENTER and SPACE, as
+/// (name, half-row, bit) like [`PRESSES`].
+pub const KEYS: [(&str, usize, u8); 12] = [
+    ("1", 3, 1),
+    ("2", 3, 2),
+    ("3", 3, 4),
+    ("4", 3, 8),
+    ("5", 3, 16),
+    ("6", 4, 16),
+    ("7", 4, 8),
+    ("8", 4, 4),
+    ("9", 4, 2),
+    ("0", 4, 1),
+    ("ENTER", 6, 1),
+    ("SPACE", 7, 1),
+];
 
 impl RunKind {
     /// The run's name for the report: `ENTER once, then nothing pressed`.
@@ -157,8 +177,38 @@ impl RunKind {
                 let name = if name == "kempston.fire" { "Kempston fire" } else { name };
                 format!("{name} once, then nothing pressed")
             }
+            RunKind::Key(i) => format!("{} once, then nothing pressed", KEYS.get(i).map_or("", |k| k.0)),
         }
     }
+
+    /// Its short name in a recorded score's line: `key 3 once`, `ENTER once`.
+    pub fn short(self) -> String {
+        let d = self.describe();
+        let once = d.strip_suffix(", then nothing pressed").unwrap_or(&d);
+        if once.starts_with(|c: char| c.is_ascii_digit()) { format!("key {once}") } else { once.to_string() }
+    }
+
+    /// The key rows and Kempston bits it presses at frame 500 (none for the generic run and
+    /// nothing pressed).
+    fn press(self) -> Option<([u8; 8], u8)> {
+        let mut set = ([0u8; 8], 0u8);
+        match self {
+            RunKind::Generic | RunKind::Nothing => return None,
+            RunKind::Once(i) => press(&mut set, START.get(i).copied().unwrap_or(usize::MAX)),
+            RunKind::Key(i) => {
+                let &(_, row, mask) = KEYS.get(i)?;
+                set.0[row] |= mask;
+            }
+        }
+        Some(set)
+    }
+}
+
+/// The recorded scores' extra runs: each key of [`KEYS`] held 5 frames at frame 500, then
+/// nothing, but the one the learner's run `learner` presses so.
+pub fn key_runs(learner: Option<RunKind>) -> Vec<RunKind> {
+    let theirs = learner.and_then(RunKind::press);
+    (0..KEYS.len()).map(RunKind::Key).filter(|k| k.press() != theirs).collect()
 }
 
 /// The candidate runs in order of preference: the generic run, nothing pressed, then each start key once.
@@ -173,9 +223,8 @@ pub fn run_inputs(kind: RunKind, seed: u64) -> Inputs {
     match kind {
         RunKind::Generic => schedule(seed),
         RunKind::Nothing => Box::new(|_| ([0; 8], 0)),
-        RunKind::Once(i) => {
-            let mut set = ([0u8; 8], 0u8);
-            press(&mut set, START.get(i).copied().unwrap_or(usize::MAX));
+        RunKind::Once(_) | RunKind::Key(_) => {
+            let set = kind.press().unwrap_or_default();
             Box::new(move |f| if (KEY_FRAME..KEY_FRAME + 5).contains(&f) { set } else { ([0; 8], 0) })
         }
     }
@@ -530,5 +579,15 @@ mod tests {
         assert_eq!(run_inputs(RunKind::Nothing, 1)(KEY_FRAME), ([0; 8], 0));
         assert_eq!(RunKind::Once(0).describe(), "ENTER once, then nothing pressed");
         assert_eq!(RunKind::Once(4).describe(), "Kempston fire once, then nothing pressed");
+        // the extra runs: twelve keys, less the learner's
+        assert_eq!(run_inputs(RunKind::Key(2), 1)(KEY_FRAME).0[3], 4);
+        assert_eq!(run_inputs(RunKind::Key(10), 1)(KEY_FRAME + 4).0[6], 1);
+        assert_eq!((RunKind::Key(2).short(), RunKind::Key(11).short(), RunKind::Once(3).short()), ("key 3 once".into(), "SPACE once".into(), "key 1 once".into()));
+        assert_eq!(key_runs(None).len(), 12);
+        assert_eq!(key_runs(Some(RunKind::Generic)).len(), 12);
+        assert_eq!(key_runs(Some(RunKind::Once(4))).len(), 12, "Kempston fire is no key of theirs");
+        let runs = key_runs(Some(RunKind::Once(3)));
+        assert_eq!(runs.len(), 11);
+        assert!(!runs.contains(&RunKind::Key(0)), "key 1 is the learner's");
     }
 }
