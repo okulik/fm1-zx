@@ -387,6 +387,7 @@ AMT_NOTES_PER_S = 15.0  # for the first estimate: generated notes a second of mu
 AMT_S_PER_NOTE = 0.12  # for the first estimate: seconds a generated note takes
 AMT_NOTES_PER_S_MAX = 40  # notes a second of music a pass may write in a window; past it the
                           # window ends (the model can keep writing notes at one moment forever)
+AMT_STALL = 16  # notes in a row at one moment that end the window (a chord has a few)
 
 
 class _AmtState:
@@ -397,6 +398,8 @@ class _AmtState:
     progress: Callable[[int], None] | None = None
     end_tick = 0  # the window's end, in the library's 10 ms time ticks
     budget = 0  # notes the window may still write; at 0 its next note is placed at end_tick
+    last_tick = -1  # the time of the window's last note, and how many notes in a row had it
+    same = 0
 
 
 AMT = _AmtState()
@@ -484,9 +487,13 @@ def _amt_add_token(model, z, tokens, top_p, current_time, debug=False):
                     logits[AMT.banned] = -float("inf")
             logits = smp.nucleus(logits, top_p)
             new.append(int(torch.multinomial(F.softmax(logits, dim=-1), 1, generator=AMT.gen)))
-    if AMT.budget <= 0:   # the window's notes are spent: a time at its end ends the window
-        from anticipation.vocab import TIME_OFFSET
-        new[0] = TIME_OFFSET + AMT.end_tick - offset
+    from anticipation.vocab import TIME_OFFSET
+    tick = new[0] - TIME_OFFSET + offset
+    AMT.same = AMT.same + 1 if tick == AMT.last_tick else 1
+    AMT.last_tick = tick
+    if AMT.budget <= 0 or AMT.same >= AMT_STALL:   # spent, or stuck at one moment: a time at
+        new[0] = TIME_OFFSET + AMT.end_tick - offset    # the window's end ends the window
+        AMT.budget = min(AMT.budget, 0)
     AMT.budget -= 1
     new[0] += offset
     if AMT.progress:
@@ -571,6 +578,7 @@ def amt_take(score: Score, take_index: int, rng: random.Random, settings: Settin
             w1 = min(w + int(AMT_WINDOW * 100), end_bins)
             AMT.end_tick = w1 + 1
             AMT.budget = max(1, int(AMT_NOTES_PER_S_MAX * (w1 - w) / 100))
+            AMT.last_tick, AMT.same = -1, 0
             events = generate(AMT.model, (w + 0.5) / 100, (w1 + 0.5) / 100, inputs=events, controls=ctl, top_p=top_p)
             cut += AMT.budget < 0
             w = w1
@@ -586,7 +594,8 @@ def amt_take(score: Score, take_index: int, rng: random.Random, settings: Settin
         stages_info[part] = {"notes": len(new), "seconds": round(time.time() - t0, 1), "windows_cut": cut}
         settings.log(f"take {take_index} {part}: {len(new)} notes in {time.time() - t0:.0f} s "
                      f"({(time.time() - t0) / max(count[0], 1):.2f} s a note on {AMT.device})"
-                     + (f"; {cut} window(s) cut at {AMT_NOTES_PER_S_MAX} notes a second" if cut else ""))
+                     + (f"; {cut} window(s) cut (over {AMT_NOTES_PER_S_MAX} notes a second, or "
+                        f"{AMT_STALL} notes at one moment)" if cut else ""))
     AMT.progress = None
     label = (f"amt {settings.amt_model} staged {','.join(p for p, _ in AMT_STAGES)} top_p={top_p} "
              f"seed={settings.seed}")

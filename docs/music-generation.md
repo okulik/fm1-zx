@@ -333,9 +333,9 @@ generating with the original as controls:
 - Scores up to 60 s have run with `amt`; longer ones are untested. The model's time tokens span
   100 s, and the library keeps times relative to its context window.
 - The model can keep writing notes at one moment without moving its clock on, so a pass would
-  never end: each generation window may write at most `AMT_NOTES_PER_S_MAX` (40) notes a second
-  of music, and past that the window ends where it is (the take's `stages` say how many windows
-  were cut). Below that cap there is no density control: a dense take can hold over 14 pad notes
+  never end: a generation window ends where it is after `AMT_STALL` (16) notes in a row at one
+  moment, or past `AMT_NOTES_PER_S_MAX` (40) notes a second of music (the take's `stages` say how
+  many windows were cut). Below that cap there is no density control: a dense take can hold over 14 pad notes
   a second, which the frame cap then thins.
 - Voice 0 keeps only the score's lead voice; an original bass or pad voice is replaced.
 
