@@ -385,6 +385,8 @@ AMT_WINDOW = 30.0  # seconds a generate call covers; a pass that stops early res
 AMT_LEAD_IN = 0.1  # seconds: the library drops controls in its first 50 ms, so time starts here
 AMT_NOTES_PER_S = 15.0  # for the first estimate: generated notes a second of music, per pass
 AMT_S_PER_NOTE = 0.12  # for the first estimate: seconds a generated note takes
+AMT_NOTES_PER_S_MAX = 40  # notes a second of music a pass may write in a window; past it the
+                          # window ends (the model can keep writing notes at one moment forever)
 
 
 class _AmtState:
@@ -393,6 +395,8 @@ class _AmtState:
     banned = None  # note-token mask of the instruments the pass may not use
     gen = None  # the pass's torch.Generator (sampling runs on the CPU, so the seed decides)
     progress: Callable[[int], None] | None = None
+    end_tick = 0  # the window's end, in the library's 10 ms time ticks
+    budget = 0  # notes the window may still write; at 0 its next note is placed at end_tick
 
 
 AMT = _AmtState()
@@ -480,6 +484,10 @@ def _amt_add_token(model, z, tokens, top_p, current_time, debug=False):
                     logits[AMT.banned] = -float("inf")
             logits = smp.nucleus(logits, top_p)
             new.append(int(torch.multinomial(F.softmax(logits, dim=-1), 1, generator=AMT.gen)))
+    if AMT.budget <= 0:   # the window's notes are spent: a time at its end ends the window
+        from anticipation.vocab import TIME_OFFSET
+        new[0] = TIME_OFFSET + AMT.end_tick - offset
+    AMT.budget -= 1
     new[0] += offset
     if AMT.progress:
         AMT.progress(new[0])
@@ -558,9 +566,13 @@ def amt_take(score: Score, take_index: int, rng: random.Random, settings: Settin
         events: list[int] = []
         t0 = time.time()
         w = 0
+        cut = 0
         while w < end_bins:
             w1 = min(w + int(AMT_WINDOW * 100), end_bins)
+            AMT.end_tick = w1 + 1
+            AMT.budget = max(1, int(AMT_NOTES_PER_S_MAX * (w1 - w) / 100))
             events = generate(AMT.model, (w + 0.5) / 100, (w1 + 0.5) / 100, inputs=events, controls=ctl, top_p=top_p)
+            cut += AMT.budget < 0
             w = w1
         new = []
         for tm, du, no in zip(events[0::3], events[1::3], events[2::3]):
@@ -571,9 +583,10 @@ def amt_take(score: Score, take_index: int, rng: random.Random, settings: Settin
             if ins in allowed and 0 <= s < total and e > s:
                 new.append(GenNote(s, e, ins, pitch, part))
         parts += new
-        stages_info[part] = {"notes": len(new), "seconds": round(time.time() - t0, 1)}
+        stages_info[part] = {"notes": len(new), "seconds": round(time.time() - t0, 1), "windows_cut": cut}
         settings.log(f"take {take_index} {part}: {len(new)} notes in {time.time() - t0:.0f} s "
-                     f"({(time.time() - t0) / max(count[0], 1):.2f} s a note on {AMT.device})")
+                     f"({(time.time() - t0) / max(count[0], 1):.2f} s a note on {AMT.device})"
+                     + (f"; {cut} window(s) cut at {AMT_NOTES_PER_S_MAX} notes a second" if cut else ""))
     AMT.progress = None
     label = (f"amt {settings.amt_model} staged {','.join(p for p, _ in AMT_STAGES)} top_p={top_p} "
              f"seed={settings.seed}")
