@@ -29,6 +29,15 @@
 //! through the log magnitudes of the three bins around them. The magnitude a fifth of the band's
 //! bins lie under is the window's noise floor.
 //!
+//! No window reaches past a silence: speaker edges none more than [`Params::silence_frames`]
+//! apart (longer than the lowest pitch's period) make a *stretch of sound*, and a window is the
+//! long one clipped to the stretch its centre is in (Hann over what is left, at least
+//! [`Params::min_window_frames`] long), none when its centre is in a silence or in a stretch of
+//! fewer than four edges (a click). Notes shorter than the window, played as bursts with
+//! silences between (a staccato tune of 1-2 frame notes), are each heard through a window of
+//! their own length: under the long window a burst's peak is as wide as the burst is short, no
+//! main lobe, and most of the window is silence.
+//!
 //! A peak may be a fundamental only when it is shaped as the window's main lobe: no narrower
 //! (the ripples of a step in the level, where a note starts or stops), no wider (the lobes of a
 //! short rest's dip in the level), and standing out of the magnitudes 2-3 bins past it on one
@@ -41,7 +50,10 @@
 //! [`Params::f_min`] and [`Params::f_max`]. Its harmonics are found ever closer around a pitch
 //! refined by those found so far (a least-squares fit weighted by amplitude): the first twelve
 //! within [`Params::tolerance`], the first forty within four times [`Params::fine_tolerance`],
-//! then all within it (or [`Params::tolerance_hz`]). Its *salience* is
+//! then all within it (or [`Params::tolerance_hz`]); a window clipped shorter widens the fine
+//! share as many times (up to [`Params::tolerance`]): its resolution is coarser, and a short
+//! note's pitch drifts over it (a loop slowed by contended memory while the screen is drawn)
+//! by a percent or two, the higher harmonics smeared the most. Its *salience* is
 //!
 //! `S(f0) = sum over h of h^-p x min(A_h, cap x A_1)`, `p` = [`Params::weight_power`].
 //!
@@ -51,8 +63,10 @@
 //! - Each harmonic counts at most [`Params::cap`] times the fundamental, which keeps out a weak
 //!   peak (an intermodulation product of the 1-bit mix, a common divisor of two voices' pitches)
 //!   whose harmonics are other voices' notes.
-//! - About 40% of its harmonics 2-8 in the band (one at least) must be found: a pulse train has
-//!   all, a square the odd ones, noise and the images of an engine's pass rate few.
+//! - About 40% of its harmonics 2-8 in the band (one at least) must be found, each at least a
+//!   tenth of the fundamental (a window clipped shorter: a share as much smaller, a fortieth at
+//!   least, its harmonics' peaks lowered by the drift): a pulse train has all, a square the odd
+//!   ones, noise and the images of an engine's pass rate few.
 //! - A pulse train whose fundamental is buried (under the ripples of another voice's rest, in an
 //!   accumulator engine's jitter) shows as its second or third harmonic: the pitch is taken half
 //!   or a third as high when three in five of the lower pitch's harmonics that are not the
@@ -60,7 +74,9 @@
 //!
 //! The strongest candidate is taken, its harmonics are subtracted from the peaks (each by its
 //! expected amplitude: at most the larger of its neighbouring harmonics', so a peak another voice
-//! shares keeps that voice's part), and the next is sought in what is left, up to
+//! shares keeps that voice's part; for a square, whose even harmonics are under a tenth of the
+//! fundamental, the odd ones two away, so a duty a little off a half leaves no third harmonic
+//! behind as a voice), and the next is sought in what is left, up to
 //! [`Params::voices`]. A pitch is taken only while its salience is at least
 //! [`Params::min_salience`] of the first pitch's and its fundamental at least
 //! [`Params::min_amp_share`] of the first's, [`Params::floor_ratio`] times the noise floor and
@@ -76,19 +92,20 @@
 //! than [`Params::gap_hops`] windows ends. A track splits where its fundamental's amplitude dips
 //! below [`Params::dip`] of the peaks on both sides (a note played again). A piece's edges are
 //! where its amplitude crosses half its median (interpolated between windows: a window centred
-//! on an onset holds the note for half its weight). A piece shorter than
-//! [`Params::min_note_frames`], or whose windows' median tonality is under
-//! [`Params::min_tonal`], is dropped. A note's pitch is the amplitude-weighted mean (in cents)
-//! of its windows' pitches between its edges, those more than 25 cents from their median left
-//! out, the first and last too when it has four or more; its period is the clock over that. Its
-//! level is its median loudness (the root mean square of its harmonics) over the loudest
-//! note's, 1-255.
+//! on an onset holds the note for half its weight). No piece goes on past a silence: one from a
+//! stretch's first window starts with the stretch's first edge, one to its last ends with its
+//! last edge. A piece shorter than [`Params::min_note_frames`] (unless it fills its stretch of
+//! sound: a staccato note), or whose windows' median tonality is under [`Params::min_tonal`],
+//! is dropped. A note's pitch is the amplitude-weighted mean (in cents) of its windows' pitches
+//! between its edges, those more than 25 cents from their median left out, the first and last
+//! too when it has four or more; its period is the clock over that. Its level is its median
+//! loudness (the root mean square of its harmonics) over the loudest note's, 1-255.
 //!
 //! Voices: in start order each note takes a free voice (one whose note has ended, or ends at
 //! most a frame later and is cut there): the first whose note ends where it starts (a line
-//! goes on), else the one whose note ended last (a line paused by a rest); with none free, the sounding note of least
-//! fundamental amplitude is cut where the new one starts if the new one is stronger, else the
-//! new one is dropped. Notes of one voice never overlap.
+//! goes on), else the one whose note ended last (a line paused by a rest); with none free, the
+//! sounding note of least fundamental amplitude is cut where the new one starts if the new one
+//! is stronger, else the new one is dropped. Notes of one voice never overlap.
 //!
 //! # Times
 //!
@@ -203,8 +220,14 @@ pub struct Params {
     pub gap_hops: usize,
     /// A track splits where its strength falls below this share of the peaks on both sides.
     pub dip: f64,
-    /// The shortest note, frames.
+    /// The shortest note, frames (a note filling a stretch of sound may be shorter).
     pub min_note_frames: f64,
+    /// A speaker without an edge for this many frames is silent: longer than the lowest pitch's
+    /// period (1.7 frames at 30 Hz), so a note's period is no silence.
+    pub silence_frames: f64,
+    /// The shortest window, frames: a window clipped to a shorter stretch of sound reaches past
+    /// it into the silence around it.
+    pub min_window_frames: f64,
 }
 
 impl Default for Params {
@@ -232,6 +255,8 @@ impl Default for Params {
             gap_hops: 4,
             dip: 0.55,
             min_note_frames: 2.0,
+            silence_frames: 2.0,
+            min_window_frames: 1.0,
         }
     }
 }
@@ -243,7 +268,23 @@ pub struct Transcriber {
     t0: u32,
     frames: usize,
     signal: Decimator,
+    /// The stretches of sound so far, the last one possibly still going on.
+    stretches: Vec<Stretch>,
+    /// The speaker is high (bit 1 of the last level).
+    speaker: bool,
 }
+
+/// A stretch of sound: speaker edges none more than [`Params::silence_frames`] apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stretch {
+    /// Its first and last edge, T-states from the start of the first frame.
+    first: u64,
+    last: u64,
+    edges: u32,
+}
+
+/// A stretch of fewer edges holds no pitch (two periods of a square wave at least): a click.
+const STRETCH_EDGES: u32 = 4;
 
 /// Transcribes a stretch: `frames` are each frame's edges and the level it starts at, from the
 /// stretch's first frame; `t0` is the T-state of the first edge in that frame.
@@ -264,13 +305,31 @@ impl Transcriber {
 
     /// A transcriber with the settings given.
     pub fn with_params(t0: u32, params: Params) -> Self {
-        Transcriber { params, t0: t0.min(ZX_FRAME_TSTATES), frames: 0, signal: Decimator::new() }
+        Transcriber { params, t0: t0.min(ZX_FRAME_TSTATES), frames: 0, signal: Decimator::new(), stretches: Vec::new(), speaker: false }
     }
 
     /// Adds the stretch's next frame: its edges and the level it starts at
     /// ([`Machine::edges_start_level`](zx_sys::Machine::edges_start_level)).
     pub fn push_frame(&mut self, edges: &[zx_edge], start_level: u8) {
         self.signal.push(&frame_levels(edges, start_level, FINE));
+        let base = self.frames as u64 * u64::from(ZX_FRAME_TSTATES);
+        let silence = (self.params.silence_frames * f64::from(ZX_FRAME_TSTATES)) as u64;
+        self.speaker = (start_level >> 1) & 1 != 0;
+        for e in edges {
+            let high = (e.level >> 1) & 1 != 0;
+            if high == self.speaker {
+                continue;
+            }
+            self.speaker = high;
+            let t = base + u64::from(e.tstate.min(ZX_FRAME_TSTATES));
+            match self.stretches.last_mut() {
+                Some(s) if t.saturating_sub(s.last) <= silence => {
+                    s.last = t;
+                    s.edges += 1;
+                }
+                _ => self.stretches.push(Stretch { first: t, last: t, edges: 1 }),
+            }
+        }
         self.frames += 1;
     }
 
@@ -293,10 +352,50 @@ impl Transcriber {
         (j as f64 * self.hop_samples() * f64::from(DT)).round() as i64 - i64::from(self.t0)
     }
 
-    /// The pitches heard in each window, strongest first (before notes are made of them).
+    /// The long window's length, samples.
+    fn window_len(&self) -> usize {
+        ((self.params.window_frames * PER_FRAME as f64).round() as usize).max(16)
+    }
+
+    /// The stretch of sound (at least [`STRETCH_EDGES`] edges) around sample `centre`.
+    fn stretch_at(stretches: &[Stretch], centre: i64) -> Option<usize> {
+        let t = centre * i64::from(DT);
+        let i = stretches.partition_point(|s| (s.last as i64) < t);
+        stretches.get(i).filter(|s| s.first as i64 <= t && s.edges >= STRETCH_EDGES).map(|_| i)
+    }
+
+    fn centre(&self, j: usize) -> i64 {
+        (j as f64 * self.hop_samples()).round() as i64
+    }
+
+    /// Window `j`'s first sample and length: the long window centred on its hop, clipped to the
+    /// stretch of sound around the centre (at least [`Params::min_window_frames`] long); none
+    /// when the centre is in a silence.
+    fn window(&self, j: usize, stretches: &[Stretch]) -> Option<(i64, usize)> {
+        let len = self.window_len();
+        let centre = self.centre(j);
+        let s = stretches[Self::stretch_at(stretches, centre)?];
+        let (start, end) = (centre - (len / 2) as i64, centre - (len / 2) as i64 + len as i64);
+        let dt = u64::from(DT);
+        let (a, b) = (start.max((s.first / dt) as i64), end.min(s.last.div_ceil(dt) as i64 + 1));
+        if (a, b) == (start, end) {
+            return Some((start, len));
+        }
+        let least = ((self.params.min_window_frames * PER_FRAME as f64).round() as i64).clamp(16, len as i64);
+        let (a, b) = if b - a < least { ((a + b - least) / 2, (a + b - least) / 2 + least) } else { (a, b) };
+        Some((a, (b - a) as usize))
+    }
+
+    /// The stretch of sound each window's centre is in.
+    fn hop_stretches(&self) -> Vec<Option<usize>> {
+        (0..self.hops()).map(|j| Self::stretch_at(&self.stretches, self.centre(j))).collect()
+    }
+
+    /// The pitches heard in each window, strongest first (before notes are made of them); none
+    /// in a window centred in a silence.
     pub fn pitches(&self) -> Vec<Vec<Pitch>> {
         let peaks = self.peaks();
-        peaks.into_iter().map(|(mut p, floor)| pick(&mut p, floor, &self.params)).collect()
+        peaks.into_iter().map(|mut w| pick(&mut w, &self.params)).collect()
     }
 
     /// The notes, in start order.
@@ -305,12 +404,30 @@ impl Transcriber {
         let p = &self.params;
         let hop_t = self.hop_samples() * f64::from(DT);
         let min_hops = p.min_note_frames * f64::from(ZX_FRAME_TSTATES) / hop_t;
+        let spans = self.hop_stretches();
+        // a stretch's edges, in windows
+        let in_hops = |t: u64| t as f64 / hop_t;
         let mut raw: Vec<RawNote> = Vec::new();
         for tr in track(&pitches, p) {
             for piece in split(&tr, p.dip) {
-                let n = summarise(&piece);
-                if n.end - n.start >= min_hops && n.tonality >= p.min_tonal {
-                    raw.push(n);
+                // no note goes on past a silence
+                for part in piece.chunk_by(|a, b| spans[a.j] == spans[b.j]) {
+                    let mut n = summarise(part);
+                    let mut whole = false;
+                    if let Some(si) = spans[part[0].j] {
+                        let s = self.stretches[si];
+                        let (first, last) = (part[0].j, part[part.len() - 1].j);
+                        // from the stretch's first window on, the note starts with the stretch;
+                        // to its last, it ends with it
+                        let opens = first == 0 || spans[first - 1] != Some(si);
+                        let closes = spans.get(last + 1).is_none_or(|&x| x != Some(si));
+                        n.start = if opens { in_hops(s.first) } else { n.start.max(in_hops(s.first)) };
+                        n.end = if closes { in_hops(s.last) } else { n.end.min(in_hops(s.last)) };
+                        whole = opens && closes;
+                    }
+                    if (n.end - n.start >= min_hops || whole) && n.tonality >= p.min_tonal {
+                        raw.push(n);
+                    }
                 }
             }
         }
@@ -329,8 +446,8 @@ impl Transcriber {
         assign_voices(notes, u64::from(ZX_FRAME_TSTATES), p.voices.min(3))
     }
 
-    /// Each window's peaks and noise floor.
-    fn peaks(&self) -> Vec<(Vec<Peak>, f64)> {
+    /// Each window's peaks (none for a window centred in a silence).
+    fn peaks(&self) -> Vec<Window> {
         let n_hops = self.hops();
         if n_hops == 0 {
             return Vec::new();
@@ -339,9 +456,10 @@ impl Transcriber {
         let chunk = n_hops.div_ceil(threads).max(64);
         let sig = self.signal.samples();
         let sig = sig.as_slice();
-        let mut out: Vec<(Vec<Peak>, f64)> = Vec::with_capacity(n_hops);
+        let stretches = self.stretches.as_slice();
+        let mut out: Vec<Window> = Vec::with_capacity(n_hops);
         std::thread::scope(|s| {
-            let handles: Vec<_> = (0..n_hops).step_by(chunk).map(|a| s.spawn(move || self.peaks_range(sig, a, (a + chunk).min(n_hops)))).collect();
+            let handles: Vec<_> = (0..n_hops).step_by(chunk).map(|a| s.spawn(move || self.peaks_range(sig, stretches, a, (a + chunk).min(n_hops)))).collect();
             for h in handles {
                 out.extend(h.join().expect("spectrum thread"));
             }
@@ -349,16 +467,14 @@ impl Transcriber {
         out
     }
 
-    fn peaks_range(&self, sig: &[f32], from: usize, to: usize) -> Vec<(Vec<Peak>, f64)> {
+    fn peaks_range(&self, sig: &[f32], stretches: &[Stretch], from: usize, to: usize) -> Vec<Window> {
         let p = &self.params;
-        let len = ((p.window_frames * PER_FRAME as f64).round() as usize).max(16);
+        let len = self.window_len();
         let n = (2 * len).next_power_of_two();
         let fft = Fft::new(n);
-        let win = hann(len);
-        let wsum: f64 = win.iter().sum();
+        let long = hann(len);
         let rate = CLOCK_HZ / f64::from(DT);
         let bin_hz = rate / n as f64;
-        let zp = n as f64 / len as f64;
         let lo = ((p.f_min * 0.9 / bin_hz).floor() as usize).max(2);
         let hi = ((p.f_top * 1.02 / bin_hz).ceil() as usize).min(n / 2 - 2);
         let mut re = vec![0f64; n];
@@ -366,39 +482,58 @@ impl Transcriber {
         let mut mag_a = vec![0f64; n / 2];
         let mut mag_b = vec![0f64; n / 2];
         let mut scratch = Vec::with_capacity(hi - lo + 1);
-        let mut out = Vec::with_capacity(to - from);
-        let mut j = from;
-        while j < to {
-            let pair = j + 1 < to;
-            self.fill(sig, j, &win, &mut re[..len]);
-            if pair {
-                self.fill(sig, j + 1, &win, &mut im[..len]);
-            } else {
-                im[..len].fill(0.0);
-            }
-            re[len..].fill(0.0);
-            im[len..].fill(0.0);
+        let mut out = vec![Window { peaks: Vec::new(), floor: 0.0, fine: p.fine_tolerance, support: SUPPORT }; to - from];
+        // a shorter window's harmonics are found within a wider share, and count for its
+        // completeness from a lower share of the fundamental: its resolution is coarser, and a
+        // short note's pitch drifts over it (a loop slowed by contended memory while the screen
+        // is drawn) by up to a few percent, its harmonics smeared that much (the higher, the
+        // wider and lower their peaks)
+        let window = |peaks: (Vec<Peak>, f64), w: usize| {
+            let short = w as f64 / len as f64;
+            Window { peaks: peaks.0, floor: peaks.1, fine: (p.fine_tolerance / short).min(p.tolerance), support: SUPPORT * short.max(0.25) }
+        };
+        let windows: Vec<(usize, (i64, usize))> = (from..to).filter_map(|j| self.window(j, stretches).map(|w| (j - from, w))).collect();
+        let mut short = Vec::new();
+        for pair in windows.chunks(2) {
+            // |X| of a sine of amplitude a is a x wsum / 2: scaled by 2 / wsum
+            let mut fill = |w: (i64, usize), buf: &mut [f64]| -> f64 {
+                let win = if w.1 == len {
+                    &long
+                } else {
+                    short = hann(w.1);
+                    &short
+                };
+                Self::fill(sig, w.0, win, &mut buf[..w.1]);
+                buf[w.1..].fill(0.0);
+                1.0 / win.iter().sum::<f64>()
+            };
+            let (ja, wa) = pair[0];
+            let scale_a = fill(wa, &mut re);
+            let scale_b = match pair.get(1) {
+                Some(&(_, wb)) => fill(wb, &mut im),
+                None => {
+                    im.fill(0.0);
+                    0.0
+                }
+            };
             fft.run(&mut re, &mut im);
-            let scale = 1.0 / wsum; // |X| of a sine of amplitude a is a x wsum / 2: x 2 / 2
             for k in 1..n / 2 {
                 let (xr, xi, yr, yi) = (re[k], im[k], re[n - k], im[n - k]);
-                mag_a[k] = ((xr + yr).powi(2) + (xi - yi).powi(2)).sqrt() * scale;
-                mag_b[k] = ((xi + yi).powi(2) + (xr - yr).powi(2)).sqrt() * scale;
+                mag_a[k] = ((xr + yr).powi(2) + (xi - yi).powi(2)).sqrt() * scale_a;
+                mag_b[k] = ((xi + yi).powi(2) + (xr - yr).powi(2)).sqrt() * scale_b;
             }
-            out.push(find_peaks(&mag_a, lo, hi, bin_hz, p.peak_share, zp, &mut scratch));
-            if pair {
-                out.push(find_peaks(&mag_b, lo, hi, bin_hz, p.peak_share, zp, &mut scratch));
+            // a resolution bin (the transform's length over the window's), in bins
+            out[ja] = window(find_peaks(&mag_a, lo, hi, bin_hz, p.peak_share, n as f64 / wa.1 as f64, &mut scratch), wa.1);
+            if let Some(&(jb, wb)) = pair.get(1) {
+                out[jb] = window(find_peaks(&mag_b, lo, hi, bin_hz, p.peak_share, n as f64 / wb.1 as f64, &mut scratch), wb.1);
             }
-            j += if pair { 2 } else { 1 };
         }
         out
     }
 
-    /// Window `j`'s samples, mean removed and windowed, into `buf`.
-    fn fill(&self, sig: &[f32], j: usize, win: &[f64], buf: &mut [f64]) {
+    /// The samples from `start` on, mean removed and windowed by `win`, into `buf`.
+    fn fill(sig: &[f32], start: i64, win: &[f64], buf: &mut [f64]) {
         let len = win.len();
-        let centre = (j as f64 * self.hop_samples()).round() as i64;
-        let start = centre - (len / 2) as i64;
         let n = sig.len() as i64;
         let first = f64::from(sig[0]);
         let last = f64::from(*sig.last().expect("samples"));
@@ -523,6 +658,17 @@ impl Decimator {
     }
 }
 
+/// One window's peaks, its noise floor and the share of `h f0` its harmonics are found within
+/// once the pitch is refined.
+#[derive(Clone, Debug)]
+struct Window {
+    peaks: Vec<Peak>,
+    floor: f64,
+    fine: f64,
+    /// A harmonic counts for [`COMPLETE`] from this share of the fundamental.
+    support: f64,
+}
+
 /// A spectral peak: frequency, amplitude, and what is left of it once pitches are taken.
 #[derive(Clone, Copy, Debug)]
 struct Peak {
@@ -612,7 +758,9 @@ fn salience(peaks: &[Peak], found: &[(usize, usize)], a1: f64, p: &Params) -> f6
 
 /// Up to `p.voices` pitches from a window's peaks (see the module docs); the peaks' residuals
 /// are used up.
-fn pick(peaks: &mut [Peak], floor: f64, p: &Params) -> Vec<Pitch> {
+fn pick(w: &mut Window, p: &Params) -> Vec<Pitch> {
+    let (floor, fine, support) = (w.floor, w.fine, w.support);
+    let peaks = w.peaks.as_mut_slice();
     let mut got: Vec<Pitch> = Vec::new();
     let mut found = Vec::new();
     let mut best_found = Vec::new();
@@ -635,7 +783,7 @@ fn pick(peaks: &mut [Peak], floor: f64, p: &Params) -> Vec<Pitch> {
             // find the harmonics ever closer around a pitch refined by those found so far
             let mut f0 = pc.f;
             let mut lost = false;
-            for (share, most) in [(p.tolerance, 12), (4.0 * p.fine_tolerance, 40), (p.fine_tolerance, p.max_harmonics)] {
+            for (share, most) in [(p.tolerance, 12), ((4.0 * fine).min(p.tolerance), 40), (fine, p.max_harmonics)] {
                 harmonics(peaks, f0, share, most, p, &mut found);
                 if found.first().is_none_or(|&(h, i)| h != 1 || i != c) {
                     lost = true;
@@ -659,7 +807,7 @@ fn pick(peaks: &mut [Peak], floor: f64, p: &Params) -> Vec<Pitch> {
             // the images of an engine's pass rate have few)
             let k = ((p.f_top / f0) as usize).min(COMPLETE);
             let need = ((0.42 * (k as f64 - 1.0)).round() as usize).max(1);
-            if found.iter().filter(|&&(h, i)| (2..=k).contains(&h) && peaks[i].a >= SUPPORT * pc.a).count() < need {
+            if found.iter().filter(|&&(h, i)| (2..=k).contains(&h) && peaks[i].a >= support * pc.a).count() < need {
                 continue;
             }
             // a pulse train whose fundamental is buried (under the ripples of another voice's
@@ -672,12 +820,12 @@ fn pick(peaks: &mut [Peak], floor: f64, p: &Params) -> Vec<Pitch> {
                     continue;
                 }
                 let most = ((p.f_top / alt) as usize).min(SUB_HARMONICS * d);
-                harmonics(peaks, alt, p.fine_tolerance, most, p, &mut sub);
+                harmonics(peaks, alt, fine, most, p, &mut sub);
                 let own = sub.iter().filter(|&&(h, i)| h % d != 0 && peaks[i].r >= SUPPORT * pc.r).count();
                 let expect = most - most / d;
                 if expect >= 4 && own * 5 >= expect * 3 {
                     f0 = alt;
-                    harmonics(peaks, f0, p.fine_tolerance, p.max_harmonics, p, &mut found);
+                    harmonics(peaks, f0, fine, p.max_harmonics, p, &mut found);
                     break;
                 }
             }
@@ -698,13 +846,16 @@ fn pick(peaks: &mut [Peak], floor: f64, p: &Params) -> Vec<Pitch> {
             }
         }
         let loudness = (best_found.iter().map(|&(_, i)| peaks[i].r.min(p.cap * a1).powi(2)).sum::<f64>() / 2.0).sqrt();
-        // take its harmonics out: each by at most the larger of its neighbours' amplitudes
+        // take its harmonics out: each by at most the larger of its neighbours' amplitudes (a
+        // square's, whose even harmonics are next to nothing, its odd ones two away)
         let amps: Vec<(usize, usize, f64)> = best_found.iter().map(|&(h, i)| (h, i, peaks[i].r)).collect();
-        for (k, &(h, i, r)) in amps.iter().enumerate() {
+        let strong = |h: usize| amps.iter().any(|&(hh, _, a)| hh == h && a >= SUPPORT * a1);
+        let square = (2..=COMPLETE).step_by(2).all(|h| !strong(h)) && (3..=COMPLETE).step_by(2).any(strong);
+        let away = if square { 2 } else { 1 };
+        for &(h, i, r) in &amps {
             let mut expect = r.min(p.cap * a1);
             if h > 1 {
-                let nb: Vec<f64> = [k.checked_sub(1).map(|x| amps[x]), amps.get(k + 1).copied()].into_iter().flatten().filter(|&(hh, _, _)| hh + 1 == h || hh == h + 1).map(|x| x.2).collect();
-                if let Some(m) = nb.iter().copied().reduce(f64::max) {
+                if let Some(m) = amps.iter().filter(|&&(hh, _, _)| hh.abs_diff(h) == away).map(|x| x.2).reduce(f64::max) {
                     expect = expect.min(m);
                 }
             }

@@ -3,7 +3,8 @@
 
 //! The transcriber on synthesized 1-bit signals made from known note lists: a square-wave
 //! melody, two and three voices of narrow pulses OR-ed into the bit, three phase accumulators
-//! mixed by pulse-width shares, chords with rests between them. A transcribed note matches a
+//! mixed by pulse-width shares, chords with rests between them, staccato bursts of a square
+//! wave shorter than the analysis window. A transcribed note matches a
 //! true one (each at most once) when its pitch is within 30 cents and their overlap is at least
 //! half of the longer one; precision is the share of transcribed notes matched, recall the share
 //! of true notes.
@@ -74,6 +75,32 @@ fn square(notes: &[True]) -> Vec<(u64, u64)> {
         }
     }
     iv
+}
+
+/// Staccato notes: each a burst of a square wave from just after a frame's interrupt, `len`
+/// T-states long, the next 4-9 frames on; high for `duty` of each period. The loop is
+/// `drift` slower while the screen is drawn (contended memory), so each true period is the
+/// burst's mean.
+fn staccato(rng: &mut Rng, n: usize, lo: f64, hi: f64, len: u64, duty: f64, drift: f64) -> (Vec<True>, Vec<(u64, u64)>) {
+    let mut notes = Vec::new();
+    let mut iv = Vec::new();
+    let mut frame = 2;
+    let screen = |t: u64| (14_336..57_344).contains(&(t % FRAME));
+    for _ in 0..n {
+        let hz = lo * (hi / lo).powf(rng.range(0.0, 1.0));
+        let period = CLOCK_HZ / hz;
+        let start = frame * FRAME + 600 + rng.int(0, 60);
+        let (mut t, mut cycles) = (start as f64, 0u32);
+        while t + period < (start + len) as f64 {
+            let p = if screen(t as u64) { period * (1.0 + drift) } else { period };
+            iv.push((t.round() as u64, (t + duty * p).round() as u64));
+            t += p;
+            cycles += 1;
+        }
+        notes.push(True { start, end: t.round() as u64, period: (t - start as f64) / f64::from(cycles) });
+        frame += rng.int(4, 9);
+    }
+    (notes, iv)
 }
 
 /// High intervals of a pulse `width` T-states wide every period per note.
@@ -268,6 +295,24 @@ fn chords_and_rests() {
         t += len + rng.int(2, 6) * FRAME;
     }
     check("chords and rests", pulses(&want, 50), &want, 0.95, 0.95);
+}
+
+/// Notes of 1.3 frames, a sixth of the window, 4-9 frames apart: each its own stretch of sound,
+/// heard through a window clipped to it; the duty a little off a half (weak even harmonics) and
+/// the period 1.5% longer while the screen is drawn.
+#[test]
+fn staccato_bursts_shorter_than_the_window() {
+    let mut rng = Rng(0x0005_7ACC);
+    let (want, iv) = staccato(&mut rng, 80, 150.0, 2000.0, 90_000, 0.493, 0.015);
+    let got = check("staccato bursts", iv, &want, 0.95, 0.95);
+    // one line, each note as long as its burst
+    assert!(got.iter().all(|n| n.voice == 0), "{got:?}");
+    // frame 0 is silent: T0 is 0
+    for g in &got {
+        let mid = g.start_t + (g.end_t - g.start_t) / 2;
+        let w = want.iter().find(|w| w.start <= mid && mid < w.end).expect("a burst");
+        assert!(g.start_t.abs_diff(w.start) < FRAME / 4 && g.end_t.abs_diff(w.end) < FRAME / 4, "{g:?} against {w:?}");
+    }
 }
 
 #[test]
