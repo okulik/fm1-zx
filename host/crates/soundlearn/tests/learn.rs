@@ -55,6 +55,7 @@ fn learner_errors_are_caught() {
             details: "  learner error: no machine\n".into(),
             roles: Vec::new(),
             scores: Vec::new(),
+            score_runs: Vec::new(),
             override_error: None,
         }
     );
@@ -262,6 +263,8 @@ fn records_a_score_for_music_nothing_reads() {
     let d = &got.details;
     assert!(d.contains(&format!("\n    recorded score: {:.1} s from frame {f0}, {} voices, ", s.intro_fp.len() as f64 * 0.019968, s.voices)), "{d}");
     assert!(!d.contains("shortened") && !d.contains("no score"), "{d}");
+    assert_eq!(got.score_runs, [None]);
+    assert!(d.contains(&format!(" KB (score {})\n", soundlearn::score_key(s))), "{d}");
     // the same game and inputs give the same score
     assert_eq!(learn(&|| fixtures::bare(&code), &quiet()), got);
 }
@@ -454,6 +457,13 @@ fn records_the_tune_behind_each_key() {
     assert_eq!(d.matches("\n    recorded score: ").count(), 1, "{d}");
     assert_eq!(d.matches("\n    recorded score (key 2 once): ").count(), 1, "{d}");
     assert!(!d.contains("no score"), "{d}");
+    // each score's run kept, its key on its line
+    let mut runs = got.score_runs.clone();
+    runs.sort_by_key(|r| r.is_some());
+    assert_eq!(runs, [None, Some(RunKind::Key(1))]);
+    for s in &got.scores {
+        assert_eq!(d.matches(&format!(" KB (score {})\n", soundlearn::score_key(s))).count(), 1, "{d}");
+    }
     // each in its run: the learner's, and key 2 once
     let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
     let key2 = run_inputs(RunKind::Key(1), 0);

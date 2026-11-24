@@ -1,0 +1,1508 @@
+#!/usr/bin/env -S uv run --script
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# /// script
+# requires-python = ">=3.11,<3.13"
+# dependencies = [
+#     "anticipation @ git+https://github.com/jthickstun/anticipation@af37397922665a0fb8d474d7988b0f3755a38d45",
+#     "mido==1.3.3",
+#     "numpy==2.5.5",
+#     "torch==2.15.0",
+#     "tqdm==4.70.1",
+#     "transformers==5.24.0",
+# ]
+# ///
+"""Arranged takes for the scores a personal pack records (BUILDING.md, "Your own games").
+
+tools/make-personal-pack writes DIR/arrange/<game>/<key>/score.toml for every score it records.
+This tool adds a bass, a pad (chords, one note at a time) and a drum to each score, as several
+takes to choose from by ear; the next tools/make-personal-pack run packs the chosen takes.
+
+  tools/arrange-music generate DIR [--takes N] [--game ID]... [--force] [--jobs J]
+                                   [--model NAME] [--soundfont PATH] [--seed S] [--offline]
+      For each score without takes (every score with --force; only the games named by --game),
+      writes N takes (default 4) to DIR/arrange/<game>/<key>/take-<n>/:
+        arranged.toml  the take as the FM-1 plays it: the score's header, take, generator, a
+                       [metrics] table, and notes on 4 voices: 0 lead (the score's melody: its
+                       voice with role "lead", else its highest voice on average), 1 bass,
+                       2 pad, 3 drums (period_t 0, level the hit's strength)
+        full.mid       the original with everything the generator wrote
+        fm1.mid        arranged.toml as MIDI (the drum's level picks kick, snare, clap or hat)
+        full.wav, fm1.wav, and ../original.wav: renders with FluidSynth, when it is installed
+                       (the default soundfont is the first .sf2 of Homebrew's fluid-synth;
+                       --soundfont overrides), loudness-matched with ffmpeg when it is there
+      --model picks the generator: "amt" (default), the Anticipatory Music Transformer
+      (stanford-crfm/music-medium-800k) in three passes, drums, then bass, then chords, each
+      hearing the original and the passes before it; "rules", a quick generator without a model
+      (a bass on the melody's chord roots, a triad pad and a plain drum pattern). Takes differ by
+      seed (and, for amt, top_p); a seed (--seed, default 1) gives the same takes again on the
+      same machine. amt writes from 1 to about 50 notes a second of music per pass, depending
+      on the take, and takes roughly 0.1 s a note on Apple silicon, so a minute of music is several minutes a take: it prints its
+      progress and an estimate. --jobs runs that many scores at once (each loads the model).
+      The first amt run downloads the model (about 1.4 GB) to the Hugging Face cache.
+      --offline fetches nothing: only the cached model (it stops when the model is not cached;
+      run once without --offline to download it). The tool runs through uv, which fetches its
+      packages on the first run; UV_OFFLINE=1 keeps uv offline too (tools/make-personal-pack
+      --offline --arrange sets both).
+      A score has its takes when takes.toml next to it lists takes 1..N for its score.toml as it
+      is now, whatever generator made them (--force replaces them; a changed score.toml gets new
+      ones); a run interrupted with the same generator and seed resumes at the missing takes.
+
+  tools/arrange-music pick DIR [--port P] [--set GAME/KEY=N]... [--list]
+      Serves a page on http://127.0.0.1:P/ (default 8765, or a free port) to listen to each
+      score's original and its takes and choose one, saved to DIR/arrange/choices.toml:
+          [choices]
+          "<game>/<key>" = <take>     # 0 or absent: the original
+      --set writes choices without the page; --list prints every score, its takes, their metrics
+      and the choice. Choices of other scores in the file are kept.
+
+  tools/arrange-music selftest
+      Checks generate (with the rules generator), the files it writes, pick --set and --list, and
+      the page's save, in a temporary folder; no network, no model.
+
+Metrics (arranged.toml [metrics], printed by generate and pick --list), for comparing generators:
+key and key_r (Krumhansl-Schmuckler estimate from the original's notes, and its correlation);
+bass_in_key, pad_in_key (share of the voice's sounding time on the key's scale); bass_consonance,
+pad_consonance (share of 10 ms ticks where the voice and the lead sound a unison, third, fourth,
+fifth or sixth apart; random notes score about 0.58); on_lead_onsets (share of bass, pad and drum
+onsets within 30 ms of a lead onset); lead_nps, bass_nps, pad_nps, drums_nps (notes a second);
+generated (notes the generator wrote).
+
+A generator is a function generate_take(score, take_index, rng, settings) -> Take registered with
+@generator("name"): score is the parsed score.toml (Score), take_index counts from 1, rng is a
+random.Random seeded from the seed, the score and the take, and settings carries the options and a
+log function. It returns the notes it wrote (GenNote: seconds from the timeline's start, a GM
+program or 128 for drums, a MIDI pitch, and its part, "bass", "chords" or "drums") and a label
+for arranged.toml's generator field. The reduction to the FM-1's four voices, the metrics, the
+files and the renders are shared.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import http.server
+import json
+import math
+import multiprocessing as mp
+import os
+import random
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tomllib
+import urllib.parse
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Callable
+
+os.environ.setdefault("TQDM_DISABLE", "1")
+
+PROG = "tools/arrange-music"
+TICKS_PER_S = 100  # reductions and metrics run on 10 ms ticks, the AMT's time resolution
+TAKE_ROLES = ["lead", "bass", "pad"]
+GM_PROGRAM = {"lead": 80, "bass": 38, "pad": 89}  # square lead, synth bass 1, warm pad
+CONSONANT = (0, 3, 4, 5, 7, 8, 9)
+
+
+def die(msg: str) -> None:
+    print(f"{PROG}: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------------------------
+# Scores
+
+
+@dataclass
+class Note:
+    voice: int
+    start_t: int
+    end_t: int
+    period_t: int
+    level: int
+
+
+@dataclass
+class Score:
+    path: Path
+    header: dict
+    notes: list[Note]
+
+    @property
+    def game(self) -> str:
+        return str(self.header["game"])
+
+    @property
+    def key(self) -> str:
+        return str(self.header["key"])
+
+    @property
+    def id(self) -> str:
+        return f"{self.game}/{self.key}"
+
+    @property
+    def name(self) -> str:
+        return str(self.header.get("name", self.game))
+
+    @property
+    def clock_hz(self) -> int:
+        return int(self.header.get("clock_hz", 3500000))
+
+    @property
+    def roles(self) -> list[str]:
+        return list(self.header.get("roles", []))
+
+    @property
+    def total_t(self) -> int:
+        t = int(self.header.get("intro_t", 0)) + int(self.header.get("loop_t", 0))
+        return t if t > 0 else max((n.end_t for n in self.notes), default=0)
+
+    @property
+    def seconds(self) -> float:
+        return self.total_t / self.clock_hz
+
+    @property
+    def dir(self) -> Path:
+        return self.path.parent
+
+    def sec(self, t: int) -> float:
+        return t / self.clock_hz
+
+    def tstate(self, s: float) -> int:
+        return int(round(s * self.clock_hz))
+
+    def tonal(self) -> list[Note]:
+        return [n for n in self.notes if n.period_t > 0 and n.voice < 3]
+
+    def midi(self, n: Note) -> float:
+        return midi_of_period(self.clock_hz, n.period_t)
+
+    def melody_voice(self) -> int | None:
+        """The score's voice with role "lead" (the longest-sounding one if several), else its
+        highest voice on average (duration-weighted MIDI pitch)."""
+        dur: dict[int, float] = {}
+        pitch: dict[int, float] = {}
+        for n in self.tonal():
+            d = max(n.end_t - n.start_t, 1)
+            dur[n.voice] = dur.get(n.voice, 0) + d
+            pitch[n.voice] = pitch.get(n.voice, 0) + d * self.midi(n)
+        if not dur:
+            return None
+        roles = self.roles
+        leads = [v for v in dur if v < len(roles) and roles[v] == "lead"]
+        if leads:
+            return max(leads, key=lambda v: dur[v])
+        return max(dur, key=lambda v: pitch[v] / dur[v])
+
+    def digest(self) -> str:
+        return hashlib.sha256(self.path.read_bytes()).hexdigest()[:16]
+
+
+def load_score(path: Path) -> Score:
+    with path.open("rb") as f:
+        doc = tomllib.load(f)
+    for k in ("game", "key"):
+        if k not in doc:
+            raise ValueError(f"{path}: no {k}")
+    notes = [
+        Note(int(n["voice"]), int(n["start_t"]), int(n["end_t"]), int(n.get("period_t", 0)), int(n.get("level", 128)))
+        for n in doc.get("note", [])
+    ]
+    header = {k: v for k, v in doc.items() if k != "note"}
+    return Score(path, header, notes)
+
+
+def midi_of_period(clock_hz: int, period_t: int) -> float:
+    return 69 + 12 * math.log2(clock_hz / period_t / 440.0)
+
+
+def period_of_midi(clock_hz: int, pitch: int) -> int:
+    return max(1, int(round(clock_hz / (440.0 * 2 ** ((pitch - 69) / 12)))))
+
+
+def vel_of_level(level: int) -> int:
+    return max(1, min(127, int(round(30 + level * 97 / 255))))
+
+
+def find_scores(d: Path, games: list[str] | None = None) -> list[Score]:
+    out = []
+    for p in sorted((d / "arrange").glob("*/*/score.toml")):
+        if games and p.parent.parent.name not in games:
+            continue
+        try:
+            out.append(load_score(p))
+        except (ValueError, KeyError, tomllib.TOMLDecodeError) as e:
+            print(f"{PROG}: skipping {p}: {e}", file=sys.stderr)
+    return out
+
+
+def take_dirs(score_dir: Path) -> list[tuple[int, Path]]:
+    out = []
+    for p in score_dir.glob("take-*"):
+        n = p.name[5:]
+        if n.isdigit() and (p / "arranged.toml").is_file():
+            out.append((int(n), p))
+    return sorted(out)
+
+
+# ---------------------------------------------------------------------------------------------
+# Generators
+
+
+@dataclass
+class GenNote:
+    start: float  # seconds from the timeline's start
+    end: float
+    program: int  # GM program 0-127, 128 drums
+    pitch: int  # MIDI pitch (GM drum key for drums)
+    part: str  # "bass", "chords" or "drums"
+    velocity: int = 90
+
+
+@dataclass
+class Take:
+    notes: list[GenNote]
+    generator: str  # arranged.toml's generator field: the model and its settings
+    info: dict = field(default_factory=dict)  # free-form, printed and kept in takes.toml
+
+
+@dataclass
+class Settings:
+    model: str = "amt"
+    takes: int = 4
+    seed: int = 1
+    offline: bool = False
+    soundfont: str | None = None
+    amt_model: str = "stanford-crfm/music-medium-800k"
+    prefix: str = ""
+
+    def log(self, msg: str) -> None:
+        print(f"{self.prefix}{msg}", flush=True)
+
+
+GenerateTake = Callable[[Score, int, random.Random, Settings], Take]
+GENERATORS: dict[str, GenerateTake] = {}
+
+
+def generator(name: str) -> Callable[[GenerateTake], GenerateTake]:
+    def reg(fn: GenerateTake) -> GenerateTake:
+        GENERATORS[name] = fn
+        return fn
+
+    return reg
+
+
+def take_rng(settings: Settings, score: Score, take_index: int) -> random.Random:
+    return random.Random(f"{settings.model}/{settings.seed}/{score.id}/{take_index}")
+
+
+def onsets_of(score: Score) -> list[float]:
+    return sorted({round(score.sec(n.start_t), 3) for n in score.tonal()})
+
+
+def estimate_beat(onsets: list[float]) -> float:
+    iois = sorted(b - a for a, b in zip(onsets, onsets[1:]) if b - a > 0.05)
+    if not iois:
+        return 0.5
+    beat = iois[len(iois) // 2]
+    while beat < 0.3:
+        beat *= 2
+    while beat > 1.0:
+        beat /= 2
+    return beat
+
+
+@generator("rules")
+def rules_take(score: Score, take_index: int, rng: random.Random, settings: Settings) -> Take:
+    """A bass on the strongest pitch class of each chord span, a triad above it, and a drum
+    pattern on the beat; the take picks the span length, the bass rhythm and the pattern."""
+    total = score.seconds
+    tonal = [(score.sec(n.start_t), score.sec(n.end_t), score.midi(n)) for n in score.tonal()]
+    onsets = onsets_of(score)
+    if not tonal or total <= 0:
+        return Take([], f"rules seed={settings.seed}")
+    beat = estimate_beat(onsets)
+    span_beats = rng.choice([2, 4])
+    bass_beats = rng.choice([1, 2, span_beats])
+    pattern = rng.choice(["rock", "half", "four"])
+    t0 = onsets[0]
+    notes: list[GenNote] = []
+    span = beat * span_beats
+    a = t0
+    while a < total:
+        b = min(a + span, total)
+        w = [0.0] * 12
+        for s, e, p in tonal:
+            ov = min(e, b) - max(s, a)
+            if ov > 0:
+                w[int(round(p)) % 12] += ov
+        if max(w) > 0:
+            root = max(range(12), key=lambda k: w[k])
+            third = 4 if w[(root + 4) % 12] >= w[(root + 3) % 12] else 3
+            bass = 36 + root
+            x = a
+            while x < b - 1e-6:
+                y = min(x + beat * bass_beats, b)
+                notes.append(GenNote(x, y - 0.02, 33, bass, "bass"))
+                x = y
+            for iv in (0, third, 7):
+                notes.append(GenNote(a, b, 4, 60 + (root + iv) % 12, "chords"))
+        a = b
+    k = 0
+    x = t0
+    while x < total:
+        if pattern == "rock":
+            key = 36 if k % 2 == 0 else 38
+        elif pattern == "half":
+            key = 36 if k % 4 == 0 else (38 if k % 4 == 2 else 42)
+        else:
+            key = 36
+        notes.append(GenNote(x, min(x + 0.1, total), 128, key, "drums"))
+        if x + beat / 2 < total:
+            notes.append(GenNote(x + beat / 2, min(x + beat / 2 + 0.05, total), 128, 42, "drums"))
+        x += beat
+        k += 1
+    label = f"rules seed={settings.seed} beat={beat:.3f}s span={span_beats} bass={bass_beats} drums={pattern}"
+    return Take(notes, label)
+
+
+# --- the Anticipatory Music Transformer ------------------------------------------------------
+
+AMT_STAGES = (
+    ("drums", frozenset({128})),
+    ("bass", frozenset(range(32, 40))),
+    ("chords", frozenset(set(range(0, 8)) | set(range(24, 32)) | set(range(48, 52)))),
+)
+AMT_TOP_P = (0.95, 0.98, 0.92, 0.96)  # by take, cycling
+AMT_MELODY_PROGRAM = 80  # the original, every voice, as one square lead
+AMT_WINDOW = 30.0  # seconds a generate call covers; a pass that stops early resumes at the next
+AMT_LEAD_IN = 0.1  # seconds: the library drops controls in its first 50 ms, so time starts here
+AMT_NOTES_PER_S = 15.0  # for the first estimate: generated notes a second of music, per pass
+AMT_S_PER_NOTE = 0.12  # for the first estimate: seconds a generated note takes
+
+
+class _AmtState:
+    model = None
+    device = None
+    banned = None  # note-token mask of the instruments the pass may not use
+    gen = None  # the pass's torch.Generator (sampling runs on the CPU, so the seed decides)
+    progress: Callable[[int], None] | None = None
+
+
+AMT = _AmtState()
+
+
+def amt_load(settings: Settings) -> None:
+    if AMT.model is not None:
+        return
+    if settings.offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    import logging
+
+    logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
+    import torch
+    import transformers
+    from transformers import AutoModelForCausalLM
+
+    transformers.logging.set_verbosity_error()  # the checkpoint's empty token_out_embeddings: tied
+    transformers.utils.logging.disable_progress_bar()
+    import anticipation.sample as smp
+
+    try:
+        model = AutoModelForCausalLM.from_pretrained(settings.amt_model, local_files_only=True)
+    except OSError:
+        if settings.offline:
+            die(f"the model {settings.amt_model} is not in the Hugging Face cache, and --offline "
+                "fetches nothing: run once without --offline to download it (about 1.4 GB)")
+        print(f"{PROG}: downloading the model {settings.amt_model} (about 1.4 GB, once) to the "
+              "Hugging Face cache", flush=True)
+        model = AutoModelForCausalLM.from_pretrained(settings.amt_model)
+    if torch.backends.mps.is_available():
+        dev = "mps"
+    elif torch.cuda.is_available():
+        dev = "cuda"
+    else:
+        dev = "cpu"
+    AMT.model = model.to(dev).eval()
+    AMT.device = dev
+    smp.add_token = _amt_add_token
+
+
+def amt_ensure_model(settings: Settings) -> None:
+    """The model in the Hugging Face cache: downloaded once (with a notice) before any worker
+    starts; under --offline, a stop with how to get it when it is missing."""
+    from huggingface_hub import snapshot_download, try_to_load_from_cache
+
+    if isinstance(try_to_load_from_cache(settings.amt_model, "config.json"), str):
+        return
+    if settings.offline:
+        die(f"the model {settings.amt_model} is not in the Hugging Face cache, and --offline "
+            "fetches nothing: run once without --offline to download it (about 1.4 GB)")
+    print(f"{PROG}: downloading the model {settings.amt_model} (about 1.4 GB, once) to the "
+          "Hugging Face cache", flush=True)
+    snapshot_download(settings.amt_model)
+
+
+def _amt_add_token(model, z, tokens, top_p, current_time, debug=False):
+    """anticipation.sample.add_token with a key-value cache for the event's second and third
+    tokens, and sampling on the CPU from the pass's generator."""
+    import torch
+    import torch.nn.functional as F
+    from anticipation import ops
+    import anticipation.sample as smp
+
+    assert len(tokens) % 3 == 0
+    history = tokens[max(len(tokens) - 1017, 0):]
+    offset = ops.min_time(history, seconds=False)
+    history = list(history)
+    history[::3] = [tok - offset for tok in history[::3]]
+    new: list[int] = []
+    with torch.no_grad():
+        out = model(input_ids=torch.tensor([z + history], device=model.device), use_cache=True)
+        for i in range(3):
+            if i:
+                out = model(input_ids=torch.tensor([[new[-1]]], device=model.device),
+                            cache=out.cache, use_cache=True)
+            logits = out.logits[0, -1].float().cpu()
+            logits = smp.safe_logits(logits, len(z) + len(history) + i - 1)
+            if i == 0:
+                logits = smp.future_logits(logits, current_time - offset)
+            else:
+                if i == 2:
+                    logits = smp.instr_logits(logits, tokens)
+                    logits[AMT.banned] = -float("inf")
+            logits = smp.nucleus(logits, top_p)
+            new.append(int(torch.multinomial(F.softmax(logits, dim=-1), 1, generator=AMT.gen)))
+    new[0] += offset
+    if AMT.progress:
+        AMT.progress(new[0])
+    return new
+
+
+def _amt_tokens(notes: list[tuple[float, float, int, int]], control: bool) -> list[int]:
+    from anticipation.vocab import CONTROL_OFFSET, DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
+
+    base = CONTROL_OFFSET if control else 0
+    out = []
+    for start, dur, prog, pitch in notes:
+        if not 0 <= pitch <= 127:
+            continue
+        t = int(round((start + AMT_LEAD_IN) * 100))
+        d = max(1, min(999, int(round(dur * 100))))
+        out += [base + TIME_OFFSET + t, base + DUR_OFFSET + d, base + NOTE_OFFSET + prog * 128 + pitch]
+    return out
+
+
+@generator("amt")
+def amt_take(score: Score, take_index: int, rng: random.Random, settings: Settings) -> Take:
+    """Three passes of the Anticipatory Music Transformer, drums, then bass, then chords, each
+    allowed one instrument class and hearing the original and the passes before it as controls."""
+    amt_load(settings)
+    import torch
+    from anticipation import ops
+    from anticipation.sample import generate
+    from anticipation.vocab import DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
+
+    top_p = AMT_TOP_P[(take_index - 1) % len(AMT_TOP_P)]
+    total = score.seconds
+    end_bins = int(round((total + AMT_LEAD_IN) * 100))
+    original = []
+    for n in score.notes:
+        s, e = score.sec(n.start_t), score.sec(n.end_t)
+        if n.period_t > 0 and n.voice < 3:
+            original.append((s, e - s, AMT_MELODY_PROGRAM, int(round(score.midi(n)))))
+        else:
+            original.append((s, e - s, 128, 38))
+    melody = _amt_tokens(original, control=True)
+    parts: list[GenNote] = []
+    seeds = []
+    t_start = time.time()
+    stages_info = {}
+    n_stages = len(AMT_STAGES)
+    last = [time.time()]
+    for si, (part, allowed) in enumerate(AMT_STAGES):
+        seed = rng.getrandbits(63)
+        seeds.append(seed)
+        AMT.gen = torch.Generator().manual_seed(seed)
+        banned = torch.ones(55028, dtype=torch.bool)
+        banned[:NOTE_OFFSET] = False
+        banned[NOTE_OFFSET + 129 * 128:] = False
+        for ins in allowed:
+            banned[NOTE_OFFSET + ins * 128:NOTE_OFFSET + (ins + 1) * 128] = False
+        AMT.banned = banned
+        count = [0]
+
+        def progress(time_tok: int, si=si, part=part, count=count) -> None:
+            count[0] += 1
+            now = time.time()
+            if now - last[0] < 15:
+                return
+            last[0] = now
+            at = min(max((time_tok - TIME_OFFSET) / 100 - AMT_LEAD_IN, 0), total)
+            frac = (si + at / max(total, 1e-6)) / n_stages
+            el = now - t_start
+            left = el * (1 - frac) / frac if frac > 0.01 else float("nan")
+            settings.log(f"take {take_index} {part}: {at:.1f}/{total:.1f} s, {count[0]} notes, "
+                         f"{el:.0f} s so far, about {fmt_dur(left)} left in this take")
+
+        AMT.progress = progress
+        ctl = list(melody) + _amt_tokens([(g.start, g.end - g.start, g.program, g.pitch) for g in parts], control=True)
+        ctl = ops.sort(ctl)
+        events: list[int] = []
+        t0 = time.time()
+        w = 0
+        while w < end_bins:
+            w1 = min(w + int(AMT_WINDOW * 100), end_bins)
+            events = generate(AMT.model, (w + 0.5) / 100, (w1 + 0.5) / 100, inputs=events, controls=ctl, top_p=top_p)
+            w = w1
+        new = []
+        for tm, du, no in zip(events[0::3], events[1::3], events[2::3]):
+            nn = no - NOTE_OFFSET
+            ins, pitch = nn // 128, nn % 128
+            s = (tm - TIME_OFFSET) / 100 - AMT_LEAD_IN
+            e = min(s + max(du - DUR_OFFSET, 1) / 100, total)
+            if ins in allowed and 0 <= s < total and e > s:
+                new.append(GenNote(s, e, ins, pitch, part))
+        parts += new
+        stages_info[part] = {"notes": len(new), "seconds": round(time.time() - t0, 1)}
+        settings.log(f"take {take_index} {part}: {len(new)} notes in {time.time() - t0:.0f} s "
+                     f"({(time.time() - t0) / max(count[0], 1):.2f} s a note on {AMT.device})")
+    AMT.progress = None
+    label = (f"amt {settings.amt_model} staged {','.join(p for p, _ in AMT_STAGES)} top_p={top_p} "
+             f"seed={settings.seed}")
+    return Take(parts, label, {"stages": stages_info, "device": AMT.device})
+
+
+def estimate_seconds(score: Score, settings: Settings) -> float | None:
+    if settings.model != "amt":
+        return None
+    return score.seconds * AMT_NOTES_PER_S * len(AMT_STAGES) * AMT_S_PER_NOTE
+
+
+def fmt_dur(s: float) -> str:
+    if s != s:
+        return "?"
+    if s < 90:
+        return f"{s:.0f} s"
+    if s < 5400:
+        return f"{s / 60:.0f} min"
+    return f"{s / 3600:.1f} h"
+
+
+# ---------------------------------------------------------------------------------------------
+# The FM-1's four voices
+
+
+DRUM_CLASS = {35: "kick", 36: "kick", 38: "snare", 40: "snare", 37: "clap", 39: "clap",
+              41: "tom", 43: "tom", 45: "tom", 47: "tom", 48: "tom", 50: "tom",
+              42: "hat", 44: "hat", 46: "hat", 49: "cymbal", 51: "cymbal", 52: "cymbal",
+              53: "cymbal", 55: "cymbal", 57: "cymbal", 59: "cymbal"}
+DRUM_PRIORITY = {"kick": 0, "snare": 1, "clap": 2, "tom": 3, "hat": 4, "cymbal": 5}
+DRUM_LEVEL = {"kick": 200, "snare": 170, "clap": 130, "tom": 130, "hat": 80, "cymbal": 96}
+DRUM_OTHER_LEVEL = 110
+# The FM-1's drum strikes only from off, and a frame (69888 T) plays at most 8 events of all
+# voices together: a hit lasts at most DRUM_HIT_S, ends DRUM_GAP_T before the next one starts,
+# and hits are at least DRUM_SPACING_S apart (the stronger kind wins a clash).
+DRUM_HIT_S = 0.05
+DRUM_GAP_T = 128
+DRUM_SPACING_S = 0.04
+TONAL_MIN_TICKS = 3  # bass and pad notes under 30 ms are dropped, to keep the frames' events few
+
+
+def drum_key_of_level(level: int) -> int:
+    """fm1.mid's drum key for a level of arranged.toml: kick, snare, clap or hat."""
+    if level >= 185:
+        return 36
+    if level >= 150:
+        return 38
+    if level >= 100:
+        return 39
+    return 42
+
+
+def mono_line(notes: list[tuple[float, float, int]], ticks: int, low: bool) -> list[tuple[int, int, int]]:
+    """One note at a time from notes (start s, end s, pitch): at each tick the lowest (low) or
+    highest sounding note; a later note wins a tie, so a repeated note is struck again. Returns
+    (start tick, end tick, pitch); pieces under TONAL_MIN_TICKS are dropped."""
+    import numpy as np
+
+    pitch = np.full(ticks, np.nan)
+    idx = np.full(ticks, -1, dtype=np.int64)
+    for i, (s, e, p) in enumerate(notes):
+        a, b = int(round(s * TICKS_PER_S)), min(int(round(e * TICKS_PER_S)), ticks)
+        if b <= a:
+            continue
+        seg = pitch[a:b]
+        m = ~(seg < p) if low else ~(seg > p)
+        seg[m] = p
+        idx[a:b][m] = i
+    out = []
+    k = 0
+    while k < ticks:
+        i = idx[k]
+        j = k
+        while j < ticks and idx[j] == i:
+            j += 1
+        if i >= 0 and j - k >= TONAL_MIN_TICKS:
+            out.append((k, j, notes[i][2]))
+        k = j
+    return out
+
+
+def arrange(score: Score, take: Take) -> dict[int, list[Note]]:
+    """The take on the FM-1's voices: 0 the score's melody voice as it is, 1 the lowest bass
+    note, 2 the highest chord note, 3 one drum hit at a time within the device's limits
+    (DRUM_HIT_S, DRUM_GAP_T, DRUM_SPACING_S)."""
+    total_t = score.total_t
+    ticks = int(math.ceil(score.seconds * TICKS_PER_S))
+    voices: dict[int, list[Note]] = {0: [], 1: [], 2: [], 3: []}
+    mv = score.melody_voice()
+    lead = sorted((n for n in score.tonal() if n.voice == mv), key=lambda n: (n.start_t, n.end_t))
+    for i, n in enumerate(lead):
+        s, e = max(n.start_t, 0), min(n.end_t, total_t)
+        if i + 1 < len(lead):
+            e = min(e, lead[i + 1].start_t)
+        if e > s:
+            voices[0].append(Note(0, s, e, n.period_t, max(1, min(255, n.level))))
+    levels = sorted(n.level for n in voices[0]) or [128]
+    lead_level = levels[len(levels) // 2]
+    tick_t = lambda k: min(score.tstate(k / TICKS_PER_S), total_t)  # noqa: E731
+    for v, part, low, level in ((1, "bass", True, lead_level), (2, "chords", False, int(lead_level * 0.7))):
+        line = mono_line([(g.start, g.end, g.pitch) for g in take.notes if g.part == part], ticks, low)
+        for a, b, p in line:
+            s, e = tick_t(a), tick_t(b)
+            if e > s:
+                voices[v].append(Note(v, s, e, period_of_midi(score.clock_hz, p), max(1, min(255, level))))
+    hits: list[tuple[float, str]] = []
+    for g in take.notes:
+        if g.part == "drums" and 0 <= g.start < score.seconds:
+            hits.append((g.start, DRUM_CLASS.get(g.pitch, "other")))
+    hits.sort()
+    kept: list[tuple[float, str]] = []
+    for at, kind in hits:
+        if kept and at - kept[-1][0] < DRUM_SPACING_S:
+            if DRUM_PRIORITY.get(kind, 9) < DRUM_PRIORITY.get(kept[-1][1], 9):
+                kept[-1] = (kept[-1][0], kind)
+            continue
+        kept.append((at, kind))
+    for i, (at, kind) in enumerate(kept):
+        s = score.tstate(at)
+        e = min(score.tstate(at + DRUM_HIT_S), total_t)
+        if i + 1 < len(kept):
+            e = min(e, score.tstate(kept[i + 1][0]) - DRUM_GAP_T)
+        if e > s:
+            voices[3].append(Note(3, s, e, 0, DRUM_LEVEL.get(kind, DRUM_OTHER_LEVEL)))
+    return voices
+
+
+# ---------------------------------------------------------------------------------------------
+# Metrics
+
+KS_MAJOR = (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
+KS_MINOR = (6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
+PC_NAMES = "C C# D D# E F F# G G# A A# B".split()
+
+
+def key_of(score: Score) -> tuple[str, list[int], float]:
+    import numpy as np
+
+    w = np.zeros(12)
+    for n in score.tonal():
+        w[int(round(score.midi(n))) % 12] += n.end_t - n.start_t
+    if w.sum() <= 0 or w.std() == 0:
+        return "", [], 0.0
+    best = max(
+        (float(np.corrcoef(np.roll(np.array(prof), k), w)[0, 1]), k, m)
+        for m, prof in (("maj", KS_MAJOR), ("min", KS_MINOR))
+        for k in range(12)
+    )
+    r, k, m = best
+    steps = (0, 2, 4, 5, 7, 9, 11) if m == "maj" else (0, 2, 3, 5, 7, 8, 10)
+    return f"{PC_NAMES[k]} {m}", [(k + s) % 12 for s in steps], r
+
+
+def metrics(score: Score, voices: dict[int, list[Note]], generated: int) -> dict:
+    import numpy as np
+
+    ticks = max(int(math.ceil(score.seconds * TICKS_PER_S)), 1)
+
+    def line(v: int) -> np.ndarray:
+        arr = np.full(ticks, -1, dtype=np.int64)
+        for n in voices[v]:
+            a = int(score.sec(n.start_t) * TICKS_PER_S)
+            b = min(int(score.sec(n.end_t) * TICKS_PER_S), ticks)
+            if n.period_t > 0:
+                arr[a:b] = int(round(score.midi(n)))
+        return arr
+
+    key, scale, r = key_of(score)
+    lead = line(0)
+    m: dict = {"key": key, "key_r": round(r, 3)}
+    for v, nm in ((1, "bass"), (2, "pad")):
+        x = line(v)
+        on = x >= 0
+        m[f"{nm}_in_key"] = round(float(np.isin(x[on] % 12, scale).mean()) if on.any() and scale else 0.0, 3)
+        both = on & (lead >= 0)
+        m[f"{nm}_consonance"] = round(float(np.isin((lead[both] - x[both]) % 12, CONSONANT).mean()) if both.any() else 0.0, 3)
+    lead_on = np.array(sorted(score.sec(n.start_t) for n in voices[0]))
+    others = [score.sec(n.start_t) for v in (1, 2, 3) for n in voices[v]]
+    if len(lead_on) and others:
+        o = np.array(others)
+        pos = np.clip(np.searchsorted(lead_on, o), 1, len(lead_on) - 1) if len(lead_on) > 1 else np.zeros(len(o), dtype=int)
+        near = np.minimum(np.abs(lead_on[pos] - o), np.abs(lead_on[np.maximum(pos - 1, 0)] - o))
+        m["on_lead_onsets"] = round(float((near <= 0.03).mean()), 3)
+    else:
+        m["on_lead_onsets"] = 0.0
+    secs = max(score.seconds, 1e-6)
+    for v, nm in ((0, "lead"), (1, "bass"), (2, "pad"), (3, "drums")):
+        m[f"{nm}_nps"] = round(len(voices[v]) / secs, 2)
+    m["generated"] = generated
+    return m
+
+
+def metrics_line(m: dict) -> str:
+    return (f"key {m.get('key') or '?'} (r {m.get('key_r', 0):.2f}); consonance bass {m.get('bass_consonance', 0):.2f} "
+            f"pad {m.get('pad_consonance', 0):.2f}; in key bass {m.get('bass_in_key', 0):.2f} pad {m.get('pad_in_key', 0):.2f}; "
+            f"on lead onsets {m.get('on_lead_onsets', 0):.2f}; notes/s lead {m.get('lead_nps', 0)} bass {m.get('bass_nps', 0)} "
+            f"pad {m.get('pad_nps', 0)} drums {m.get('drums_nps', 0)}")
+
+
+# ---------------------------------------------------------------------------------------------
+# MIDI and renders
+
+
+def write_midi(path: Path, tracks: list[tuple[str, int, bool, list[tuple[float, float, int, int]]]]) -> None:
+    """tracks: (name, GM program, drums?, [(start s, end s, pitch, velocity)]), at 120 bpm."""
+    import mido
+
+    mid = mido.MidiFile(ticks_per_beat=480)
+    meta = mido.MidiTrack()
+    meta.append(mido.MetaMessage("set_tempo", tempo=500000, time=0))
+    mid.tracks.append(meta)
+    tonal_ch = [c for c in range(16) if c != 9]
+    ci = 0
+    for name, program, drums, notes in tracks:
+        if drums:
+            ch = 9
+        else:
+            ch = tonal_ch[ci % len(tonal_ch)]
+            ci += 1
+        tr = mido.MidiTrack()
+        tr.append(mido.MetaMessage("track_name", name=name, time=0))
+        if not drums:
+            tr.append(mido.Message("program_change", channel=ch, program=program, time=0))
+        ev = []
+        for s, e, p, v in notes:
+            if not 0 <= p <= 127:
+                continue
+            a, b = int(round(s * 960)), int(round(e * 960))
+            b = max(b, a + 1)
+            ev.append((a, 1, p, v))
+            ev.append((b, 0, p, 0))
+        ev.sort()
+        now = 0
+        for t, on, p, v in ev:
+            msg = "note_on" if on else "note_off"
+            tr.append(mido.Message(msg, channel=ch, note=p, velocity=v if on else 0, time=t - now))
+            now = t
+        mid.tracks.append(tr)
+    mid.save(str(path))
+
+
+def original_tracks(score: Score, all_lead: bool) -> list:
+    """The score's notes, a track per voice: as the FM-1 plays them (roles' instruments), or all
+    as one square lead (the generator's view, in full.mid)."""
+    tracks = []
+    roles = score.roles
+    for v in sorted({n.voice for n in score.notes}):
+        ns = [n for n in score.notes if n.voice == v]
+        if ns and ns[0].period_t == 0:
+            tracks.append(("original drum", 0, True, [(score.sec(n.start_t), score.sec(n.end_t), 38, vel_of_level(n.level)) for n in ns]))
+            continue
+        role = roles[v] if v < len(roles) and roles[v] in GM_PROGRAM else "lead"
+        prog = GM_PROGRAM["lead"] if all_lead else GM_PROGRAM[role]
+        tracks.append((f"original voice {v}", prog, False,
+                       [(score.sec(n.start_t), score.sec(n.end_t), int(round(score.midi(n))), vel_of_level(n.level)) for n in ns if n.period_t > 0]))
+    return tracks
+
+
+def full_midi(score: Score, take: Take, path: Path) -> None:
+    tracks = original_tracks(score, all_lead=True)
+    for prog in sorted({g.program for g in take.notes}):
+        ns = [(g.start, g.end, g.pitch, g.velocity) for g in take.notes if g.program == prog]
+        part = next(g.part for g in take.notes if g.program == prog)
+        tracks.append((f"{part} {prog}" if prog < 128 else "drums", 0 if prog == 128 else prog, prog == 128, ns))
+    write_midi(path, tracks)
+
+
+def fm1_midi(score: Score, voices: dict[int, list[Note]], path: Path) -> None:
+    tracks = []
+    for v, role in enumerate(TAKE_ROLES):
+        tracks.append((role, GM_PROGRAM[role], False,
+                       [(score.sec(n.start_t), score.sec(n.end_t), int(round(score.midi(n))), vel_of_level(n.level)) for n in voices[v]]))
+    tracks.append(("drums", 0, True, [(score.sec(n.start_t), score.sec(n.end_t), drum_key_of_level(n.level), vel_of_level(n.level)) for n in voices[3]]))
+    write_midi(path, tracks)
+
+
+def default_soundfont() -> str | None:
+    dirs = []
+    fs = shutil.which("fluidsynth")
+    if fs:
+        dirs.append(Path(fs).resolve().parent.parent / "share" / "fluid-synth" / "sf2")
+    for prefix in ("/opt/homebrew", "/usr/local"):
+        dirs += [Path(prefix) / "opt" / "fluid-synth" / "share" / "fluid-synth" / "sf2", Path(prefix) / "share" / "fluid-synth" / "sf2",
+                 Path(prefix) / "share" / "soundfonts"]
+    dirs += [Path("/usr/share/sounds/sf2"), Path("/usr/share/soundfonts")]
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        found = sorted(p for p in d.glob("*.sf2") if p.name.isascii() and p.name.replace("-", "").replace("_", "").replace(".", "").isalnum())
+        if found:
+            return str(found[0])
+    return None
+
+
+class Renderer:
+    def __init__(self, soundfont: str | None):
+        self.fluidsynth = shutil.which("fluidsynth")
+        self.ffmpeg = shutil.which("ffmpeg")
+        self.soundfont = soundfont or (default_soundfont() if self.fluidsynth else None)
+        if self.soundfont and not Path(self.soundfont).is_file():
+            die(f"no soundfont {self.soundfont}")
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.fluidsynth and self.soundfont)
+
+    def why_not(self) -> str:
+        if not self.fluidsynth:
+            return "no fluidsynth on PATH (Homebrew: brew install fluid-synth): no renders"
+        return "no soundfont found (--soundfont PATH): no renders"
+
+    def render(self, mid: Path, wav: Path, seconds: float) -> None:
+        if not self.ok:
+            return
+        raw = wav.with_suffix(".raw.wav")
+        subprocess.run([self.fluidsynth, "-ni", "-q", "-g", "0.5", "-r", "44100", "-F", str(raw), self.soundfont, str(mid)],
+                       check=True, capture_output=True)
+        if self.ffmpeg:
+            subprocess.run([self.ffmpeg, "-y", "-loglevel", "error", "-i", str(raw), "-t", f"{seconds + 1.0:.2f}",
+                            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100", str(wav)], check=True)
+            raw.unlink()
+        else:
+            raw.replace(wav)
+
+
+# ---------------------------------------------------------------------------------------------
+# generate
+
+
+def toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, list):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    raise TypeError(f"no TOML for {type(v).__name__}")
+
+
+def toml_dumps(doc: dict) -> str:
+    """TOML for the files this tool writes: keys and values first, then tables ([name]), then
+    arrays of tables ([[name]]), one level deep."""
+    key = lambda k: k if k.replace("_", "").replace("-", "").isalnum() and k.isascii() else json.dumps(k)  # noqa: E731
+    out = [f"{key(k)} = {toml_value(v)}" for k, v in doc.items() if not isinstance(v, dict)
+           and not (isinstance(v, list) and v and all(isinstance(x, dict) for x in v))]
+    for k, v in doc.items():
+        if isinstance(v, dict):
+            out += ["", f"[{key(k)}]"]
+            for k2, v2 in v.items():
+                if isinstance(v2, dict):
+                    out += ["", f"[{key(k)}.{key(k2)}]"] + [f"{key(k3)} = {toml_value(v3)}" for k3, v3 in v2.items()]
+                else:
+                    out.append(f"{key(k2)} = {toml_value(v2)}")
+    for k, v in doc.items():
+        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            for x in v:
+                out += ["", f"[[{key(k)}]]"] + [f"{key(k2)} = {toml_value(v2)}" for k2, v2 in x.items()]
+    return "\n".join(out) + "\n"
+
+
+def dump_toml(path: Path, doc: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(toml_dumps(doc))
+    tmp.replace(path)
+
+
+def read_toml(path: Path) -> dict:
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def arranged_doc(score: Score, n: int, take: Take, voices: dict[int, list[Note]], m: dict) -> dict:
+    doc = dict(score.header)
+    doc["voices"] = 3
+    doc["roles"] = list(TAKE_ROLES)
+    doc["take"] = n
+    doc["generator"] = take.generator
+    doc["metrics"] = m
+    notes = sorted((x for v in voices.values() for x in v), key=lambda x: (x.start_t, x.voice))
+    doc["note"] = [asdict(x) for x in notes]
+    return doc
+
+
+def write_take(score: Score, n: int, take: Take, renderer: Renderer) -> dict:
+    voices = arrange(score, take)
+    m = metrics(score, voices, len(take.notes))
+    final = score.dir / f"take-{n}"
+    tmp = score.dir / f".take-{n}.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    dump_toml(tmp / "arranged.toml", arranged_doc(score, n, take, voices, m))
+    full_midi(score, take, tmp / "full.mid")
+    fm1_midi(score, voices, tmp / "fm1.mid")
+    renderer.render(tmp / "full.mid", tmp / "full.wav", score.seconds)
+    renderer.render(tmp / "fm1.mid", tmp / "fm1.wav", score.seconds)
+    shutil.rmtree(final, ignore_errors=True)
+    tmp.replace(final)
+    return m
+
+
+def takes_state(score: Score, settings: Settings, digest: str) -> tuple[bool, set[int]]:
+    """From takes.toml: whether the score has its takes (all of 1..N, for this score.toml, by
+    any generator), and the takes done by this generator and seed (to resume)."""
+    st = read_toml(score.dir / "takes.toml")
+    if st.get("score") != digest:
+        return False, set()
+    done = {int(t) for t in st.get("done", {}) if (score.dir / f"take-{t}" / "arranged.toml").is_file()}
+    complete = all(n in done for n in range(1, settings.takes + 1))
+    same = st.get("model") == settings.model and st.get("seed") == settings.seed
+    return complete, done if same else set()
+
+
+def generate_score(path: str, settings: Settings, force: bool) -> dict:
+    score = load_score(Path(path))
+    settings.prefix = f"[{score.id}] "
+    renderer = Renderer(settings.soundfont)
+    digest = score.digest()
+    complete, done = takes_state(score, settings, digest)
+    if complete and not force:
+        return {"id": score.id, "skipped": True}
+    if force:
+        done = set()
+    todo = [n for n in range(1, settings.takes + 1) if n not in done]
+    if force or not done:
+        for _, p in take_dirs(score.dir):
+            shutil.rmtree(p)
+        (score.dir / "takes.toml").unlink(missing_ok=True)
+    if not score.tonal():
+        settings.log("no notes: skipped")
+        return {"id": score.id, "skipped": True}
+    est = estimate_seconds(score, settings)
+    settings.log(f"{score.name}: {score.seconds:.1f} s of music, {len(score.notes)} notes; {len(todo)} takes with {settings.model}"
+                 + (f", roughly {fmt_dur(est)} a take" if est else ""))
+    orig_mid = score.dir / "original.mid"
+    write_midi(orig_mid, original_tracks(score, all_lead=False))
+    if renderer.ok:
+        renderer.render(orig_mid, score.dir / "original.wav", score.seconds)
+    state = read_toml(score.dir / "takes.toml") if done else {}
+    state.update({"score": digest, "model": settings.model, "seed": settings.seed})
+    state.setdefault("done", {})
+    fn = GENERATORS[settings.model]
+    for n in todo:
+        t0 = time.time()
+        take = fn(score, n, take_rng(settings, score, n), settings)
+        m = write_take(score, n, take, renderer)
+        secs = time.time() - t0
+        settings.log(f"take {n}/{settings.takes} in {fmt_dur(secs)}: {metrics_line(m)}")
+        state["done"][str(n)] = {"generator": take.generator, "seconds": round(secs, 1), **({"info": json.dumps(take.info)} if take.info else {})}
+        dump_toml(score.dir / "takes.toml", state)
+    return {"id": score.id, "skipped": False}
+
+
+def _worker(path: str, settings: dict, force: bool) -> dict:
+    return generate_score(path, Settings(**settings), force)
+
+
+def cmd_generate(a: argparse.Namespace) -> int:
+    d = Path(a.dir)
+    if a.model not in GENERATORS:
+        die(f"unknown model {a.model} (have: {', '.join(sorted(GENERATORS))})")
+    if a.takes < 1:
+        die("--takes must be at least 1")
+    if a.offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    scores = find_scores(d, a.game)
+    if not scores:
+        print(f"{PROG}: no scores under {d / 'arrange'}")
+        return 0
+    settings = Settings(model=a.model, takes=a.takes, seed=a.seed, offline=a.offline, soundfont=a.soundfont)
+    renderer = Renderer(a.soundfont)
+    if not renderer.ok:
+        print(f"{PROG}: {renderer.why_not()}")
+    pending = [s for s in scores if a.force or not takes_state(s, settings, s.digest())[0]]
+    if pending and a.model == "amt":
+        amt_ensure_model(settings)
+    print(f"{PROG}: {len(scores)} scores, {len(pending)} to arrange ({a.takes} takes each, {a.model}, seed {a.seed})", flush=True)
+    est = [estimate_seconds(s, settings) for s in pending]
+    if pending and est[0] is not None:
+        total = sum(e or 0 for e in est) * a.takes / max(a.jobs, 1)
+        print(f"{PROG}: {sum(s.seconds for s in pending):.0f} s of music; roughly {fmt_dur(total)} in all", flush=True)
+    if a.jobs <= 1 or len(pending) <= 1:
+        for s in pending:
+            generate_score(str(s.path), Settings(**asdict(settings)), a.force)
+    else:
+        ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=a.jobs, mp_context=ctx) as ex:
+            futs = [ex.submit(_worker, str(s.path), asdict(settings), a.force) for s in pending]
+            for f in as_completed(futs):
+                f.result()
+    if pending:
+        print(f"{PROG}: done; listen and choose with: {PROG} pick {d}")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# pick
+
+
+def choices_path(d: Path) -> Path:
+    return d / "arrange" / "choices.toml"
+
+
+def read_choices(d: Path) -> dict[str, int]:
+    return {str(k): int(v) for k, v in read_toml(choices_path(d)).get("choices", {}).items()}
+
+
+def write_choices(d: Path, update: dict[str, int]) -> dict[str, int]:
+    ch = read_choices(d)
+    ch.update(update)
+    choices_path(d).parent.mkdir(parents=True, exist_ok=True)
+    dump_toml(choices_path(d), {"choices": dict(sorted(ch.items()))})
+    return ch
+
+
+def score_entries(d: Path) -> list[dict]:
+    choices = read_choices(d)
+    out = []
+    for s in find_scores(d):
+        takes = []
+        for n, p in take_dirs(s.dir):
+            doc = read_toml(p / "arranged.toml")
+            takes.append({"n": n, "generator": doc.get("generator", ""), "metrics": doc.get("metrics", {}),
+                          "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file()})
+        out.append({"id": s.id, "game": s.game, "name": s.name, "key": s.key, "seconds": round(s.seconds, 1),
+                    "original": (s.dir / "original.wav").is_file(), "takes": takes, "choice": choices.get(s.id, 0)})
+    return out
+
+
+def apply_set(d: Path, sets: list[str]) -> None:
+    entries = {e["id"]: e for e in score_entries(d)}
+    update = {}
+    for s in sets:
+        sid, eq, n = s.rpartition("=")
+        if not eq or not n.isdigit():
+            die(f"--set {s}: expected GAME/KEY=N")
+        if sid not in entries:
+            die(f"--set {s}: no score {sid} under {d / 'arrange'}")
+        n_ = int(n)
+        if n_ and n_ not in {t["n"] for t in entries[sid]["takes"]}:
+            die(f"--set {s}: {sid} has no take {n_}")
+        update[sid] = n_
+    write_choices(d, update)
+    for sid, n_ in update.items():
+        print(f"{sid} = {n_}" + (" (the original)" if n_ == 0 else ""))
+
+
+def print_list(d: Path) -> None:
+    entries = score_entries(d)
+    if not entries:
+        print(f"no scores under {d / 'arrange'}")
+    for e in entries:
+        ch = e["choice"]
+        print(f"{e['id']}  ({e['name']}, {e['seconds']} s)  takes: {' '.join(str(t['n']) for t in e['takes']) or '-'}  "
+              f"choice: {ch}{' (original)' if ch == 0 else ''}")
+        for t in e["takes"]:
+            print(f"  take {t['n']}: {t['generator']}")
+            print(f"    {metrics_line(t['metrics'])}")
+
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arranged takes</title>
+<style>
+:root{--bg:#fafafa;--fg:#1d1d1f;--muted:#6e6e73;--line:#d9d9de;--card:#fff;--accent:#0a64d6}
+@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#f2f2f4;--muted:#9a9aa0;--line:#33333a;--card:#202024;--accent:#5aa2ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif}
+main{max-width:980px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:8px 0 4px}h2{font-size:18px;margin:28px 0 8px}
+p.note{color:var(--muted);margin:0 0 16px}
+.score{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
+.score h3{font-size:15px;margin:0 0 8px;font-weight:600}.score h3 span{color:var(--muted);font-weight:400}
+.row{display:grid;grid-template-columns:120px 1fr;gap:4px 12px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.row label{font-weight:500;cursor:pointer}
+.audios{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.audios div{display:flex;align-items:center;gap:6px}.audios small,.m{color:var(--muted);font-size:12px}
+audio{height:32px;max-width:100%}
+.m{grid-column:2}
+.bar{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 0;display:flex;gap:12px;align-items:center}
+button{font:inherit;padding:7px 18px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+#status{color:var(--muted)}
+@media (max-width:600px){.row{grid-template-columns:1fr}.m{grid-column:1}}
+</style></head><body><main>
+<h1>Arranged takes</h1>
+<p class="note">Listen to each score's original and its takes, choose one, and save. The next
+<code>tools/make-personal-pack</code> run packs the chosen takes.</p>
+<div id="list"></div>
+<div class="bar"><button id="save">Save</button><span id="status"></span></div>
+</main>
+<script>
+const DATA = __DATA__;
+const list = document.getElementById('list');
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const url = (e, f) => '/audio/' + encodeURIComponent(e.game) + '/' + encodeURIComponent(e.key) + '/' + f;
+const player = (src, label) => '<div>' + (label ? '<small>' + label + '</small>' : '') +
+  '<audio controls preload="none" src="' + esc(src) + '"></audio></div>';
+const fmt = m => m && Object.keys(m).length ? 'consonance bass ' + (m.bass_consonance ?? 0).toFixed(2) + ', pad ' +
+  (m.pad_consonance ?? 0).toFixed(2) + ' · in key bass ' + (m.bass_in_key ?? 0).toFixed(2) + ', pad ' +
+  (m.pad_in_key ?? 0).toFixed(2) + ' · notes/s bass ' + m.bass_nps + ', pad ' + m.pad_nps + ', drums ' + m.drums_nps : '';
+let game = null, html = '';
+for (const e of DATA) {
+  if (e.game !== game) { game = e.game; html += '<h2>' + esc(e.name) + ' <small class="m">' + esc(e.game) + '</small></h2>'; }
+  const name = 'c-' + e.id;
+  html += '<div class="score"><h3>' + esc(e.key) + ' <span>' + e.seconds + ' s</span></h3>';
+  html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="0"' + (e.choice === 0 ? ' checked' : '') +
+    '> original</label><div class="audios">' + (e.original ? player(url(e, 'original.wav')) : '<small>no render</small>') + '</div></div>';
+  for (const t of e.takes) {
+    html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="' + t.n + '"' + (e.choice === t.n ? ' checked' : '') +
+      '> take ' + t.n + '</label><div class="audios">' +
+      (t.fm1 ? player(url(e, 'take-' + t.n + '/fm1.wav'), 'FM-1') : '<small>no render</small>') +
+      (t.full ? player(url(e, 'take-' + t.n + '/full.wav'), 'full arrangement') : '') +
+      '</div><div class="m" title="' + esc(t.generator) + '">' + esc(fmt(t.metrics)) + '</div></div>';
+  }
+  if (!e.takes.length) html += '<p class="m">No takes yet: tools/arrange-music generate</p>';
+  html += '</div>';
+}
+list.innerHTML = html || '<p>No scores.</p>';
+document.addEventListener('play', ev => { for (const a of document.querySelectorAll('audio')) if (a !== ev.target) a.pause(); }, true);
+document.getElementById('save').onclick = async () => {
+  const choices = {};
+  for (const e of DATA) { const r = document.querySelector('input[name="' + CSS.escape('c-' + e.id) + '"]:checked'); if (r) choices[e.id] = +r.value; }
+  const st = document.getElementById('status');
+  try {
+    const res = await fetch('/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({choices})});
+    const j = await res.json();
+    st.textContent = res.ok ? 'Saved to ' + j.path : 'Not saved: ' + j.error;
+  } catch (err) { st.textContent = 'Not saved: ' + err; }
+};
+</script></body></html>
+"""
+
+
+def make_handler(d: Path) -> type:
+    arrange_dir = (d / "arrange").resolve()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _json(self, code: int, obj: dict) -> None:
+            self._send(code, json.dumps(obj).encode(), "application/json")
+
+        def _host_ok(self) -> bool:
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            return host in ("127.0.0.1", "localhost")
+
+        def do_HEAD(self) -> None:
+            self.do_GET()
+
+        def do_GET(self) -> None:
+            if not self._host_ok():
+                return self._send(403, b"forbidden", "text/plain")
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/":
+                data = json.dumps(score_entries(d)).replace("<", "\\u003c")
+                return self._send(200, PAGE.replace("__DATA__", data).encode(), "text/html; charset=utf-8")
+            if path.startswith("/audio/"):
+                rel = urllib.parse.unquote(path[len("/audio/"):])
+                f = (arrange_dir / rel).resolve()
+                if f.suffix != ".wav" or not f.is_relative_to(arrange_dir) or not f.is_file():
+                    return self._send(404, b"not found", "text/plain")
+                return self._file(f)
+            self._send(404, b"not found", "text/plain")
+
+        def _file(self, f: Path) -> None:
+            size = f.stat().st_size
+            rng = self.headers.get("Range")
+            start, end = 0, size - 1
+            code = 200
+            if rng and rng.startswith("bytes="):
+                a, _, b = rng[6:].split(",")[0].partition("-")
+                try:
+                    if a:
+                        start = int(a)
+                        end = min(int(b), size - 1) if b else size - 1
+                    else:
+                        start = max(size - int(b), 0)
+                except ValueError:
+                    start, end = 0, size - 1
+                if start > end or start >= size:
+                    return self._send(416, b"", "text/plain", {"Content-Range": f"bytes */{size}"})
+                code = 206
+            with f.open("rb") as fh:
+                fh.seek(start)
+                body = fh.read(end - start + 1)
+            extra = {"Accept-Ranges": "bytes"}
+            if code == 206:
+                extra["Content-Range"] = f"bytes {start}-{end}/{size}"
+            self._send(code, body, "audio/wav", extra)
+
+        def do_POST(self) -> None:
+            if not self._host_ok() or urllib.parse.urlparse(self.path).path != "/save":
+                return self._json(404, {"error": "not found"})
+            if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+                return self._json(415, {"error": "expected JSON"})
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 1 << 20:
+                return self._json(413, {"error": "too large"})
+            try:
+                req = json.loads(self.rfile.read(n))
+                choices = req["choices"]
+                assert isinstance(choices, dict)
+            except (ValueError, KeyError, AssertionError):
+                return self._json(400, {"error": "bad request"})
+            entries = {e["id"]: e for e in score_entries(d)}
+            update = {}
+            for sid, v in choices.items():
+                if sid not in entries or not isinstance(v, int) or (v and v not in {t["n"] for t in entries[sid]["takes"]}):
+                    return self._json(400, {"error": f"no take {v} for {sid}"})
+                update[sid] = v
+            write_choices(d, update)
+            self._json(200, {"path": str(choices_path(d)), "choices": update})
+
+    return Handler
+
+
+def serve(d: Path, port: int) -> http.server.ThreadingHTTPServer:
+    handler = make_handler(d)
+    try:
+        return http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    except OSError:
+        if port == 0:
+            raise
+        return http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+
+
+def cmd_pick(a: argparse.Namespace) -> int:
+    d = Path(a.dir)
+    if not (d / "arrange").is_dir():
+        die(f"no {d / 'arrange'}: build the pack first (tools/make-personal-pack)")
+    if a.set:
+        apply_set(d, a.set)
+    if a.list:
+        print_list(d)
+    if a.set or a.list:
+        return 0
+    srv = serve(d, a.port)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    print(f"{PROG}: listen and choose at {url} (Ctrl-C to stop); choices go to {choices_path(d)}", flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# selftest
+
+
+def selftest_score(path: Path, game: str, key: str) -> None:
+    """A small invented tune: an intro and a loop, a melody, a bass voice and a pad voice."""
+    clock = 3500000
+    beat = int(0.25 * clock)
+    intro_t, loop_t = 4 * beat, 32 * beat
+    melody = [60, 64, 67, 72, 71, 67, 64, 62]
+    notes = []
+    for i in range(36):
+        p = melody[i % len(melody)] + (5 if (i // 8) % 2 else 0)
+        notes.append({"voice": 2, "start_t": i * beat, "end_t": i * beat + beat - 20000, "period_t": period_of_midi(clock, p), "level": 116})
+        if i % 4 == 0:
+            notes.append({"voice": 0, "start_t": i * beat, "end_t": i * beat + 4 * beat - 1, "period_t": period_of_midi(clock, 36 + (5 if (i // 8) % 2 else 0)), "level": 90})
+        if i % 8 == 0:
+            notes.append({"voice": 1, "start_t": i * beat, "end_t": min(i * beat + 8 * beat, intro_t + loop_t), "period_t": period_of_midi(clock, 55), "level": 60})
+    notes.sort(key=lambda n: (n["start_t"], n["voice"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dump_toml(path, {"game": game, "name": "Test tune", "key": key, "clock_hz": clock, "intro_t": intro_t, "loop_t": loop_t,
+                     "voices": 3, "roles": ["bass", "pad", "lead"], "note": notes})
+
+
+def cmd_selftest(a: argparse.Namespace) -> int:
+    import mido
+    import urllib.request
+
+    fails = []
+
+    def check(cond: bool, what: str) -> None:
+        print(("ok    " if cond else "FAIL  ") + what, flush=True)
+        if not cond:
+            fails.append(what)
+
+    with tempfile.TemporaryDirectory(prefix="arrange-selftest-") as tmp:
+        d = Path(tmp)
+        keys = ["1234-0badc0de", "5678-12345678"]
+        for k in keys:
+            selftest_score(d / "arrange" / "test-game" / k / "score.toml", "test-game", k)
+        dump_toml(choices_path(d), {"choices": {"other-game/0000-00000000": 3}})
+        run = lambda *args: main([*args])  # noqa: E731
+        check(run("generate", str(d), "--model", "rules", "--takes", "2", "--jobs", "2") == 0, "generate --model rules --takes 2 --jobs 2")
+        renderer = Renderer(None)
+        for k in keys:
+            sdir = d / "arrange" / "test-game" / k
+            score = load_score(sdir / "score.toml")
+            check([n for n, _ in take_dirs(sdir)] == [1, 2], f"{k}: take-1 and take-2")
+            for n in (1, 2):
+                td = sdir / f"take-{n}"
+                doc = read_toml(td / "arranged.toml")
+                for f in ("game", "name", "key", "clock_hz", "intro_t", "loop_t"):
+                    check(doc.get(f) == score.header[f], f"{k} take {n}: {f} as the score's")
+                check(doc.get("take") == n and str(doc.get("generator", "")).startswith("rules"), f"{k} take {n}: take and generator")
+                check(doc.get("voices") == 3 and doc.get("roles") == TAKE_ROLES, f"{k} take {n}: voices and roles")
+                mt = doc.get("metrics", {})
+                check(all(x in mt for x in ("key", "bass_consonance", "pad_in_key", "drums_nps", "on_lead_onsets")), f"{k} take {n}: metrics")
+                notes = doc.get("note", [])
+                by = {v: sorted((x for x in notes if x["voice"] == v), key=lambda x: x["start_t"]) for v in range(4)}
+                check(all(by[v] for v in range(4)), f"{k} take {n}: notes on all 4 voices")
+                check(all(0 <= x["start_t"] < x["end_t"] <= score.total_t for x in notes), f"{k} take {n}: notes inside the timeline")
+                check(all(1 <= x["level"] <= 255 for x in notes), f"{k} take {n}: levels 1-255")
+                check(all((x["period_t"] == 0) == (x["voice"] == 3) for x in notes), f"{k} take {n}: drums have period_t 0, tonal notes not")
+                check(all(a_["end_t"] <= b_["start_t"] for v in range(4) for a_, b_ in zip(by[v], by[v][1:])), f"{k} take {n}: no overlaps on a voice")
+                dr = by[3]
+                check(all(a_["end_t"] + DRUM_GAP_T <= b_["start_t"] for a_, b_ in zip(dr, dr[1:])), f"{k} take {n}: a drum hit ends {DRUM_GAP_T} T before the next")
+                check(all(x["end_t"] - x["start_t"] <= score.tstate(DRUM_HIT_S) for x in dr), f"{k} take {n}: drum hits are short")
+                check(all(b_["start_t"] - a_["start_t"] >= score.tstate(DRUM_SPACING_S) - 1 for a_, b_ in zip(dr, dr[1:])), f"{k} take {n}: drum hits spaced")
+                lead = [(x.start_t, x.end_t, x.period_t) for x in score.notes if x.voice == 2]
+                check([(x["start_t"], x["end_t"], x["period_t"]) for x in by[0]] == lead, f"{k} take {n}: voice 0 is the lead voice")
+                for f in ("full.mid", "fm1.mid"):
+                    try:
+                        ok = len(mido.MidiFile(str(td / f)).tracks) >= 2
+                    except (OSError, ValueError, EOFError):
+                        ok = False
+                    check(ok, f"{k} take {n}: {f}")
+                if renderer.ok:
+                    check((td / "full.wav").stat().st_size > 1000 and (td / "fm1.wav").stat().st_size > 1000, f"{k} take {n}: renders")
+            if renderer.ok:
+                check((sdir / "original.wav").is_file(), f"{k}: original.wav")
+        if not renderer.ok:
+            print(f"skip  renders: {renderer.why_not()}")
+        first = (d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes()
+        check(run("generate", str(d), "--model", "rules", "--takes", "2", "--seed", "9") == 0, "generate again, another seed")
+        check((d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes() == first, "scores with takes are left alone")
+        check(run("generate", str(d), "--model", "rules", "--takes", "2", "--force", "--game", "test-game") == 0, "generate --force")
+        again = (d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes()
+        check(first == again, "the same seed gives the same take")
+        run("generate", str(d), "--model", "rules", "--takes", "2", "--force", "--seed", "7", "--game", "test-game")
+        other = (d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes()
+        check(first != other, "another seed gives another take")
+        check(run("pick", str(d), "--set", f"test-game/{keys[0]}=2", f"test-game/{keys[1]}=0") == 0, "pick --set with two choices")
+        ch = read_toml(choices_path(d)).get("choices", {})
+        check(ch == {"other-game/0000-00000000": 3, f"test-game/{keys[0]}": 2, f"test-game/{keys[1]}": 0}, "choices.toml: set, other games kept")
+        try:
+            main(["pick", str(d), "--set", f"test-game/{keys[0]}=9"])
+            check(False, "pick --set of a missing take fails")
+        except SystemExit as e:
+            check(e.code != 0, "pick --set of a missing take fails")
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["pick", str(d), "--list"])
+        out = buf.getvalue()
+        check(f"test-game/{keys[0]}" in out and "choice: 2" in out and "take 2: rules" in out, "pick --list")
+        srv = serve(d, 0)
+        port = srv.server_address[1]
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            base = f"http://127.0.0.1:{port}"
+            page = urllib.request.urlopen(base + "/").read().decode()
+            check("Arranged takes" in page and keys[0] in page, "page lists the scores")
+            if renderer.ok:
+                req = urllib.request.Request(f"{base}/audio/test-game/{keys[0]}/take-1/fm1.wav", headers={"Range": "bytes=0-99"})
+                r = urllib.request.urlopen(req)
+                check(r.status == 206 and len(r.read()) == 100, "audio served with ranges")
+            try:
+                urllib.request.urlopen(f"{base}/audio/test-game/{keys[0]}/score.toml")
+                check(False, "only .wav files are served")
+            except urllib.error.HTTPError as e:
+                check(e.code == 404, "only .wav files are served")
+            body = json.dumps({"choices": {f"test-game/{keys[1]}": 1}}).encode()
+            req = urllib.request.Request(base + "/save", data=body, headers={"Content-Type": "application/json"})
+            check(urllib.request.urlopen(req).status == 200, "page save")
+            ch = read_toml(choices_path(d)).get("choices", {})
+            check(ch.get(f"test-game/{keys[1]}") == 1 and ch.get(f"test-game/{keys[0]}") == 2 and ch.get("other-game/0000-00000000") == 3,
+                  "choices.toml after the page's save")
+        finally:
+            srv.shutdown()
+            srv.server_close()
+    print(f"selftest: {'FAILED, ' + str(len(fails)) + ' checks' if fails else 'all checks passed'}")
+    return 1 if fails else 0
+
+
+# ---------------------------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog=PROG, description="Arranged takes for a personal pack's scores.",
+                                 epilog="Details: the docstring at the top of tools/arrange-music.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("generate", help="generate takes for the scores without them")
+    g.add_argument("dir", help="the personal pack's folder (tools/make-personal-pack -o DIR)")
+    g.add_argument("--takes", type=int, default=4, help="takes per score (default 4)")
+    g.add_argument("--game", action="append", help="only this game's scores (repeatable)")
+    g.add_argument("--force", action="store_true", help="regenerate scores that have takes")
+    g.add_argument("--jobs", type=int, default=1, help="scores at once, in separate processes (default 1)")
+    g.add_argument("--model", default="amt", help=f"the generator: {', '.join(sorted(GENERATORS))} (default amt)")
+    g.add_argument("--soundfont", help="the .sf2 for renders (default: Homebrew fluid-synth's)")
+    g.add_argument("--seed", type=int, default=1, help="the seed the takes derive from (default 1)")
+    g.add_argument("--offline", action="store_true", help="fetch nothing: only the cached model")
+    p = sub.add_parser("pick", help="listen and choose a take per score")
+    p.add_argument("dir")
+    p.add_argument("--port", type=int, default=8765, help="the page's port on 127.0.0.1 (default 8765, else a free one)")
+    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original) without the page; several at once, or --set again")
+    p.add_argument("--list", action="store_true", help="print the scores, their takes and choices")
+    sub.add_parser("selftest", help="check generate and pick in a temporary folder")
+    a = ap.parse_args(argv)
+    return {"generate": cmd_generate, "pick": cmd_pick, "selftest": cmd_selftest}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

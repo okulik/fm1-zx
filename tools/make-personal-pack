@@ -3,14 +3,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Build the update packages with your own games (BUILDING.md, "Your own games"):
-#   tools/make-personal-pack <folder | games.toml> [-o DIR] [--try] [--offline] [--cache DIR]
+#   tools/make-personal-pack <folder | games.toml> [-o DIR] [--try] [--arrange] [--offline] [--cache DIR]
 # From a folder, DIR/personal-games.toml lists its games; a re-run keeps your edits to it. From a
 # games file (such as that one, after you deleted some entries), the file is used as written.
 # Writes DIR/fmzx.fwsc and DIR/fmzx-preview.fwsc (DIR is build/personal unless -o says otherwise),
 # prints a table of the games, and verifies both packages as tools/make-packages does.
 #   -o DIR       the output folder
 #   --try        then run the browser test bench on these packages (tools/web-demo --packages DIR)
-#   --offline, --cache DIR   as for tools/make-packages
+#   --arrange    then generate arranged takes for the recorded scores that have none
+#                (tools/arrange-music generate DIR; needs uv; the first run downloads its packages
+#                and a 1.4 GB model): choose with tools/arrange-music pick DIR, and the next run
+#                packs the chosen takes
+#   --offline, --cache DIR   as for tools/make-packages; --offline also keeps --arrange to the
+#                cached model and packages
 # Runs both device builds first (presets fm1 and fm1-preview, in Docker through tools/fm1-docker; a
 # no-op when they are up to date), so one command goes from a clean build/ to the packages.
 # FMZX_SKIP_DEVICE_BUILD=1 skips them (build/fm1 and build/fm1-preview must then exist).
@@ -18,7 +23,7 @@
 set -eu
 
 usage() {
-    sed -n '5,15s/^# \{0,1\}//p' "$0" >&2
+    sed -n '5,20s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 
@@ -28,6 +33,7 @@ p="$root/build/fm1-preview"
 out="$root/build/personal"
 input=
 try=0
+arrange=0
 offline=
 cache=
 while [ $# -gt 0 ]; do
@@ -38,6 +44,7 @@ while [ $# -gt 0 ]; do
         shift
         ;;
     --try) try=1 ;;
+    --arrange) arrange=1 ;;
     --offline) offline=--offline ;;
     --cache)
         [ $# -ge 2 ] || usage
@@ -62,6 +69,10 @@ die() {
     echo "tools/make-personal-pack: $*" >&2
     exit 1
 }
+
+if [ "$arrange" = 1 ]; then
+    command -v uv >/dev/null || die "--arrange needs uv (https://docs.astral.sh/uv/)"
+fi
 
 if [ "${FMZX_SKIP_DEVICE_BUILD:-0}" != 1 ]; then
     for preset in fm1 fm1-preview; do
@@ -94,6 +105,16 @@ set -- $offline
 FMZX_SKIP_DEVICE_BUILD=1 FMZX_PACKAGES_PACK="$out/games.bin" FMZX_PACKAGES_OUT="$out" \
     "$root/tools/make-packages" "$@"
 echo "$out/fmzx.fwsc: your package; docs/install.md says how to install it"
+
+if [ "$arrange" = 1 ]; then
+    if [ -n "$offline" ]; then
+        UV_OFFLINE=1 "$root/tools/arrange-music" generate "$out" --offline
+    else
+        "$root/tools/arrange-music" generate "$out"
+    fi
+    echo "choose a take per score: tools/arrange-music pick $out"
+    echo "the next tools/make-personal-pack run packs the chosen takes"
+fi
 
 if [ "$try" = 1 ]; then
     exec "$root/tools/web-demo" --packages "$out"

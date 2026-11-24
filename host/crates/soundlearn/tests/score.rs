@@ -7,13 +7,17 @@
 //! phase in the frame, stops within the delay when the tune changes (the beeper returns), and
 //! leaves a frame a table entry claims to the table; of several scores at one site, each tune
 //! plays its own; a tune that repeats a phrase forever is followed round the score's loop pass
-//! after pass, until it changes.
+//! after pass, until it changes. A score's drum events (voice 3) reach method B's drum voice at
+//! their T-states; the list's scores read back ([`decode_scores`]), are replaced
+//! ([`replace_scores`]) and named ([`score_key`]).
 
 mod fixtures;
 
 use fixtures::{Asm, Labels};
 use soundlearn::entry::{ear_edges, score_code, score_fingerprint, score_level};
-use soundlearn::{encode_list, encode_list_scores, encode_list_with, BuiltinRoles, LearnedEntry, Op, ScoreEvent, ScoreRecord};
+use soundlearn::{
+    decode_scores, encode_list, encode_list_scores, encode_list_with, replace_scores, score_key, BuiltinRoles, LearnedEntry, Op, ScoreEvent, ScoreRecord, SCORE_DRUM,
+};
 use zx_sys::{
     zx_edge, Machine, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_SCORES_MAX,
     SND_SCORE_BUCKETS_MAX, SND_SITE_TONAL, ZX_FRAME_TSTATES,
@@ -30,6 +34,11 @@ fn on(t: u32, voice: u8, period: u32, level: u8) -> ScoreEvent {
 
 fn off(t: u32, voice: u8) -> ScoreEvent {
     ScoreEvent { t, voice, on: None }
+}
+
+/// A drum hit (`level` 1-255).
+fn hit(t: u32, level: u8) -> ScoreEvent {
+    ScoreEvent { t, voice: SCORE_DRUM, on: Some((0, level)) }
 }
 
 /// A valid score with no loop: two voices, three buckets, four events.
@@ -66,8 +75,12 @@ fn list(scores: &[ScoreRecord]) -> Vec<u8> {
     encode_list_scores(&[], &[], scores)
 }
 
+/// Does the device's decoder take the list? [`decode_scores`] (which checks the list's structure
+/// and its scores, not its learned entries) agrees.
 fn decodes(l: &[u8]) -> bool {
-    SndEngines::with_learned(l).is_ok()
+    let ok = SndEngines::with_learned(l).is_ok();
+    assert_eq!(decode_scores(l).is_ok(), ok, "decode_scores against the decoder: {:?}", decode_scores(l).err());
+    ok
 }
 
 /// The list of `s` with bytes from `at` (in the record) replaced.
@@ -123,7 +136,7 @@ const FP1: [u8; 2] = [0x78, 0x00];
 
 /// A score's record parsed back as the format describes it (docs/pack-format.md): the
 /// fingerprints, and each section's events as (64-T unit from its start, voice, level 0-63, the
-/// pitch's period).
+/// pitch's period; a drum event's 0).
 #[allow(clippy::type_complexity)]
 fn parse(l: &[u8]) -> ([Vec<u8>; 2], [Vec<(u32, u8, u8, u32)>; 2]) {
     let r = &l[4..];
@@ -167,7 +180,7 @@ fn parse(l: &[u8]) -> ([Vec<u8>; 2], [Vec<(u32, u8, u8, u32)>; 2]) {
             u += dt;
             let b = r[at];
             at += 1;
-            let p = if b >> 2 != 0 {
+            let p = if b >> 2 != 0 && b & 3 != SCORE_DRUM {
                 at += 1;
                 pitch(usize::from(r[at - 1]))
             } else {
@@ -412,7 +425,6 @@ fn decoder_refuses_bad_scores() {
     refused(patched_of(&ScoreRecord { loop_t: 0, loop_fp: vec![], loop_events: vec![], ..lp.clone() }, 26, &[1, 0]), "a loop's event with no loop");
     refused(raw(HEAD, &[0x78, 0x00, 0x00, 0x04, 0x01]), "pitch index 1 of one");
     refused(raw(Head { voices: 2, ..HEAD }, &[0x78, 0x00, 0x00, 0x02]), "voice 2 of two");
-    refused(raw(Head { voices: 3, ..HEAD }, &[0x78, 0x00, 0x00, 0x03]), "voice 3");
     refused(raw(HEAD, &[0x78, 0x00, 0xC4, 0x08, 0x00]), "an event at the intro's end");
     refused(raw(HEAD, &[0x78, 0x00, 0xFF, 0xFF, 0xFF, 0x7F, 0x00]), "an event far past the intro's end");
     let lh = Head { loop_t: F32, buckets: (1, 1), events: (0, 1), ..HEAD };
@@ -425,6 +437,154 @@ fn decoder_refuses_bad_scores() {
     // one bad score refuses the list, its learned entries too
     let roles = BuiltinRoles { digest: 2, channels: 1, roles: [1, 0, 0] };
     refused(encode_list_scores(&[], &[roles], &[score(), ScoreRecord { voices: 0, ..score() }]), "a bad second score");
+}
+
+/// [`looped`] with drum hits and offs in both sections, one voice.
+fn drummed() -> ScoreRecord {
+    ScoreRecord {
+        voices: 1,
+        intro_events: vec![on(0, 0, 2716, 200), hit(0, 255), off(2000, SCORE_DRUM), hit(F32, 9)],
+        loop_events: vec![hit(0, 120), on(0, 0, 3000, 200), off(640, SCORE_DRUM), hit(2 * F32 + 50, 1)],
+        ..looped()
+    }
+}
+
+#[test]
+fn drums_in_scores() {
+    // a drum event is its byte alone (voice 3, the level's step), no pitch byte; drum periods are
+    // not in the pitch table
+    let l = list(&[drummed()]);
+    let r = &l[4..];
+    assert_eq!(r[3], 1, "voices counts the tonal voices");
+    assert_eq!((r[28], &r[32..38]), (2, &[0x9C, 0x0A, 0, 0xB8, 0x0B, 0][..]), "2716 and 3000 T");
+    let (_, ev) = parse(&l);
+    let l50 = |level: u8| (u32::from(level) + 2) / 4;
+    assert_eq!(ev[0], [(0, 0, 50, 2716), (0, 3, 63, 0), ((2000 + 32) / 64, 3, 0, 0), (F32 / 64, 3, l50(9) as u8, 0)]);
+    assert_eq!(ev[1], [(0, 3, l50(120) as u8, 0), (0, 0, 50, 3000), (10, 3, 0, 0), ((2 * F32 + 50 + 32) / 64, 3, 1, 0)]);
+    // the fingerprint: 40 and 52 two escapes, 30 an escape and +1: 10 nibbles
+    let fp_bytes = (3 + 3 + 3 + 1usize).div_ceil(2);
+    let events_at = 32 + 6 + fp_bytes;
+    assert_eq!(&r[events_at..events_at + 6], [0x00, 50 << 2, 0, 0x00, 0x03 | 63 << 2, 0x1F], "voice 0 on, pitch 0; the drum hit; dt 31");
+    // the decoder takes drum events in both sections whatever `voices` is; a drum hit's byte is
+    // followed by the next event's time
+    assert!(decodes(&l));
+    assert!(decodes(&raw(HEAD, &[0x78, 0x00, 0x00, 0x03])), "a drum off, one voice");
+    assert!(decodes(&raw(HEAD, &[0x78, 0x00, 0x00, 0xFF])), "a drum hit of step 63, one pitch, no pitch byte");
+    assert!(decodes(&raw(Head { events: (2, 0), ..HEAD }, &[0x78, 0x00, 0x00, 0xFF, 0xC3, 0x08, 0x07])), "a hit, then the drum off at unit 1091");
+    let lh = Head { loop_t: F32, buckets: (1, 1), events: (0, 1), ..HEAD };
+    assert!(decodes(&raw(lh, &[0x78, 0x80, 0x07, 0xC3, 0x08, 0x07])), "a drum hit at unit 1091 of a one-bucket loop");
+    // the drum alone; a score with no tonal note on still has one pitch
+    let drum_only = ScoreRecord { intro_events: vec![hit(0, 100), off(64, SCORE_DRUM)], loop_events: vec![hit(0, 100)], ..drummed() };
+    let l = list(&[drum_only]);
+    assert_eq!(l[4 + 28], 1);
+    assert!(decodes(&l));
+}
+
+#[test]
+fn decoder_refuses_bad_drum_events() {
+    let refused = |l: Vec<u8>, what: &str| assert!(!decodes(&l), "{what}: {l:02X?}");
+    // the time: past its section's end, in the loop of a score with no loop
+    refused(raw(HEAD, &[0x78, 0x00, 0xC4, 0x08, 0x07]), "a drum hit at the intro's end");
+    refused(raw(HEAD, &[0x78, 0x00, 0xC4, 0x08, 0x03]), "the drum off at the intro's end");
+    let lh = Head { loop_t: F32, buckets: (1, 1), events: (0, 1), ..HEAD };
+    refused(raw(lh, &[0x78, 0x80, 0x07, 0xC4, 0x08, 0x07]), "a drum hit at the loop's end");
+    refused(raw(Head { events: (1, 1), ..HEAD }, &[0x78, 0x00, 0x00, 0x03, 0x00, 0x07]), "a drum hit in a loop that is not there");
+    let d = drummed();
+    let no_loop = ScoreRecord { loop_t: 0, loop_fp: vec![], loop_events: vec![], ..d.clone() };
+    refused(patched_of(&no_loop, 26, &[1, 0]), "a loop's drum event with no loop");
+    // the record: a drum event cut off at its byte (36 bytes: no padding), or its time
+    refused(raw(Head { events: (2, 0), ..HEAD }, &[0x78, 0x00, 0x00, 0xFF, 0x00]), "an event after a drum hit cut off at its byte");
+    refused(raw(Head { events: (2, 0), ..HEAD }, &[0x78, 0x00, 0x00, 0xFF, 0x80, 0x80, 0x80, 0x80, 0x00]), "a five-byte time after a drum hit");
+    // a tonal voice at or past `voices` is still refused
+    refused(raw(Head { voices: 2, ..HEAD }, &[0x78, 0x00, 0x00, 0x02]), "voice 2 of two");
+}
+
+#[test]
+fn scores_read_back_and_are_replaced() {
+    let e = LearnedEntry {
+        digest: 1,
+        len: 4,
+        wild: vec![],
+        reloc: vec![],
+        sites: vec![(0, SND_SITE_TONAL, 0)],
+        pass: 0,
+        pos: vec![0],
+        flips: false,
+        observed: false,
+        drum: 0,
+        stale: None,
+        level: vec![200],
+        instrument: [0; 3],
+        progs: vec![vec![Op::K(300)]],
+        timing: None,
+    };
+    let roles = BuiltinRoles { digest: 2, channels: 1, roles: [1, 0, 0] };
+    // the encoder's rounding: times to 64 T, levels to their step x 4, periods the pitch table's
+    let round = |s: &ScoreRecord| {
+        let ev = |es: &[ScoreEvent], len: u32| {
+            es.iter()
+                .map(|e| ScoreEvent {
+                    t: ((e.t + 32) / 64).min((len - 1) / 64) * 64,
+                    on: e.on.map(|(p, l)| (if e.voice == SCORE_DRUM { 0 } else { p }, ((u32::from(l) + 2) / 4).clamp(1, 63) as u8 * 4)),
+                    ..*e
+                })
+                .collect::<Vec<_>>()
+        };
+        ScoreRecord { intro_events: ev(&s.intro_events, s.intro_t), loop_events: ev(&s.loop_events, s.loop_t.max(1)), ..s.clone() }
+    };
+    let scores = [score(), looped(), drummed()];
+    let l = encode_list_scores(std::slice::from_ref(&e), &[roles], &scores);
+    assert!(decodes(&l));
+    let back = decode_scores(&l).expect("reads back");
+    assert_eq!(back, scores.iter().map(round).collect::<Vec<_>>());
+    assert_eq!(back[2].intro_events[1], hit(0, 252), "a drum hit: period 0, level its step x 4");
+    // written back as they read: the same bytes; read back again, the same scores
+    assert_eq!(replace_scores(&l, &back).as_ref(), Ok(&l));
+    assert_eq!(replace_scores(&l, &scores).as_ref(), Ok(&l), "the encoder's own rounding");
+    // replaced: the header, the learned entry and the kind-1 record as they were; the new scores
+    // read back
+    let new = [drummed(), score(), ScoreRecord { loop_events: vec![], ..drummed() }];
+    let r = replace_scores(&l, &new).expect("replaced");
+    let head = l.len() - (encode_list_scores(&[], &[], &scores).len() - 4);
+    assert_eq!(r[..head], l[..head], "the header and kinds 0 and 1 byte for byte");
+    assert_eq!(r, encode_list_scores(std::slice::from_ref(&e), &[roles], &new));
+    assert_eq!(decode_scores(&r), Ok(new.iter().map(round).collect::<Vec<_>>()));
+    assert!(decodes(&r));
+    // bytes after the last entry stay
+    let mut tail = l.clone();
+    tail.extend([1, 2, 3, 4]);
+    assert_eq!(&replace_scores(&tail, &new).unwrap()[r.len()..], [1, 2, 3, 4]);
+    // a list of learned entries alone: no scores, none to give
+    let plain = encode_list_with(std::slice::from_ref(&e), &[roles]);
+    assert_eq!(decode_scores(&plain), Ok(vec![]));
+    assert_eq!(replace_scores(&plain, &[]).as_ref(), Ok(&plain));
+    // refused: another count, a score the decoder would refuse, a record too big, a bad list
+    assert!(replace_scores(&l, &scores[..2]).is_err(), "two for three");
+    assert!(replace_scores(&plain, &[score()]).is_err(), "one for none");
+    assert!(replace_scores(&l, &[score(), ScoreRecord { voices: 0, ..score() }, score()]).is_err(), "no voice");
+    let late = ScoreRecord { intro_events: vec![on(0, 2, 100, 9)], ..score() };
+    assert!(replace_scores(&l, &[score(), late.clone(), score()]).is_err(), "voice 2 of two");
+    let many: Vec<ScoreEvent> = (0..40_000).map(|i| on(i % 100, 0, 1000 + i, 9)).collect();
+    let big = ScoreRecord { intro_events: many, ..score() };
+    assert!(replace_scores(&l, &[score(), big, score()]).unwrap_err().contains("bytes"), "a record over 65,532 bytes");
+    assert!(decode_scores(&list(&[late])).is_err());
+    assert!(decode_scores(&l[..l.len() - 4]).is_err(), "cut off");
+    assert!(decode_scores(&[1, 0]).is_err());
+}
+
+#[test]
+fn score_key_names_a_score() {
+    // CRC-32 of "123456789": CBF43926h
+    let s = ScoreRecord { site: 0x8951, intro_fp: b"12345".to_vec(), loop_fp: b"6789".to_vec(), ..looped() };
+    assert_eq!(score_key(&s), "8951-cbf43926");
+    assert_eq!(score_key(&ScoreRecord { site: 0x00AB, intro_fp: vec![], loop_fp: vec![], ..s.clone() }), "00AB-00000000");
+    // the same fingerprints split elsewhere: the same key; the events, roles and lengths do not
+    // change it; a bucket does
+    assert_eq!(score_key(&ScoreRecord { intro_fp: b"1234".to_vec(), loop_fp: b"56789".to_vec(), ..s.clone() }), "8951-cbf43926");
+    assert_eq!(score_key(&ScoreRecord { loop_events: vec![], roles: [3, 3, 3], intro_t: 1, ..s.clone() }), score_key(&s));
+    assert_ne!(score_key(&ScoreRecord { loop_fp: b"6788".to_vec(), ..s.clone() }), score_key(&s));
+    // a decoded score keeps its key
+    assert_eq!(score_key(&decode_scores(&list(&[looped()])).unwrap()[0]), score_key(&looped()));
 }
 
 #[test]
@@ -850,6 +1010,88 @@ fn score_releases_its_voices_where_its_fingerprint_ends() {
     assert_eq!(r.dec[end].events().last().map(|e| e.t), Some(t0), "released at T0's T-state in that frame");
 }
 
+/// The run's drum as each decided frame starts (`d.drum`) and as its events leave it, checked
+/// frame by frame against the events before: (frame, the drum at its start).
+fn drum_starts(r: &Run, engine: u8) -> Vec<(usize, u8)> {
+    let mut drum = 0;
+    let mut out = Vec::new();
+    for (k, d) in r.dec.iter().enumerate().filter(|(_, d)| d.confident != 0 && d.engine == engine) {
+        out.push((k, d.drum));
+        assert_eq!(d.drum, drum, "frame {k}: the drum at its start as the frame before left it");
+        for e in d.events().iter().filter(|e| usize::from(e.voice) == 3) {
+            drum = e.level;
+        }
+    }
+    out
+}
+
+#[test]
+fn score_plays_its_drum() {
+    let (notes, s, abs) = recorded();
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    // a hit 640 T after each note's start, off 3008 T later; the second note's held across
+    // frames; the last never off (released where the score ends); times on the 64-T grid
+    let starts: Vec<u64> = abs.iter().filter(|e| e.1 == 0 && e.2.is_some()).map(|e| e.0).collect();
+    let mut drums: Vec<Timed> = Vec::new();
+    for (i, &t) in starts.iter().enumerate() {
+        let level = [255, 100, 160, 40, 200, 7][i % 6];
+        drums.push((t + 640, SCORE_DRUM, Some((0, level))));
+        if i + 1 < starts.len() {
+            drums.push((t + 640 + if i == 1 { 2 * F + 1024 } else { 3008 }, SCORE_DRUM, None));
+        }
+    }
+    let mut all: Vec<Timed> = abs.iter().copied().chain(drums.iter().copied()).collect();
+    all.sort_by_key(|e| e.0);
+    let ds = ScoreRecord { intro_events: all.iter().map(|&(t, voice, on)| ScoreEvent { t: t as u32, voice, on }).collect(), ..s.clone() };
+    let list_d = list(std::slice::from_ref(&ds));
+    let list_p = list(std::slice::from_ref(&s));
+    for delay in [3000u16, 7700] {
+        let r = run(delay, &notes, FRAMES, &list_d, None);
+        let plain = run(delay, &notes, FRAMES, &list_p, None);
+        let (f0, t0) = first_edge(&r);
+        // the drum's events at their T-states with the hits' levels, the last released at the
+        // score's end; the voices as without the drum, the frames claimed the same
+        let mut expect = want(&all);
+        expect.push((s.intro_fp.len() as u64 * F, 3, 0, 0));
+        assert_eq!(played(&r, mine), expect, "delay {delay}");
+        let tonal: Vec<_> = played(&r, mine).into_iter().filter(|e| e.1 < 3).collect();
+        assert_eq!(tonal, played(&plain, mine), "delay {delay}: the voices unaffected");
+        assert_eq!(claimed(&r, mine), claimed(&plain, mine), "delay {delay}");
+        for (a, b) in r.dec.iter().zip(&plain.dec).filter(|(a, _)| a.confident != 0) {
+            assert_eq!(a.tone.map(|v| (v.period_q8, v.level)), b.tone.map(|v| (v.period_q8, v.level)), "delay {delay}");
+        }
+        // the drum held across frames: their starts carry it; a drum at a frame's start somewhere
+        let starts = drum_starts(&r, mine);
+        assert!(starts.iter().filter(|s| s.1 == score_level(100)).count() >= 2, "delay {delay}: {starts:?}");
+        // and nothing of it after the score: no frame after has a drum
+        let last = *claimed(&r, mine).last().unwrap();
+        assert!(r.dec[last + 1..].iter().all(|d| d.drum == 0 && d.events().iter().all(|e| e.voice < 3)), "delay {delay}");
+        assert_eq!(r.dec[f0].events().iter().find(|e| e.voice == 3).map(|e| e.t), Some(t0 + 640).filter(|&t| t < F32), "delay {delay}");
+    }
+}
+
+#[test]
+fn a_stopped_score_leaves_no_drum() {
+    let (notes, s, abs) = recorded();
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    // a hit at T0 never off: the drum sounds until the score stops
+    let mut events = vec![ScoreEvent { t: 0, voice: SCORE_DRUM, on: Some((0, 200)) }];
+    events.extend(abs.iter().map(|&(t, voice, on)| ScoreEvent { t: t as u32, voice, on }));
+    let ds = ScoreRecord { intro_events: events, ..s.clone() };
+    let mut changed = notes.clone();
+    for n in &mut changed[3..] {
+        n.n = 20;
+    }
+    let plain = run(3000, &notes, FRAMES, &encode_list(&[]), None);
+    let (f0, _) = first_edge(&plain);
+    let r = run(3000, &notes, FRAMES, &list(&[ds]), Some((f0 + 12, &changed)));
+    let c = claimed(&r, mine);
+    let last = *c.last().unwrap();
+    assert!(last < f0 + s.intro_fp.len(), "it stops: {c:?}");
+    assert!(c[1..].iter().all(|&k| r.dec[k].drum == score_level(200)), "the drum sounds in every frame of the score's after T0's");
+    assert!(r.dec[last + 1..].iter().all(|d| d.drum == 0 && d.confident == 0), "none after it stops");
+}
+
 // ---- several scores at one site ----------------------------------------------
 
 /// The word naming the tune the selector program plays.
@@ -1014,17 +1256,17 @@ fn record_loop(r: &Run, intro: &[Note], phrase: &[Note], m: &Machine, labels: &L
 
 /// The events of `s` as the player gives them, to T `until` from T0: the intro's, then each
 /// pass's from its start, the voices sounding at a pass's start that its first events do not
-/// restate released there.
+/// restate released there, and the drum if it sounds.
 fn score_timeline(s: &ScoreRecord, until: u64) -> Vec<(u64, u8, u32, u8)> {
     let mut abs: Vec<Timed> = s.intro_events.iter().map(|e| (u64::from(e.t), e.voice, e.on)).collect();
-    let mut sounding = [false; 3];
+    let mut sounding = [false; 4];
     for e in &s.intro_events {
         sounding[usize::from(e.voice)] = e.on.is_some();
     }
-    let restated: Vec<u8> = s.loop_events.iter().filter(|e| e.t == 0 && e.on.is_some()).map(|e| e.voice).collect();
+    let restated: Vec<u8> = s.loop_events.iter().filter(|e| e.t == 0 && e.on.is_some() && e.voice != SCORE_DRUM).map(|e| e.voice).collect();
     let mut start = u64::from(s.intro_t);
     while start < until {
-        for v in 0..3u8 {
+        for v in 0..4u8 {
             if sounding[usize::from(v)] && !restated.contains(&v) {
                 abs.push((start, v, None));
                 sounding[usize::from(v)] = false;
@@ -1076,6 +1318,46 @@ fn score_follows_its_loop_round_and_round() {
             assert!(releases >= 4, "intro {}, delay {delay}: {releases} releases of voice 1", intro.len());
             assert!((f0 + 1..decided).all(|k| r.fm[k]), "intro {}, delay {delay}: FM throughout", intro.len());
         }
+    }
+}
+
+#[test]
+fn a_looping_score_plays_its_drum() {
+    let (intro, phrase) = (tune(&INTRO), tune(&PHRASE));
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    let (code, labels) = program_with(3000, None, true);
+    let rec = run_on(loop_machine(3000, &intro, &phrase), REC_FRAMES, &encode_list(&[]), None);
+    let (s, _) = record_loop(&rec, &intro, &phrase, &fixtures::bare(&code), &labels);
+    // the intro: a hit never off (released at the first pass's start); each pass: a hit at its
+    // start (after the release: it strikes anew), off, a hit in the middle and off, and a last hit
+    // never off (released at the next pass's start); times on the 64-T grid
+    let mut ds = s.clone();
+    ds.intro_events.push(hit(F32 / 2, 90));
+    ds.intro_events.sort_by_key(|e| e.t);
+    let lt = s.loop_t;
+    let g = |t: u32| t / 64 * 64;
+    ds.loop_events.extend([hit(0, 255), off(1984, SCORE_DRUM), hit(g(lt / 2), 60), off(g(lt / 2) + 4992, SCORE_DRUM), hit(g(lt - 4000), 140)]);
+    ds.loop_events.sort_by_key(|e| e.t);
+    let l = list(std::slice::from_ref(&ds));
+    assert!(decodes(&l));
+    let plain_l = list(std::slice::from_ref(&s));
+    for delay in [3000u16, 7700] {
+        let r = run_on(loop_machine(delay, &intro, &phrase), LOOP_FRAMES, &l, None);
+        let plain = run_on(loop_machine(delay, &intro, &phrase), LOOP_FRAMES, &plain_l, None);
+        let (f0, t0) = first_edge(&r);
+        let horizon = (r.dec.len() - f0) as u64 * F - u64::from(t0);
+        assert!(horizon >= u64::from(s.intro_t) + 4 * u64::from(s.loop_t));
+        let expect = score_timeline(&ds, horizon);
+        assert_eq!(played(&r, mine), expect, "delay {delay}");
+        // the drum released at every pass's start, before its hit there
+        for k in 0..4u64 {
+            let at = u64::from(s.intro_t) + k * u64::from(lt);
+            let drum: Vec<_> = expect.iter().filter(|e| e.0 == at && e.1 == 3).map(|e| e.3).collect();
+            assert_eq!(drum, [0, score_level(255)], "delay {delay}: pass {k}");
+        }
+        let tonal: Vec<_> = played(&r, mine).into_iter().filter(|e| e.1 < 3).collect();
+        assert_eq!(tonal, played(&plain, mine), "delay {delay}: the voices unaffected");
+        drum_starts(&r, mine);
     }
 }
 
@@ -1159,7 +1441,8 @@ fn corrupted_scores_are_safe() {
     // and with a loop: its last two buckets, a note on at its start
     let loop_events = vec![on(0, 0, 3000, 200), off(F32 + 64, 0)];
     let lp = ScoreRecord { loop_t: 2 * F32 + 640, loop_fp: s.intro_fp[4..6].to_vec(), loop_events, ..short.clone() };
-    for good in [list(&[short]), list(&[lp])] {
+    // and drum events in both sections
+    for good in [list(&[short]), list(&[lp]), list(&[drummed()])] {
         corrupt(&notes, &good);
     }
 }
@@ -1187,6 +1470,10 @@ fn corrupt(notes: &[Note], good: &[u8]) {
         match SndEngines::with_learned(&l) {
             Ok(mut b) => {
                 taken += 1;
+                // read back, written again and read back: the same scores
+                let back = decode_scores(&l).expect("decode_scores takes what the decoder takes");
+                let again = replace_scores(&l, &back).expect("the scores written again");
+                assert_eq!(decode_scores(&again).as_ref(), Ok(&back));
                 if taken % 16 == 0 {
                     let mut m = machine(3000, notes);
                     for _ in 0..12 {
@@ -1195,7 +1482,10 @@ fn corrupt(notes: &[Note], good: &[u8]) {
                     }
                 }
             }
-            Err(_) => refused += 1,
+            Err(_) => {
+                assert!(decode_scores(&l).is_err(), "decode_scores refuses what the decoder refuses: {l:02X?}");
+                refused += 1;
+            }
         }
     }
     assert!(taken > 0 && refused > 0, "{taken} taken, {refused} refused");

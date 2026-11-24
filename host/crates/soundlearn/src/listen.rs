@@ -211,8 +211,9 @@ pub fn key_runs(learner: Option<RunKind>) -> Vec<RunKind> {
     (0..KEYS.len()).map(RunKind::Key).filter(|k| k.press() != theirs).collect()
 }
 
-/// The candidate runs in order of preference: the generic run, nothing pressed, then each start key once.
-fn candidates() -> Vec<RunKind> {
+/// The candidate runs of [`choose_run`] in order of preference: the generic run, nothing pressed,
+/// then each start key once.
+pub fn candidates() -> Vec<RunKind> {
     let mut v = vec![RunKind::Generic, RunKind::Nothing];
     v.extend((0..START.len()).map(RunKind::Once));
     v

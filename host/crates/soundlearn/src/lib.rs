@@ -28,6 +28,6 @@ pub mod spectrum;
 pub mod transcribe;
 pub mod z80;
 
-pub use entry::{encode_list, encode_list_scores, encode_list_with, BuiltinRoles, LearnedEntry, ScoreEvent, ScoreRecord};
+pub use entry::{decode_scores, encode_list, encode_list_scores, encode_list_with, replace_scores, score_key, BuiltinRoles, LearnedEntry, ScoreEvent, ScoreRecord, SCORE_DRUM};
 pub use learn::{learn, learn_with, GameSound, LearnOptions, LEARNER_VERSION};
 pub use prog::{encode_prog, eval_prog, Op};

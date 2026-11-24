@@ -33,8 +33,10 @@
 //!
 //! A routine a score may be recorded for ends its block with its scores
 //! (`recorded score: 169.5 s from frame 506 (intro 4.2 s, loop 41.6 s), 3 voices, 1074 notes,
-//! 4.1 KB`: its stretch's length, its trigger's frame, its intro and loop when its music loops,
-//! its voices, the notes it stores and its bytes; `, shortened ...` when it was cut) and its
+//! 4.1 KB (score 8951-1a2b3c4d)`: its stretch's length, its trigger's frame, its intro and loop
+//! when its music loops, its voices, the notes it stores and its bytes, `, shortened ...` when it
+//! was cut, and its key ([`score_key`](crate::entry::score_key)), which names its folder of
+//! arranged music in the personal pack) and its
 //! stretches left out (`no score: <reason>`), in the order of the runs and then of the frames,
 //! each from a run not the learner's naming it (`recorded score (key 3 once): ...`), the same
 //! reasons once (`... (3 stretches)`); or, with none, `no score: <reason>`. An `OUT` heard in
@@ -181,12 +183,13 @@ fn score_line(score: &ScoreOutcome) -> String {
             let shortened = s.shortened.as_ref().map_or(String::new(), |w| format!(", shortened {w}"));
             let looped = s.looped.map_or(String::new(), |(intro, pass)| format!(" (intro {intro:.1} s, loop {pass:.1} s)"));
             format!(
-                "    recorded score{run}: {:.1} s from frame {}{looped}, {}, {}, {:.1} KB{shortened}\n",
+                "    recorded score{run}: {:.1} s from frame {}{looped}, {}, {}, {:.1} KB{shortened} (score {})\n",
                 s.seconds,
                 s.frame,
                 count(usize::from(s.voices), "voice"),
                 count(s.notes, "note"),
-                s.bytes as f64 / 1024.0
+                s.bytes as f64 / 1024.0,
+                s.key
             )
         }
         Err(why) => format!("    no score{run}: {why}\n"),

@@ -579,6 +579,7 @@ typedef struct {          /* the recorded score playing, or its candidates (lear
 	uint8_t sec;          /* the section playing: 0 the intro, 1 the loop */
 	uint8_t live;         /* bit k: score k followed (a candidate, or the score chosen); 0: stopped */
 	uint8_t index;        /* 1 + its index in snd_b.score */
+	uint8_t drum;         /* its drum, as decided so far: the hit's strength, 0 off */
 	snd_b_follow fl[SND_SCORES_MAX];   /* per score followed */
 	snd_voice v[SND_TONAL];   /* its voices, as decided so far */
 } snd_b_score;

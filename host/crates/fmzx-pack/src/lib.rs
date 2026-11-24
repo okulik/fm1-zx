@@ -7,6 +7,7 @@
 //! GPL-3.0-or-later. The tool as a whole is therefore distributed under GPL-3.0-only. The
 //! firmware image links none of it.
 
+pub mod arrange;
 pub mod fwsc;
 pub mod inputs;
 pub mod keymaps;

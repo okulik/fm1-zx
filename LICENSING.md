@@ -37,6 +37,7 @@ How a part is combined decides what it means for the whole:
 | fm1-emu by Joakim Eriksson, the FM-1 emulator the firmware tests run in (rev `93cb7ee`) | a Cargo git dependency of `emu-gate` and of `fmzx-pack`'s tests | MIT | host tool (tests) |
 | Rust crates from crates.io (`host/Cargo.lock`) | Cargo dependencies | their own (MIT, Apache-2.0 and similar) | host tool |
 | Patrik Rak's z80test 1.2a | not in the repository: fetched into `build/test-data/` (`tools/fetch-test-data`) | MIT | host tool (test data) |
+| The optional arranging tool's Python packages and music model (`tools/arrange-music`, below) | not in the repository: installed by uv into its cache, and the model downloaded into the Hugging Face cache, on first use | their own (below) | host tool; nothing of them is in the image or the package |
 | The JieLi pi32v2 toolchain, Ubuntu, Rust in the build image | not in the repository: `tools/docker/Dockerfile` | their own | build tools; nothing of them is in the image except the compiler's output |
 
 ### The image
@@ -65,6 +66,28 @@ only the SDK files and `third_party/games/oneway/` (its `Wow.tap`, `LICENSE.rele
 no `NOTICE` file (checked at <https://github.com/Serdjuk/A-World-of-One-way> commit
 `aecdf334f8c97eac2cd54052b73b0da06a38411e`: the only licence files are `LICENSE` and the beeper
 engine's `COPYING`), so Apache-2.0 section 4(d) has nothing to carry over.
+
+## The arranging tool
+
+`tools/arrange-music` (GPL-3.0-or-later, like the rest of `tools/`) writes arranged takes for a
+personal pack's recorded scores (BUILDING.md, "Arranged music"). It is optional, and what it
+fetches stays on the computer that runs it: none of it is in the repository, the firmware image or
+the packages. Its pieces, at the versions the
+script pins, with their licences as their sources declare them:
+
+| Piece | How it is fetched | Licence |
+| --- | --- | --- |
+| `anticipation`, the Anticipatory Music Transformer's code by John Thickstun (commit `af37397922665a0fb8d474d7988b0f3755a38d45` of <https://github.com/jthickstun/anticipation>) | by uv, from git | Apache-2.0 (its `LICENSE.txt`) |
+| The model `stanford-crfm/music-medium-800k` (about 1.4 GB; trained on the Lakh MIDI dataset, as its model card says) | by the tool, from the Hugging Face Hub, into the Hugging Face cache | Apache-2.0 (its model card's licence) |
+| PyTorch (`torch` 2.15.0) | by uv, from PyPI | its package metadata: `Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND ISC AND MIT AND Zlib` |
+| Hugging Face Transformers (`transformers` 5.24.0), with `huggingface_hub`, `safetensors` and `tokenizers` | by uv, from PyPI | Apache-2.0 |
+| `mido` 1.3.3 | by uv, from PyPI | MIT |
+| NumPy (`numpy` 2.5.5) | by uv, from PyPI | its package metadata: `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0` |
+| `tqdm` 4.70.1 | by uv, from PyPI | MPL-2.0 AND MIT |
+| The other packages these depend on, and the Python uv may install | by uv | their own |
+
+FluidSynth, ffmpeg and the soundfont the renders use are programs and data the owner installs, if
+at all, under their own licences; the tool only runs them.
 
 ## The built-in games
 

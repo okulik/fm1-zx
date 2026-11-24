@@ -78,7 +78,9 @@
 //!    beeper follows plays. A score whose loop fails is recorded with none instead (the intro the
 //!    whole stretch) and verified again. One with no loop that stops early is shortened to the
 //!    frames it held (and verified again, once) if that leaves [`SCORE_FRAMES`] frames; otherwise
-//!    it is left out, with the reason.
+//!    it is left out, with the reason. [`verify`] checks a score of a finished list the same way
+//!    in one run (the personal pack's arranged takes, which keep a score's trigger and
+//!    fingerprints and replace its events).
 
 use crate::entry::{ear_edges, encode_list_scores, score_code, score_fingerprint, BuiltinRoles, LearnedEntry, ScoreEvent, ScoreRecord};
 use crate::listen::{Inputs, LISTEN_FRAMES};
@@ -381,6 +383,8 @@ pub struct ScoreSummary {
     pub bytes: usize,
     /// Shortened to the frames method B followed it in (or to fit the game's bytes).
     pub shortened: Option<String>,
+    /// Its key ([`score_key`](crate::entry::score_key)).
+    pub key: String,
 }
 
 /// A candidate: its block (the learner's index) and its `OUT`.
@@ -564,8 +568,8 @@ fn cut(r: &ScoreRecord, buckets: usize) -> (ScoreRecord, usize) {
     (ScoreRecord { intro_t: limit as u32, intro_fp, intro_events: events, ..r.clone() }, notes)
 }
 
-/// A record's bytes in the list.
-fn bytes(r: &ScoreRecord) -> usize {
+/// A record's bytes in the list (what counts against [`SCORES_BYTES_MAX`]).
+pub fn record_bytes(r: &ScoreRecord) -> usize {
     encode_list_scores(&[], &[], std::slice::from_ref(r)).len() - 4
 }
 
@@ -637,6 +641,46 @@ fn check(tap: &Tap, dec: &[(bool, u8)], table: usize, index: usize, st: &Stretch
         )));
     }
     Ok(())
+}
+
+/// Verifies by replay that score `index` of the entry list `list` plays in the run `inputs` of
+/// the game `load` gives, as [`record`] verifies a score it keeps (step 8 of the module docs):
+/// the game is run under `inputs` through method B with `list` (with the built-in entries if
+/// `builtins`), the score's stretch found in the run (a trigger at its `OUT` with its code, from
+/// which the speaker edges give its fingerprints; with no loop, as long as its intro), and the
+/// score must arm at its trigger, follow it over the whole stretch and get at least
+/// [`CLAIM_SHARE`] of the frames it sounds in. Of several such stretches, one doing so is
+/// enough. For a score whose events were replaced (its trigger and fingerprints kept): method B
+/// follows a score by its fingerprints, so this checks that the device takes the new list and
+/// plays the score where it played before. Err: why not, or that the run has no such stretch.
+pub fn verify(load: &dyn Fn() -> Machine, inputs: &Inputs, list: &[u8], index: usize, builtins: bool) -> Result<(), String> {
+    let recs = crate::entry::decode_scores(list)?;
+    let rec = recs.get(index).ok_or_else(|| format!("the list has no score {}", index + 1))?;
+    let mut tap = Tap::default();
+    let (dec, table) = replay_tap(load, inputs, list, builtins, Some(&mut tap)).ok_or("method B's decoder refuses the list")?;
+    let (intro_t, loop_t) = (u64::from(rec.intro_t), u64::from(rec.loop_t));
+    let looped = loop_t > 0;
+    let mut first = None;
+    for &tr in tap.triggers.iter().filter(|t| t.site == rec.site && t.code == rec.code) {
+        let mut st = stretch(&tap, inputs, tr);
+        if !looped {
+            if st.buckets < rec.intro_fp.len() {
+                continue;
+            }
+            st.buckets = rec.intro_fp.len();
+        }
+        let frames = &tap.frames[st.span()];
+        if score_fingerprint(frames, tr.t0, 0, intro_t) != rec.intro_fp || score_fingerprint(frames, tr.t0, intro_t, loop_t) != rec.loop_fp {
+            continue;
+        }
+        match check(&tap, &dec, table, index, &st, looped) {
+            Ok(()) => return Ok(()),
+            Err(Fail::Held(_, why) | Fail::Share(why)) => {
+                first.get_or_insert(why);
+            }
+        }
+    }
+    Err(first.unwrap_or_else(|| "its stretch is not in the run".into()))
 }
 
 /// A run the scores are recorded from: its name in the report (None: the learner's run), its
@@ -777,8 +821,9 @@ fn summary(st: &Stretch, rec: &ScoreRecord, notes: usize, shortened: Option<Stri
         looped: (rec.loop_t > 0).then(|| (f64::from(rec.intro_t) / crate::spectrum::CLOCK_HZ, f64::from(rec.loop_t) / crate::spectrum::CLOCK_HZ)),
         voices: rec.voices,
         notes,
-        bytes: bytes(rec),
+        bytes: record_bytes(rec),
         shortened,
+        key: crate::entry::score_key(rec),
     }
 }
 
@@ -972,7 +1017,7 @@ pub fn record(
             heard.push((site, got));
         }
     }
-    Recorded { scores: kept.into_iter().map(|k| k.rec).collect(), outcomes, heard }
+    Recorded { runs: kept.iter().map(|k| k.run).collect(), scores: kept.into_iter().map(|k| k.rec).collect(), outcomes, heard }
 }
 
 /// What [`record`] gives.
@@ -980,6 +1025,8 @@ pub fn record(
 pub struct Recorded {
     /// The records, in the list's order.
     pub scores: Vec<ScoreRecord>,
+    /// The run each record is from: 0 the learner's run, k the extra run `extra[k - 1]`.
+    pub runs: Vec<usize>,
     /// The candidates' outcomes.
     pub outcomes: Vec<Outcome>,
     /// The `OUT`s heard in the extra runs only, each with its outcomes.
@@ -1023,7 +1070,7 @@ fn whose(runs: &[Run], k: &Kept) -> String {
 fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mut rec: ScoreRecord, mut notes: usize) -> Result<Kept, String> {
     let mut shortened = None;
     let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
-    if used + bytes(&rec) > SCORES_BYTES_MAX {
+    if used + record_bytes(&rec) > SCORES_BYTES_MAX {
         if !kept.is_empty() || rec.loop_t > 0 {
             return Err(over_bytes());
         }
@@ -1031,7 +1078,7 @@ fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mu
         let (mut lo, mut hi) = (0usize, st.buckets);
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
-            if bytes(&cut(&rec, mid).0) <= SCORES_BYTES_MAX {
+            if record_bytes(&cut(&rec, mid).0) <= SCORES_BYTES_MAX {
                 lo = mid;
             } else {
                 hi = mid - 1;
@@ -1230,6 +1277,6 @@ mod tests {
         let (c, n) = cut(&r, 2);
         assert_eq!((c.intro_fp.as_slice(), n), (&[9u8, 8][..], 2));
         assert_eq!(timed(&c.intro_events), [(0, 0, Some((2000, 100))), (1000, 0, None), (1500, 0, Some((1000, 100)))]);
-        assert!(bytes(&c) < bytes(&r) && bytes(&c).is_multiple_of(4));
+        assert!(record_bytes(&c) < record_bytes(&r) && record_bytes(&c).is_multiple_of(4));
     }
 }

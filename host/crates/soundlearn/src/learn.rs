@@ -76,7 +76,7 @@ use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_SITES_MAX, SND_LE
 /// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
 /// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
 /// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
-pub const LEARNER_VERSION: u32 = 9;
+pub const LEARNER_VERSION: u32 = 10;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
@@ -103,6 +103,9 @@ pub struct GameSound {
     pub roles: Vec<BuiltinRoles>,
     /// The recorded scores (kind-2 records), after the roles in the pack's list.
     pub scores: Vec<ScoreRecord>,
+    /// The run each score was recorded from: None the learner's (the `inputs` it was given),
+    /// else the extra run ([`RunKind::Key`], whose inputs are [`run_inputs`]`(kind, 0)`).
+    pub score_runs: Vec<Option<RunKind>>,
     /// An override ([`LearnOptions::instruments`]) that names no routine of the game, or does not
     /// fit the routine: `[game.instruments] "C694": ...`. The personal pack is not built.
     pub override_error: Option<String>,
@@ -146,6 +149,7 @@ pub fn learn_with(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &L
                 details: format!("  learner error: {why}\n"),
                 roles: Vec::new(),
                 scores: Vec::new(),
+                score_runs: Vec::new(),
                 override_error: None,
             }
         }
@@ -268,9 +272,11 @@ fn learn_game(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &Learn
     let entries: Vec<LearnedEntry> = kept.iter().filter_map(|&k| done[k].entry.clone()).collect();
     let (cands, groups) = score_candidates(&done);
     let covered = |pc: u16| groups.iter().any(|(outs, spans)| outs.contains(&pc) || spans.iter().any(|&(a, len)| pc.wrapping_sub(a) < len));
-    let extra: Vec<(String, Inputs)> = key_runs(opts.run).into_iter().map(|k| (k.short(), run_inputs(k, 0))).collect();
+    let kinds = key_runs(opts.run);
+    let extra: Vec<(String, Inputs)> = kinds.iter().map(|&k| (k.short(), run_inputs(k, 0))).collect();
     let got = record(load, inputs, tap, &extra, &cands, &covered, &entries, &roles, builtins);
     let scores = got.scores;
+    let score_runs = got.runs.iter().map(|&r| r.checked_sub(1).and_then(|k| kinds.get(k).copied())).collect();
     for (k, o) in got.outcomes {
         done[k].routine.scores.push(o);
     }
@@ -296,7 +302,7 @@ fn learn_game(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &Learn
         .find_map(|j| report::reason(&j.routine));
     let details = done.iter().map(|j| report::block(&j.routine)).chain(heard_only).collect();
     let voices: Vec<u8> = scores.iter().map(|s| s.voices).collect();
-    GameSound { entries, line: report::line(&learned, &voices, refused.as_deref()), details, roles, scores, override_error }
+    GameSound { entries, line: report::line(&learned, &voices, refused.as_deref()), details, roles, scores, score_runs, override_error }
 }
 
 /// The routines a score may be recorded for (step 8 of the module docs), in the order of `done`:

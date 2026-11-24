@@ -87,7 +87,9 @@ What works:
   ([computer keyboard](docs/controls.md#computer-keyboard-browser-page));
 - your own 48K games: `tools/make-personal-pack` builds the packages from a folder of them,
   turbo and custom-loader tapes included (loaded through the tape signal on the host), and learns
-  each game's music ([your own games](BUILDING.md#your-own-games));
+  each game's music ([your own games](BUILDING.md#your-own-games)); an optional tool has a music
+  model write a bass, chords and drums around a recorded tune, as takes you choose by ear
+  ([arranged music](BUILDING.md#arranged-music));
 - the UBOOT gesture: OCT- held at power-on calls the boot loader's update-mode entry
   (`fmzx_enter_uboot`); behind M-VAVE's stock bootloader the computer then sees the boot loader on
   USB ([install and recovery](docs/install.md)).
@@ -116,6 +118,7 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
   your own games and their music, measured budgets
 - [Controls](docs/controls.md): the FM-1's controls in the picker, the menu and the games; key maps
 - [Game pack format](docs/pack-format.md)
+- [Music generation](docs/music-generation.md): experiments with the arranged music's generators
 - [Install and recovery](docs/install.md): the packages, trying them in the browser, installing,
   the update mode, back to the stock firmware
 - [First device test](docs/hardware-test.md)

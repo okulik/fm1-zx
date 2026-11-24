@@ -43,7 +43,9 @@
  * (two nibbles, low first), each next the change from the bucket before (-7..+7) or an escape.
  * Events: a varint (64-T units since the section's event before, or its start), a byte (bits 0-1
  * the voice, bits 2-7 0 a note off, else a note on of level (b >> 2) x 4 + 3) and a note on's
- * index in the record's pitch table (each pitch a full period in T, 3 bytes). Method B's player,
+ * index in the record's pitch table (each pitch a full period in T, 3 bytes). Voice 3 is the drum
+ * (`voices` counts the tonal voices alone): bits 2-7 0 the drum off, else a drum hit of strength
+ * (b >> 2) x 4 + 3, and no pitch byte; method B's drum events. Method B's player,
  * once a frame after the decision (snd_b.scores), with frame j just fed:
  *  - following: each score followed (the candidates, then the score chosen) has each of its whole
  *    buckets that ends in frame j compared with its fingerprint, on its own sections' grids (the
@@ -67,14 +69,15 @@
  *    the one its intro ends in when it has no loop, or up to the frame before it stopped): its
  *    events whose times fall in the frame (each at its T-state in the frame); at each pass's start
  *    the voices sounding that the loop's first events (at the pass's start) do not restate
- *    released, the loop's events then from its first; with no loop, in the frame its intro ends,
- *    the voices still sounding released where it ends. Unless the decision has the frame
- *    confident (a table entry claims it: the table wins, its events stand), the frame becomes the
- *    score's: confident, its voices at the frame's start and its events (the first SND_EVENTS),
- *    engine n + 1 + its index (n the table's entries), its stored roles, B's voices the score's and
- *    nothing of a table entry's carried or held.
+ *    released (and the drum, if it sounds: a hit there strikes anew), the loop's events then from
+ *    its first; with no loop, in the frame its intro ends, the voices and the drum still sounding
+ *    released where it ends. Unless the decision has the frame confident (a table entry claims
+ *    it: the table wins, its events stand), the frame becomes the score's: confident, its voices
+ *    and drum at the frame's start and its events (the first SND_EVENTS), engine n + 1 + its
+ *    index (n the table's entries), its stored roles, B's voices and drum the score's and nothing
+ *    of a table entry's carried or held.
  * A frame after a score stops is decided as without it (the beeper's, unless the table claims
- * it): B's voices are silenced there and the mixer leaves FM.
+ * it): B's voices and drum are silenced there and the mixer leaves FM.
  *
  * Built into flash, not SRAM, on the device (the reader runs only for frames a learned entry
  * claims; the player, a pass or two over a frame's edges per score followed, through
@@ -92,9 +95,11 @@
 #define OBSERVED 2u   /* snd_engine.observed */
 #define SCORE 32u     /* a kind-2 record's fixed part (a recorded score) */
 #define ESC 8u        /* a score's fingerprint: the nibble before a count */
+#define DRUMV 3u      /* a score's event: the drum's voice (SND_TONAL, method B's drum voice) */
 #define FRAME ((int32_t)ZX_FRAME_TSTATES)
 
 _Static_assert(SND_SCORES_MAX <= 8u, "a bit per score in snd_b_score.live");
+_Static_assert(DRUMV == SND_TONAL, "a score's drum events are method B's drum voice");
 
 static uint32_t rd16(const uint8_t *p)
 {
@@ -414,8 +419,8 @@ static int fp_ok(const uint8_t *fp, uint32_t bytes, uint32_t ib, uint32_t lb, ui
 }
 
 /* Are a section's n events at e + *at (within size) valid? Each time a varint, inside the
- * section (below len T), its voice below `voices`, a note on's pitch index below np; *at moved
- * past them. */
+ * section (below len T), its voice the drum (no pitch byte) or below `voices`, a note on's pitch
+ * index below np; *at moved past them. */
 static int events_ok(const uint8_t *e, uint32_t size, uint32_t *at, uint32_t n, uint32_t len, uint32_t voices, uint32_t np)
 {
 	const uint32_t units = (len + 63u) / 64u;   /* a time below len T: below this in 64-T units */
@@ -426,6 +431,7 @@ static int events_ok(const uint8_t *e, uint32_t size, uint32_t *at, uint32_t n, 
 		u += dt;   /* (dt < 2^28, u below 2^24 before it: no wrap) */
 		if (u >= units || *at >= size) return 0;
 		vb = e[(*at)++];
+		if ((vb & 3u) == DRUMV) continue;
 		if ((vb & 3u) >= voices) return 0;
 		if ((vb >> 2) && (*at >= size || e[(*at)++] >= np)) return 0;
 	}
@@ -659,7 +665,8 @@ static void section(snd_b_score *sc, uint32_t sec, uint32_t at)
 	if (sc->left) next_time(sc);
 }
 
-/* The voices a section's first events (n of them, from offset at) give a note on at its start. */
+/* The tonal voices a section's first events (n of them, from offset at) give a note on at its
+ * start. */
 static uint32_t restated(const uint8_t *r, uint32_t at, uint32_t n)
 {
 	uint32_t mask = 0, dt, vb;
@@ -667,7 +674,7 @@ static uint32_t restated(const uint8_t *r, uint32_t at, uint32_t n)
 	for (; n > 0; n--) {
 		if (!varint(r, rd16(r), &at, &dt) || dt) break;
 		vb = r[at++];
-		if (vb >> 2) {
+		if ((vb >> 2) && (vb & 3u) != DRUMV) {
 			mask |= 1u << (vb & 3u);
 			at++;
 		}
@@ -686,8 +693,8 @@ static uint32_t event(snd_frame *out, uint32_t i, uint32_t t, uint32_t voice, ui
 	return i + 1u;
 }
 
-/* The playing score's sounding voices but those of mask released at T-state t of out's frame
- * (into out from event i if mine); the events out has then. */
+/* The playing score's sounding voices but those of mask, and its drum if it sounds, released at
+ * T-state t of out's frame (into out from event i if mine); the events out has then. */
 static uint32_t release(snd_b_score *sc, snd_frame *out, uint32_t i, uint32_t t, uint32_t mask, uint32_t mine)
 {
 	uint32_t k;
@@ -698,6 +705,10 @@ static uint32_t release(snd_b_score *sc, snd_frame *out, uint32_t i, uint32_t t,
 		sc->v[k].period_q8 = 0;
 		sc->v[k].level = 0;
 	}
+	if (sc->drum) {
+		if (mine) i = event(out, i, t, DRUMV, 0, 0);
+		sc->drum = 0;
+	}
 	return i;
 }
 
@@ -707,7 +718,7 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 {
 	snd_b_score *sc = &b->sc;
 	const uint8_t *r = sc->rec;
-	const uint32_t loop = sec_len(r, 1) != 0, mine = !out->confident;
+	const uint32_t loop = sec_len(r, 1) != 0, mine = !out->confident, drum = sc->drum;
 	uint32_t i = 0, k;
 	int32_t t;
 
@@ -720,13 +731,17 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 		while (sc->left && (t = sc->start + (int32_t)(sc->u * 64u)) < FRAME) {
 			const uint32_t vb = r[sc->at++];
 			uint32_t p = 0, level = 0;
-			if (vb >> 2) {
-				p = rd24(r + SCORE + 3u * r[sc->at++]) << 8;
-				level = (vb >> 2) * 4u + 3u;
-			}
 			k = vb & 3u;
-			sc->v[k].period_q8 = p;
-			sc->v[k].level = (uint8_t)level;
+			if (vb >> 2) {
+				level = (vb >> 2) * 4u + 3u;
+				if (k != DRUMV) p = rd24(r + SCORE + 3u * r[sc->at++]) << 8;
+			}
+			if (k == DRUMV) {   /* the drum: a hit, or off */
+				sc->drum = (uint8_t)level;
+			} else {
+				sc->v[k].period_q8 = p;
+				sc->v[k].level = (uint8_t)level;
+			}
 			if (mine) i = event(out, i, (uint32_t)t, k, p, level);
 			if (--sc->left) next_time(sc);
 		}
@@ -744,7 +759,7 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 	sc->start -= FRAME;
 	if (!mine) return;   /* the table's */
 	out->n_ev = (uint8_t)i;
-	out->drum = 0;
+	out->drum = (uint8_t)drum;
 	out->style = SND_STYLE_ENGINE;
 	out->confident = 1;
 	out->engine = (uint8_t)(b->n + sc->index);
@@ -754,6 +769,7 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 		b->tone[k].period_q8 = sc->v[k].period_q8;
 		b->tone[k].level = sc->v[k].level;
 	}
+	b->drum = sc->drum;
 	b->engine = 0;
 	b->held = 0;
 }
@@ -785,6 +801,7 @@ static uint32_t choose(snd_b *b)
 		sc->v[k].period_q8 = 0;
 		sc->v[k].level = 0;
 	}
+	sc->drum = 0;
 	return 1;
 }
 

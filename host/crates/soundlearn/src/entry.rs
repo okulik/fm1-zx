@@ -22,7 +22,7 @@
 //! a kind-1 record (roles for a built-in entry):
 //!   u16 size (16), u8 kind (1), u8 channels (1-3), u64 digest (the built-in entry's), u8 role[3], u8 0
 //! a kind-2 record (a recorded score: an intro and optionally a loop, times from each section's start):
-//!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (1-3)
+//!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (1-3 tonal voices)
 //!   u16 site, u16 quiet, u32 code, u32 intro_t, u32 loop_t (0: no loop)
 //!   u16 intro_buckets, u16 loop_buckets (each section's whole buckets), u16 intro_events, u16 loop_events
 //!   u8 n_pitches (1-255), u8 role[3], u24 pitch[n_pitches] (full periods, T)
@@ -32,14 +32,16 @@
 //!   events: the intro's, then the loop's; an event:
 //!     varint dt (64-T units since the section's event before or its start; LEB128, <= 4 bytes)
 //!     u8 b (bits 0-1 the voice; bits 2-7: 0 a note off, else a note on of level b >> 2), a note on's u8 pitch index
+//!     (voice 3 the drum: bits 2-7 0 the drum off, else a drum hit of level b >> 2; no pitch byte)
 //!   zero padding to size
 //! ```
 //!
 //! Each kind has its own type and encoder ([`LearnedEntry`], [`BuiltinRoles`], [`ScoreRecord`]),
-//! which writes its own kind byte.
+//! which writes its own kind byte. [`decode_scores`] reads a list's kind-2 records back,
+//! [`replace_scores`] puts others in their place, and [`score_key`] names a score.
 
 use crate::prog::{encode_prog, Op};
-use zx_sys::{zx_edge, ZX_FRAME_TSTATES, SND_TONAL};
+use zx_sys::{zx_edge, SND_LEARNED_MAX, SND_SCORES_MAX, SND_SCORE_BUCKETS_MAX, SND_TONAL, ZX_FRAME_TSTATES};
 
 /// One learned routine: what a built-in `snd_engine` carries, with programs for its reader.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +114,7 @@ pub struct ScoreRecord {
     pub quiet: u16,
     /// FNV-1a 32 of the 32 bytes from `site - 16` ([`score_code`]): the code must be the same.
     pub code: u32,
-    /// The voices the events use (1-3).
+    /// The tonal voices the events use (1-3); the drum ([`SCORE_DRUM`]) is not counted.
     pub voices: u8,
     /// Per voice: its stored role in the FM synth (`SND_ROLE_*`; 0: none).
     pub roles: [u8; SND_TONAL],
@@ -133,20 +135,27 @@ pub struct ScoreRecord {
     pub loop_events: Vec<ScoreEvent>,
 }
 
-/// One event of a [`ScoreRecord`].
+/// One event of a [`ScoreRecord`]: a tonal voice's note on or off, or a drum hit or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScoreEvent {
     /// T-states since its section's start (T0, or its pass's). The record holds times in 64-T
     /// units: the encoder rounds each event's time from its section's start, so the rounding does
     /// not add up.
     pub t: u32,
-    /// The voice (0-2, below the record's `voices`).
+    /// The voice: 0-2 a tonal voice (below the record's `voices`), [`SCORE_DRUM`] (3) the drum
+    /// (method B's drum voice), whatever `voices` is.
     pub voice: u8,
     /// A note on: its full period in T-states (64 to 2^24 - 1) and its level (1-255, stored as
     /// (level + 2) / 4 of 1-63, which the device plays as that x 4 + 3); a note on for a sounding
-    /// voice changes its pitch. None: a note off.
+    /// voice changes its pitch. None: a note off. For the drum: a hit of that level (the same
+    /// steps), its period not stored (0 read back); None the drum off. A hit while the drum
+    /// sounds does not strike again on the device (its FM drum starts only from off): a drum note
+    /// is a hit and an off.
     pub on: Option<(u32, u8)>,
 }
+
+/// A score event's voice for the drum ([`ScoreEvent::voice`]).
+pub const SCORE_DRUM: u8 = 3;
 
 /// FNV-1a 32 of the 32 bytes from `site - 16` (addresses wrapping), read by `peek`: a score's
 /// `code`.
@@ -250,7 +259,7 @@ fn encode_roles(r: &BuiltinRoles) -> Vec<u8> {
 /// one pitch (unused).
 fn score_pitches(r: &ScoreRecord) -> Vec<u32> {
     let mut uses: Vec<(u32, usize)> = Vec::new();
-    for p in r.intro_events.iter().chain(&r.loop_events).filter_map(|e| e.on.map(|o| o.0 & 0xFF_FFFF)) {
+    for p in r.intro_events.iter().chain(&r.loop_events).filter(|e| e.voice & 3 != SCORE_DRUM).filter_map(|e| e.on.map(|o| o.0 & 0xFF_FFFF)) {
         match uses.binary_search_by_key(&p, |u| u.0) {
             Ok(i) => uses[i].1 += 1,
             Err(i) => uses.insert(i, (p, 1)),
@@ -319,6 +328,7 @@ fn score_events_into(b: &mut Vec<u8>, events: &[ScoreEvent], len: u32, pitches: 
             }
         }
         match e.on {
+            Some((_, level)) if e.voice & 3 == SCORE_DRUM => b.push(SCORE_DRUM | score_level6(level) << 2),
             Some((period, level)) => {
                 b.extend([e.voice & 3 | score_level6(level) << 2, index(period & 0xFF_FFFF)]);
             }
@@ -383,4 +393,228 @@ pub fn encode_list_scores(entries: &[LearnedEntry], roles: &[BuiltinRoles], scor
         b.extend(encode_score(r));
     }
     b
+}
+
+/// The entries of an encoded list: (offset, size, kind) each, checked as `snd_learned_decode`
+/// checks a list's structure (the header, each entry's size and kind within the list, at most 8
+/// of kinds 0 and 1 and 8 of kind 2); nothing inside the entries.
+fn list_entries(list: &[u8]) -> Result<Vec<(usize, usize, u8)>, String> {
+    if list.len() < 4 {
+        return Err(format!("a list of {} bytes", list.len()));
+    }
+    let mut out = Vec::new();
+    let mut off = 4;
+    for k in 0..usize::from(list[0]) {
+        if list.len() - off < 4 {
+            return Err(format!("entry {k} past the list"));
+        }
+        let size = usize::from(u16::from_le_bytes([list[off], list[off + 1]]));
+        let kind = list[off + 2];
+        let min = match kind {
+            KIND_LEARNED => HEAD,
+            KIND_ROLES => usize::from(ROLES_SIZE),
+            KIND_SCORE => SCORE_HEAD,
+            _ => return Err(format!("entry {k}: kind {kind}")),
+        };
+        if size < min || size % 4 != 0 || size > list.len() - off {
+            return Err(format!("entry {k} (kind {kind}): size {size}"));
+        }
+        out.push((off, size, kind));
+        off += size;
+    }
+    let scores = out.iter().filter(|e| e.2 == KIND_SCORE).count();
+    if out.len() - scores > SND_LEARNED_MAX || scores > SND_SCORES_MAX {
+        return Err(format!("{} entries of kinds 0 and 1, {scores} scores", out.len() - scores));
+    }
+    Ok(out)
+}
+
+/// A kind-2 record (`r`, its `size` bytes) read back, checked as `snd_learned_decode` checks it.
+fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
+    let w = |at: usize| u16::from_le_bytes([r[at], r[at + 1]]);
+    let d = |at: usize| u32::from_le_bytes([r[at], r[at + 1], r[at + 2], r[at + 3]]);
+    let size = r.len();
+    let voices = r[3];
+    let (intro_t, loop_t) = (d(12), d(16));
+    let buckets = [usize::from(w(20)), usize::from(w(22))];
+    let np = usize::from(r[28]);
+    if !(1..=SND_TONAL as u8).contains(&voices) {
+        return Err(format!("{voices} voices"));
+    }
+    if buckets[0] as u32 != intro_t / ZX_FRAME_TSTATES || buckets[1] as u32 != loop_t / ZX_FRAME_TSTATES || buckets[0] + buckets[1] > SND_SCORE_BUCKETS_MAX {
+        return Err(format!("buckets {buckets:?} for an intro of {intro_t} T and a loop of {loop_t} T"));
+    }
+    if (intro_t == 0 && loop_t == 0) || (loop_t != 0 && buckets[1] == 0) {
+        return Err(format!("an intro of {intro_t} T and a loop of {loop_t} T"));
+    }
+    let fp0 = SCORE_HEAD + 3 * np;
+    if np == 0 || fp0 > size {
+        return Err(format!("{np} pitches"));
+    }
+    let pitches: Vec<u32> = (0..np).map(|k| u32::from_le_bytes([r[SCORE_HEAD + 3 * k], r[SCORE_HEAD + 3 * k + 1], r[SCORE_HEAD + 3 * k + 2], 0])).collect();
+    if let Some(p) = pitches.iter().find(|&&p| p < 64) {
+        return Err(format!("a pitch of {p} T"));
+    }
+    // the fingerprint: a nibble stream from fp0
+    let nibbles = 2 * (size - fp0);
+    let nib = |i: usize| (r[fp0 + i / 2] >> (4 * (i % 2))) & 15;
+    let mut i = 0;
+    let mut prev = 0i32;
+    let mut fps = [Vec::new(), Vec::new()];
+    for (fp, &n) in fps.iter_mut().zip(&buckets) {
+        for k in 0..n {
+            if i >= nibbles {
+                return Err("the fingerprint past the record".into());
+            }
+            let c = nib(i);
+            i += 1;
+            prev = if c == ESC {
+                if i + 2 > nibbles {
+                    return Err("the fingerprint past the record".into());
+                }
+                i += 2;
+                i32::from(nib(i - 2) | nib(i - 1) << 4)
+            } else if k == 0 {
+                return Err("a section's first bucket not an escape".into());
+            } else {
+                prev + i32::from(c) - if c & 8 != 0 { 16 } else { 0 }
+            };
+            fp.push(u8::try_from(prev).map_err(|_| format!("a bucket of {prev} edges"))?);
+        }
+    }
+    if i % 2 == 1 && nib(i) != 0 {
+        return Err("the fingerprint's spare nibble not 0".into());
+    }
+    // the events
+    let mut at = fp0 + i.div_ceil(2);
+    let mut sections = [Vec::new(), Vec::new()];
+    for (s, ev) in sections.iter_mut().enumerate() {
+        let (n, len) = [(w(24), intro_t), (w(26), loop_t)][s];
+        let units = u64::from(len).div_ceil(64);
+        let mut u = 0u64;
+        for k in 0..n {
+            let mut dt = 0u64;
+            let mut done = false;
+            for sh in 0..4 {
+                let Some(&c) = r.get(at) else { break };
+                at += 1;
+                dt |= u64::from(c & 0x7F) << (7 * sh);
+                if c & 0x80 == 0 {
+                    done = true;
+                    break;
+                }
+            }
+            u += dt;
+            if !done || u >= units || at >= size {
+                return Err(format!("section {s}, event {k}: its time or its byte past the section or the record"));
+            }
+            let b = r[at];
+            at += 1;
+            let (voice, level) = (b & 3, (b >> 2) * 4);
+            let on = if voice == SCORE_DRUM {
+                (level != 0).then_some((0, level))
+            } else if voice >= voices {
+                return Err(format!("section {s}, event {k}: voice {voice} of {voices}"));
+            } else if level != 0 {
+                let p = r.get(at).map(|&p| usize::from(p)).filter(|&p| p < np).ok_or_else(|| format!("section {s}, event {k}: its pitch"))?;
+                at += 1;
+                Some((pitches[p], level))
+            } else {
+                None
+            };
+            ev.push(ScoreEvent { t: (u * 64) as u32, voice, on });
+        }
+    }
+    let [intro_fp, loop_fp] = fps;
+    let [intro_events, loop_events] = sections;
+    Ok(ScoreRecord {
+        site: w(4),
+        quiet: w(6),
+        code: d(8),
+        voices,
+        roles: [r[29], r[30], r[31]],
+        intro_t,
+        loop_t,
+        intro_fp,
+        loop_fp,
+        intro_events,
+        loop_events,
+    })
+}
+
+/// The recorded scores (kind-2 records) of an encoded entry list, in list order, read back as
+/// [`ScoreRecord`]s: the inverse of the encoder up to what it rounds. Checked as
+/// `snd_learned_decode` checks the list's structure and its kind-2 records (an error names what
+/// it would refuse); the learned entries and kind-1 records inside are not looked at.
+///
+/// What a record keeps of the [`ScoreRecord`] it was encoded from (the rest comes back exactly):
+/// - each event's time as a multiple of 64 T (the encoder's 64-T unit of it);
+/// - each level as its step x 4 (4-252: the encoder's `(level + 2) / 4` of 1-63 x 4, which it
+///   stores back as the same step; the device plays the step x 4 + 3, [`score_level`]);
+/// - each note on's period as the pitch table's (the encoder's table holds every period exactly
+///   up to 255 different ones; past that, merged to the nearest kept), within 24 bits;
+/// - a drum hit's period as 0;
+/// - the events in the order stored (the encoder keeps the order given and moves a time that
+///   goes back to the event before's).
+///
+/// So the encoder writes a decoded record back byte for byte: [`replace_scores`] with the scores
+/// a list decodes to gives that list.
+pub fn decode_scores(list: &[u8]) -> Result<Vec<ScoreRecord>, String> {
+    list_entries(list)?
+        .into_iter()
+        .filter(|e| e.2 == KIND_SCORE)
+        .enumerate()
+        .map(|(k, (off, size, _))| decode_score(&list[off..off + size]).map_err(|e| format!("score {}: {e}", k + 1)))
+        .collect()
+}
+
+/// The encoded entry list `list` with its recorded scores (kind-2 records) replaced by `scores`,
+/// the first by the first and so on: the learned entries, the kind-1 records, the header and any
+/// bytes after the last entry stay byte for byte. Errors: a list [`decode_scores`] refuses, a
+/// count of `scores` other than the list's scores, a record over 65,532 bytes, or a new record
+/// the decoder would refuse (each checked as [`decode_scores`] checks it).
+pub fn replace_scores(list: &[u8], scores: &[ScoreRecord]) -> Result<Vec<u8>, String> {
+    decode_scores(list)?;
+    let entries = list_entries(list)?;
+    let n = entries.iter().filter(|e| e.2 == KIND_SCORE).count();
+    if n != scores.len() {
+        return Err(format!("{} scores for a list of {n}", scores.len()));
+    }
+    let mut b = list[..4].to_vec();
+    let mut next = scores.iter().enumerate();
+    let mut end = 4;
+    for &(off, size, kind) in &entries {
+        if kind == KIND_SCORE {
+            let (k, s) = next.next().expect("a score for each record");
+            let r = encode_score(s);
+            if r.len() > 0xFFFC {
+                return Err(format!("score {}: {} bytes", k + 1, r.len()));
+            }
+            decode_score(&r).map_err(|e| format!("score {}: {e}", k + 1))?;
+            b.extend(r);
+        } else {
+            b.extend(&list[off..off + size]);
+        }
+        end = off + size;
+    }
+    b.extend(&list[end..]);
+    Ok(b)
+}
+
+/// A score's key, stable while the learner records the same music: its site as 4 uppercase hex
+/// digits, `-`, and the CRC-32 (IEEE) of its intro's fingerprint then its loop's as 8 lowercase
+/// hex digits (e.g. `8951-1a2b3c4d`).
+pub fn score_key(rec: &ScoreRecord) -> String {
+    format!("{:04X}-{:08x}", rec.site, crc32(rec.intro_fp.iter().chain(&rec.loop_fp)))
+}
+
+/// CRC-32 (IEEE: reflected, polynomial EDB88320h, initial value and final XOR FFFFFFFFh).
+fn crc32<'a>(bytes: impl Iterator<Item = &'a u8>) -> u32 {
+    !bytes.fold(!0u32, |mut c, &b| {
+        c ^= u32::from(b);
+        for _ in 0..8 {
+            c = (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg());
+        }
+        c
+    })
 }

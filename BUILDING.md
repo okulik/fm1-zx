@@ -257,7 +257,9 @@ with the same code around it (several scores of one `OUT` start together, and th
 recorded edges the beeper follows plays), and plays it in step with the beeper, comparing the
 beeper's edges with the recorded ones as it goes: when the game does something else (a key
 pressed during the tune, another tune), the score stops within a few frames and the beeper
-plays. Its voices take their instruments by pitch, as a routine's channels do.
+plays. Its voices take their instruments by pitch, as a routine's channels do. A recorded score
+can also play with a bass, chords and drums written around its melody, as a take you choose
+([arranged music](#arranged-music)).
 
 Anything else stays on the beeper. After the table it prints one line per game:
 
@@ -274,8 +276,10 @@ gives the pitch (`counter x1`: that many passes of the loop; `16-bit accumulator
 each pass) and its score (the share of the music in which the predicted pitch was heard), its
 replay, and `learned by observation: 2 channels` or `observation:` and why not. A routine that
 could have a score ends with its scores, `recorded score: 169.5 s from frame 506 (intro 4.2 s,
-loop 41.6 s), 3 voices, 1074 notes, 4.1 KB` (its stretch's length, the frame of its first edge,
-its intro and loop when it loops, its voices, the notes stored and its size), the
+loop 41.6 s), 3 voices, 1074 notes, 4.1 KB (score 8951-1a2b3c4d)` (its stretch's length, the
+frame of its first edge, its intro and loop when it loops, its voices, the notes stored, its size
+and its key, which names its folder `DIR/arrange/<game>/<key>/`, see
+[arranged music](#arranged-music)), the
 run named when it is an extra one (`recorded score (key 3 once): ...`), and its stretches left
 out, `no score:` and why not; an `OUT` heard only in the extra runs has a block of its own
 (`OUT at 9A12h, heard only in other runs`) unless it was found in the code; the game's line counts
@@ -335,10 +339,132 @@ key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware)
 
 The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
 (the games file, the converted games in `DIR/converted/` with a manifest of their own,
-`DIR/games.bin` with the learned music, `DIR/keymaps.json`, `DIR/sound-report.txt` and the table;
+`DIR/games.bin` with the learned music and the chosen takes, `DIR/keymaps.json`,
+`DIR/sound-report.txt`, the scores' `DIR/arrange/<game>/<key>/score.toml` and the table;
 `--app`, required, gives the images, whose size sets the room), then
 those steps. `emu-gate`'s `tests/fw_personal.rs` runs the script on a folder of our own generated
 test programs and boots the result in fm1-emu.
+
+### Arranged music
+
+A recorded score can play with a band: a bass, a pad (chords, one note at a time) and a drum,
+written around the score's melody by a music model, as several takes that you listen to and choose
+from by ear, or keep the original. Only recorded scores have takes: music a routine gives (learned
+or built in) is read from the game as it plays and stays as it is.
+
+    tools/make-personal-pack ~/games --arrange    # the packages, then takes for the scores without any
+    tools/arrange-music pick build/personal       # listen and choose, on a page on your computer
+    tools/make-personal-pack ~/games              # the packages again, with the chosen takes
+
+**What it needs.** [uv](https://docs.astral.sh/uv/) (`tools/make-personal-pack --arrange` checks
+for it first): `tools/arrange-music` is a uv script, and its first run installs its Python packages
+(about 1 GB: PyTorch, Hugging Face Transformers and the model's code, pinned in the script) into
+uv's cache, with a Python 3.11 or 3.12 if you have none. The first run that generates with the
+model downloads it, the Anticipatory Music Transformer (`stanford-crfm/music-medium-800k`, about
+1.4 GB), to the Hugging Face cache. FluidSynth renders the takes to listen to (`brew install
+fluid-synth`; the tool takes the first soundfont in FluidSynth's folders, `--soundfont PATH`
+another); without it there is nothing to hear on the page, only MIDI files. ffmpeg, when it is
+installed, matches the renders' loudness. None of this is part of the repository or the packages
+([LICENSING.md](LICENSING.md#the-arranging-tool)).
+
+**The scores.** Every `tools/make-personal-pack` run writes each recorded score's notes to
+`DIR/arrange/<game>/<key>/score.toml` (`<game>` the game's id; `<key>` the score's `OUT` address
+in 4 hex digits and a CRC-32 of its recorded speaker edges, such as `8951-1a2b3c4d`, the same for as
+long as the learner records the same music), only when the text changes, and leaves the rest of
+the folder alone. `--arrange` then runs `tools/arrange-music generate DIR` once the packages are
+made, so takes generated in a run go into the packages of the next one.
+
+**The commands.**
+
+- `tools/arrange-music generate DIR [--takes N] [--game ID]... [--force] [--jobs J] [--model NAME]
+  [--soundfont PATH] [--seed S] [--offline]` writes N takes (default 4) for each score that has
+  none, every score with `--force`, only the scores of the games `--game` names. `--model amt` (the
+  default) runs the model in three passes, drums, then bass, then chords, each hearing the original
+  and the passes before it; `--model rules` is a quick generator without a model (a bass on the
+  melody's chord roots, a triad pad and a plain drum pattern). The same seed (`--seed`, default 1)
+  gives the same takes again on the same machine. `--jobs J` arranges J scores at once, each in a
+  process of its own that loads the model. A score has its takes when `takes.toml` beside it lists
+  takes 1 to N for its `score.toml` as it is; a changed `score.toml` gets new takes in place of the
+  old ones (choose again), and an interrupted run resumes at the missing takes.
+- `tools/arrange-music pick DIR [--port P]` serves a page at `http://127.0.0.1:8765/` (or a free
+  port; only this computer can open it): per score, the original and each take, the take as the
+  FM-1 plays it and the whole arrangement the model wrote, with its figures (below); Save writes
+  `DIR/arrange/choices.toml`. `--set GAME/KEY=N` chooses take N without the page (0: the original),
+  and `--list` prints each score, its takes, what made them, their figures and the choice; other
+  choices in the file are kept.
+- `tools/arrange-music selftest` checks `generate` (with `rules`), the files it writes, `pick
+  --set`, `--list` and the page's save in a temporary folder, with no model (and, once uv has
+  installed the packages, no network).
+
+The renders play General MIDI instruments through FluidSynth: they show the parts, not the FM-1's
+sound. To hear a take as the FM-1 plays it, choose it, build the packages and try them (`--try`,
+or on the FM-1).
+
+**The files**, in `DIR/arrange/` (under `build/personal/` by default, which git ignores):
+
+    choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original)
+    <game>/<key>/score.toml          the score's notes (tools/make-personal-pack)
+                 original.mid, original.wav   the score alone
+                 takes.toml          the takes made, for which score.toml, by what, how long each took
+                 take-<n>/arranged.toml       the take as the FM-1 plays it
+                 take-<n>/fm1.mid, fm1.wav    the same, to listen to (the drum's level picks a drum)
+                 take-<n>/full.mid, full.wav  the original with everything the model wrote
+
+`arranged.toml` has `score.toml`'s header, `take`, `generator` (the model and its settings), a
+`[metrics]` table and notes on 4 voices: 0 the lead (the score's voice with the role lead, else its
+highest voice, as it is), 1 the bass, 2 the pad, 3 the drum (`period_t = 0`, its `level` the hit's
+strength). The score's other voices give way to the bass and the pad. The figures: the key the
+original's notes suggest; the share of the bass's and the pad's sounding time in that key; their
+consonance with the lead (the share of 10 ms steps where they sound a unison, third, fourth, fifth
+or sixth apart; random notes give about 0.58); the share of onsets within 30 ms of a lead onset;
+each voice's notes a second. They help to compare takes; the ear decides.
+[docs/music-generation.md](docs/music-generation.md) describes the formats in full, and how to try
+other generators.
+
+**What the next run checks.** Every `tools/make-personal-pack` run reads `choices.toml` (the cache
+holds the learned music, so a changed choice learns nothing again) and puts each chosen take into
+the pack in place of the score's notes; the score keeps its trigger and recorded edges, so it
+starts and plays in step with the beeper as before. The take must have the score's key and
+timeline (`intro_t`, `loop_t`), every note within that timeline on voices 0-3 with none
+overlapping another on its voice, a tonal period of 64 to 16,777,215 T, a drum period of 0 and
+levels 1-255. A frame of music holds at most 8 events (note ons and offs of every voice): where a
+frame has more, drum notes give way first, then pad notes, the latest first, and the report says
+how many; a frame with more on the lead and the bass alone refuses the take. The game's scores must
+stay within 128 KB with it, method B's decoder must take the list, and a replay of the run that
+recorded the score (the cache keeps each score's run) must still play the score where it played. A
+take that fails any of these leaves the original. `sound-report.txt` says what plays, and why a
+take is refused, under the `recorded score` line that ends with the score's key:
+
+      arranged: take 2 (amt stanford-crfm/music-medium-800k staged drums,bass,chords top_p=0.98 seed=1)
+      arranged: original
+      arranged: take 3 refused: notes 14 and 15 overlap on voice 1
+
+(`arranged: original`: takes exist, none chosen). The game's line counts the takes that play
+(`music recorded (2 scores, 3 voices, 1 arranged)`), and the table ends with `<name>: score <key>
+plays take 2 (...)` or `<name>: score <key>: take 3 refused, the original plays: <why>` per choice.
+A choice that names no score of the pack (a game left out, music the learner no longer records) is
+ignored, with a note; a `choices.toml` that does not read fails the run. A take's bytes count
+toward the pack as the score's did.
+
+**Limits.** The FM-1 plays 3 tonal voices and one drum sound, so a take is a lead, one bass note
+and one pad note at a time, and one drum whose hits differ only in strength (the drum kinds the
+model writes are only heard in `fm1.wav`). A drum hit lasts at most 50 ms, hits are at least 40 ms
+apart, and each ends before the next starts (the FM-1's drum strikes only from silence). The model
+writes the loop as plain music, with nothing telling it that the pass's end leads back to its
+start, so the seam can jump; the FM-1 plays that pass round for as long as the beeper repeats it.
+Takes differ widely in how many notes they hold.
+
+**Speed.** `rules` takes a moment a score. The model runs on Apple silicon's GPU (MPS), else
+CUDA, else the CPU; on an Apple M4 Max it took 0.11 to 0.15 s a note it wrote, which for a
+14-second score was 37 s for a sparse take and 3 minutes for a dense one. A minute of music is
+roughly 5 minutes a take, 20 minutes for 4 takes; `generate` prints an estimate first and its
+progress every 15 seconds. The selftest takes about 20 s.
+
+**Offline.** `tools/make-personal-pack ... --arrange --offline` runs `UV_OFFLINE=1
+tools/arrange-music generate DIR --offline`: uv uses only its cached packages and the tool only the
+cached model, and it stops with how to get the model when it is not cached (one run without
+`--offline` downloads it). Run directly, `tools/arrange-music generate --offline` keeps the model
+offline, and `UV_OFFLINE=1` keeps uv offline too.
 
 ## Music corpus
 
