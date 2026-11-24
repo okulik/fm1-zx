@@ -35,13 +35,13 @@ what is known so far, and the rules for working on it.
 | Step | What happens | Where |
 |---|---|---|
 | 1. Listening run | The game runs on the host for 3 minutes of emulated time under fixed inputs (or the key script `<name>.keys`); a run per start key is compared and the one that hears the most music is kept. | `host/crates/soundlearn/src/listen.rs`, `learn.rs` |
-| 2. Routines | Music a routine gives is not scored: the learner reads a routine's code (`model/`, `gate.rs`), or observes a routine that mixes channels into the one speaker bit by testing the pitches its loop's values predict against the speaker's spectrum (`observe.rs`, `spectrum.rs`), or the routine is one of the FM-1's built-in entries (`core/sound/engines_builtin.c`). The FM-1 reads those notes live. | `host/crates/soundlearn/src/` |
-| 3. Recorded scores | Music nothing reads, when its `OUT` sounded in 250 frames or more, is recorded: each stretch from a trigger edge; a run per key for a menu of tunes; the same tune kept once; the loop found on the speaker edges (an intro and one pass of the loop); the notes transcribed from the speaker's sound (up to 3 voices); encoded as a kind-2 record and verified by replaying the run through method B. | `scores.rs`, `transcribe.rs`, `entry.rs` |
-| 4. `score.toml` | Every `tools/make-personal-pack` run writes each recorded score's notes, decoded from the learned list, to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
+| 2. Routines | The learner reads a routine's code (`model/`, `gate.rs`), or observes a routine that mixes channels into the one speaker bit by testing the pitches its loop's values predict against the speaker's spectrum (`observe.rs`, `spectrum.rs`), or the routine is one of the FM-1's built-in entries (`core/sound/engines_builtin.c`). The FM-1 reads those notes live. | `host/crates/soundlearn/src/` |
+| 3. Recorded scores | Every heard routine whose `OUT` sounded in 100 frames or more (learned, built in or neither) has its music recorded: each stretch of at least 100 frames (2 s) from a trigger edge; a run per key for a menu of tunes; the same tune kept once; the loop found on the speaker edges (an intro and one pass of the loop); the notes transcribed from the speaker's sound (up to 3 voices, at least 8 notes over 3 pitches); encoded as a kind-2 record and verified by replaying the run through method B. A stretch the table (learned and built-in entries) claims at most a tenth of the sounding frames of is a *score*, packed; one it claims more of is a *shadow score*: verified with the precedence bit set, kept in the learner's result and cache, not packed. | `scores.rs`, `learn.rs`, `transcribe.rs`, `entry.rs` |
+| 4. `score.toml` | Every `tools/make-personal-pack` run writes each recorded score's notes, decoded from the learned list, and each shadow score's (with `shadow = true`) to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
 | 5. Generator | `tools/arrange-music generate DIR` runs a generator per take, reduces what it wrote to the FM-1's four voices, measures it and writes `take-<n>/` with MIDI and renders. | `tools/arrange-music` (`GENERATORS`, `arrange`, `metrics`) |
 | 6. Choice | The owner listens on `tools/arrange-music pick DIR` and chooses a take or the original. | `tools/arrange-music` (`cmd_pick`), `DIR/arrange/choices.toml` |
-| 7. Pack | The next `tools/make-personal-pack` run checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores` |
-| 8. Device | FM: engines arms the score at its trigger edge, follows the beeper's edges against the recorded fingerprint, and plays the events on the FM synth with each voice's stored role (lead, bass, pad) and the FM drum. | `core/sound/learned.c` (`snd_b_scores`), `core/sound/fm.c` |
+| 7. Pack | The next `tools/make-personal-pack` run checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
+| 8. Device | FM: engines arms the score at its trigger edge, follows the beeper's edges against the recorded fingerprint, and plays the events on the FM synth with each voice's stored role (lead, bass, pad) and the FM drum. A score yields the frames a table entry claims; a score with precedence keeps them, the entry's voices unused there. | `core/sound/learned.c` (`snd_b_scores`), `core/sound/fm.c` |
 
 The learner's results, each score's run among them, are cached (`DIR/sound-cache/`), so after the first build a run that only
 changes choices learns nothing again, and `generate` needs nothing but the `score.toml` files: an
@@ -61,6 +61,7 @@ pack's own takes alone.
     loop_t = 3125448            # one pass of the loop; 0: no loop
     voices = 3                  # tonal voices, 1-3
     roles = ["lead", "bass", "pad"]   # one per tonal voice, "" for none
+    shadow = true               # a shadow score's alone (comment lines above it say so)
 
     [[note]]
     voice = 0                   # 0-2
@@ -76,10 +77,17 @@ shows a note starting at `intro_t` (the device restates it there). Notes are sor
 voice. Times are multiples of 64 T within each section, levels multiples of 4 (the record's steps),
 periods the record's pitch table entries: exactly what the FM-1 plays.
 
+A **shadow score** (`shadow = true`) is music a learned or built-in routine plays live: the same
+file and the same takes as any score's; with no take chosen the routine plays it, and a chosen take
+goes into the pack as a score with precedence that plays in its place. `tools/arrange-music`
+generates its takes like any score's, and `pick` marks it `(replaces the live version when
+chosen)`.
+
 The **score key** is `<site>-<crc>`: the score's `OUT` address in 4 uppercase hex digits and the
 CRC-32 (IEEE) of its intro fingerprint's bytes followed by its loop fingerprint's, 8 lowercase hex
 digits (`soundlearn::score_key`). It stays the same while the learner records the same music, and
-ends the score's `recorded score` line in `sound-report.txt` (`(score 8951-1a2b3c4d)`).
+ends the score's `recorded score` line in `sound-report.txt` (`(score 8951-1a2b3c4d)`; a shadow
+score's `shadow score` line, `(score 8951-1a2b3c4d; packed only with a chosen take)`).
 
 ### arranged.toml (written by tools/arrange-music, one per take)
 
@@ -174,8 +182,15 @@ gives the record byte by byte, with the drum events and the player's rules.
   take whose key, `intro_t` or `loop_t` differs from the score's. The replay at pack time confirms
   that the decoder takes the list and the score still plays where it did; it cannot judge what the
   notes sound like.
-- **Size.** A game's scores take at most 128 KB together (`SCORES_BYTES_MAX`); a take usually
-  holds more notes than the score, and its bytes count toward the pack's room.
+- **Size.** A game's packed scores take at most 128 KB together (`SCORES_BYTES_MAX`), and a game
+  packs at most 8 (`SND_SCORES_MAX`); shadow scores count only once a take of theirs is packed. A
+  take usually holds more notes than the score, and its bytes count toward the pack's room.
+- **Shortest.** A stretch is recorded from 100 frames (2 s) on; a stretch with no repeat heard
+  (a loop needs two passes of at least 50 frames each) is all intro.
+- **Precedence.** A shadow score's take is packed with bit 7 of its record's voices byte set
+  (docs/pack-format.md): the FM-1 then gives it every frame it plays, those its routine claims
+  too. Without the bit the routine's entry would keep its frames, and the replay at pack time
+  (which needs at least 90% of the stretch's sounding frames for the score) would refuse it.
 
 ## Adding a generator
 

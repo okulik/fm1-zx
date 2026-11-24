@@ -10,7 +10,7 @@
 mod fixtures;
 
 use soundlearn::listen::{run_inputs, schedule, Inputs, RunKind};
-use soundlearn::{learn, learn_with, BuiltinRoles, GameSound, LearnOptions, Op};
+use soundlearn::{learn, learn_with, BuiltinRoles, GameSound, LearnOptions, Op, ScoreRecord};
 use std::time::Instant;
 use zx_sys::{Machine, SndEngines, SND_ROLE_LEAD, SND_SITE_TONAL};
 
@@ -26,8 +26,16 @@ fn learns_tune() {
     let t = Instant::now();
     let got = learn(&tune, &schedule(1));
     println!("{}\n{}{:?}", got.line, got.details, t.elapsed());
-    assert_eq!(got.line, "music learned (1 routine, heard, 1 channel)");
+    // its music, which the learned entry plays, is a shadow score too
+    assert_eq!(got.line, "music learned (1 routine, heard, 1 channel; 1 shadow score)");
     assert_eq!(got.entries.len(), 1);
+    assert!(got.scores.is_empty() && got.shadows.len() == 1 && got.shadows[0].precedence, "{:?}", got.shadows);
+    assert_eq!(got.shadow_runs, [None]);
+    let key = soundlearn::score_key(&got.shadows[0]);
+    assert!(got.details.contains("\n    shadow score: 39.9 s from frame 1 "), "{}", got.details);
+    assert!(got.details.contains(&format!(" KB (score {key}; packed only with a chosen take)\n")), "{}", got.details);
+    // not in the game's list
+    assert_eq!(soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores), soundlearn::encode_list(&got.entries));
     assert_eq!(got.entries[0].sites, vec![(0x14, zx_sys::SND_SITE_TONAL, 0)]);
     assert!(SndEngines::with_learned(&soundlearn::encode_list(&got.entries)).is_ok());
     assert!(got.details.starts_with("  OUT at 8014h, heard in "), "{}", got.details);
@@ -56,6 +64,8 @@ fn learner_errors_are_caught() {
             roles: Vec::new(),
             scores: Vec::new(),
             score_runs: Vec::new(),
+            shadows: Vec::new(),
+            shadow_runs: Vec::new(),
             override_error: None,
         }
     );
@@ -72,6 +82,9 @@ fn builtin_routine_gets_kind1_roles() {
     assert_eq!(got.roles, [BuiltinRoles { digest: beep.digest, channels: 1, roles: [SND_ROLE_LEAD, 0, 0] }]);
     // said once, in the block of the BEEP's OUT heard in the most frames
     assert_eq!(got.details.matches("    roles: channel 0 lead (analysis)\n").count(), 1, "{}", got.details);
+    // the BEEP plays its tune (long notes): a shadow score, not a score
+    assert!(got.scores.is_empty() && got.shadows.len() == 1, "{}", got.details);
+    assert!(got.line.ends_with("; 1 shadow score)"), "{}", got.line);
 }
 
 fn quiet() -> Inputs {
@@ -93,7 +106,7 @@ fn learns_a_mixing_routine_by_observation() {
     let sna = fixtures::or_mixed_sna();
     let got = learn(&|| fixtures::machine(&sna), &schedule(1));
     println!("{}\n{}", got.line, got.details);
-    assert_eq!(got.line, "music learned (1 routine, heard, observed, 2 channels)");
+    assert_eq!(got.line, "music learned (1 routine, heard, observed, 2 channels; 1 shadow score)");
     assert_eq!(got.entries.len(), 1);
     let e = &got.entries[0];
     assert!(e.observed && !e.flips && e.timing.is_none() && e.pass == 0, "{e:?}");
@@ -122,7 +135,7 @@ fn observes_a_channel_in_a_byte_of_iy() {
     let (code, l, _) = fixtures::iyh_counter_engine();
     let got = learn(&|| fixtures::bare(&code), &quiet());
     println!("{}\n{}", got.line, got.details);
-    assert_eq!(got.line, "music learned (1 routine, heard, observed, 2 channels)");
+    assert!(got.line.starts_with("music learned (1 routine, heard, observed, 2 channels"), "{}", got.line);
     let e = &got.entries[0];
     assert_eq!(e.sites, vec![(l["out"] - l["loop"], SND_SITE_TONAL, 0)]);
     let iy = e.progs.iter().find(|p| p[0] == Op::Reg(12)).expect("a channel read from IY");
@@ -141,7 +154,7 @@ fn register_channels_read_the_same_at_every_out() {
     let (code, l, _) = fixtures::accumulator_engine();
     let got = learn(&|| fixtures::bare(&code), &quiet());
     println!("{}\n{}", got.line, got.details);
-    assert_eq!(got.line, "music learned (1 routine, heard, observed, 2 channels)");
+    assert_eq!(got.line, "music learned (1 routine, heard, observed, 2 channels; 1 shadow score)");
     let e = &got.entries[0];
     assert_eq!(e.sites, vec![(l["out1"] - l["loop"], SND_SITE_TONAL, 0), (l["out2"] - l["loop"], SND_SITE_TONAL, 0)]);
     let regs: Vec<Op> = e.progs.iter().map(|p| p[0]).collect();
@@ -321,6 +334,11 @@ const PLAYER: Names = Names { play: "play", looped: "loop", out1: "out1", out2: 
 ///        LD A,(dur) ; DEC A ; LD (dur),A ; JP NZ,loop ; JP play
 /// ```
 fn player(a: &mut fixtures::Asm, n: &Names, tune: &[(u16, u16)], second: Option<&[(u16, u16)]>) {
+    player_of(a, n, tune, second, NOTE_FRAMES);
+}
+
+/// [`player`] with notes of `note_frames` frames each (to the nearest 256 passes).
+fn player_of(a: &mut fixtures::Asm, n: &Names, tune: &[(u16, u16)], second: Option<&[(u16, u16)]>, note_frames: u32) {
     a.label(n.play).b(&[0xDD, 0x5E, 0x00, 0xDD, 0x56, 0x01, 0x7A, 0xB3, 0xC8]);
     a.b(&[0xD9, 0xDD, 0x5E, 0x02, 0xDD, 0x56, 0x03, 0xD9, 0xDD, 0x7E, 0x04]).w(&[0x32], n.dur);
     a.b(&[0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23]);
@@ -329,7 +347,7 @@ fn player(a: &mut fixtures::Asm, n: &Names, tune: &[(u16, u16)], second: Option<
     a.label(n.out2).b(&[0xD3, 0xFE, 0xD9, 0x0D]).w(&[0xC2], n.looped);
     a.w(&[0x3A], n.dur).b(&[0x3D]).w(&[0x32], n.dur).w(&[0xC2], n.looped).w(&[0xC3], n.play);
     a.label(n.dur).b(&[0]);
-    let units = (NOTE_FRAMES * zx_sys::ZX_FRAME_TSTATES / (112 * 256)) as u8;
+    let units = (note_frames * zx_sys::ZX_FRAME_TSTATES / (112 * 256)) as u8;
     for (name, notes) in [(n.tune, Some(tune)), ("tune_b", second)] {
         let Some(notes) = notes else { continue };
         a.label(name);
@@ -351,13 +369,18 @@ fn player(a: &mut fixtures::Asm, n: &Names, tune: &[(u16, u16)], second: Option<
 /// go:    CALL play ; JR wait
 /// ```
 fn jukebox(second: &[(u16, u16)]) -> (Vec<u8>, fixtures::Labels) {
+    jukebox_of(second, NOTE_FRAMES)
+}
+
+/// [`jukebox`] with notes of `note_frames` frames each.
+fn jukebox_of(second: &[(u16, u16)], note_frames: u32) -> (Vec<u8>, fixtures::Labels) {
     let mut a = fixtures::Asm::default();
     a.label("start").b(&[0xF3]);
     a.label("wait").b(&[0x01, 0xFE, 0xF7, 0xED, 0x78, 0x2F, 0xE6, 0x03]).r(0x28, "wait").b(&[0x5F]);
     a.label("rel").b(&[0xED, 0x78, 0x2F, 0xE6, 0x1F]).r(0x20, "rel");
     a.w(&[0xDD, 0x21], "tune_a").b(&[0xCB, 0x1B]).r(0x38, "go").w(&[0xDD, 0x21], "tune_b");
     a.label("go").w(&[0xCD], "play").r(0x18, "wait");
-    player(&mut a, &PLAYER, &TUNE, Some(second));
+    player_of(&mut a, &PLAYER, &TUNE, Some(second), note_frames);
     a.finish()
 }
 
@@ -694,4 +717,148 @@ fn a_loop_that_changes_after_its_stretch() {
     assert!(frames.windows(2).all(|w| w[1] == w[0] + 1));
     let end = *frames.last().unwrap() as u32;
     assert!((PRESS - zx_sys::SND_DELAY_FRAMES..PRESS).contains(&end), "to the press: {end}");
+}
+
+
+/// [`TUNE`] once through [`player`], its notes `note_frames` frames each, after about 70 frames
+/// of silence; then silence.
+///
+/// ```text
+/// start: DI ; LD H,3 ; CALL quiet ; LD IX,tune_a ; CALL play
+/// end:   JR end
+/// quiet: LD BC,0
+/// dly:   DEC BC ; LD A,B ; OR C ; JR NZ,dly ; DEC H ; JR NZ,quiet ; RET
+/// ```
+fn one_tune(note_frames: u32) -> (Vec<u8>, fixtures::Labels) {
+    let mut a = fixtures::Asm::default();
+    a.label("start").b(&[0xF3, 0x26, 0x03]).w(&[0xCD], "quiet").w(&[0xDD, 0x21], "tune_a").w(&[0xCD], "play");
+    a.label("end").r(0x18, "end");
+    a.label("quiet").b(&[0x01, 0x00, 0x00]);
+    a.label("dly").b(&[0x0B, 0x78, 0xB1]).r(0x20, "dly").b(&[0x25]).r(0x20, "quiet").b(&[0xC9]);
+    player_of(&mut a, &PLAYER, &TUNE, None, note_frames);
+    a.finish()
+}
+
+/// A tune of about 3 s (8 notes of 19 frames) gets a score, which method B arms, chooses (after
+/// its delay's buckets) and plays through; one of about 1.5 s does not (the shortest is 2 s, and
+/// its `OUT` must sound in 100 frames).
+#[test]
+fn records_a_three_second_tune() {
+    assert_eq!(soundlearn::scores::SCORE_FRAMES, 100);
+    let (code, l) = one_tune(19);
+    let got = learn(&|| fixtures::bare(&code), &quiet());
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 1, "{}", got.details);
+    let s = &got.scores[0];
+    assert!((140..160).contains(&s.intro_fp.len()) && s.loop_t == 0, "{s:?}");
+    assert!(got.details.contains("\n    recorded score: 3.0 s from frame "), "{}", got.details);
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let (f0, _) = first_edge_from(&code, &quiet(), l["out1"]);
+    assert!(plays_through(s, f0, &score_frames(&code, &quiet(), &list)[0]));
+
+    let (code, _) = one_tune(9);
+    let got = learn(&|| fixtures::bare(&code), &quiet());
+    println!("{}\n{}", got.line, got.details);
+    // its OUT sounds in under 100 frames: no score is looked for
+    assert!(got.scores.is_empty() && got.shadows.is_empty() && !got.details.contains("score"), "{}", got.details);
+}
+
+/// Two tunes of about 3 s behind keys 1 and 2, through one `OUT` with the same code around it:
+/// a score each, and in each run method B follows both from the shared trigger and plays the
+/// one whose fingerprint the beeper keeps to, through its stretch.
+#[test]
+fn short_tunes_that_share_a_trigger() {
+    let (code, l) = jukebox_of(&TUNE_B, 19);
+    let (inputs, opts) = key1();
+    let got = learn_with(&|| fixtures::bare(&code), &inputs, &opts);
+    println!("{}\n{}", got.line, got.details);
+    assert_eq!(got.scores.len(), 2, "{}", got.details);
+    assert!(got.scores.iter().all(|s| s.site == l["out1"] && s.intro_fp.len() < 160) && got.scores[0].code == got.scores[1].code);
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    let key2 = run_inputs(RunKind::Key(1), 0);
+    let mut played = Vec::new();
+    for run in [&inputs, &key2] {
+        let (f0, _) = first_edge_from(&code, run, l["out1"]);
+        let frames = score_frames(&code, run, &list);
+        let who: Vec<usize> = (0..2).filter(|&i| !frames[i].is_empty()).collect();
+        assert_eq!(who.len(), 1, "one score plays: {frames:?}");
+        assert!(plays_through(&got.scores[who[0]], f0, &frames[who[0]]), "{f0}: {:?}", frames[who[0]]);
+        played.push(who[0]);
+    }
+    assert_ne!(played[0], played[1], "each run its own score");
+}
+
+/// A tune of the ROM's BEEP routine whose every call is 12 ms, shorter than the built-in BEEP
+/// entry takes (a frame): each tone of the tune twelve calls at its pitch (to the ear a note of
+/// about 150 ms). The table claims none of it, so the routine inside the built-in entry gets a
+/// score, not a shadow score, which plays in the replay.
+#[test]
+fn a_beep_tune_of_short_notes_gets_a_score() {
+    let hz = [262.0, 392.0, 523.0, 330.0, 659.0, 440.0, 784.0, 349.0];
+    let notes: Vec<(u16, u16)> = hz.iter().flat_map(|&f| std::iter::repeat_n(fixtures::beep_note(f, 0.012), 12)).collect();
+    let sna = fixtures::rom_beep_tune_sna(&notes, 1);
+    let load = || fixtures::machine(&sna);
+    let got = learn(&load, &schedule(1));
+    println!("{}\n{}", got.line, got.details);
+    assert!(got.entries.is_empty());
+    assert_eq!((got.scores.len(), got.shadows.len()), (1, 0), "{}", got.details);
+    assert!(got.line.starts_with("music recorded (1 score, "), "{}", got.line);
+    let d = &got.details;
+    assert!(d.contains("\n    left out: built-in entry at 03B5h\n") && d.contains("\n    recorded score: "), "{d}");
+    assert!(!got.scores[0].precedence);
+    let list = soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores);
+    soundlearn::scores::verify(&load, &schedule(1), &list, 0, true).expect("it plays");
+}
+
+/// The frames method B gives each score of `list` in a run of the game `load` gives under
+/// `inputs`, and the frames the table claims (the frames it decides, from the run's first).
+fn decided(load: &dyn Fn() -> Machine, inputs: &Inputs, list: &[u8]) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut b = SndEngines::with_learned(list).expect("the list decodes");
+    let (table, n) = (b.entries().len(), b.scores());
+    let mut m = load();
+    let (mut got, mut tabled) = (vec![Vec::new(); n], Vec::new());
+    let delay = zx_sys::SND_DELAY_FRAMES as usize;
+    for f in 0..9000 {
+        let (rows, kemp) = inputs(f as u32);
+        m.set_keys(rows);
+        m.set_kempston(kemp);
+        m.run_frame();
+        let d = b.frame(&m, m.edges(), m.edges_start_level());
+        if f >= delay && d.confident != 0 {
+            match usize::from(d.engine) {
+                e if e > table => got[e - table - 1].push(f - delay),
+                e if e > 0 => tabled.push(f - delay),
+                _ => {}
+            }
+        }
+    }
+    (got, tabled)
+}
+
+/// `tune.sna`'s music, which its learned entry plays, is a shadow score: kept beside the list,
+/// not in it. Put in the list it plays over the learned entry only with precedence (the
+/// replay verifies it, and method B gives it the frames the entry claimed); without, the table
+/// keeps them and the replay refuses it.
+#[test]
+fn a_shadow_score_plays_over_the_learned_entry_only_with_precedence() {
+    let got = learn(&tune, &schedule(1));
+    assert_eq!((got.entries.len(), got.scores.len(), got.shadows.len()), (1, 0, 1), "{}", got.details);
+    let shadow = got.shadows[0].clone();
+    assert!(shadow.precedence);
+    let alone = soundlearn::encode_list(&got.entries);
+    assert_eq!(soundlearn::encode_list_scores(&got.entries, &got.roles, &got.scores), alone);
+    let (_, tabled) = decided(&tune, &schedule(1), &alone);
+    assert!(tabled.len() > 8900, "the learned entry plays it: {}", tabled.len());
+
+    let first = soundlearn::encode_list_scores(&got.entries, &got.roles, std::slice::from_ref(&shadow));
+    soundlearn::scores::verify(&tune, &schedule(1), &first, 0, true).expect("it plays with precedence");
+    let (scored, tabled) = decided(&tune, &schedule(1), &first);
+    assert!(scored[0].len() > 8900 && tabled.len() < 10, "{} {}", scored[0].len(), tabled.len());
+
+    let plain = ScoreRecord { precedence: false, ..shadow };
+    let last = soundlearn::encode_list_scores(&got.entries, &got.roles, std::slice::from_ref(&plain));
+    let why = soundlearn::scores::verify(&tune, &schedule(1), &last, 0, true).expect_err("the table wins");
+    assert!(why.contains("method B"), "{why}");
+    let (scored, tabled) = decided(&tune, &schedule(1), &last);
+    assert!(scored[0].len() < 100 && tabled.len() > 8900, "{} {}", scored[0].len(), tabled.len());
 }

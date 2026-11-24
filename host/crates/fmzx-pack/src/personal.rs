@@ -67,26 +67,27 @@
 //! file's data followed by the key script's text, if there is one, and the overrides; the
 //! learner's version), which runs keep: an unchanged game is not learned again. A cache file
 //! holds the list, the runs its scores were recorded from ([`ScoreRuns`]: the learner's run, its
-//! key script's steps or [`choose_run`]'s run and seed, and per score that run or the extra key
-//! run), the line and the details. It is used only if its CRC matches, method B's decoder takes
+//! key script's steps or [`choose_run`]'s run and seed, and per score and shadow score that run
+//! or the extra key run), the line, the details and the shadow scores. It is used only if its CRC matches, method B's decoder takes
 //! its list and it names a run for each score; otherwise the game is
 //! learned again (a game with a bad override is not cached). A panic while learning a game gives
 //! that game a learner error, and the pack is still built.
 //!
 //! # Arranged music
 //!
-//! After the learning (from the cache or not), each game's recorded scores are written to
-//! `<out>/arrange/<game-id>/<key>/score.toml`, and the takes `<out>/arrange/choices.toml` chooses
-//! go into the pack in place of the scores' notes ([`crate::arrange`]), every run: the cache
-//! holds the learned list, so a changed choice never needs the game learned again. A take is
-//! verified by a replay of the run that recorded its score, as the cache keeps it
+//! After the learning (from the cache or not), each game's recorded scores and shadow scores are
+//! written to `<out>/arrange/<game-id>/<key>/score.toml`, and the takes `<out>/arrange/choices.toml`
+//! chooses go into the pack in place of the scores' notes, or (a shadow score's) after the scores
+//! with precedence ([`crate::arrange`]), every run: the cache holds the learned list and the
+//! shadow scores, so a changed choice never needs the game learned again. A take is verified by a
+//! replay of the run that recorded its score, as the cache keeps it
 //! ([`soundlearn::scores::verify`]). In `sound-report.txt` a score with takes or a choice gets a
-//! line under its `recorded score` line (the one ending with its key, `(score 8951-1a2b3c4d)`;
-//! [`Status::text`]), and the game's line `, 1 arranged` when a take plays;
-//! [`table`] ends with a line per take chosen (that plays, or refused and why) and per choice
-//! that names no score of the pack (ignored).
+//! line under its `recorded score` (or `shadow score`) line (the one ending with its key,
+//! `(score 8951-1a2b3c4d)`; [`Status::text`]), and the game's line `, 1 arranged` when a take
+//! plays; [`table`] ends with a line per take chosen (that plays, or refused and why) and per
+//! choice that names no score of the pack (ignored).
 
-use crate::arrange::{self, Status, ARRANGE, CHOICES};
+use crate::arrange::{self, Of, Status, ARRANGE, CHOICES};
 use crate::keymaps::keymaps_json;
 use crate::keys::{inputs, parse_keys, Step};
 use crate::layout::pack_room;
@@ -94,6 +95,7 @@ use crate::manifest::{game_path, parse_manifest, parse_personal_manifest, Game, 
 use crate::pack::{attach_sound, build_pack};
 use crate::tapeload::{self, Kind, Loaded};
 use soundlearn::listen::{candidates, choose_run, run_inputs, Inputs, RunKind, KEYS};
+use soundlearn::report::SHADOW_TAIL;
 use soundlearn::{decode_scores, encode_list_scores, learn_with, score_key, LearnOptions, ScoreRecord, LEARNER_VERSION};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -324,7 +326,10 @@ const REPORT_HEAD: &str = "\
 # are written to arrange/<game>/<key>/score.toml for tools/arrange-music; a score with takes, or
 # a take chosen in arrange/choices.toml, says under its line which plays: `arranged: take 2
 # (<what made it>)` (with any notes dropped for frames over 8 events), `arranged: original`, or
-# `arranged: take 2 refused: <why>` (the original plays).
+# `arranged: take 2 refused: <why>` (the original plays). Music a learned or built-in routine plays
+# gets a shadow score (`shadow score: ...; packed only with a chosen take`): its notes are written
+# out the same way, and it goes into the pack only with a take chosen for it, which then plays in
+# place of the routine (`arranged: the live version (no take chosen)` until then).
 ";
 
 /// A packed game, for learning its music: its id and name, its converted file's bytes and name,
@@ -344,6 +349,9 @@ struct Job {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sound {
     pub list: Option<Vec<u8>>,
+    /// The shadow scores ([`soundlearn::GameSound::shadows`]): not in the list unless a take is
+    /// chosen for one.
+    pub shadows: Vec<ScoreRecord>,
     /// The runs its scores were recorded from (None when nothing was learned).
     pub runs: Option<ScoreRuns>,
     pub line: String,
@@ -404,6 +412,7 @@ fn isolated(f: impl FnOnce() -> Sound) -> Sound {
 fn learner_error(why: &str) -> Sound {
     Sound {
         list: None,
+        shadows: Vec::new(),
         runs: None,
         line: format!("no music learned (learner error: {why})"),
         details: format!("  learner error: {why}\n"),
@@ -415,7 +424,7 @@ fn learner_error(why: &str) -> Sound {
 /// Milliseconds per Spectrum frame, for the key scripts' times.
 const FRAME_MS: u64 = 20;
 /// The start of a cache file.
-const CACHE_MAGIC: &[u8; 8] = b"FMZXSND3";
+const CACHE_MAGIC: &[u8; 8] = b"FMZXSND4";
 
 /// A game's music: from the cache, or learned and then cached.
 fn learn_cached(job: &Job, cache: &Path) -> Sound {
@@ -446,14 +455,14 @@ pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<
         crc.update(roles);
     }
     let path = cache.join(format!("{:08x}-{LEARNER_VERSION}.bin", crc.finalize()));
-    if let Some((list, runs, line, details)) = std::fs::read(&path).ok().as_deref().and_then(cache_decode) {
-        return Sound { list, runs, line, details, keys_error, override_error: None };
+    if let Some((list, runs, line, details, shadows)) = std::fs::read(&path).ok().as_deref().and_then(cache_decode) {
+        return Sound { list, shadows, runs, line, details, keys_error, override_error: None };
     }
     let got = learn_converted(file, data, steps, instruments);
     // written whole, then renamed: a half-written file is never read
     let tmp = cache.join(format!("{file}.tmp"));
     if got.override_error.is_none()
-        && std::fs::write(&tmp, cache_encode(got.list.as_deref(), got.runs.as_ref(), &got.line, &got.details)).is_ok()
+        && std::fs::write(&tmp, cache_encode(got.list.as_deref(), &got.shadows, got.runs.as_ref(), &got.line, &got.details)).is_ok()
         && std::fs::rename(&tmp, &path).is_err()
     {
         let _ = std::fs::remove_file(&tmp);
@@ -467,7 +476,7 @@ pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<
 fn learn_converted(file: &str, data: &[u8], steps: Option<Vec<Step>>, instruments: &BTreeMap<u16, Vec<u8>>) -> Sound {
     if let Err(e) = machine(file, data) {
         let line = format!("no music learned (the game does not load: {e})");
-        return Sound { list: None, runs: None, line, details: String::new(), keys_error: None, override_error: None };
+        return Sound { list: None, shadows: Vec::new(), runs: None, line, details: String::new(), keys_error: None, override_error: None };
     }
     // it loaded just now, so it loads again: the fallback is never used
     let load = || machine(file, data).unwrap_or_else(|_| Machine::new());
@@ -491,8 +500,10 @@ fn learn_converted(file: &str, data: &[u8], steps: Option<Vec<Step>>, instrument
     let opts = LearnOptions { instruments: instruments.clone(), run: run_kind, ..LearnOptions::default() };
     let got = learn_with(&load, &run, &opts);
     let list = (!got.entries.is_empty() || !got.roles.is_empty() || !got.scores.is_empty()).then(|| encode_list_scores(&got.entries, &got.roles, &got.scores));
-    let runs = Some(ScoreRuns { learner, scores: got.score_runs });
-    Sound { list, runs, line: got.line, details: run_line + &got.details, keys_error: None, override_error: got.override_error }
+    let runs = Some(ScoreRuns { learner, scores: got.score_runs, shadows: got.shadow_runs });
+    // each shadow score as its record reads back (as the list's scores and the cache's do)
+    let shadows = got.shadows.iter().map(|r| decode_scores(&encode_list_scores(&[], &[], std::slice::from_ref(r))).map(|mut d| d.remove(0)).unwrap_or_else(|_| r.clone())).collect();
+    Sound { list, shadows, runs, line: got.line, details: run_line + &got.details, keys_error: None, override_error: got.override_error }
 }
 
 /// Writes every game's scores out and puts the chosen takes into the lists, the games' lines and
@@ -504,35 +515,41 @@ fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<(Vec<St
     let mut known: HashSet<String> = HashSet::new();
     let mut lines = Vec::new();
     for (j, s) in jobs.iter().zip(sounds.iter_mut()) {
-        let Some(list) = s.list.clone() else { continue };
+        // a game with shadow scores alone: an empty list, kept only if a take goes in
+        let Some(list) = s.list.clone().or_else(|| (!s.shadows.is_empty()).then(|| encode_list_scores(&[], &[], &[]))) else { continue };
         // the list went through method B's decoder: its scores read back
         let Ok(scores) = decode_scores(&list) else { continue };
-        if scores.is_empty() {
+        if scores.is_empty() && s.shadows.is_empty() {
             continue;
         }
         arrange::export(dir, &j.id, &j.name, &scores)?;
-        known.extend(scores.iter().map(|r| format!("{}/{}", j.id, score_key(r))));
+        arrange::export(dir, &j.id, &j.name, &s.shadows)?;
+        known.extend(scores.iter().chain(&s.shadows).map(|r| format!("{}/{}", j.id, score_key(r))));
         let runs = s.runs.clone();
-        let got = arrange::apply(dir, &j.id, &list, &scores, &choices, &|l, i| verify_take(j, runs.as_ref(), l, i));
-        for (rec, st) in scores.iter().zip(&got.status) {
+        let got = arrange::apply(dir, &j.id, &list, &scores, &s.shadows, &choices, &|l, i, of| verify_take(j, runs.as_ref(), l, i, of));
+        let all = scores.iter().zip(&got.status).map(|(r, st)| (r, st, false)).chain(s.shadows.iter().zip(&got.shadow_status).map(|(r, st)| (r, st, true)));
+        for (rec, st, shadow) in all {
+            let (what, live) = if shadow { ("shadow score", "the live version") } else { ("score", "the original") };
             match st {
                 Some(Status::Take { take, generator, .. }) => {
-                    lines.push(format!("{}: score {} plays take {take} ({generator})", j.name, score_key(rec)))
+                    lines.push(format!("{}: {what} {} plays take {take} ({generator})", j.name, score_key(rec)))
                 }
                 Some(Status::Refused { take, why }) => {
-                    lines.push(format!("{}: score {}: take {take} refused, the original plays: {why}", j.name, score_key(rec)))
+                    lines.push(format!("{}: {what} {}: take {take} refused, {live} plays: {why}", j.name, score_key(rec)))
                 }
                 _ => {}
             }
         }
-        let n = got.status.iter().filter(|st| matches!(st, Some(Status::Take { .. }))).count();
+        let n = got.status.iter().chain(&got.shadow_status).filter(|st| matches!(st, Some(Status::Take { .. }))).count();
         if n > 0 {
             if let Some(at) = s.line.rfind(')') {
                 s.line.insert_str(at, &format!(", {n} arranged"));
             }
         }
-        s.details = with_status(&s.details, &scores, &got.status);
-        s.list = Some(got.list);
+        s.details = with_status(&s.details, &scores, &got.status, &s.shadows, &got.shadow_status);
+        if s.list.is_some() || got.list != list {
+            s.list = Some(got.list);
+        }
     }
     let notes = choices
         .keys()
@@ -543,34 +560,43 @@ fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<(Vec<St
 }
 
 /// A game's details with each score's status under its `recorded score` line (the line that
-/// ends with its key, `(score 8951-1a2b3c4d)`; one not found at the end, with its key).
-fn with_status(details: &str, scores: &[ScoreRecord], status: &[Option<Status>]) -> String {
-    let keyed: Vec<(String, &Status)> =
-        scores.iter().zip(status).filter_map(|(rec, st)| st.as_ref().map(|st| (format!("(score {})", score_key(rec)), st))).collect();
+/// ends with its key, `(score 8951-1a2b3c4d)`), and each shadow score's under its `shadow score`
+/// line (`(score 8951-1a2b3c4d; packed only with a chosen take)`); one not found at the end,
+/// with its key.
+fn with_status(details: &str, scores: &[ScoreRecord], status: &[Option<Status>], shadows: &[ScoreRecord], shadow_status: &[Option<Status>]) -> String {
+    let tag = |rec: &ScoreRecord, shadow: bool| format!("(score {}{})", score_key(rec), if shadow { SHADOW_TAIL } else { "" });
+    let keyed: Vec<(String, &Status, bool)> = scores
+        .iter()
+        .zip(status)
+        .map(|(r, st)| (r, st, false))
+        .chain(shadows.iter().zip(shadow_status).map(|(r, st)| (r, st, true)))
+        .filter_map(|(rec, st, shadow)| st.as_ref().map(|st| (tag(rec, shadow), st, shadow)))
+        .collect();
     let mut placed = vec![false; keyed.len()];
     let mut out = String::new();
     for l in details.lines() {
         out += &format!("{l}\n");
-        if l.starts_with("    recorded score") {
-            for (k, (tag, st)) in keyed.iter().enumerate() {
+        if l.starts_with("    recorded score") || l.starts_with("    shadow score") {
+            for (k, (tag, st, shadow)) in keyed.iter().enumerate() {
                 if !placed[k] && l.ends_with(tag.as_str()) {
                     placed[k] = true;
-                    out += &format!("      {}\n", st.text());
+                    out += &format!("      {}\n", st.text(*shadow));
                 }
             }
         }
     }
-    for ((tag, st), _) in keyed.iter().zip(&placed).filter(|(_, p)| !**p) {
-        let key = tag.trim_start_matches("(score ").trim_end_matches(')');
-        out += &format!("  score {key}: {}\n", st.text());
+    for ((tag, st, shadow), _) in keyed.iter().zip(&placed).filter(|(_, p)| !**p) {
+        let key = tag.trim_start_matches("(score ").trim_end_matches(')').trim_end_matches(SHADOW_TAIL);
+        let what = if *shadow { "shadow score" } else { "score" };
+        out += &format!("  {what} {key}: {}\n", st.text(*shadow));
     }
     out
 }
 
 /// Verifies by replay score `index` of `list`, a game's list with a take in it, in the run that
-/// recorded the score (`runs`, kept with the learned list). Err: why not.
-fn verify_take(j: &Job, runs: Option<&ScoreRuns>, list: &[u8], index: usize) -> Result<(), String> {
-    let inputs = runs.and_then(|r| r.inputs(index)).ok_or("the run that recorded it is not known")?;
+/// recorded the score `of` (`runs`, kept with the learned list). Err: why not.
+fn verify_take(j: &Job, runs: Option<&ScoreRuns>, list: &[u8], index: usize, of: Of) -> Result<(), String> {
+    let inputs = runs.and_then(|r| r.inputs(of)).ok_or("the run that recorded it is not known")?;
     let load = || machine(&j.file, &j.data).unwrap_or_else(|_| Machine::new());
     soundlearn::scores::verify(&load, &inputs, list, index, true)
 }
@@ -584,17 +610,22 @@ pub enum LearnerRun {
 }
 
 /// The runs a game's scores were recorded from: the learner's run, and per score (in the list's
-/// order) None for it, else the extra run ([`RunKind::Key`]).
+/// order) None for it, else the extra run ([`RunKind::Key`]); per shadow score the same.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScoreRuns {
     pub learner: LearnerRun,
     pub scores: Vec<Option<RunKind>>,
+    pub shadows: Vec<Option<RunKind>>,
 }
 
 impl ScoreRuns {
-    /// The inputs of the run that recorded score `index`; None when there is no such score.
-    pub fn inputs(&self, index: usize) -> Option<Inputs> {
-        Some(match (self.scores.get(index)?, &self.learner) {
+    /// The inputs of the run that recorded the score `of`; None when there is no such score.
+    pub fn inputs(&self, of: Of) -> Option<Inputs> {
+        let run = match of {
+            Of::Score(k) => self.scores.get(k)?,
+            Of::Shadow(k) => self.shadows.get(k)?,
+        };
+        Some(match (run, &self.learner) {
             (Some(kind), _) => run_inputs(*kind, 0),
             (None, LearnerRun::Kind(kind, seed)) => run_inputs(*kind, *seed),
             (None, LearnerRun::Script(steps)) => {
@@ -606,8 +637,8 @@ impl ScoreRuns {
 
     /// Its bytes in a cache file: the learner's run (0, the steps' count (u32) and each step's
     /// action, time and hold (u8, u64, u64); or 1, the kind's code and the seed (u64)), then
-    /// the scores' count (u32) and each one's run (255 the learner's, else the kind's code);
-    /// numbers little-endian.
+    /// the scores' count (u32) and each one's run (255 the learner's, else the kind's code), then
+    /// the shadow scores' the same way; numbers little-endian.
     pub fn encode(&self) -> Vec<u8> {
         let mut b = Vec::new();
         match &self.learner {
@@ -626,8 +657,10 @@ impl ScoreRuns {
                 b.extend(seed.to_le_bytes());
             }
         }
-        b.extend((self.scores.len() as u32).to_le_bytes());
-        b.extend(self.scores.iter().map(|k| k.map_or(LEARNER_CODE, kind_code)));
+        for runs in [&self.scores, &self.shadows] {
+            b.extend((runs.len() as u32).to_le_bytes());
+            b.extend(runs.iter().map(|k| k.map_or(LEARNER_CODE, kind_code)));
+        }
         b
     }
 
@@ -658,9 +691,12 @@ impl ScoreRuns {
             }
             _ => return None,
         };
-        let n = u32_of(take(4)?) as usize;
-        let scores = take(n)?.iter().map(|&c| if c == LEARNER_CODE { Some(None) } else { kind_of(c).map(Some) }).collect::<Option<Vec<_>>>()?;
-        (at == b.len()).then_some(ScoreRuns { learner, scores })
+        let mut runs = || -> Option<Vec<Option<RunKind>>> {
+            let n = u32_of(take(4)?) as usize;
+            take(n)?.iter().map(|&c| if c == LEARNER_CODE { Some(None) } else { kind_of(c).map(Some) }).collect()
+        };
+        let (scores, shadows) = (runs()?, runs()?);
+        (at == b.len()).then_some(ScoreRuns { learner, scores, shadows })
     }
 }
 
@@ -692,16 +728,17 @@ fn kind_of(c: u8) -> Option<RunKind> {
 }
 
 /// A cache file's contents: the entry list (None: none), the runs its scores were recorded
-/// from, the line and the details.
-pub type Cached = (Option<Vec<u8>>, Option<ScoreRuns>, String, String);
+/// from, the line, the details and the shadow scores.
+pub type Cached = (Option<Vec<u8>>, Option<ScoreRuns>, String, String, Vec<ScoreRecord>);
 
 /// A cache file: the magic, the CRC-32 of the rest (u32, little-endian), then the entry list,
-/// the runs ([`ScoreRuns::encode`]), the line and the details, each a u32 length and its bytes;
-/// an empty list or runs is none.
-pub fn cache_encode(list: Option<&[u8]>, runs: Option<&ScoreRuns>, line: &str, details: &str) -> Vec<u8> {
+/// the runs ([`ScoreRuns::encode`]), the line, the details and the shadow scores (each an entry
+/// list of the one record), each a u32 length and its bytes; an empty list or runs is none.
+pub fn cache_encode(list: Option<&[u8]>, shadows: &[ScoreRecord], runs: Option<&ScoreRuns>, line: &str, details: &str) -> Vec<u8> {
     let runs = runs.map_or_else(Vec::new, ScoreRuns::encode);
+    let shadows: Vec<Vec<u8>> = shadows.iter().map(|r| encode_list_scores(&[], &[], std::slice::from_ref(r))).collect();
     let mut payload = Vec::new();
-    for part in [list.unwrap_or(&[]), &runs, line.as_bytes(), details.as_bytes()] {
+    for part in [list.unwrap_or(&[]), &runs, line.as_bytes(), details.as_bytes()].into_iter().chain(shadows.iter().map(Vec::as_slice)) {
         payload.extend((part.len() as u32).to_le_bytes());
         payload.extend(part);
     }
@@ -712,30 +749,40 @@ pub fn cache_encode(list: Option<&[u8]>, runs: Option<&ScoreRuns>, line: &str, d
 }
 
 /// A cache file's contents; None if it is not one, its CRC does not match, method B's decoder
-/// refuses its list (the cache is not trusted: a list goes into the pack only as the decoder
-/// takes it), or its runs do not name a run for each of the list's scores.
+/// refuses its list or a shadow score's (the cache is not trusted: a list goes into the pack only
+/// as the decoder takes it), or its runs do not name a run for each of the list's scores and
+/// each shadow score.
 pub fn cache_decode(b: &[u8]) -> Option<Cached> {
     let rest = b.strip_prefix(CACHE_MAGIC)?;
     let (crc, mut rest) = (u32::from_le_bytes(rest.get(..4)?.try_into().ok()?), rest.get(4..)?);
     if crc32fast::hash(rest) != crc {
         return None;
     }
-    let mut part = || -> Option<Vec<u8>> {
+    let part = |rest: &mut &[u8]| -> Option<Vec<u8>> {
         let len = u32::from_le_bytes(rest.get(..4)?.try_into().ok()?) as usize;
         let bytes = rest.get(4..4 + len)?.to_vec();
-        rest = &rest[4 + len..];
+        *rest = &rest[4 + len..];
         Some(bytes)
     };
-    let (list, runs, line, details) = (part()?, part()?, part()?, part()?);
-    if !rest.is_empty() || (!list.is_empty() && SndEngines::with_learned(&list).is_err()) {
+    let (list, runs, line, details) = (part(&mut rest)?, part(&mut rest)?, part(&mut rest)?, part(&mut rest)?);
+    let mut shadows = Vec::new();
+    while !rest.is_empty() {
+        let one = part(&mut rest)?;
+        let rec = match SndEngines::with_learned(&one).ok().and(decode_scores(&one).ok()).as_deref() {
+            Some([rec]) if rec.precedence => rec.clone(),
+            _ => return None,
+        };
+        shadows.push(rec);
+    }
+    if !list.is_empty() && SndEngines::with_learned(&list).is_err() {
         return None;
     }
     let runs = if runs.is_empty() { None } else { Some(ScoreRuns::decode(&runs)?) };
     let scores = if list.is_empty() { 0 } else { decode_scores(&list).ok()?.len() };
-    if scores > 0 && runs.as_ref().is_none_or(|r| r.scores.len() != scores) {
+    if (scores > 0 || !shadows.is_empty()) && runs.as_ref().is_none_or(|r| r.scores.len() != scores || r.shadows.len() != shadows.len()) {
         return None;
     }
-    Some(((!list.is_empty()).then_some(list), runs, String::from_utf8(line).ok()?, String::from_utf8(details).ok()?))
+    Some(((!list.is_empty()).then_some(list), runs, String::from_utf8(line).ok()?, String::from_utf8(details).ok()?, shadows))
 }
 
 /// The first line of the converted files' manifest, which marks an output folder as ours.
@@ -1081,8 +1128,8 @@ mod tests {
 
     #[test]
     fn cache_files() {
-        let empty = cache_encode(None, None, "no music learned (x)", "  d\n");
-        assert_eq!(cache_decode(&empty), Some((None, None, "no music learned (x)".into(), "  d\n".into())));
+        let empty = cache_encode(None, &[], None, "no music learned (x)", "  d\n");
+        assert_eq!(cache_decode(&empty), Some((None, None, "no music learned (x)".into(), "  d\n".into(), vec![])));
         // any byte changed fails the CRC
         for i in 8..empty.len() {
             let mut bad = empty.clone();
@@ -1090,7 +1137,7 @@ mod tests {
             assert_eq!(cache_decode(&bad), None, "byte {i}");
         }
         // a list method B's decoder refuses (one entry announced, none there), its CRC right
-        assert_eq!(cache_decode(&cache_encode(Some(&[1, 0, 0, 0]), None, "music learned (x)", "")), None);
+        assert_eq!(cache_decode(&cache_encode(Some(&[1, 0, 0, 0]), &[], None, "music learned (x)", "")), None);
     }
 
     fn a_score(site: u16) -> ScoreRecord {
@@ -1099,6 +1146,7 @@ mod tests {
             quiet: 25,
             code: 1,
             voices: 1,
+            precedence: false,
             roles: [0; 3],
             intro_t: 10 * zx_sys::ZX_FRAME_TSTATES,
             loop_t: 0,
@@ -1114,14 +1162,23 @@ mod tests {
         let list = encode_list_scores(&[], &[], &[a_score(0x8000), a_score(0x9000)]);
         let steps = vec![Step { action: 3, at: 1000, hold: 100 }, Step { action: 0x41, at: u64::MAX, hold: 7 }];
         for learner in [LearnerRun::Script(steps), LearnerRun::Script(vec![]), LearnerRun::Kind(RunKind::Generic, 0x1234_5678), LearnerRun::Kind(RunKind::Once(4), 0)] {
-            let runs = ScoreRuns { learner, scores: vec![None, Some(RunKind::Key(11))] };
+            let runs = ScoreRuns { learner, scores: vec![None, Some(RunKind::Key(11))], shadows: vec![Some(RunKind::Key(2))] };
             assert_eq!(ScoreRuns::decode(&runs.encode()).as_ref(), Some(&runs));
-            let b = cache_encode(Some(&list), Some(&runs), "music recorded (2 scores, 1 voice)", "  d\n");
-            assert_eq!(cache_decode(&b), Some((Some(list.clone()), Some(runs.clone()), "music recorded (2 scores, 1 voice)".into(), "  d\n".into())));
-            // a run for each score, or the cache is not used
+            let shadows = [ScoreRecord { precedence: true, ..a_score(0xA000) }];
+            let b = cache_encode(Some(&list), &shadows, Some(&runs), "music recorded (2 scores, 1 voice)", "  d\n");
+            let want = (Some(list.clone()), Some(runs.clone()), "music recorded (2 scores, 1 voice)".to_string(), "  d\n".to_string(), shadows.to_vec());
+            assert_eq!(cache_decode(&b), Some(want));
+            // a run for each score and each shadow score, or the cache is not used
             let short = ScoreRuns { scores: vec![None], ..runs.clone() };
-            assert_eq!(cache_decode(&cache_encode(Some(&list), Some(&short), "x", "")), None);
-            assert_eq!(cache_decode(&cache_encode(Some(&list), None, "x", "")), None);
+            assert_eq!(cache_decode(&cache_encode(Some(&list), &shadows, Some(&short), "x", "")), None);
+            assert_eq!(cache_decode(&cache_encode(Some(&list), &[], Some(&runs), "x", "")), None);
+            assert_eq!(cache_decode(&cache_encode(Some(&list), &shadows, None, "x", "")), None);
+            // a shadow score is one with precedence
+            assert_eq!(cache_decode(&cache_encode(Some(&list), &[a_score(0xA000)], Some(&runs), "x", "")), None);
+            // shadow scores alone
+            let alone = ScoreRuns { scores: vec![], ..runs.clone() };
+            let b = cache_encode(None, &shadows, Some(&alone), "x", "");
+            assert_eq!(cache_decode(&b), Some((None, Some(alone.clone()), "x".into(), "".into(), shadows.to_vec())));
             // runs cut short or run on are not runs
             let e = runs.encode();
             assert_eq!(ScoreRuns::decode(&e[..e.len() - 1]), None);
@@ -1133,10 +1190,12 @@ mod tests {
         }
         assert_eq!((0..=255).filter_map(kind_of).count(), candidates().len() + KEYS.len());
         // the inputs: the learner's for its scores, the key run's for its
-        let runs = ScoreRuns { learner: LearnerRun::Script(vec![Step { action: 0, at: 0, hold: 40 }]), scores: vec![None, Some(RunKind::Key(0))] };
-        let (a, b) = (runs.inputs(0).unwrap(), runs.inputs(1).unwrap());
+        let runs = ScoreRuns { learner: LearnerRun::Script(vec![Step { action: 0, at: 0, hold: 40 }]), scores: vec![None, Some(RunKind::Key(0))], shadows: vec![Some(RunKind::Key(0))] };
+        let (a, b) = (runs.inputs(Of::Score(0)).unwrap(), runs.inputs(Of::Score(1)).unwrap());
         assert_eq!((a(0).0[0], a(2).0[0], b(0).0, b(500).0[3]), (1, 0, [0; 8], 1));
-        assert!(runs.inputs(2).is_none());
+        assert!(runs.inputs(Of::Score(2)).is_none());
+        assert_eq!(runs.inputs(Of::Shadow(0)).unwrap()(500).0[3], 1);
+        assert!(runs.inputs(Of::Shadow(1)).is_none());
     }
 
     #[test]
@@ -1157,7 +1216,7 @@ mod tests {
              \x20   recorded score (key 3 once): 1.0 s from frame 9, 1 voice, 1 note, 0.1 KB (score {kb})\n  OUT at 9000h, code only\n"
         );
         let status = [Some(Status::Refused { take: 2, why: "w".into() }), None, Some(Status::Original)];
-        let got = with_status(&details, &[a.clone(), b.clone(), c.clone()], &status);
+        let got = with_status(&details, &[a.clone(), b.clone(), c.clone()], &status, &[], &[]);
         assert_eq!(
             got,
             format!(
@@ -1165,6 +1224,19 @@ mod tests {
                  \x20     arranged: take 2 refused: w\n    recorded score (key 3 once): 1.0 s from frame 9, 1 voice, 1 note, 0.1 KB (score {kb})\n\
                  \x20 OUT at 9000h, code only\n  score {kc}: arranged: original\n"
             )
+        );
+    }
+
+    #[test]
+    fn statuses_under_their_shadow_scores() {
+        let (a, b) = (ScoreRecord { precedence: true, ..a_score(0x8057) }, ScoreRecord { precedence: true, ..a_score(0x9000) });
+        let (ka, kb) = (score_key(&a), score_key(&b));
+        let details = format!("  OUT at 8057h, heard in 9 frames (9 edges)\n    shadow score: 1.0 s from frame 3, 1 voice, 1 note, 0.1 KB (score {ka}{SHADOW_TAIL})\n");
+        let status = [Some(Status::Take { take: 1, generator: "g".into(), dropped: (0, 0) }), Some(Status::Original)];
+        let got = with_status(&details, &[], &[], &[a, b], &status);
+        assert_eq!(
+            got,
+            format!("{details}      arranged: take 1 (g)\n  shadow score {kb}: arranged: the live version (no take chosen)\n"),
         );
     }
 

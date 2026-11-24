@@ -17,7 +17,10 @@
 
 tools/make-personal-pack writes DIR/arrange/<game>/<key>/score.toml for every score it records.
 This tool adds a bass, a pad (chords, one note at a time) and a drum to each score, as several
-takes to choose from by ear; the next tools/make-personal-pack run packs the chosen takes.
+takes to choose from by ear; the next tools/make-personal-pack run packs the chosen takes. A
+score.toml with `shadow = true` is a shadow score: music a learned or built-in routine already
+plays live. Its takes are made like any score's; it is packed only when a take is chosen for it,
+and the take then replaces the live version.
 
   tools/arrange-music generate DIR [--takes N] [--game ID]... [--force] [--jobs J]
                                    [--model NAME] [--soundfont PATH] [--seed S] [--offline]
@@ -55,7 +58,8 @@ takes to choose from by ear; the next tools/make-personal-pack run packs the cho
           [choices]
           "<game>/<key>" = <take>     # 0 or absent: the original
       --set writes choices without the page; --list prints every score, its takes, their metrics
-      and the choice. Choices of other scores in the file are kept.
+      and the choice. Choices of other scores in the file are kept. The page and the list mark a
+      shadow score "(replaces the live version when chosen)"; its original is the live version.
 
   tools/arrange-music selftest
       Checks generate (with the rules generator), the files it writes, pick --set and --list, and
@@ -157,6 +161,12 @@ class Score:
     @property
     def roles(self) -> list[str]:
         return list(self.header.get("roles", []))
+
+    @property
+    def shadow(self) -> bool:
+        """A shadow score: music a learned or built-in routine plays live, packed only with a take
+        chosen for it."""
+        return self.header.get("shadow", False) is True
 
     @property
     def total_t(self) -> int:
@@ -1126,7 +1136,7 @@ def score_entries(d: Path) -> list[dict]:
             doc = read_toml(p / "arranged.toml")
             takes.append({"n": n, "generator": doc.get("generator", ""), "metrics": doc.get("metrics", {}),
                           "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file()})
-        out.append({"id": s.id, "game": s.game, "name": s.name, "key": s.key, "seconds": round(s.seconds, 1),
+        out.append({"id": s.id, "game": s.game, "name": s.name, "key": s.key, "seconds": round(s.seconds, 1), "shadow": s.shadow,
                     "original": (s.dir / "original.wav").is_file(), "takes": takes, "choice": choices.get(s.id, 0)})
     return out
 
@@ -1149,14 +1159,19 @@ def apply_set(d: Path, sets: list[str]) -> None:
         print(f"{sid} = {n_}" + (" (the original)" if n_ == 0 else ""))
 
 
+SHADOW_MARK = "(replaces the live version when chosen)"
+
+
 def print_list(d: Path) -> None:
     entries = score_entries(d)
     if not entries:
         print(f"no scores under {d / 'arrange'}")
     for e in entries:
         ch = e["choice"]
-        print(f"{e['id']}  ({e['name']}, {e['seconds']} s)  takes: {' '.join(str(t['n']) for t in e['takes']) or '-'}  "
-              f"choice: {ch}{' (original)' if ch == 0 else ''}")
+        shadow = f" {SHADOW_MARK}" if e["shadow"] else ""
+        original = " (the live version)" if e["shadow"] else " (original)"
+        print(f"{e['id']}  ({e['name']}, {e['seconds']} s){shadow}  takes: {' '.join(str(t['n']) for t in e['takes']) or '-'}  "
+              f"choice: {ch}{original if ch == 0 else ''}")
         for t in e["takes"]:
             print(f"  take {t['n']}: {t['generator']}")
             print(f"    {metrics_line(t['metrics'])}")
@@ -1206,9 +1221,10 @@ let game = null, html = '';
 for (const e of DATA) {
   if (e.game !== game) { game = e.game; html += '<h2>' + esc(e.name) + ' <small class="m">' + esc(e.game) + '</small></h2>'; }
   const name = 'c-' + e.id;
-  html += '<div class="score"><h3>' + esc(e.key) + ' <span>' + e.seconds + ' s</span></h3>';
+  html += '<div class="score"><h3>' + esc(e.key) + ' <span>' + e.seconds + ' s' +
+    (e.shadow ? ' (replaces the live version when chosen)' : '') + '</span></h3>';
   html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="0"' + (e.choice === 0 ? ' checked' : '') +
-    '> original</label><div class="audios">' + (e.original ? player(url(e, 'original.wav')) : '<small>no render</small>') + '</div></div>';
+    '> ' + (e.shadow ? 'live version' : 'original') + '</label><div class="audios">' + (e.original ? player(url(e, 'original.wav')) : '<small>no render</small>') + '</div></div>';
   for (const t of e.takes) {
     html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="' + t.n + '"' + (e.choice === t.n ? ' checked' : '') +
       '> take ' + t.n + '</label><div class="audios">' +
@@ -1366,8 +1382,9 @@ def cmd_pick(a: argparse.Namespace) -> int:
 # selftest
 
 
-def selftest_score(path: Path, game: str, key: str) -> None:
-    """A small invented tune: an intro and a loop, a melody, a bass voice and a pad voice."""
+def selftest_score(path: Path, game: str, key: str, shadow: bool = False) -> None:
+    """A small invented tune: an intro and a loop, a melody, a bass voice and a pad voice; a shadow
+    score's when `shadow`."""
     clock = 3500000
     beat = int(0.25 * clock)
     intro_t, loop_t = 4 * beat, 32 * beat
@@ -1382,8 +1399,12 @@ def selftest_score(path: Path, game: str, key: str) -> None:
             notes.append({"voice": 1, "start_t": i * beat, "end_t": min(i * beat + 8 * beat, intro_t + loop_t), "period_t": period_of_midi(clock, 55), "level": 60})
     notes.sort(key=lambda n: (n["start_t"], n["voice"]))
     path.parent.mkdir(parents=True, exist_ok=True)
-    dump_toml(path, {"game": game, "name": "Test tune", "key": key, "clock_hz": clock, "intro_t": intro_t, "loop_t": loop_t,
-                     "voices": 3, "roles": ["bass", "pad", "lead"], "note": notes})
+    doc = {"game": game, "name": "Test tune", "key": key, "clock_hz": clock, "intro_t": intro_t, "loop_t": loop_t,
+           "voices": 3, "roles": ["bass", "pad", "lead"]}
+    if shadow:
+        doc["shadow"] = True
+    doc["note"] = notes
+    dump_toml(path, doc)
 
 
 def cmd_selftest(a: argparse.Namespace) -> int:
@@ -1399,9 +1420,11 @@ def cmd_selftest(a: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="arrange-selftest-") as tmp:
         d = Path(tmp)
-        keys = ["1234-0badc0de", "5678-12345678"]
+        keys = ["1234-0badc0de", "5678-12345678", "9ABC-0f0f0f0f"]
         for k in keys:
-            selftest_score(d / "arrange" / "test-game" / k / "score.toml", "test-game", k)
+            selftest_score(d / "arrange" / "test-game" / k / "score.toml", "test-game", k, shadow=k == keys[2])
+        check(load_score(d / "arrange" / "test-game" / keys[2] / "score.toml").shadow, "a score.toml with shadow = true reads as a shadow score")
+        check(not load_score(d / "arrange" / "test-game" / keys[0] / "score.toml").shadow, "one without, as a score")
         dump_toml(choices_path(d), {"choices": {"other-game/0000-00000000": 3}})
         run = lambda *args: main([*args])  # noqa: E731
         check(run("generate", str(d), "--model", "rules", "--takes", "2", "--jobs", "2") == 0, "generate --model rules --takes 2 --jobs 2")
@@ -1469,6 +1492,10 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             main(["pick", str(d), "--list"])
         out = buf.getvalue()
         check(f"test-game/{keys[0]}" in out and "choice: 2" in out and "take 2: rules" in out, "pick --list")
+        lines = {ln.split()[0]: ln for ln in out.splitlines() if ln.startswith("test-game/")}
+        check(SHADOW_MARK in lines[f"test-game/{keys[2]}"] and "(the live version)" in lines[f"test-game/{keys[2]}"], "pick --list marks the shadow score")
+        check(SHADOW_MARK not in lines[f"test-game/{keys[0]}"], "pick --list marks no other score")
+        check(run("pick", str(d), "--set", f"test-game/{keys[2]}=1") == 0, "pick --set chooses a take of the shadow score")
         srv = serve(d, 0)
         port = srv.server_address[1]
         th = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -1477,6 +1504,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             base = f"http://127.0.0.1:{port}"
             page = urllib.request.urlopen(base + "/").read().decode()
             check("Arranged takes" in page and keys[0] in page, "page lists the scores")
+            check('"shadow": true' in page and "replaces the live version when chosen" in page, "page marks the shadow score")
             if renderer.ok:
                 req = urllib.request.Request(f"{base}/audio/test-game/{keys[0]}/take-1/fm1.wav", headers={"Range": "bytes=0-99"})
                 r = urllib.request.urlopen(req)
@@ -1490,8 +1518,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             req = urllib.request.Request(base + "/save", data=body, headers={"Content-Type": "application/json"})
             check(urllib.request.urlopen(req).status == 200, "page save")
             ch = read_toml(choices_path(d)).get("choices", {})
-            check(ch.get(f"test-game/{keys[1]}") == 1 and ch.get(f"test-game/{keys[0]}") == 2 and ch.get("other-game/0000-00000000") == 3,
-                  "choices.toml after the page's save")
+            check(ch.get(f"test-game/{keys[1]}") == 1 and ch.get(f"test-game/{keys[0]}") == 2 and ch.get("other-game/0000-00000000") == 3
+                  and ch.get(f"test-game/{keys[2]}") == 1, "choices.toml after the page's save")
         finally:
             srv.shutdown()
             srv.server_close()

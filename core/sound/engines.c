@@ -36,7 +36,7 @@
  * read (step 2, stale as for any learned entry), and the decision is as for any entry.
  *
  * A game's recorded scores (learned.c) play after the decision, through snd_b.scores: a frame the
- * decision leaves unclaimed may be a score's.
+ * decision leaves unclaimed may be a score's (any frame, a score's with precedence).
  *
  * The built-in entries: Castaway's title tune and Escape from Colony 8's music (the pack's
  * games), the 48K ROM's BEEPER, and the two-count tune, the burst tune and the unison melody

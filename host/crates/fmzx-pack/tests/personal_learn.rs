@@ -112,7 +112,13 @@ fn personal_learns_tune() {
 
     // the lines after the size table, and the details
     assert!(shown.find("used ").unwrap() < shown.find("tune: music learned").unwrap(), "{shown}");
-    assert!(line(&shown, "tune").starts_with("tune: music learned (1 routine, heard, 1 channel)"), "{shown}");
+    // its music, which the entry plays, a shadow score: written out, not packed (the list holds
+    // the entry alone)
+    assert!(line(&shown, "tune").starts_with("tune: music learned (1 routine, heard, 1 channel; 1 shadow score)"), "{shown}");
+    let shadows: Vec<_> = std::fs::read_dir(out.0.join("arrange/tune")).expect("arrange/tune/").flatten().collect();
+    assert_eq!(shadows.len(), 1);
+    let text = std::fs::read_to_string(shadows[0].path().join("score.toml")).expect("score.toml");
+    assert!(text.contains("\nshadow = true\n"), "{text}");
     assert!(line(&shown, "border").starts_with("border: no music learned ("), "{shown}");
     assert!(line(&shown, "scroll").starts_with("scroll: no music learned ("), "{shown}");
     let report = std::fs::read_to_string(out.0.join("sound-report.txt")).expect("sound-report.txt");

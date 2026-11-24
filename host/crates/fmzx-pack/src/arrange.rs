@@ -6,10 +6,11 @@
 //!
 //! # The scores, written out
 //!
-//! Each recorded score (kind-2 record) of each packed game is written to
+//! Each recorded score (kind-2 record) of each packed game, and each of its shadow scores (music a
+//! learned or built-in entry plays, [`soundlearn::GameSound::shadows`]), is written to
 //! `<out>/arrange/<game-id>/<key>/score.toml` (`<key>`: [`score_key`]): the game's id and name,
 //! the key, `clock_hz`, the record's `intro_t` and `loop_t`, its tonal `voices` and their
-//! `roles` by name, and its notes on one timeline, the intro and then one pass of the loop (a
+//! `roles` by name, `shadow = true` for a shadow score, and its notes on one timeline, the intro and then one pass of the loop (a
 //! loop note at `intro_t` plus its time in the loop), each `[[note]]` with its `voice` (0-2),
 //! `start_t` and `end_t` (T-states since T0), `period_t` (the full period in T-states) and
 //! `level` (1-255), by start and then voice. A note runs from its note on to the voice's next
@@ -38,11 +39,15 @@
 //! keeps the score's trigger, code, quiet and fingerprints, so it plays in step as before.
 //! Then ([`apply`]) the game's scores must stay within [`SCORES_BYTES_MAX`], method B's decoder
 //! must take the list, and the replay must verify the score ([`soundlearn::scores::verify`]).
-//! A take that fails any of these leaves the original, with the reason.
+//! A take that fails any of these leaves the original, with the reason. A shadow score is packed
+//! only with a take chosen for it: the take's record, its precedence set (method B gives it the
+//! frames the table claims too), is added after the game's scores, which must then number at most
+//! [`SND_SCORES_MAX`](zx_sys::SND_SCORES_MAX) and stay within [`SCORES_BYTES_MAX`], and is
+//! verified the same way; else the routine plays the music live, as before.
 
 use serde::Deserialize;
 use soundlearn::scores::{record_bytes, SCORES_BYTES_MAX};
-use soundlearn::{replace_scores, score_key, ScoreEvent, ScoreRecord, SCORE_DRUM};
+use soundlearn::{append_score, decode_scores, replace_scores, score_key, ScoreEvent, ScoreRecord, SCORE_DRUM};
 use std::collections::BTreeMap;
 use std::path::Path;
 use zx_sys::{SndEngines, SND_EVENTS, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD, SND_TONAL, ZX_FRAME_TSTATES};
@@ -115,7 +120,7 @@ fn quoted(s: &str) -> String {
 }
 
 /// The text of a score's `score.toml` (see the module docs): `game` its game's id, `name` the
-/// game's name.
+/// game's name; a shadow score's (precedence set) says `shadow = true`.
 pub fn score_toml(game: &str, name: &str, rec: &ScoreRecord) -> String {
     let roles: Vec<String> = rec.roles[..usize::from(rec.voices).min(SND_TONAL)].iter().map(|&r| quoted(role_name(r))).collect();
     let mut s = format!(
@@ -129,6 +134,11 @@ pub fn score_toml(game: &str, name: &str, rec: &ScoreRecord) -> String {
         rec.voices,
         roles.join(", ")
     );
+    if rec.precedence {
+        s += "# A shadow score: music a learned or built-in routine plays live. It is packed only with a\n\
+              # take chosen for it, which then plays in place of the live version.\n\
+              shadow = true\n";
+    }
     for n in timeline(rec) {
         s += &format!(
             "\n[[note]]\nvoice = {}\nstart_t = {}\nend_t = {}\nperiod_t = {}\nlevel = {}\n",
@@ -414,9 +424,11 @@ pub enum Status {
 
 impl Status {
     /// Its line in the report: `arranged: take 2 (<generator>)`, `arranged: original` or
-    /// `arranged: take 2 refused: <why>`.
-    pub fn text(&self) -> String {
+    /// `arranged: take 2 refused: <why>` (a shadow score's: `arranged: the live version` when
+    /// none is chosen).
+    pub fn text(&self, shadow: bool) -> String {
         match self {
+            Status::Original if shadow => "arranged: the live version (no take chosen)".into(),
             Status::Original => "arranged: original".into(),
             Status::Take { take, generator, dropped } => {
                 let mut parts = Vec::new();
@@ -444,9 +456,16 @@ pub fn has_takes(folder: &Path) -> bool {
     })
 }
 
-/// How [`apply`] verifies a take by replay: given the list with it and the score's index; Err:
-/// why it does not play.
-pub type Verify<'a> = &'a dyn Fn(&[u8], usize) -> Result<(), String>;
+/// Which score a take is of: score `k` of the game's list, or its shadow score `k`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Of {
+    Score(usize),
+    Shadow(usize),
+}
+
+/// How [`apply`] verifies a take by replay: given the list with it, the score's index in the
+/// list and which score it is; Err: why it does not play.
+pub type Verify<'a> = &'a dyn Fn(&[u8], usize, Of) -> Result<(), String>;
 
 /// A game's list with the chosen takes in it, and what plays for each score.
 #[derive(Clone, Debug, PartialEq)]
@@ -454,27 +473,36 @@ pub struct Applied {
     pub list: Vec<u8>,
     /// Per score, in the list's order: None when it has no takes and no choice.
     pub status: Vec<Option<Status>>,
+    /// Per shadow score, the same.
+    pub shadow_status: Vec<Option<Status>>,
 }
 
 /// Puts the takes `choices` names for game `game` into its entry list `list` (its `scores`
 /// decoded), each verified by `verify` (the list with it, the score's index) after the checks
 /// (see the module docs); `dir` the arranged music's folder. The takes go in one after another,
-/// each verified on the list with those before it.
+/// each verified on the list with those before it. Then each shadow score of `shadows` with a
+/// take chosen goes into the list after its scores, the take's record with precedence (method B
+/// plays it in the frames the table claims too), within [`SND_SCORES_MAX`](zx_sys::SND_SCORES_MAX)
+/// scores and [`SCORES_BYTES_MAX`] bytes with the others packed, verified the same way.
 pub fn apply(
     dir: &Path,
     game: &str,
     list: &[u8],
     scores: &[ScoreRecord],
+    shadows: &[ScoreRecord],
     choices: &BTreeMap<String, u32>,
     verify: Verify,
 ) -> Applied {
     let mut cur = list.to_vec();
     let mut recs = scores.to_vec();
+    let chosen = |rec: &ScoreRecord| {
+        let key = score_key(rec);
+        (dir.join(game).join(&key), choices.get(&format!("{game}/{key}")).copied().filter(|&n| n > 0))
+    };
     let mut status = Vec::new();
     for (i, rec) in scores.iter().enumerate() {
-        let key = score_key(rec);
-        let folder = dir.join(game).join(&key);
-        status.push(match choices.get(&format!("{game}/{key}")).copied().filter(|&n| n > 0) {
+        let (folder, take) = chosen(rec);
+        status.push(match take {
             Some(take) => Some(match one_take(&folder, take, &recs, i, &cur, verify) {
                 Ok((a, l)) => {
                     cur = l;
@@ -486,7 +514,38 @@ pub fn apply(
             None => has_takes(&folder).then_some(Status::Original),
         });
     }
-    Applied { list: cur, status }
+    let mut shadow_status = Vec::new();
+    for (i, rec) in shadows.iter().enumerate() {
+        let (folder, take) = chosen(rec);
+        shadow_status.push(match take {
+            Some(take) => Some(match one_shadow(&folder, take, rec, i, &cur, verify) {
+                Ok((a, l)) => {
+                    cur = l;
+                    Status::Take { take, generator: a.generator, dropped: a.dropped }
+                }
+                Err(why) => Status::Refused { take, why },
+            }),
+            None => has_takes(&folder).then_some(Status::Original),
+        });
+    }
+    Applied { list: cur, status, shadow_status }
+}
+
+/// Take `take` of shadow score `i` (`rec`) in its `folder`: made into a record with precedence
+/// and added to the list `list`, checked and verified. Err: why not.
+fn one_shadow(folder: &Path, take: u32, rec: &ScoreRecord, i: usize, list: &[u8], verify: Verify) -> Result<(Arranged, Vec<u8>), String> {
+    let path = folder.join(format!("take-{take}")).join(TAKE_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("take-{take}/{TAKE_FILE}: {e}"))?;
+    let mut a = arrange(rec, take, &text)?;
+    a.rec.precedence = true;
+    let mut all = decode_scores(list)?;
+    let index = all.len();
+    all.push(a.rec.clone());
+    fits(&all)?;
+    let l = append_score(list, &a.rec)?;
+    SndEngines::with_learned(&l).map_err(|e| format!("method B's decoder refuses it (error {e})"))?;
+    verify(&l, index, Of::Shadow(i)).map_err(|why| format!("the replay: {why}"))?;
+    Ok((a, l))
 }
 
 /// Take `take` of score `i` (of `recs`, the list `list`'s scores) in its `folder`: made into a
@@ -507,7 +566,7 @@ fn one_take(
     fits(&all)?;
     let l = replace_scores(list, &all)?;
     SndEngines::with_learned(&l).map_err(|e| format!("method B's decoder refuses it (error {e})"))?;
-    verify(&l, i).map_err(|why| format!("the replay: {why}"))?;
+    verify(&l, i, Of::Score(i)).map_err(|why| format!("the replay: {why}"))?;
     Ok((a, l))
 }
 
@@ -538,6 +597,7 @@ mod tests {
             quiet: 25,
             code: 7,
             voices: 2,
+            precedence: false,
             roles: [SND_ROLE_LEAD, SND_ROLE_BASS, 0],
             intro_t: 10 * F + 10,
             loop_t: 20 * F,
@@ -697,7 +757,7 @@ mod tests {
         assert_eq!(a.dropped, (3, 1));
         assert_eq!(a.rec.intro_events.len(), 7);
         assert!(a.rec.intro_events.iter().any(|e| e.t == F + 128) && !a.rec.intro_events.iter().any(|e| e.t == F + 320));
-        assert_eq!(Status::Take { take: 1, generator: "g".into(), dropped: a.dropped }.text(), "arranged: take 1 (g), 3 drum notes and 1 pad note dropped (over 8 events in a frame)");
+        assert_eq!(Status::Take { take: 1, generator: "g".into(), dropped: a.dropped }.text(false), "arranged: take 1 (g), 3 drum notes and 1 pad note dropped (over 8 events in a frame)");
         // the lead and two drums, 9 events: the later drum goes
         notes.truncate(4);
         notes.extend([(3, f + 1000, f + 1100, 0, 9), (3, f + 1200, f + 1300, 0, 9)]);
@@ -712,10 +772,10 @@ mod tests {
 
     #[test]
     fn statuses() {
-        assert_eq!(Status::Original.text(), "arranged: original");
-        assert_eq!(Status::Take { take: 2, generator: "m".into(), dropped: (0, 0) }.text(), "arranged: take 2 (m)");
-        assert_eq!(Status::Take { take: 2, generator: "m".into(), dropped: (1, 0) }.text(), "arranged: take 2 (m), 1 drum note dropped (over 8 events in a frame)");
-        assert_eq!(Status::Refused { take: 3, why: "x".into() }.text(), "arranged: take 3 refused: x");
+        assert_eq!(Status::Original.text(false), "arranged: original");
+        assert_eq!(Status::Take { take: 2, generator: "m".into(), dropped: (0, 0) }.text(false), "arranged: take 2 (m)");
+        assert_eq!(Status::Take { take: 2, generator: "m".into(), dropped: (1, 0) }.text(false), "arranged: take 2 (m), 1 drum note dropped (over 8 events in a frame)");
+        assert_eq!(Status::Refused { take: 3, why: "x".into() }.text(false), "arranged: take 3 refused: x");
     }
 
     #[test]
@@ -768,19 +828,20 @@ mod tests {
         let list = soundlearn::encode_list_scores(&[], &[], std::slice::from_ref(&s));
         let key = score_key(&s);
         let folder = dir.0.join("g").join(&key);
-        let ok = |_: &[u8], _: usize| Ok(());
+        let ok = |_: &[u8], _: usize, _: Of| Ok(());
         // no takes, no choice: nothing to say; a take: the original
         let none = BTreeMap::new();
-        assert_eq!(apply(&dir.0, "g", &list, std::slice::from_ref(&s), &none, &ok), Applied { list: list.clone(), status: vec![None] });
+        assert_eq!(apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &none, &ok), Applied { list: list.clone(), status: vec![None], shadow_status: vec![] });
         std::fs::create_dir_all(folder.join("take-1")).unwrap();
         assert!(!has_takes(&folder));
         std::fs::write(folder.join("take-1").join(TAKE_FILE), take(&s, &[(0, 0, 640, 3000, 92)])).unwrap();
         assert!(has_takes(&folder));
-        assert_eq!(apply(&dir.0, "g", &list, std::slice::from_ref(&s), &none, &ok).status, [Some(Status::Original)]);
+        assert_eq!(apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &none, &ok).status, [Some(Status::Original)]);
         // chosen: in the list, verified with the list and the score's index
         let chosen = BTreeMap::from([(format!("g/{key}"), 1)]);
         let seen = std::cell::RefCell::new(Vec::new());
-        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &chosen, &|l, i| {
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &chosen, &|l, i, of| {
+            assert_eq!(of, Of::Score(0));
             seen.borrow_mut().push((l.to_vec(), i));
             Ok(())
         });
@@ -789,11 +850,62 @@ mod tests {
         assert_eq!(soundlearn::decode_scores(&got.list).unwrap(), [want.rec]);
         assert_eq!(seen.into_inner(), [(got.list.clone(), 0)]);
         // the replay fails, or the take is not there: the original, with the reason
-        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &chosen, &|_, _| Err("it stops".into()));
-        assert_eq!(got, Applied { list: list.clone(), status: vec![Some(Status::Refused { take: 1, why: "the replay: it stops".into() })] });
-        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &BTreeMap::from([(format!("g/{key}"), 4)]), &ok);
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &chosen, &|_, _, _| Err("it stops".into()));
+        assert_eq!(
+            got,
+            Applied { list: list.clone(), status: vec![Some(Status::Refused { take: 1, why: "the replay: it stops".into() })], shadow_status: vec![] }
+        );
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &BTreeMap::from([(format!("g/{key}"), 4)]), &ok);
         assert_eq!(got.list, list);
         assert!(matches!(&got.status[0], Some(Status::Refused { take: 4, why }) if why.starts_with("take-4/arranged.toml: ")), "{got:?}");
+    }
+
+    #[test]
+    fn a_shadow_score_goes_in_only_with_a_take() {
+        let dir = Tmp::new("shadow");
+        let s = score();
+        let shadow = ScoreRecord { site: 0x8100, precedence: true, ..s.clone() };
+        let list = soundlearn::encode_list_scores(&[], &[], std::slice::from_ref(&s));
+        let key = score_key(&shadow);
+        let folder = dir.0.join("g").join(&key);
+        let ok = |_: &[u8], _: usize, _: Of| Ok(());
+        // not chosen: the list as it was; with takes, the live version plays
+        let none = BTreeMap::new();
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), std::slice::from_ref(&shadow), &none, &ok);
+        assert_eq!(got, Applied { list: list.clone(), status: vec![None], shadow_status: vec![None] });
+        std::fs::create_dir_all(folder.join("take-1")).unwrap();
+        std::fs::write(folder.join("take-1").join(TAKE_FILE), take(&shadow, &[(0, 0, 640, 3000, 92)])).unwrap();
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), std::slice::from_ref(&shadow), &none, &ok);
+        assert_eq!((got.list.as_slice(), got.shadow_status[0].as_ref()), (list.as_slice(), Some(&Status::Original)));
+        assert_eq!(Status::Original.text(true), "arranged: the live version (no take chosen)");
+        // chosen: after the scores, with precedence, verified as score 1 of the list
+        let chosen = BTreeMap::from([(format!("g/{key}"), 1)]);
+        let seen = std::cell::RefCell::new(Vec::new());
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), std::slice::from_ref(&shadow), &chosen, &|l, i, of| {
+            seen.borrow_mut().push((l.to_vec(), i, of));
+            Ok(())
+        });
+        let mut want = arrange(&shadow, 1, &take(&shadow, &[(0, 0, 640, 3000, 92)])).unwrap().rec;
+        want.precedence = true;
+        assert_eq!(got.shadow_status, [Some(Status::Take { take: 1, generator: "g 1".into(), dropped: (0, 0) })]);
+        let back = soundlearn::decode_scores(&list).unwrap().remove(0);
+        assert_eq!(soundlearn::decode_scores(&got.list).unwrap(), [back, want]);
+        assert_eq!(got.list[0], list[0] + 1);
+        assert_eq!(seen.into_inner(), [(got.list.clone(), 1, Of::Shadow(0))]);
+        assert!(SndEngines::with_learned(&got.list).is_ok());
+        // the list full: refused, the live version plays
+        let eight = vec![s.clone(); zx_sys::SND_SCORES_MAX];
+        let full = soundlearn::encode_list_scores(&[], &[], &eight);
+        let got = apply(&dir.0, "g", &full, &eight, std::slice::from_ref(&shadow), &chosen, &ok);
+        assert_eq!(got.list, full);
+        assert!(matches!(&got.shadow_status[0], Some(Status::Refused { take: 1, why }) if why.contains("8 scores already")), "{got:?}");
+        // the replay fails: the list as it was
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), std::slice::from_ref(&shadow), &chosen, &|_, _, _| Err("it stops".into()));
+        assert_eq!(got.list, list);
+        assert_eq!(got.shadow_status, [Some(Status::Refused { take: 1, why: "the replay: it stops".into() })]);
+        // its score.toml says shadow
+        assert!(score_toml("g", "G", &shadow).contains("\nshadow = true\n"));
+        assert!(!score_toml("g", "G", &s).contains("shadow"));
     }
 
     #[test]

@@ -310,7 +310,7 @@ fn tune_personal_pack() -> Vec<u8> {
     std::fs::create_dir_all(&games).expect("create the learned pack's folder");
     std::fs::write(games.join("tune.sna"), tune_sna()).expect("write tune.sna");
     let r = fmzx_pack::personal::run(&games, &out).expect("the personal pack of tune.sna");
-    assert_eq!(r.sound, ["tune: music learned (1 routine, heard, 1 channel)"], "{r:?}");
+    assert_eq!(r.sound, ["tune: music learned (1 routine, heard, 1 channel; 1 shadow score)"], "{r:?}");
     std::fs::read(out.join("games.bin")).expect("games.bin")
 }
 

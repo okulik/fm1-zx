@@ -7,10 +7,12 @@
 //! `choices.toml` (four voices, drums among them) goes into the pack in place of the score's
 //! notes and the replay verifies it; takes that do not fit (the wrong key, overlapping notes, a
 //! note past the score's end) leave the original with the reason; a choice naming no score is a
-//! note, and a choices file that does not read fails the run. Every folder holds only generated
-//! test programs.
+//! note, and a choices file that does not read fails the run. The music of a routine the learner
+//! learned (`games/test/tune.sna`) is a shadow score: written out with `shadow = true`, packed
+//! only once a take is chosen for it, and then with precedence, so that the replay verifies it
+//! over the learned entry. Every folder holds only generated test programs.
 
-use fmzx_pack::arrange::{score_toml, timeline};
+use fmzx_pack::arrange::{score_toml, timeline, Of};
 use fmzx_pack::pack::sound_list;
 use fmzx_pack::personal::{cache_decode, run_with_limit, table, LearnerRun, Report, ScoreRuns};
 use soundlearn::listen::{schedule, RunKind};
@@ -261,7 +263,7 @@ fn chosen_takes_go_into_the_pack() {
     let (list_c, runs, ..) = cache_decode(&std::fs::read(&cached).unwrap()).expect("the cache file reads");
     assert_eq!(list_c.as_deref(), Some(&original[..]));
     let seed = u64::from(crc32fast::hash(&looping_sna()));
-    assert_eq!(runs, Some(ScoreRuns { learner: LearnerRun::Kind(RunKind::Generic, seed), scores: vec![None] }));
+    assert_eq!(runs, Some(ScoreRuns { learner: LearnerRun::Kind(RunKind::Generic, seed), scores: vec![None], shadows: vec![] }));
 
     // written out: the record's notes on one timeline
     let folder = out.0.join("arrange/looper").join(&key);
@@ -388,4 +390,81 @@ fn chosen_takes_go_into_the_pack() {
     write(&choices, "[choices]\n\"looper/x\" = -1\n");
     let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad take number");
     assert!(e.contains("\"looper/x\" = -1: a take is 1 or more, 0 the original"), "{e}");
+}
+
+/// `games/test/tune.sna`: a tune its learned entry plays.
+fn tune_sna() -> Vec<u8> {
+    std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../games/test/tune.sna")).expect("tune.sna")
+}
+
+#[test]
+fn a_shadow_score_is_packed_only_with_a_take() {
+    let games = Tmp::new("shadow-games");
+    std::fs::write(games.0.join("tune.sna"), tune_sna()).unwrap();
+    let out = Tmp::new("shadow-out");
+    let r = run(&games.0, &out.0);
+    let rep = report(&out.0);
+    println!("{}\n{rep}", table(&r));
+
+    // the learned entry alone in the pack; the shadow score written out, its line in the report
+    let learned = list(&out.0);
+    assert_eq!((learned[0], decode_scores(&learned).unwrap().len()), (1, 0));
+    let cached = std::fs::read_dir(out.0.join("sound-cache")).unwrap().next().expect("a cache file").unwrap().path();
+    let (_, runs, _, _, shadows) = cache_decode(&std::fs::read(&cached).unwrap()).expect("the cache file reads");
+    assert_eq!(shadows.len(), 1);
+    let rec = shadows[0].clone();
+    assert!(rec.precedence);
+    let key = score_key(&rec);
+    assert!(rep.contains("\n    shadow score: ") && rep.contains(&format!(" (score {key}; packed only with a chosen take)\n")), "{rep}");
+    let folder = out.0.join("arrange/tune").join(&key);
+    let text = std::fs::read_to_string(folder.join("score.toml")).expect("score.toml written");
+    assert_eq!(text, score_toml("tune", "tune", &rec));
+    assert!(text.contains("\nshadow = true\n"), "{text}");
+
+    // a take and no choice: still not packed; the live version plays
+    let mut take = format!(
+        "key = \"{key}\"\nintro_t = {}\nloop_t = {}\ntake = 1\ngenerator = \"octave down\"\n",
+        rec.intro_t, rec.loop_t
+    );
+    for n in timeline(&rec) {
+        take += &format!("\n[[note]]\nvoice = {}\nstart_t = {}\nend_t = {}\nperiod_t = {}\nlevel = 200\n", n.voice, n.start_t, n.end_t, 2 * n.period_t);
+    }
+    write(&folder.join("take-1/arranged.toml"), &take);
+    run(&games.0, &out.0);
+    assert_eq!(list(&out.0), learned);
+    assert!(report(&out.0).contains("\n      arranged: the live version (no take chosen)\n"), "{}", report(&out.0));
+
+    // chosen: packed after the entry with precedence, the trigger and fingerprints kept
+    write(&out.0.join("arrange/choices.toml"), &format!("[choices]\n\"tune/{key}\" = 1\n"));
+    let r = run(&games.0, &out.0);
+    let shown = table(&r);
+    let rep = report(&out.0);
+    println!("{shown}\n{rep}");
+    let packed = list(&out.0);
+    let got = decode_scores(&packed).unwrap();
+    assert_eq!((packed[0], got.len()), (2, 1));
+    let a = &got[0];
+    assert!(a.precedence);
+    assert_eq!((a.site, a.code, a.intro_fp.clone(), a.loop_fp.clone()), (rec.site, rec.code, rec.intro_fp.clone(), rec.loop_fp.clone()));
+    assert!(a.intro_events.iter().chain(&a.loop_events).filter_map(|e| e.on).all(|(p, _)| timeline(&rec).iter().any(|n| n.period_t * 2 == p)));
+    assert!(rep.contains("\n      arranged: take 1 (octave down)\n"), "{rep}");
+    assert!(shown.contains(&format!("tune: shadow score {key} plays take 1 (octave down)\n")), "{shown}");
+    assert!(shown.contains("tune: music learned (1 routine, heard, 1 channel; 1 shadow score, 1 arranged)\n"), "{shown}");
+    // the replay verifies it in the run that recorded it: it plays over the learned entry
+    let sna = tune_sna();
+    let load = || {
+        let mut m = Machine::new();
+        m.load_sna(&sna).unwrap();
+        m
+    };
+    let inputs = runs.expect("the runs").inputs(Of::Shadow(0)).expect("its run");
+    soundlearn::scores::verify(&load, &inputs, &packed, 0, true).expect("verified");
+    // without precedence the learned entry keeps its frames and the replay refuses it
+    let plain = soundlearn::replace_scores(&packed, &[ScoreRecord { precedence: false, ..a.clone() }]).unwrap();
+    assert!(soundlearn::scores::verify(&load, &inputs, &plain, 0, true).is_err());
+
+    // the original chosen again: the learned list
+    write(&out.0.join("arrange/choices.toml"), &format!("[choices]\n\"tune/{key}\" = 0\n"));
+    run(&games.0, &out.0);
+    assert_eq!(list(&out.0), learned);
 }

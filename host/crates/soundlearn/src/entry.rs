@@ -22,7 +22,8 @@
 //! a kind-1 record (roles for a built-in entry):
 //!   u16 size (16), u8 kind (1), u8 channels (1-3), u64 digest (the built-in entry's), u8 role[3], u8 0
 //! a kind-2 record (a recorded score: an intro and optionally a loop, times from each section's start):
-//!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (1-3 tonal voices)
+//!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (bits 0-6: 1-3 tonal voices;
+//!     bit 7: precedence, the score keeps the frames the table claims too)
 //!   u16 site, u16 quiet, u32 code, u32 intro_t, u32 loop_t (0: no loop)
 //!   u16 intro_buckets, u16 loop_buckets (each section's whole buckets), u16 intro_events, u16 loop_events
 //!   u8 n_pitches (1-255), u8 role[3], u24 pitch[n_pitches] (full periods, T)
@@ -116,6 +117,10 @@ pub struct ScoreRecord {
     pub code: u32,
     /// The tonal voices the events use (1-3); the drum ([`SCORE_DRUM`]) is not counted.
     pub voices: u8,
+    /// Precedence over method B's table: the score keeps every frame it plays, those a table
+    /// entry claims too (bit 7 of the record's voices byte). The personal pack sets it on the
+    /// chosen take of a shadow score (music a learned or built-in entry plays).
+    pub precedence: bool,
     /// Per voice: its stored role in the FM synth (`SND_ROLE_*`; 0: none).
     pub roles: [u8; SND_TONAL],
     /// The intro's length: T from T0 (with no loop, the whole score).
@@ -195,6 +200,8 @@ pub fn score_fingerprint(frames: &[(Vec<zx_edge>, u8)], t0: u32, from_t: u64, le
 
 /// Fixed part of an entry.
 const HEAD: usize = 36;
+/// A kind-2 record's voices byte: the precedence bit.
+const PRECEDENCE: u8 = 0x80;
 /// The kind byte of each.
 const KIND_LEARNED: u8 = 0;
 const KIND_ROLES: u8 = 1;
@@ -339,7 +346,7 @@ fn score_events_into(b: &mut Vec<u8>, events: &[ScoreEvent], len: u32, pitches: 
 
 fn encode_score(r: &ScoreRecord) -> Vec<u8> {
     let pitches = score_pitches(r);
-    let mut b = vec![0, 0, KIND_SCORE, r.voices];
+    let mut b = vec![0, 0, KIND_SCORE, r.voices | if r.precedence { PRECEDENCE } else { 0 }];
     for w in [r.site, r.quiet] {
         b.extend(w.to_le_bytes());
     }
@@ -434,7 +441,7 @@ fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
     let w = |at: usize| u16::from_le_bytes([r[at], r[at + 1]]);
     let d = |at: usize| u32::from_le_bytes([r[at], r[at + 1], r[at + 2], r[at + 3]]);
     let size = r.len();
-    let voices = r[3];
+    let (voices, precedence) = (r[3] & !PRECEDENCE, r[3] & PRECEDENCE != 0);
     let (intro_t, loop_t) = (d(12), d(16));
     let buckets = [usize::from(w(20)), usize::from(w(22))];
     let np = usize::from(r[28]);
@@ -532,6 +539,7 @@ fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
         quiet: w(6),
         code: d(8),
         voices,
+        precedence,
         roles: [r[29], r[30], r[31]],
         intro_t,
         loop_t,
@@ -597,6 +605,30 @@ pub fn replace_scores(list: &[u8], scores: &[ScoreRecord]) -> Result<Vec<u8>, St
         }
         end = off + size;
     }
+    b.extend(&list[end..]);
+    Ok(b)
+}
+
+/// The encoded entry list `list` with the score `rec` added after its last entry (the list's
+/// count one more; any bytes after the last entry stay after it). Errors: a list
+/// [`decode_scores`] refuses, a list that would hold over [`SND_SCORES_MAX`] scores or 255
+/// entries, a record over 65,532 bytes, or one the decoder would refuse.
+pub fn append_score(list: &[u8], rec: &ScoreRecord) -> Result<Vec<u8>, String> {
+    decode_scores(list)?;
+    let entries = list_entries(list)?;
+    let n = entries.iter().filter(|e| e.2 == KIND_SCORE).count();
+    if n >= SND_SCORES_MAX || entries.len() >= 255 {
+        return Err(format!("the list holds {n} scores already (at most {SND_SCORES_MAX})"));
+    }
+    let r = encode_score(rec);
+    if r.len() > 0xFFFC {
+        return Err(format!("its record would take {} bytes", r.len()));
+    }
+    decode_score(&r)?;
+    let end = entries.last().map_or(4, |&(off, size, _)| off + size);
+    let mut b = list[..end].to_vec();
+    b[0] += 1;
+    b.extend(r);
     b.extend(&list[end..]);
     Ok(b)
 }

@@ -46,10 +46,10 @@
 //!    routine, a routine another key names too, or more channels than the routine has, is
 //!    [`GameSound::override_error`].
 //! 8. **Scores** ([`crate::scores`]): each heard routine whose `OUT` sounded in at least
-//!    [`SCORE_FRAMES`] frames, that no kept entry gives and no built-in entry matches (refused as
-//!    one, or its observation refused for one), and whose `OUT` lies in no routine before it (a
-//!    learned one, or one taken for a score: its `OUT`s and its span as read or observed), gets
-//!    a recorded score (an intro and, when its music loops, one pass of the loop) for each tune
+//!    [`SCORE_FRAMES`] frames (learned, built in or neither) and whose `OUT` lies in no routine
+//!    before it (one taken for a score: its `OUT`s and its span as read or observed), gets a
+//!    recorded score (an intro and, when its music loops, one pass of the loop; a shadow score
+//!    when method B's table claims more than a tenth of its stretch, [`GameSound::shadows`]) for each tune
 //!    of the run listened to and, when that gives one, of the extra runs (each key of 1-9, 0,
 //!    ENTER and SPACE once, but the one of the learner's run, [`LearnOptions::run`]), which may
 //!    give scores to `OUT`s heard there only too; each is verified by a replay of its run with
@@ -76,7 +76,7 @@ use zx_sys::{Machine, SndEngines, SND_LEARNED_MAX, SND_LEARNED_SITES_MAX, SND_LE
 /// changes. Bump it too whenever method B's behaviour changes (`core/sound/engines.c`,
 /// `core/sound/learned.c`, the decoder's limits in `core/sound/sound.h`): the learner replays
 /// through them and keeps only lists the decoder takes, and the cache key does not cover the core.
-pub const LEARNER_VERSION: u32 = 10;
+pub const LEARNER_VERSION: u32 = 11;
 
 /// Drums tried per learned routine (each costs a replay).
 const DRUM_TRIES: usize = 4;
@@ -106,6 +106,12 @@ pub struct GameSound {
     /// The run each score was recorded from: None the learner's (the `inputs` it was given),
     /// else the extra run ([`RunKind::Key`], whose inputs are [`run_inputs`]`(kind, 0)`).
     pub score_runs: Vec<Option<RunKind>>,
+    /// The shadow scores (precedence set): music a learned or built-in entry plays, recorded as
+    /// a score is, not in the pack's list (the personal pack packs one only with a take chosen
+    /// for it).
+    pub shadows: Vec<ScoreRecord>,
+    /// The run each shadow score was recorded from, as [`GameSound::score_runs`].
+    pub shadow_runs: Vec<Option<RunKind>>,
     /// An override ([`LearnOptions::instruments`]) that names no routine of the game, or does not
     /// fit the routine: `[game.instruments] "C694": ...`. The personal pack is not built.
     pub override_error: Option<String>,
@@ -150,6 +156,8 @@ pub fn learn_with(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &L
                 roles: Vec::new(),
                 scores: Vec::new(),
                 score_runs: Vec::new(),
+                shadows: Vec::new(),
+                shadow_runs: Vec::new(),
                 override_error: None,
             }
         }
@@ -276,7 +284,10 @@ fn learn_game(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &Learn
     let extra: Vec<(String, Inputs)> = kinds.iter().map(|&k| (k.short(), run_inputs(k, 0))).collect();
     let got = record(load, inputs, tap, &extra, &cands, &covered, &entries, &roles, builtins);
     let scores = got.scores;
-    let score_runs = got.runs.iter().map(|&r| r.checked_sub(1).and_then(|k| kinds.get(k).copied())).collect();
+    let run_of = |&r: &usize| r.checked_sub(1).and_then(|k| kinds.get(k).copied());
+    let score_runs = got.runs.iter().map(run_of).collect();
+    let shadow_runs = got.shadow_runs.iter().map(run_of).collect();
+    let shadows = got.shadows;
     for (k, o) in got.outcomes {
         done[k].routine.scores.push(o);
     }
@@ -302,16 +313,13 @@ fn learn_game(load: &(dyn Fn() -> Machine + Sync), inputs: &Inputs, opts: &Learn
         .find_map(|j| report::reason(&j.routine));
     let details = done.iter().map(|j| report::block(&j.routine)).chain(heard_only).collect();
     let voices: Vec<u8> = scores.iter().map(|s| s.voices).collect();
-    GameSound { entries, line: report::line(&learned, &voices, refused.as_deref()), details, roles, scores, score_runs, override_error }
+    let line = report::line(&learned, &voices, shadows.len(), refused.as_deref());
+    GameSound { entries, line, details, roles, scores, score_runs, shadows, shadow_runs, override_error }
 }
 
-/// The routines a score may be recorded for (step 8 of the module docs), in the order of `done`:
-/// (block, its `OUT`); and the `OUT`s and spans of those and of the learned routines.
+/// The routines a score (or a shadow score) may be recorded for (step 8 of the module docs), in
+/// the order of `done`: (block, its `OUT`); and the `OUT`s and spans of those.
 fn score_candidates(done: &[Judged]) -> (Vec<Candidate>, Vec<Group>) {
-    let builtin = |r: &Routine| {
-        r.outcome.as_ref().is_err_and(|w| w.starts_with(BUILTIN))
-            || r.observation.as_ref().is_some_and(|o| o.outcome.as_ref().is_err_and(|w| w.contains("built-in")))
-    };
     // the routines before
     let mut groups: Vec<Group> = Vec::new();
     let mut cands = Vec::new();
@@ -329,7 +337,7 @@ fn score_candidates(done: &[Judged]) -> (Vec<Candidate>, Vec<Group>) {
         }
         let site = r.site;
         let before = groups.iter().any(|(outs, spans)| outs.contains(&site) || spans.iter().any(|&(a, len)| site.wrapping_sub(a) < len));
-        let candidate = r.heard.is_some_and(|(frames, _)| frames >= SCORE_FRAMES) && r.outcome.is_err() && !builtin(r);
+        let candidate = r.heard.is_some_and(|(frames, _)| frames >= SCORE_FRAMES);
         if candidate || r.outcome.is_ok() {
             groups.push((outs, spans));
         }

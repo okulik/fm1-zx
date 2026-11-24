@@ -16,7 +16,7 @@ mod fixtures;
 use fixtures::{Asm, Labels};
 use soundlearn::entry::{ear_edges, score_code, score_fingerprint, score_level};
 use soundlearn::{
-    decode_scores, encode_list, encode_list_scores, encode_list_with, replace_scores, score_key, BuiltinRoles, LearnedEntry, Op, ScoreEvent, ScoreRecord, SCORE_DRUM,
+    append_score, decode_scores, encode_list, encode_list_scores, encode_list_with, replace_scores, score_key, BuiltinRoles, LearnedEntry, Op, ScoreEvent, ScoreRecord, SCORE_DRUM,
 };
 use zx_sys::{
     zx_edge, Machine, SndEngines, SndFrame, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B, SND_ROLE_AUTO, SND_ROLE_BASS, SND_ROLE_LEAD, SND_SCORES_MAX,
@@ -48,6 +48,7 @@ fn score() -> ScoreRecord {
         quiet: 2,
         code: 0xDEAD_BEEF,
         voices: 2,
+        precedence: false,
         roles: [SND_ROLE_BASS, SND_ROLE_LEAD, 0],
         intro_t: 3 * F32,
         loop_t: 0,
@@ -437,6 +438,44 @@ fn decoder_refuses_bad_scores() {
     // one bad score refuses the list, its learned entries too
     let roles = BuiltinRoles { digest: 2, channels: 1, roles: [1, 0, 0] };
     refused(encode_list_scores(&[], &[roles], &[score(), ScoreRecord { voices: 0, ..score() }]), "a bad second score");
+    // the voices byte: bit 7 (the precedence) alone beside the voices
+    refused(patched(3, &[0x80]), "precedence, no voice");
+    refused(patched(3, &[0x84]), "precedence, four voices");
+    for bit in [0x04, 0x08, 0x10, 0x20, 0x40] {
+        refused(patched(3, &[2 | bit]), "another high bit");
+    }
+}
+
+#[test]
+fn the_precedence_bit() {
+    // bit 7 of a kind-2 record's voices byte (the score uses two voices): taken, read back, written
+    // back byte for byte
+    for voices in 2..=3u8 {
+        let l = patched(3, &[0x80 | voices]);
+        assert!(decodes(&l), "{voices} voices with precedence");
+        let got = decode_scores(&l).unwrap();
+        assert_eq!((got[0].voices, got[0].precedence), (voices, true));
+        assert_eq!(replace_scores(&l, &got).unwrap(), l);
+    }
+    let first = ScoreRecord { precedence: true, ..score() };
+    assert_eq!(list(std::slice::from_ref(&first))[4 + 3], 0x80 | score().voices);
+    assert_eq!(list(&[score()])[4 + 3], score().voices);
+    let back = decode_scores(&list(&[score()])).unwrap().remove(0);
+    assert_eq!(decode_scores(&list(&[score(), first.clone()])).unwrap(), [back.clone(), ScoreRecord { precedence: true, ..back }]);
+    assert_eq!(score_key(&first), score_key(&score()), "the key names the music, not the precedence");
+    // on kind-2 records alone: a learned entry's channels byte and a kind-1 record's refuse it
+    let roles = BuiltinRoles { digest: 2, channels: 1, roles: [1, 0, 0] };
+    let mut l = encode_list_scores(&[], &[roles], &[]);
+    assert!(decodes(&l));
+    l[4 + 3] |= 0x80;
+    assert!(SndEngines::with_learned(&l).is_err(), "a kind-1 record's channels with bit 7");
+    // appended to a list: after its last entry, the count one more
+    let base = encode_list_scores(&[], &[roles], &[score()]);
+    let more = append_score(&base, &first).unwrap();
+    assert_eq!(more, encode_list_scores(&[], &[roles], &[score(), first.clone()]));
+    assert!(decodes(&more));
+    let full = list(&vec![score(); SND_SCORES_MAX]);
+    assert!(append_score(&full, &first).unwrap_err().contains("8 scores already"));
 }
 
 /// [`looped`] with drum hits and offs in both sections, one voice.
@@ -807,6 +846,7 @@ fn record(r: &Run, notes: &[Note], m: &Machine, labels: &Labels) -> (ScoreRecord
         code: score_code(|a| m.peek(a), site),
         roles: [SND_ROLE_LEAD, SND_ROLE_BASS, 0],
         voices: 2,
+        precedence: false,
         intro_t: buckets as u32 * F32,
         loop_t: 0,
         intro_fp: live_fp(r, f0, t0, buckets),
@@ -1244,6 +1284,7 @@ fn record_loop(r: &Run, intro: &[Note], phrase: &[Note], m: &Machine, labels: &L
         code: score_code(|a| m.peek(a), site),
         roles: [SND_ROLE_LEAD, SND_ROLE_BASS, 0],
         voices: 2,
+        precedence: false,
         intro_t,
         loop_t,
         intro_fp: score_fingerprint(frames, t0, 0, u64::from(intro_t)),

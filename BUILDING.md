@@ -227,16 +227,23 @@ known routine claims any of them. On the FM-1 an observed routine's channels pla
 it reads, without the check against the beeper's edges (its edges hold all its channels at
 once).
 
-Music that no routine gives (none learned, none known) is recorded instead, as a score, when its
-`OUT` sounded in at least 250 frames: each stretch from the first speaker edge of that `OUT` after
+Music that no routine plays (none learned, none known) is recorded instead, as a score, when its
+`OUT` sounded in at least 100 frames: each stretch from the first speaker edge of that `OUT` after
 at least 25 frames without one, for as long as the keys stay as they were (a key press may change
 the music) and the `OUT` is not silent for 100 frames, to the end of the 3-minute run at most, so
-a run that plays several tunes with silence between gives a score each; a stretch under 250 frames
-(5 s) is not recorded. When the run gives a score, the learner also listens to the game once per
-key, 1-9, 0, ENTER and SPACE (but the key of its own run), each held 5 frames at frame 500 and then
-nothing, as a menu of tunes plays another behind each key, and takes those runs' stretches too,
-from the same `OUT`s and from any other `OUT` that sounded there in 250 frames and lies in no
-routine already known. Two stretches whose speaker edges agree frame by frame over their first 100
+a run that plays several tunes with silence between gives a score each; a stretch under 100 frames
+(2 s) is not recorded. Every heard routine is looked at this way, learned, known or neither, and
+each stretch is judged by what plays it: replayed with the game's learned entries and the known
+routines, a stretch they claim at most a tenth of the sounding frames of is music nothing plays,
+and gets a score. So a routine inside a known routine (the ROM's BEEP routine at 03B5h, say) gets
+a score for music the known entry does not take (BEEP notes under a frame long). A stretch they
+claim more of is music a routine already plays live: it gets a *shadow score*, recorded and
+verified as a score is but not packed, so that it can be [arranged](#arranged-music); a take
+chosen for it puts it in the pack, where it then plays in place of the live version. When the run
+gives a score or a shadow score, the learner also listens to the game once per key, 1-9, 0, ENTER
+and SPACE (but the key of its own run), each held 5 frames at frame 500 and then nothing, as a menu
+of tunes plays another behind each key, and takes those runs' stretches too, from the same `OUT`s
+and from any other `OUT` that sounded there in 100 frames and lies in no routine already known. Two stretches whose speaker edges agree frame by frame over their first 100
 frames (2 s) are the same tune: the longer is kept. Each extra run costs a replay of the game, and
 each new tune a transcription and the replays that verify it, so a menu of tunes takes several
 times as long as a game with one. Most tunes loop: when a stretch's speaker edges repeat (from
@@ -251,20 +258,24 @@ changes from the stretch before. Method B, replaying the score's own run with th
 list, must play the score over the whole stretch (round its loop as often as the run repeats
 it) while every score kept before still plays in its run; a score whose loop it does not follow
 is recorded with no loop instead, and one with no loop it stops following is cut to where it
-held, if 250 frames remain. At most 8 scores a game, the longest first, within 128 KB in all. On
+held, if 100 frames remain. At most 8 scores a game, the longest first, within 128 KB in all;
+shadow scores are not counted (at most 8 of them as well, the longest first, none playing with a
+score in its run), and a chosen take of one counts when it goes into the pack. On
 the FM-1, FM: engines starts a score when its `OUT` makes that first edge after the same silence
 with the same code around it (several scores of one `OUT` start together, and the one whose
 recorded edges the beeper follows plays), and plays it in step with the beeper, comparing the
 beeper's edges with the recorded ones as it goes: when the game does something else (a key
 pressed during the tune, another tune), the score stops within a few frames and the beeper
-plays. Its voices take their instruments by pitch, as a routine's channels do. A recorded score
-can also play with a bass, chords and drums written around its melody, as a take you choose
+plays. Its voices take their instruments by pitch, as a routine's channels do. A score yields
+the frames a learned or known routine claims; the chosen take of a shadow score keeps them (the
+routine's own notes are not used there). A recorded score or a shadow score can also play with a
+bass, chords and drums written around its melody, as a take you choose
 ([arranged music](#arranged-music)).
 
 Anything else stays on the beeper. After the table it prints one line per game:
 
-    tune: music learned (1 routine, heard, 1 channel)
-    mixer: music learned (1 routine, heard, observed, 2 channels)
+    tune: music learned (1 routine, heard, 1 channel; 1 shadow score)
+    mixer: music learned (1 routine, heard, observed, 2 channels; 1 shadow score)
     demo: music recorded (1 score, 3 voices)
     border: no music learned (OUTs that do not always flip the speaker at 801Ah)
 
@@ -280,11 +291,14 @@ loop 41.6 s), 3 voices, 1074 notes, 4.1 KB (score 8951-1a2b3c4d)` (its stretch's
 frame of its first edge, its intro and loop when it loops, its voices, the notes stored, its size
 and its key, which names its folder `DIR/arrange/<game>/<key>/`, see
 [arranged music](#arranged-music)), the
-run named when it is an extra one (`recorded score (key 3 once): ...`), and its stretches left
-out, `no score:` and why not; an `OUT` heard only in the extra runs has a block of its own
-(`OUT at 9A12h, heard only in other runs`) unless it was found in the code; the game's line counts
-the scores (`music recorded (5 scores, 3 voices)`, `music learned (1 routine, heard, 2 channels;
-1 score)`). The games are learned in parallel, a few seconds each (a menu of tunes longer); the results are cached in `DIR/sound-cache/` (by the
+run named when it is an extra one (`recorded score (key 3 once): ...`), its shadow scores (`shadow
+score: 39.9 s from frame 1 (intro 0.0 s, loop 8.0 s), 1 voice, 16 notes, 0.4 KB (score
+8014-cc5bc889; packed only with a chosen take)`), and its stretches left out, `no score:` or `no
+shadow score:` and why not; an `OUT` heard only in the extra runs has a block of its own (`OUT at
+9A12h, heard only in other runs`) unless it was found in the code; the game's line counts the
+scores and the shadow scores (`music recorded (5 scores, 3 voices)`, `music learned (1 routine,
+heard, 2 channels; 1 score; 2 shadow scores)`, `no music learned (built-in entry at 03B5h; 1
+shadow score)`). The games are learned in parallel, a few seconds each (a menu of tunes longer); the results are cached in `DIR/sound-cache/` (by the
 converted game's CRC, its key script, its instrument overrides and the learner's version), which
 runs keep, so a re-run learns only new or changed games.
 
@@ -349,8 +363,10 @@ test programs and boots the result in fm1-emu.
 
 A recorded score can play with a band: a bass, a pad (chords, one note at a time) and a drum,
 written around the score's melody by a music model, as several takes that you listen to and choose
-from by ear, or keep the original. Only recorded scores have takes: music a routine gives (learned
-or built in) is read from the game as it plays and stays as it is.
+from by ear, or keep the original. Music a routine plays live (learned or built in) can be
+arranged too, through its shadow score ([the music](#your-own-games)): its takes are made and
+chosen like any score's, and with none chosen the routine plays it live as before; a chosen take
+goes into the pack as a score that plays in place of the routine's notes.
 
     tools/make-personal-pack ~/games --arrange    # the packages, then takes for the scores without any
     tools/arrange-music pick build/personal       # listen and choose, on a page on your computer
@@ -367,11 +383,11 @@ another); without it there is nothing to hear on the page, only MIDI files. ffmp
 installed, matches the renders' loudness. None of this is part of the repository or the packages
 ([LICENSING.md](LICENSING.md#the-arranging-tool)).
 
-**The scores.** Every `tools/make-personal-pack` run writes each recorded score's notes to
-`DIR/arrange/<game>/<key>/score.toml` (`<game>` the game's id; `<key>` the score's `OUT` address
-in 4 hex digits and a CRC-32 of its recorded speaker edges, such as `8951-1a2b3c4d`, the same for as
-long as the learner records the same music), only when the text changes, and leaves the rest of
-the folder alone. `--arrange` then runs `tools/arrange-music generate DIR` once the packages are
+**The scores.** Every `tools/make-personal-pack` run writes each recorded score's notes, and each
+shadow score's, to `DIR/arrange/<game>/<key>/score.toml` (`<game>` the game's id; `<key>` the
+score's `OUT` address in 4 hex digits and a CRC-32 of its recorded speaker edges, such as
+`8951-1a2b3c4d`, the same for as long as the learner records the same music; a shadow score's
+says `shadow = true`), only when the text changes, and leaves the rest of the folder alone. `--arrange` then runs `tools/arrange-music generate DIR` once the packages are
 made, so takes generated in a run go into the packages of the next one.
 
 **The commands.**
@@ -391,7 +407,8 @@ made, so takes generated in a run go into the packages of the next one.
   FM-1 plays it and the whole arrangement the model wrote, with its figures (below); Save writes
   `DIR/arrange/choices.toml`. `--set GAME/KEY=N` chooses take N without the page (0: the original),
   and `--list` prints each score, its takes, what made them, their figures and the choice; other
-  choices in the file are kept.
+  choices in the file are kept. Both mark a shadow score `(replaces the live version when
+  chosen)`; its original is the routine playing live.
 - `tools/arrange-music selftest` checks `generate` (with `rules`), the files it writes, `pick
   --set`, `--list` and the page's save in a temporary folder, with no model (and, once uv has
   installed the packages, no network).
@@ -432,16 +449,22 @@ frame has more, drum notes give way first, then pad notes, the latest first, and
 how many; a frame with more on the lead and the bass alone refuses the take. The game's scores must
 stay within 128 KB with it, method B's decoder must take the list, and a replay of the run that
 recorded the score (the cache keeps each score's run) must still play the score where it played. A
-take that fails any of these leaves the original. `sound-report.txt` says what plays, and why a
-take is refused, under the `recorded score` line that ends with the score's key:
+shadow score's take goes into the list after the scores, marked to keep the frames the routine
+claims; it must leave the game at 8 scores at most and within 128 KB with the scores packed, and
+the replay must play it over its whole stretch, at least 90% of the frames it sounds in. A take
+that fails any of these leaves the original (for a shadow score, the routine playing live).
+`sound-report.txt` says what plays, and why a take is refused, under the `recorded score` (or
+`shadow score`) line that ends with the score's key:
 
       arranged: take 2 (amt stanford-crfm/music-medium-800k staged drums,bass,chords top_p=0.98 seed=1)
       arranged: original
       arranged: take 3 refused: notes 14 and 15 overlap on voice 1
 
-(`arranged: original`: takes exist, none chosen). The game's line counts the takes that play
-(`music recorded (2 scores, 3 voices, 1 arranged)`), and the table ends with `<name>: score <key>
-plays take 2 (...)` or `<name>: score <key>: take 3 refused, the original plays: <why>` per choice.
+(`arranged: original`: takes exist, none chosen; a shadow score's `arranged: the live version (no
+take chosen)`). The game's line counts the takes that play (`music recorded (2 scores, 3 voices, 1
+arranged)`), and the table ends with `<name>: score <key> plays take 2 (...)` or `<name>: score
+<key>: take 3 refused, the original plays: <why>` per choice (`<name>: shadow score <key> plays take
+2 (...)`, `... refused, the live version plays: <why>`).
 A choice that names no score of the pack (a game left out, music the learner no longer records) is
 ignored, with a note; a `choices.toml` that does not read fails the run. A take's bytes count
 toward the pack as the score's did.

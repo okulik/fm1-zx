@@ -615,8 +615,8 @@ void snd_b_init(snd_b *b, const snd_engine *table, uint32_t n);
 /* Feeds frame t (zm right after zx_run_frame; zm may be NULL: nothing is B's); fills *out with
  * the decision for frame t - SND_DELAY_FRAMES. A frame an engine claims carries that table
  * entry's stored roles (snd_engine.role), any other frame SND_ROLE_AUTO for every voice. A frame
- * a recorded score plays (and no table entry claims) has engine n + 1 + the score's index (n the
- * table's entries) and the score's stored roles. */
+ * a recorded score plays (and no table entry claims, unless the score has precedence) has engine
+ * n + 1 + the score's index (n the table's entries) and the score's stored roles. */
 void snd_b_frame(snd_b *b, const zx_machine *zm, const zx_edge *e, uint32_t n, uint8_t start_level, snd_frame *out);
 
 /* ---- effects follower (fx_read.c, fx.c) --------------------------------

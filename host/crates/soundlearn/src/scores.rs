@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Recorded scores: the music of a game's routines that nothing else plays, recorded from the
-//! learner's run (and from extra runs, one key each) as kind-2 records ([`ScoreRecord`]) that
-//! method B plays in step with the beeper.
+//! Recorded scores: the music of a game's routines, recorded from the learner's run (and from
+//! extra runs, one key each) as kind-2 records ([`ScoreRecord`]) that method B plays in step with
+//! the beeper: *scores* for music nothing else plays, and *shadow scores* for music a learned or
+//! built-in entry plays (kept beside the list, so that an arranged take of one can be packed in
+//! its place, with precedence).
 //!
 //! 1. **Which music** (chosen by the learner, [`crate::learn`]): each heard routine (the
 //!    learner's block, from its speaker `OUT` heard in the most frames) that sounded in at least
-//!    [`SCORE_FRAMES`] frames, that no kept learned entry gives and no built-in entry matches,
-//!    and whose `OUT` lies in no routine before it.
+//!    [`SCORE_FRAMES`] frames and whose `OUT` lies in no routine before it, learned, built in or
+//!    neither: each stretch is judged by what plays it (step 2).
 //! 2. **The stretches.** A *trigger* is the first speaker edge from the routine's `OUT` after at
 //!    least [`TRIGGER_QUIET`] frames with none from it (or with none since the run's start). A
 //!    stretch runs from it while the inputs stay as they were in its frame (a key press may
@@ -16,8 +18,8 @@
 //!    silent for [`END_SILENCE`] frames (it ends with the bucket of the `OUT`'s last edge),
 //!    [`SND_SCORE_BUCKETS_MAX`] buckets, or the end of the frames method B decides in the run.
 //!    Every stretch of at least [`SCORE_FRAMES`] frames is taken (a run of several tunes gives
-//!    several); none is recorded more than a tenth of whose sounding frames method B's table
-//!    (the built-in and kept entries) claims: that music is played already. Times are T-states
+//!    several); one more than a tenth of whose sounding frames method B's table (the built-in and
+//!    kept entries) claims is music played already: a shadow score's (the rest a score's). Times are T-states
 //!    from the trigger edge (T0); a bucket is a frame long from T0, and a stretch is whole
 //!    buckets.
 //! 3. **The extra runs**, when the learner's run gives a score (step 7): each key of 1-9, 0,
@@ -62,11 +64,14 @@
 //!    voices below that where needed), its roles by pitch: the voice lowest on average the bass,
 //!    the highest the lead, a third the pad, a lone voice the lead.
 //! 7. **Kept** ([`record`]): the learner's run's stretches are chosen first; when that keeps a
-//!    score, the extra runs are taken and the choice is made again over all the runs. A choice
-//!    takes the stretches the longest first: at most [`SND_SCORES_MAX`] scores, within
-//!    [`SCORES_BYTES_MAX`] bytes in all (the longest with no loop cut to fit when it alone does
-//!    not), none whose stretch plays with a kept one's in the same run (method B plays one score
-//!    at a time), each built only then.
+//!    score or a shadow score, the extra runs are taken and the choice is made again over all the
+//!    runs. A choice takes the stretches the longest first: at most [`SND_SCORES_MAX`] scores,
+//!    within [`SCORES_BYTES_MAX`] bytes in all (the longest with no loop cut to fit when it alone
+//!    does not), none whose stretch plays with a kept one's in the same run (method B plays one
+//!    score at a time), each built only then. The shadow scores are chosen after the scores, the
+//!    same way but apart from them: at most [`SND_SCORES_MAX`] shadow scores, their bytes not
+//!    counted (a shadow score is packed only with a take chosen for it, and then counts), none
+//!    playing with a score or a shadow score kept in its run.
 //! 8. **Verified by replay:** the game is run again under the score's run's inputs through
 //!    method B with the game's whole list (its entries, roles and every score kept so far, it
 //!    last), and the score must arm at its trigger, follow its fingerprint over its whole
@@ -78,7 +83,9 @@
 //!    beeper follows plays. A score whose loop fails is recorded with none instead (the intro the
 //!    whole stretch) and verified again. One with no loop that stops early is shortened to the
 //!    frames it held (and verified again, once) if that leaves [`SCORE_FRAMES`] frames; otherwise
-//!    it is left out, with the reason. [`verify`] checks a score of a finished list the same way
+//!    it is left out, with the reason. A shadow score is verified as the last of the list after
+//!    the scores kept, its precedence set ([`ScoreRecord::precedence`]: method B gives it the
+//!    frames the table claims too). [`verify`] checks a score of a finished list the same way
 //!    in one run (the personal pack's arranged takes, which keep a score's trigger and
 //!    fingerprints and replace its events).
 
@@ -92,7 +99,7 @@ use zx_sys::{
 };
 
 /// The frames a routine's `OUT` must sound in to be recorded, and the shortest stretch.
-pub const SCORE_FRAMES: u32 = 250;
+pub const SCORE_FRAMES: u32 = 100;
 /// Frames with no edge from the `OUT` before a trigger (or none since the run's start).
 pub const TRIGGER_QUIET: u32 = 25;
 /// Frames of silence from the `OUT` that end a stretch.
@@ -385,6 +392,8 @@ pub struct ScoreSummary {
     pub shortened: Option<String>,
     /// Its key ([`score_key`](crate::entry::score_key)).
     pub key: String,
+    /// A shadow score: music a learned or built-in entry plays, packed only with a chosen take.
+    pub shadow: bool,
 }
 
 /// A candidate: its block (the learner's index) and its `OUT`.
@@ -396,6 +405,8 @@ pub type Candidate = (usize, u16);
 pub struct ScoreOutcome {
     pub run: Option<String>,
     pub got: Result<ScoreSummary, String>,
+    /// A shadow score's outcome (see [`ScoreSummary::shadow`]).
+    pub shadow: bool,
 }
 
 /// A candidate's outcome: its block and a score's outcome (a candidate has one or more).
@@ -435,6 +446,7 @@ fn build(tap: &Tap, st: &Stretch, lp: Option<Loop>) -> Result<(ScoreRecord, usiz
         code: st.tr.code,
         roles: ev.roles,
         voices: ev.voices,
+        precedence: false,
         intro_t: intro_t as u32,
         loop_t: loop_t as u32,
         intro_fp: score_fingerprint(frames, st.tr.t0, 0, intro_t),
@@ -707,10 +719,10 @@ struct Take {
     fp: Vec<u8>,
     /// The same music as this take's, which is longer (or as long and earlier).
     same: Option<usize>,
-    /// Left out whatever the choice (method B's table claims it, or it is not music), and why.
+    /// Left out whatever the choice (it is not music), and why.
     left: Option<String>,
-    /// Left out because method B's table claims it.
-    claimed: bool,
+    /// Method B's table claims more than a tenth of its sounding frames: a shadow score's.
+    shadow: bool,
     /// Left out because it plays with a score kept.
     overlap: bool,
     /// Its loop, once looked for (None inside: it has none).
@@ -727,6 +739,11 @@ impl Take {
     /// Not the same music as another's, nor left out before the choice.
     fn open(&self) -> bool {
         self.same.is_none() && self.left.is_none()
+    }
+
+    /// [`Take::open`], and a shadow score's take if `shadow`, else a score's.
+    fn open_as(&self, shadow: bool) -> bool {
+        self.open() && self.shadow == shadow
     }
 }
 
@@ -769,7 +786,7 @@ fn gather(run: &Run, r: usize, outs: &[(Option<usize>, u16)], takes: &mut Vec<Ta
         }
         for st in all.into_iter().filter(|s| s.buckets >= SCORE_FRAMES as usize) {
             let fp = score_fingerprint(&run.tap.frames[st.span()], st.tr.t0, 0, st.buckets as u64 * UNITS * 64);
-            add(takes, Take { run: r, block, st, fp, same: None, left: None, claimed: false, overlap: false, lp: None, built: None, plain: None, got: None });
+            add(takes, Take { run: r, block, st, fp, same: None, left: None, shadow: false, overlap: false, lp: None, built: None, plain: None, got: None });
         }
     }
     none
@@ -793,16 +810,14 @@ fn heard_only(tap: &Tap, cands: &[Candidate], covered: &dyn Fn(u16) -> bool) -> 
     outs.into_iter().map(|o| o.0).collect()
 }
 
-/// Leaves out each open take of run `r` more than a tenth of whose sounding frames method B's
-/// table (the built-in and kept entries) claims: `table`, its decisions in the run.
+/// Makes a shadow score's take each open take of run `r` more than a tenth of whose sounding
+/// frames method B's table (the built-in and kept entries) claims: `table`, its decisions in the
+/// run.
 fn claims(run: &Run, r: usize, takes: &mut [Take], table: &[(bool, u8)]) {
     for t in takes.iter_mut().filter(|t| t.run == r && t.open()) {
         let sounding: Vec<usize> = t.st.span().filter(|&f| !run.tap.frames[f].0.is_empty()).collect();
         let claimed = sounding.iter().filter(|&&f| table.get(f).is_some_and(|d| d.0)).count();
-        if claimed as f64 > (1.0 - CLAIM_SHARE) * sounding.len() as f64 {
-            t.left = Some(format!("method B's table claims {claimed} of the {} frames its stretch sounds in", sounding.len()));
-            t.claimed = true;
-        }
+        t.shadow = claimed as f64 > (1.0 - CLAIM_SHARE) * sounding.len() as f64;
     }
 }
 
@@ -824,6 +839,7 @@ fn summary(st: &Stretch, rec: &ScoreRecord, notes: usize, shortened: Option<Stri
         bytes: record_bytes(rec),
         shortened,
         key: crate::entry::score_key(rec),
+        shadow: rec.precedence,
     }
 }
 
@@ -836,15 +852,19 @@ struct Game<'a> {
 }
 
 /// The choice over the open takes (of the learner's run alone if `first`), the longest first
-/// (see the module docs): each one's outcome, and the scores kept.
-fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool) -> Vec<Kept> {
-    let mut order: Vec<usize> = (0..takes.len()).filter(|&i| takes[i].open() && (!first || takes[i].run == 0)).collect();
+/// (see the module docs): each one's outcome, and the scores kept. With `normals` (the scores
+/// kept), the choice of the shadow scores over the shadow scores' takes: beside the scores, not
+/// counted with them nor in their bytes, each verified with precedence in the list after them.
+fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool, normals: Option<&[Kept]>) -> Vec<Kept> {
+    let shadow = normals.is_some();
+    let mut order: Vec<usize> = (0..takes.len()).filter(|&i| takes[i].open_as(shadow) && (!first || takes[i].run == 0)).collect();
     order.sort_by_key(|&i| (std::cmp::Reverse(takes[i].st.buckets), takes[i].run, takes[i].st.tr.frame, takes[i].st.tr.site));
     let mut kept: Vec<Kept> = Vec::new();
     for i in order {
         let t = &mut takes[i];
         t.got = None;
-        if let Err((why, overlap)) = room(runs, &kept, t.run, &t.st) {
+        let room = room(runs, &kept, t.run, &t.st).and_then(|()| normals.map_or(Ok(()), |n| overlaps(runs, n, t.run, &t.st)));
+        if let Err((why, overlap)) = room {
             t.got = Some(Err(why));
             t.overlap = overlap;
             continue;
@@ -855,7 +875,7 @@ fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool) -> Vec<Kept> 
         // is not built
         let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
         let stored = lp.map_or(t.st.buckets, |l| ((u64::from(l.intro_t) + u64::from(l.loop_t)) / u64::from(ZX_FRAME_TSTATES)) as usize);
-        if !kept.is_empty() && used + RECORD_HEAD + stored / 2 > SCORES_BYTES_MAX {
+        if !shadow && !kept.is_empty() && used + RECORD_HEAD + stored / 2 > SCORES_BYTES_MAX {
             t.got = Some(Err(over_bytes()));
             continue;
         }
@@ -871,10 +891,12 @@ fn choose(g: &Game, runs: &[Run], takes: &mut [Take], first: bool) -> Vec<Kept> 
         }
         let Some((rec, notes)) = t.built.clone() else { continue };
         let looped = rec.loop_t > 0;
-        let mut got = keep_one(g, runs, &kept, t.run, t.st, rec, notes);
+        let (before, run, st) = (normals.unwrap_or(&kept), t.run, t.st);
+        let mine = |(rec, notes): (ScoreRecord, usize)| keep_one(g, runs, before, run, st, ScoreRecord { precedence: shadow, ..rec }, notes);
+        let mut got = mine((rec, notes));
         if got.is_err() && looped {
             // its loop not followed: the record with none
-            got = plain(tap, t).and_then(|(rec, notes)| keep_one(g, runs, &kept, t.run, t.st, rec, notes));
+            got = plain(tap, t).and_then(mine);
         }
         t.got = Some(got.map(|k| {
             let sum = k.sum.clone();
@@ -892,13 +914,15 @@ fn plain(tap: &Tap, t: &mut Take) -> Result<(ScoreRecord, usize), String> {
 
 /// The outcomes of `takes` for the report, in the order of the runs and then of the frames, the
 /// same reasons together (`... (3 stretches)`); with `all`, those that play with a score kept
-/// too, and of those method B's table claims, the longest of each run.
+/// too.
 fn lines(runs: &[Run], takes: &[&Take], all: bool) -> Vec<ScoreOutcome> {
-    let longest = |t: &Take| !takes.iter().any(|k| k.claimed && k.same.is_none() && k.run == t.run && (k.st.buckets, std::cmp::Reverse(k.st.tr.frame)) > (t.st.buckets, std::cmp::Reverse(t.st.tr.frame)));
     let mut mine: Vec<(usize, u32, ScoreOutcome)> = takes
         .iter()
-        .filter(|t| t.same.is_none() && (all || !t.claimed && !t.overlap) && (!t.claimed || longest(t)))
-        .filter_map(|t| t.left.clone().map(Err).or_else(|| t.got.clone()).map(|got| (t.run, t.st.tr.frame, ScoreOutcome { run: runs[t.run].name.clone(), got })))
+        .filter(|t| t.same.is_none() && (all || !t.overlap))
+        .filter_map(|t| {
+            let got = t.left.clone().map(Err).or_else(|| t.got.clone())?;
+            Some((t.run, t.st.tr.frame, ScoreOutcome { run: runs[t.run].name.clone(), got, shadow: t.shadow }))
+        })
         .collect();
     mine.sort_by_key(|m| (m.0, m.1));
     let mut out: Vec<(ScoreOutcome, usize)> = Vec::new();
@@ -942,7 +966,7 @@ pub fn record(
         return Recorded::default();
     }
     let refused = || Recorded {
-        outcomes: cands.iter().map(|&(block, _)| (block, ScoreOutcome { run: None, got: Err("method B's decoder refuses the game's list".into()) })).collect(),
+        outcomes: cands.iter().map(|&(block, _)| (block, ScoreOutcome { run: None, got: Err("method B's decoder refuses the game's list".into()), shadow: false })).collect(),
         ..Recorded::default()
     };
     let g = Game { load, entries, roles, builtins };
@@ -953,9 +977,11 @@ pub fn record(
     let none = gather(&runs[0], 0, &outs, &mut takes);
     let Some((table, _)) = replay(load, inputs, &base, builtins) else { return refused() };
     claims(&runs[0], 0, &mut takes, &table);
-    let mut kept = choose(&g, &runs, &mut takes, true);
-    // the extra runs, when the learner's run gives a score; then the choice over all the runs
-    if !kept.is_empty() && !extra.is_empty() {
+    let mut kept = choose(&g, &runs, &mut takes, true, None);
+    let mut shadows = choose(&g, &runs, &mut takes, true, Some(&kept));
+    // the extra runs, when the learner's run gives a score or a shadow score; then the choice
+    // over all the runs
+    if (!kept.is_empty() || !shadows.is_empty()) && !extra.is_empty() {
         // a few at a time, each tapped with its table's decisions in one replay
         for chunk in extra.chunks(EXTRA_AT_ONCE) {
             let tapped = par(chunk.len(), &|i| {
@@ -980,7 +1006,8 @@ pub fn record(
             t.got = None;
             t.overlap = false;
         }
-        kept = choose(&g, &runs, &mut takes, false);
+        kept = choose(&g, &runs, &mut takes, false, None);
+        shadows = choose(&g, &runs, &mut takes, false, Some(&kept));
     }
 
     // the outcomes: each candidate's takes, else why it has none
@@ -1002,7 +1029,7 @@ pub fn record(
         } else {
             none.iter().find(|n| n.0 == block).map_or_else(|| "no stretch".into(), |n| n.1.clone())
         };
-        outcomes.push((block, ScoreOutcome { run: None, got: Err(why) }));
+        outcomes.push((block, ScoreOutcome { run: None, got: Err(why), shadow: false }));
     }
     // the OUTs heard in the extra runs only, in the order first taken
     let mut heard: Vec<(u16, Vec<ScoreOutcome>)> = Vec::new();
@@ -1017,7 +1044,14 @@ pub fn record(
             heard.push((site, got));
         }
     }
-    Recorded { runs: kept.iter().map(|k| k.run).collect(), scores: kept.into_iter().map(|k| k.rec).collect(), outcomes, heard }
+    Recorded {
+        runs: kept.iter().map(|k| k.run).collect(),
+        scores: kept.into_iter().map(|k| k.rec).collect(),
+        shadow_runs: shadows.iter().map(|k| k.run).collect(),
+        shadows: shadows.into_iter().map(|k| k.rec).collect(),
+        outcomes,
+        heard,
+    }
 }
 
 /// What [`record`] gives.
@@ -1027,6 +1061,11 @@ pub struct Recorded {
     pub scores: Vec<ScoreRecord>,
     /// The run each record is from: 0 the learner's run, k the extra run `extra[k - 1]`.
     pub runs: Vec<usize>,
+    /// The shadow scores' records (precedence set), each verified as the last of the list after
+    /// the scores.
+    pub shadows: Vec<ScoreRecord>,
+    /// The run each shadow score is from, as [`Recorded::runs`].
+    pub shadow_runs: Vec<usize>,
     /// The candidates' outcomes.
     pub outcomes: Vec<Outcome>,
     /// The `OUT`s heard in the extra runs only, each with its outcomes.
@@ -1037,12 +1076,20 @@ pub struct Recorded {
 /// [`SND_SCORES_MAX`], and none whose stretch plays with another's in the same run. Err: why
 /// not, and whether it plays with one.
 fn room(runs: &[Run], kept: &[Kept], r: usize, st: &Stretch) -> Result<(), (String, bool)> {
+    overlaps(runs, kept, r, st)?;
+    if kept.len() >= SND_SCORES_MAX {
+        let what = if kept.first().is_some_and(|k| k.rec.precedence) { "shadow scores" } else { "scores" };
+        return Err((format!("only {SND_SCORES_MAX} {what} a game: the longest first"), false));
+    }
+    Ok(())
+}
+
+/// Whether a score from run `r` with stretch `st` plays with one of `kept` in the same run. Err:
+/// with which, and true.
+fn overlaps(runs: &[Run], kept: &[Kept], r: usize, st: &Stretch) -> Result<(), (String, bool)> {
     let span = st.span();
     if let Some(k) = kept.iter().find(|k| k.run == r && k.st.span().start < span.end && span.start < k.st.span().end) {
         return Err((format!("its stretch plays with {}", whose(runs, k)), true));
-    }
-    if kept.len() >= SND_SCORES_MAX {
-        return Err((format!("only {SND_SCORES_MAX} scores a game: the longest first"), false));
     }
     Ok(())
 }
@@ -1059,18 +1106,20 @@ fn over_bytes() -> String {
     format!("the game's scores would take over {} KB: the longest first", SCORES_BYTES_MAX / 1024)
 }
 
-/// `the score of the OUT at 8951h (key 3 once)`.
+/// `the score of the OUT at 8951h (key 3 once)` (`the shadow score ...`).
 fn whose(runs: &[Run], k: &Kept) -> String {
-    format!("the score of the OUT at {:04X}h{}", k.rec.site, runs[k.run].suffix())
+    let shadow = if k.rec.precedence { "shadow " } else { "" };
+    format!("the {shadow}score of the OUT at {:04X}h{}", k.rec.site, runs[k.run].suffix())
 }
 
 /// One score from run `r` added to those `kept` (it has [`room`]), verified (see the module
-/// docs): it, or why not.
+/// docs): it, or why not. A shadow score's record (precedence set) is verified in the list after
+/// the scores `kept`, its bytes not counted with theirs.
 #[allow(clippy::too_many_arguments)]
 fn keep_one(g: &Game, runs: &[Run], kept: &[Kept], r: usize, mut st: Stretch, mut rec: ScoreRecord, mut notes: usize) -> Result<Kept, String> {
     let mut shortened = None;
     let used: usize = kept.iter().map(|k| k.sum.bytes).sum();
-    if used + record_bytes(&rec) > SCORES_BYTES_MAX {
+    if !rec.precedence && used + record_bytes(&rec) > SCORES_BYTES_MAX {
         if !kept.is_empty() || rec.loop_t > 0 {
             return Err(over_bytes());
         }
@@ -1267,6 +1316,7 @@ mod tests {
             code: 1,
             roles,
             voices,
+            precedence: false,
             intro_t: 3 * UNITS as u32 * 64,
             loop_t: 0,
             intro_fp: vec![9, 8, 7],

@@ -1141,6 +1141,56 @@ pub fn rom_beep_sna() -> Vec<u8> {
     sna(&code, &[])
 }
 
+/// A tune of the 48K ROM's BEEP routine: each note (HL, DE: the routine's half-period count and
+/// cycles) a call of 03B5h, then a rest of `gap` x 26 T, from a table at 802Eh ended by HL = 0,
+/// looped.
+///
+/// ```text
+/// 8000 DD 21 2E 80  start: LD IX,802Eh
+/// 8004 DD 6E 00     next:  LD L,(IX+0)
+/// 8007 DD 66 01            LD H,(IX+1)
+/// 800A DD 5E 02            LD E,(IX+2)
+/// 800D DD 56 03            LD D,(IX+3)
+/// 8010 7C                  LD A,H
+/// 8011 B5                  OR L
+/// 8012 28 EC               JR Z,start
+/// 8014 DD E5               PUSH IX       (the routine uses IX)
+/// 8016 CD B5 03            CALL 03B5h
+/// 8019 DD E1               POP IX
+/// 801B DD 23 x4            INC IX x4
+/// 8023 01 nn nn            LD BC,gap
+/// 8026 0B           rest:  DEC BC
+/// 8027 78                  LD A,B
+/// 8028 B1                  OR C
+/// 8029 20 FB               JR NZ,rest
+/// 802B C3 04 80            JP next
+/// ```
+pub fn rom_beep_tune_sna(notes: &[(u16, u16)], gap: u16) -> Vec<u8> {
+    let g = gap.to_le_bytes();
+    #[rustfmt::skip]
+    let mut code = vec![
+        0xDD, 0x21, 0x2E, 0x80,
+        0xDD, 0x6E, 0x00, 0xDD, 0x66, 0x01, 0xDD, 0x5E, 0x02, 0xDD, 0x56, 0x03,
+        0x7C, 0xB5, 0x28, 0xEC,
+        0xDD, 0xE5, 0xCD, 0xB5, 0x03, 0xDD, 0xE1,
+        0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23, 0xDD, 0x23,
+        0x01, g[0], g[1], 0x0B, 0x78, 0xB1, 0x20, 0xFB,
+        0xC3, 0x04, 0x80,
+    ];
+    debug_assert_eq!(code.len(), 0x2E);
+    for &(hl, de) in notes {
+        code.extend(hl.to_le_bytes());
+        code.extend(de.to_le_bytes());
+    }
+    code.extend([0, 0, 0, 0]);
+    sna(&code, &[])
+}
+
+/// The ROM BEEP's (HL, DE) for a note of `hz` lasting `secs`.
+pub fn beep_note(hz: f64, secs: f64) -> (u16, u16) {
+    ((437_500.0 / hz - 30.125).round() as u16, (hz * secs).round() as u16)
+}
+
 /// The steps (s0, s1) of [`or_mixed_sna`]'s notes, and the T-states of its pass.
 pub const OR_MIXED_NOTES: [(u16, u16); 3] = [(1796, 2262), (2016, 2540), (1600, 2400)];
 pub const OR_MIXED_PASS: u32 = 214;

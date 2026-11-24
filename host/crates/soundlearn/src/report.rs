@@ -18,6 +18,8 @@
 //! - `no music learned (no speaker routine found)`: nothing heard, and no routine in the code the
 //!   reader could read.
 //!
+//! Each ends with `; 2 shadow scores` inside its brackets when shadow scores were recorded.
+//!
 //! A block gives the speaker `OUT` the routine was read from (heard, or found in the code only),
 //! the routine's span, family and channels, each channel's half period as a formula of its
 //! inputs, the gates' figures (fit and replay), any drum sites, and the outcome: learned, or the
@@ -36,8 +38,9 @@
 //! 4.1 KB (score 8951-1a2b3c4d)`: its stretch's length, its trigger's frame, its intro and loop
 //! when its music loops, its voices, the notes it stores and its bytes, `, shortened ...` when it
 //! was cut, and its key ([`score_key`](crate::entry::score_key)), which names its folder of
-//! arranged music in the personal pack) and its
-//! stretches left out (`no score: <reason>`), in the order of the runs and then of the frames,
+//! arranged music in the personal pack), its shadow scores (`shadow score: ...` and, after the
+//! key, `; packed only with a chosen take`) and its
+//! stretches left out (`no score: <reason>`, `no shadow score: <reason>`), in the order of the runs and then of the frames,
 //! each from a run not the learner's naming it (`recorded score (key 3 once): ...`), the same
 //! reasons once (`... (3 stretches)`); or, with none, `no score: <reason>`. An `OUT` heard in
 //! the extra runs only ([`crate::scores`]) gives its scores and its stretches left out (but
@@ -150,14 +153,16 @@ fn count(n: usize, noun: &str) -> String {
 }
 
 /// The summary line: `learned` holds each learned routine's (heard, observed, channels),
-/// `scores` each recorded score's voices, `refused` the first refusal's text ([`reason`]).
-pub fn line(learned: &[(bool, bool, usize)], scores: &[u8], refused: Option<&str>) -> String {
+/// `scores` each recorded score's voices, `shadows` the shadow scores recorded, `refused` the
+/// first refusal's text ([`reason`]).
+pub fn line(learned: &[(bool, bool, usize)], scores: &[u8], shadows: usize, refused: Option<&str>) -> String {
     let voices = scores.iter().copied().max().unwrap_or(0);
+    let shadowed = if shadows == 0 { String::new() } else { format!("; {}", count(shadows, "shadow score")) };
     if learned.is_empty() && !scores.is_empty() {
-        return format!("music recorded ({}, {})", count(scores.len(), "score"), count(usize::from(voices), "voice"));
+        return format!("music recorded ({}, {}{shadowed})", count(scores.len(), "score"), count(usize::from(voices), "voice"));
     }
     if learned.is_empty() {
-        return format!("no music learned ({})", refused.unwrap_or("no speaker routine found"));
+        return format!("no music learned ({}{shadowed})", refused.unwrap_or("no speaker routine found"));
     }
     let heard = learned.iter().filter(|r| r.0).count();
     let how = match heard {
@@ -172,18 +177,20 @@ pub fn line(learned: &[(bool, bool, usize)], scores: &[u8], refused: Option<&str
     };
     let channels = learned.iter().map(|r| r.2).max().unwrap_or(0);
     let recorded = if scores.is_empty() { String::new() } else { format!("; {}", count(scores.len(), "score")) };
-    format!("music learned ({}, {how}{observed}, {}{recorded})", count(learned.len(), "routine"), count(channels, "channel"))
+    format!("music learned ({}, {how}{observed}, {}{recorded}{shadowed})", count(learned.len(), "routine"), count(channels, "channel"))
 }
 
 /// A score's line of a block.
 fn score_line(score: &ScoreOutcome) -> String {
     let run = score.run.as_ref().map_or(String::new(), |r| format!(" ({r})"));
+    let what = if score.shadow { "shadow score" } else { "score" };
     match &score.got {
         Ok(s) => {
             let shortened = s.shortened.as_ref().map_or(String::new(), |w| format!(", shortened {w}"));
             let looped = s.looped.map_or(String::new(), |(intro, pass)| format!(" (intro {intro:.1} s, loop {pass:.1} s)"));
+            let (head, tail) = if s.shadow { ("shadow score", SHADOW_TAIL) } else { ("recorded score", "") };
             format!(
-                "    recorded score{run}: {:.1} s from frame {}{looped}, {}, {}, {:.1} KB{shortened} (score {})\n",
+                "    {head}{run}: {:.1} s from frame {}{looped}, {}, {}, {:.1} KB{shortened} (score {}{tail})\n",
                 s.seconds,
                 s.frame,
                 count(usize::from(s.voices), "voice"),
@@ -192,9 +199,12 @@ fn score_line(score: &ScoreOutcome) -> String {
                 s.key
             )
         }
-        Err(why) => format!("    no score{run}: {why}\n"),
+        Err(why) => format!("    no {what}{run}: {why}\n"),
     }
 }
+
+/// What a shadow score's line says after its key.
+pub const SHADOW_TAIL: &str = "; packed only with a chosen take";
 
 /// A refusal of the code reader.
 pub fn refusal(r: &Refusal) -> String {
@@ -397,16 +407,21 @@ mod tests {
 
     #[test]
     fn the_line_says_observed() {
-        assert_eq!(line(&[(true, false, 1)], &[], None), "music learned (1 routine, heard, 1 channel)");
-        assert_eq!(line(&[(true, true, 3)], &[], None), "music learned (1 routine, heard, observed, 3 channels)");
-        assert_eq!(line(&[(true, true, 2), (false, false, 1)], &[], None), "music learned (2 routines, both, 1 observed, 2 channels)");
-        assert_eq!(line(&[], &[], Some("a sweep, not music")), "no music learned (a sweep, not music)");
+        assert_eq!(line(&[(true, false, 1)], &[], 0, None), "music learned (1 routine, heard, 1 channel)");
+        assert_eq!(line(&[(true, true, 3)], &[], 0, None), "music learned (1 routine, heard, observed, 3 channels)");
+        assert_eq!(line(&[(true, true, 2), (false, false, 1)], &[], 0, None), "music learned (2 routines, both, 1 observed, 2 channels)");
+        assert_eq!(line(&[], &[], 0, Some("a sweep, not music")), "no music learned (a sweep, not music)");
     }
 
     #[test]
     fn the_line_counts_scores() {
-        assert_eq!(line(&[(true, true, 3)], &[2], None), "music learned (1 routine, heard, observed, 3 channels; 1 score)");
-        assert_eq!(line(&[], &[3], Some("a sweep, not music")), "music recorded (1 score, 3 voices)");
-        assert_eq!(line(&[], &[1, 2], None), "music recorded (2 scores, 2 voices)");
+        assert_eq!(line(&[(true, true, 3)], &[2], 0, None), "music learned (1 routine, heard, observed, 3 channels; 1 score)");
+        assert_eq!(line(&[], &[3], 0, Some("a sweep, not music")), "music recorded (1 score, 3 voices)");
+        assert_eq!(line(&[], &[1, 2], 0, None), "music recorded (2 scores, 2 voices)");
+        // the shadow scores counted after the rest
+        assert_eq!(line(&[(true, false, 1)], &[], 1, None), "music learned (1 routine, heard, 1 channel; 1 shadow score)");
+        assert_eq!(line(&[(true, false, 1)], &[2], 2, None), "music learned (1 routine, heard, 1 channel; 1 score; 2 shadow scores)");
+        assert_eq!(line(&[], &[2], 1, None), "music recorded (1 score, 2 voices; 1 shadow score)");
+        assert_eq!(line(&[], &[], 1, Some("built-in entry at 03B5h")), "no music learned (built-in entry at 03B5h; 1 shadow score)");
     }
 }

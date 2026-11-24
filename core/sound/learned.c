@@ -44,7 +44,8 @@
  * Events: a varint (64-T units since the section's event before, or its start), a byte (bits 0-1
  * the voice, bits 2-7 0 a note off, else a note on of level (b >> 2) x 4 + 3) and a note on's
  * index in the record's pitch table (each pitch a full period in T, 3 bytes). Voice 3 is the drum
- * (`voices` counts the tonal voices alone): bits 2-7 0 the drum off, else a drum hit of strength
+ * (`voices`, the byte's low bits, counts the tonal voices alone; its bit 7 is the score's
+ * precedence, below): bits 2-7 0 the drum off, else a drum hit of strength
  * (b >> 2) x 4 + 3, and no pitch byte; method B's drum events. Method B's player,
  * once a frame after the decision (snd_b.scores), with frame j just fed:
  *  - following: each score followed (the candidates, then the score chosen) has each of its whole
@@ -72,12 +73,15 @@
  *    released (and the drum, if it sounds: a hit there strikes anew), the loop's events then from
  *    its first; with no loop, in the frame its intro ends, the voices and the drum still sounding
  *    released where it ends. Unless the decision has the frame confident (a table entry claims
- *    it: the table wins, its events stand), the frame becomes the score's: confident, its voices
+ *    it: the table wins, its events stand) and the score has no precedence (bit 7 of its voices
+ *    byte clear), the frame becomes the score's: confident, its voices
  *    and drum at the frame's start and its events (the first SND_EVENTS), engine n + 1 + its
  *    index (n the table's entries), its stored roles, B's voices and drum the score's and nothing
  *    of a table entry's carried or held.
- * A frame after a score stops is decided as without it (the beeper's, unless the table claims
- * it): B's voices and drum are silenced there and the mixer leaves FM.
+ * A score with precedence (the personal pack's arranged take of music a table entry plays) keeps
+ * every frame it plays, those the table claims too: the table's voices and events are not used
+ * there. A frame after a score stops is decided as without it (the beeper's, unless the table
+ * claims it): B's voices and drum are silenced there and the mixer leaves FM.
  *
  * Built into flash, not SRAM, on the device (the reader runs only for frames a learned entry
  * claims; the player, a pass or two over a frame's edges per score followed, through
@@ -96,6 +100,7 @@
 #define SCORE 32u     /* a kind-2 record's fixed part (a recorded score) */
 #define ESC 8u        /* a score's fingerprint: the nibble before a count */
 #define DRUMV 3u      /* a score's event: the drum's voice (SND_TONAL, method B's drum voice) */
+#define FIRST 0x80u   /* a score's voices byte: bit 7 its precedence over the table */
 #define FRAME ((int32_t)ZX_FRAME_TSTATES)
 
 _Static_assert(SND_SCORES_MAX <= 8u, "a bit per score in snd_b_score.live");
@@ -438,13 +443,14 @@ static int events_ok(const uint8_t *e, uint32_t size, uint32_t *at, uint32_t n, 
 	return 1;
 }
 
-/* Is the kind-2 record at e (size bytes, within the list) valid? 1-3 voices, an intro or a loop,
+/* Is the kind-2 record at e (size bytes, within the list) valid? 1-3 voices (bit 7 of the byte
+ * aside: the precedence; bits 2-6 clear), an intro or a loop,
  * each section's whole buckets its length's (SND_SCORE_BUCKETS_MAX of both at most; a loop one at
  * least), 1-255 pitches of 64 T at least, the fingerprint (fp_ok) and every event (events_ok)
  * within the record. */
 static int score_ok(const uint8_t *e, uint32_t size)
 {
-	const uint32_t voices = e[3], intro_t = sec_len(e, 0), loop_t = sec_len(e, 1), ib = sec_buckets(e, 0), lb = sec_buckets(e, 1);
+	const uint32_t voices = e[3] & ~FIRST, intro_t = sec_len(e, 0), loop_t = sec_len(e, 1), ib = sec_buckets(e, 0), lb = sec_buckets(e, 1);
 	const uint32_t np = e[28];
 	uint32_t k, at = SCORE + 3u * np, len;
 
@@ -713,12 +719,13 @@ static uint32_t release(snd_b_score *sc, snd_frame *out, uint32_t i, uint32_t t,
 }
 
 /* Frame f0 + rel, which the playing score plays: its events (into out unless the decision has the
- * frame confident), each pass of the loop that begins in it, then the frame the score's. */
+ * frame confident and the score has no precedence), each pass of the loop that begins in it, then
+ * the frame the score's. */
 static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 {
 	snd_b_score *sc = &b->sc;
 	const uint8_t *r = sc->rec;
-	const uint32_t loop = sec_len(r, 1) != 0, mine = !out->confident, drum = sc->drum;
+	const uint32_t loop = sec_len(r, 1) != 0, mine = !out->confident || (r[3] & FIRST), drum = sc->drum;
 	uint32_t i = 0, k;
 	int32_t t;
 
@@ -758,6 +765,7 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 		i = release(sc, out, i, (uint32_t)(sc->start + (int32_t)sec_len(r, 0)), 0, mine);
 	sc->start -= FRAME;
 	if (!mine) return;   /* the table's */
+	/* (a score with precedence: the table's voices and events, if it claimed the frame, replaced) */
 	out->n_ev = (uint8_t)i;
 	out->drum = (uint8_t)drum;
 	out->style = SND_STYLE_ENGINE;
@@ -765,7 +773,7 @@ static void score_frame(snd_b *b, snd_frame *out, uint32_t rel)
 	out->engine = (uint8_t)(b->n + sc->index);
 	silence(b);
 	for (k = 0; k < SND_TONAL; k++) {
-		out->role[k] = k < r[3] && r[29 + k] <= SND_ROLE_PAD ? r[29 + k] : SND_ROLE_AUTO;
+		out->role[k] = k < (r[3] & ~FIRST) && r[29 + k] <= SND_ROLE_PAD ? r[29 + k] : SND_ROLE_AUTO;
 		b->tone[k].period_q8 = sc->v[k].period_q8;
 		b->tone[k].level = sc->v[k].level;
 	}
