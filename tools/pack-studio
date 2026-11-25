@@ -79,8 +79,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   its packages and a 1.4 GB model.
 
   The games screen: a row per game, its name, how it went in, its packed size (with its chosen
-  music, as of the last learning), its pack (P1 to P9, a colour per pack, or a dash), its methods
-  (a capital letter when marked), and per score the choice (original, take-2, chip-1, ay-1), else
+  music, as of the last learning), its pack (P1 to P9, a colour per pack, or a dash), its music
+  methods ("FM AI SID AY": FM always, the others coloured when marked, dots when not), and per score the choice (original, take-2, chip-1, ay-1), else
   "nothing to arrange: FM from code" or "beeper". Games left out are dimmed, with why. Above the
   rows, the packs: per pack with games "P1  312.4/416.7 KB <bar> 4 games" (its games' bytes
   against what a pack holds: the room less 2% less the pack's overhead, the plan's bytes beyond
@@ -95,13 +95,17 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       f              every packed game in no pack into the first pack with room, in name order
       p              the packs: each pack, its fill and its games (1-9, 0/x move the game chosen,
                      Enter opens it, b builds, Left/h/Esc/p back)
-      a / s / y      mark or unmark AI / SID / AY for the game
+      a / s / y      mark or unmark a way to get new music for the game (nothing runs yet):
+                     a AI, the model writes a bass, chords and drums around its melody;
+                     s SID, its C64 version's tune from the SID collection;
+                     y AY, its Spectrum 128 version's tune from the AY collection
       A / S / Y      the same for every game with scores
       g              generate the marked methods: an AI job per game with A, a SID job per game
                      with S, an AY job per game with Y (the SID or AY collection is downloaded
                      first when there is none)
       r              learn again (the plan: sizes change with the choices)
-      b              build the packs
+      b              build the firmware: the packages (fmzx.fwsc, fmzx-preview.fwsc) of each pack,
+                     with each game's chosen music, in W/pack-<n>/
       l              the log (W/studio.log); ? this text; q quit (asks when jobs are running)
   Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
   titles bold, the chosen candidate green, marked methods AI magenta, SID cyan, AY yellow (dim
@@ -2351,12 +2355,15 @@ class Studio:
 # The screen (curses): a thin layer over Studio
 
 
-HELP_GAMES = ("jk move  Enter open  1-9/0 pack  f fill  p packs  b build  g generate  a/s/y AI/SID/AY  A/S/Y all  "
-              "r re-learn  l log  ? help  q quit")
-HELP_LIVE = "jk move  1-9/0 pack  l log  ? help  q quit"
-HELP_GAME = "jk move  Enter play  space/Esc stop  c choose  a/s/y mark AI/SID/AY  g generate  h/Left back  l log"
-HELP_PACKS = "jk move  1-9 pack  0/x none  f fill  Enter open  b build  h/Esc back  l log  q quit"
-HELP_TEXT = "jk/PgUp/PgDn scroll  Home/End  q/Esc back"
+HELP_GAMES = ("Enter open  a/s/y mark  g make-takes  1-9/0 pack  f fill  p packs  b build-firmware  r re-learn  "
+              "l log  ? help  q quit")
+HELP_LIVE = "1-9/0 pack  l log  ? help  q quit"
+HELP_GAME = "Enter play  Space stop  c choose  a/s/y mark  g make-takes  Esc back  l log  ? help"
+HELP_PACKS = "1-9 pack  0/x none  f fill  Enter open  b build-firmware  Esc back  l log  q quit"
+HELP_TEXT = "j/k PgUp/PgDn scroll  Home/End  q/Esc back"
+# the methods to mark: key, label on a row, what it is
+METHOD_KEYS = (("a", "AI", "ai", "AI arrangement"), ("s", "SID", "sid", "C64 version"),
+               ("y", "AY", "ay", "Spectrum 128 version"))
 
 
 def color_wanted(env: dict, has_colors: bool) -> bool:
@@ -2421,7 +2428,7 @@ class UI:
         B, D, R = curses.A_BOLD, curses.A_DIM, curses.A_REVERSE
         a = {"dim": D, "bold": B, "rev": R, "sel": R | B, "title": B, "name": B, "head": B, "key": B,
              "chosen": B, "ai": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
-             "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B}
+             "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B, "keycap": R | B}
         a.update({f"p{n}": B for n in range(1, PACKS_MAX + 1)})
         if not colors:
             return a
@@ -2435,6 +2442,8 @@ class UI:
             for i, n in enumerate(names, 1):
                 curses.init_pair(i, getattr(curses, f"COLOR_{n}"), bg)
             g, y, r, m, c, b = (curses.color_pair(i) for i in range(1, len(names) + 1))
+            curses.init_pair(len(names) + 1, curses.COLOR_BLACK, curses.COLOR_CYAN)
+            a["keycap"] = curses.color_pair(len(names) + 1) | B
         except curses.error:
             return a
         a.update({"chosen": g | B, "ai": m | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
@@ -2457,13 +2466,18 @@ class UI:
             self.scr.addstr(y, x, s.replace("\t", " ")[:room], attr)
         return x + len(s)
 
+    def put_key(self, y: int, x: int, key: str, what: str = "") -> int:
+        """A key as a cap (" g ", reversed, coloured), then what it does; returns the next column."""
+        x = self.put(y, x, f" {key} ", self.attr["keycap"])
+        return self.put(y, x, f" {what}  " if what else "  ")
+
     def put_help(self, y: int, text: str) -> None:
-        """A key line: each key bold, what it does dim."""
+        """A key line: each key a cap, what it does after it; cut at the edge, so the keys used
+        most come first."""
         x = 0
         for seg in text.split("  "):
             key, _, what = seg.partition(" ")
-            x = self.put(y, x, key, self.attr["key"])
-            x = self.put(y, x, " " + what + "  " if what else "  ", self.attr["dim"])
+            x = self.put_key(y, x, key, what)
 
     def draw(self) -> None:
         self.scr.erase()
@@ -2541,11 +2555,12 @@ class UI:
         if lh:
             self.put(1, 0, lh, self.attr["err"] if live.phase == "failed" else self.attr["warn"])
         else:
-            x = self.put(1, 0, "methods: F FM (always) ", self.attr["dim"])
-            for letter, what, k in (("A", "AI", "ai"), ("S", "SID", "sid"), ("Y", "AY", "ay")):
-                x = self.put(1, x + 1, letter, self.attr[k])
-                x = self.put(1, x, f" {what}", self.attr["dim"])
-            self.put(1, x, "; a capital: marked", self.attr["dim"])
+            x = self.put(1, 0, "music to try (FM from the code is always there): ", self.attr["dim"])
+            for key, label, k, what in METHOD_KEYS:
+                x = self.put_key(1, x, key)
+                x = self.put(1, x - 1, label, self.attr[k])
+                x = self.put(1, x, f" {what}   ", self.attr["dim"])
+            self.put(1, x, "(capital: every game; g makes the takes)", self.attr["dim"])
         if not p:
             self.put_help(h - 2, HELP_LIVE)
             return self.draw_live(h, w)
@@ -2576,10 +2591,12 @@ class UI:
             x = self.put(y, x, f"{tag:<2}", (self.attr["err"] if over else ta) | rv)
             x += 1
             ms = st.marked(g.id)
-            for letter, m in (("F", None), ("A", "ai"), ("S", "sid"), ("Y", "ay")):
-                on = (not g.left_out) if m is None else (m in ms and g.can_arrange)
-                a = (self.attr[m] if m and on else 0 if on else self.attr["dim"]) | rv
-                x = self.put(y, x + 1, letter if on else letter.lower(), a)
+            x = self.put(y, x + 1, "FM", (self.attr["dim"] if g.left_out else 0) | rv)
+            for _, label, m, _ in METHOD_KEYS:
+                on = m in ms and g.can_arrange
+                dot = "\u00b7" if self.utf8 else "."
+                text = label if on else dot * len(label)
+                x = self.put(y, x + 1, text, (self.attr[m] if on else self.attr["dim"]) | rv)
             summary = st.choice_summary(g)
             x = self.put(y, x + 2, summary, base)
             if not g.left_out and g.scores:
@@ -2638,11 +2655,12 @@ class UI:
         self.put(1, 0, g.music, self.attr["dim"])
         ms = st.marked(g.id)
         if g.can_arrange:
-            x = self.put(2, 0, "methods: F FM (always)", self.attr["dim"])
-            for letter, what, k in (("A", "AI", "ai"), ("S", "SID", "sid"), ("Y", "AY", "ay")):
+            x = self.put(2, 0, "music to try: ", self.attr["dim"])
+            for key, label, k, what in METHOD_KEYS:
                 on = k in ms
-                x = self.put(2, x + 3, f"{letter} {what} ", self.attr["dim"])
-                x = self.put(2, x, "[x]" if on else "[ ]", self.attr[k] if on else self.attr["dim"])
+                x = self.put_key(2, x, key)
+                x = self.put(2, x - 1, "[x] " if on else "[ ] ", self.attr[k] if on else self.attr["dim"])
+                x = self.put(2, x, f"{label} {what}   ", self.attr[k] if on else self.attr["dim"])
         else:
             self.put(2, 0, f"{g.plays()}: no score, so no AI, SID or AY; listen to the whole game below", self.attr["dim"])
         self.put_help(h - 2, HELP_GAME)
@@ -3531,8 +3549,9 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         fc = FakeCurses()
         plain, colored = UI.attrs(fc, False), UI.attrs(fc, True)
         check(plain["chosen"] == 1 and plain["sel"] == 5 and plain["cached"] == 2 and colored["chosen"] == (1 << 8) | 1
-              and colored["ai"] != colored["sid"] != colored["ay"] and colored["err"] & 0xff00 == 3 << 8 and len(fc.pairs) == 6
-              and all(p[2] == -1 for p in fc.pairs), "colours: bold/dim/reverse without colour; green chosen, AI/SID/AY apart, red errors")
+              and colored["ai"] != colored["sid"] != colored["ay"] and colored["err"] & 0xff00 == 3 << 8 and len(fc.pairs) == 7
+              and all(p[2] == -1 for p in fc.pairs[:6]) and fc.pairs[6][1:] == (fc.COLOR_BLACK, fc.COLOR_CYAN) and colored["keycap"] == (7 << 8) | 1,
+              "colours: bold/dim/reverse without colour; green chosen, AI/SID/AY apart, red errors, keys on cyan")
 
         # -- --status, which learns first (the stand-in fmzx-pack)
         games = t / "My Games"
