@@ -20,37 +20,55 @@
 //!
 //! # The takes chosen
 //!
-//! `<out>/arrange/choices.toml` holds a `[choices]` table, `"<game-id>/<key>" = <take>`, 0 for
-//! the original (one that does not read fails the run). A chosen take is read from
-//! `<key>/take-<n>/arranged.toml` (the header of `score.toml` and `take`, `generator`, and notes
-//! on 4 voices: 0 the lead, 1 the bass, 2 the pad, 3 the drum with `period_t = 0`, a hit from
-//! `start_t` to `end_t`) and checked ([`arrange`]): its key and timeline the score's, every note
-//! within the timeline, on voices 0-3, with no two on one voice overlapping, a tonal note's
-//! period 64 to 16,777,215 T, a drum's 0, levels 1-255. Its notes become the record's events
-//! as the learner builds a score's ([`soundlearn::scores::score_events`]): times rounded to 64
-//! T, the notes cut at the intro's end and the loop's, each tonal voice sounding at the loop's
-//! start restated there, a note off at a note's end unless the voice's next note starts there
-//! (or the note reaches its section's end); voices 0-2 tonal with the roles lead, bass and pad,
-//! voice 3 the drum's hits and offs, a drum off at least 64 T before the next hit (shortened
-//! where needed; a drum note is never restated: the device strikes the drum anew at each pass).
-//! A frame (a bucket of 69,888 T on its section's grid) holds at most [`SND_EVENTS`] events: past
-//! that, drum notes are dropped first, then pad notes (the latest in the frame first), and the
-//! take says how many; a frame over it with the lead and bass alone refuses the take. The record
-//! keeps the score's trigger, code, quiet and fingerprints, so it plays in step as before.
+//! `<out>/arrange/choices.toml` holds a `[choices]` table, `"<game-id>/<key>" = <take>`: a number
+//! for an AI take (`take-<n>`, 0 the original) or `"chip-<n>"` for a C64 take ([`Choice`]; a
+//! value that is neither, or a file that does not read, fails the run, naming the file and the
+//! key). A chosen AI take is read from `<key>/take-<n>/arranged.toml` (the header of `score.toml`
+//! and `take`, `generator`, and notes on 4 voices: 0 the lead, 1 the bass, 2 the pad, 3 the drum
+//! with `period_t = 0`, a hit from `start_t` to `end_t`) and checked ([`arrange`]): its key and
+//! timeline the score's, every note within the timeline, on voices 0-3, with no two on one voice
+//! overlapping, a tonal note's period 64 to 16,777,215 T, a drum's 0, levels 1-255. Its notes
+//! become the record's events as the learner builds a score's
+//! ([`soundlearn::scores::score_events`]): times rounded to 64 T, the notes cut at the intro's end
+//! and the loop's, each tonal voice sounding at the loop's start restated there, a note off at a
+//! note's end unless the voice's next note starts there (or the note reaches its section's end);
+//! voices 0-2 tonal with the roles lead, bass and pad, voice 3 the drum's hits and offs, a drum
+//! off at least 64 T before the next hit (shortened where needed; a drum note is never restated:
+//! the device strikes the drum anew at each pass). A frame (a bucket of 69,888 T on its section's
+//! grid) holds at most [`SND_EVENTS`] events: past that, drum notes are dropped first, then pad
+//! notes (the latest in the frame first), and the take says how many; a frame over it with the
+//! lead and bass alone refuses the take. The record keeps the score's trigger, code, quiet and
+//! fingerprints, so it plays in step as before.
+//!
+//! A chosen C64 take (`<key>/chip-<n>/arranged.toml`, written by `tools/arrange-music chip`) has
+//! the same header and notes, `take` its number or `"chip-<n>"`, and its own timeline:
+//! `timeline = "own"`, `own_intro_t` and `own_loop_t` (T; 0: no loop, the notes end at
+//! `own_intro_t`), and `source` (where the tune comes from). It is checked the same way against
+//! its own timeline (the key and the score's header still the score's; `own_loop_t` 0 or at least
+//! a frame; the two together 1 T to a score's longest, [`SND_SCORE_BUCKETS_MAX`] frames, about 4
+//! minutes), and becomes a
+//! replacement record ([`ScoreRecord::replacement`], docs/pack-format.md): the score's trigger,
+//! code, quiet and fingerprints, which method B follows as before, precedence set, and its events
+//! built as above on its own sections ([`ScoreRecord::event_lengths`]): its intro from T0 and its
+//! loop, played round from T0 + `own_intro_t` for as long as the score is followed. Its frames
+//! are counted on its own sections' grids.
+//!
 //! Then ([`apply`]) the game's scores must stay within [`SCORES_BYTES_MAX`], method B's decoder
 //! must take the list, and the replay must verify the score ([`soundlearn::scores::verify`]).
 //! A take that fails any of these leaves the original, with the reason. A shadow score is packed
-//! only with a take chosen for it: the take's record, its precedence set (method B gives it the
-//! frames the table claims too), is added after the game's scores, which must then number at most
-//! [`SND_SCORES_MAX`](zx_sys::SND_SCORES_MAX) and stay within [`SCORES_BYTES_MAX`], and is
-//! verified the same way; else the routine plays the music live, as before.
+//! only with a take chosen for it (an AI take or a C64 take): the take's record, its precedence
+//! set (method B gives it the frames the table claims too), is added after the game's scores,
+//! which must then number at most [`SND_SCORES_MAX`](zx_sys::SND_SCORES_MAX) and stay within
+//! [`SCORES_BYTES_MAX`], and is verified the same way; else the routine plays the music live, as
+//! before.
 
 use serde::Deserialize;
 use soundlearn::scores::{record_bytes, SCORES_BYTES_MAX};
 use soundlearn::{append_score, decode_scores, replace_scores, score_key, ScoreEvent, ScoreRecord, SCORE_DRUM};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
-use zx_sys::{SndEngines, SND_EVENTS, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD, SND_TONAL, ZX_FRAME_TSTATES};
+use zx_sys::{SndEngines, SND_EVENTS, SND_ROLE_BASS, SND_ROLE_LEAD, SND_ROLE_PAD, SND_SCORE_BUCKETS_MAX, SND_TONAL, ZX_FRAME_TSTATES};
 
 /// The arranged music's folder, in the output folder.
 pub const ARRANGE: &str = "arrange";
@@ -68,6 +86,10 @@ const TAKE_ROLES: [u8; SND_TONAL] = [SND_ROLE_LEAD, SND_ROLE_BASS, SND_ROLE_PAD]
 const FRAME_UNITS: u64 = ZX_FRAME_TSTATES as u64 / 64;
 /// The longest period a note may have (the record's 24 bits).
 const PERIOD_MAX: i64 = 0xFF_FFFF;
+/// A replacement's event sections together, at most (T): the decoder's limit.
+const OWN_MAX: i64 = SND_SCORE_BUCKETS_MAX as i64 * ZX_FRAME_TSTATES as i64;
+/// A section's most events (the record's 16-bit counts).
+const EVENTS_MAX: usize = u16::MAX as usize;
 
 /// A note of a score's timeline: its voice (0-2 tonal, 3 the drum), its start and end in T
 /// since T0, its full period in T (0 for the drum) and its level (1-255).
@@ -90,11 +112,13 @@ pub fn role_name(role: u8) -> &'static str {
     }
 }
 
-/// The tonal notes of a record on one timeline (see the module docs), by start and then voice.
+/// The tonal notes of a record on one timeline (see the module docs; a replacement's on its
+/// events' own), by start and then voice.
 pub fn timeline(rec: &ScoreRecord) -> Vec<Note> {
     let mut out = Vec::new();
-    let intro_t = u64::from(rec.intro_t);
-    for (events, from, len) in [(&rec.intro_events, 0, intro_t), (&rec.loop_events, intro_t, u64::from(rec.loop_t))] {
+    let (intro_t, loop_t) = rec.event_lengths();
+    let intro_t = u64::from(intro_t);
+    for (events, from, len) in [(&rec.intro_events, 0, intro_t), (&rec.loop_events, intro_t, u64::from(loop_t))] {
         let mut open: [Option<(u64, u32, u8)>; SND_TONAL] = [None; SND_TONAL];
         let close = |out: &mut Vec<Note>, v: usize, o: Option<(u64, u32, u8)>, end: u64| {
             if let Some((start, period_t, level)) = o.filter(|o| end > o.0) {
@@ -171,16 +195,63 @@ fn toml_error(text: &str, e: &toml::de::Error) -> String {
     at.map_or_else(|| what.to_string(), |l| format!("line {l}: {what}"))
 }
 
+/// A choice of `choices.toml`: an AI take (`take-<n>`; `Take(0)` the original) or a C64 take
+/// (`chip-<n>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Choice {
+    Take(u32),
+    Chip(u32),
+}
+
+impl Choice {
+    /// The choice a `choices.toml` value names: a number (0 the original) or `"chip-<n>"` (n 1
+    /// or more). None: neither.
+    pub fn parse(v: &toml::Value) -> Option<Choice> {
+        match v {
+            toml::Value::Integer(n) => u32::try_from(*n).ok().map(Choice::Take),
+            toml::Value::String(s) => chip_number(s).map(Choice::Chip),
+            _ => None,
+        }
+    }
+
+    /// Its folder in the score's folder: `take-<n>` or `chip-<n>`.
+    pub fn dir(self) -> String {
+        match self {
+            Choice::Take(n) => format!("take-{n}"),
+            Choice::Chip(n) => format!("chip-{n}"),
+        }
+    }
+}
+
+impl fmt::Display for Choice {
+    /// `take 2`, or `C64 take chip-1`.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Choice::Take(n) => write!(f, "take {n}"),
+            Choice::Chip(n) => write!(f, "C64 take chip-{n}"),
+        }
+    }
+}
+
+/// The number of a `chip-<n>` name (n 1 or more, plain digits).
+fn chip_number(s: &str) -> Option<u32> {
+    let n = s.strip_prefix("chip-")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok().filter(|&n| n > 0)
+}
+
 #[derive(Deserialize)]
 struct ChoicesFile {
     #[serde(default)]
-    choices: BTreeMap<String, i64>,
+    choices: BTreeMap<String, toml::Value>,
 }
 
 /// The owner's choices, from `<dir>/choices.toml` (`dir`: the arranged music's folder): each
-/// `"<game-id>/<key>"` and its take (0: the original); none when the file is not there. Err: a
-/// file that does not read, naming it.
-pub fn read_choices(dir: &Path) -> Result<BTreeMap<String, u32>, String> {
+/// `"<game-id>/<key>"` and its [`Choice`]; none when the file is not there. Err: a file that
+/// does not read, or a value that names no take, naming the file (and the key).
+pub fn read_choices(dir: &Path) -> Result<BTreeMap<String, Choice>, String> {
     let path = dir.join(CHOICES);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -191,9 +262,9 @@ pub fn read_choices(dir: &Path) -> Result<BTreeMap<String, u32>, String> {
     let f: ChoicesFile = toml::from_str(&text).map_err(|e| bad(toml_error(&text, &e)))?;
     f.choices
         .into_iter()
-        .map(|(k, n)| match u32::try_from(n) {
-            Ok(n) => Ok((k, n)),
-            Err(_) => Err(bad(format!("{k:?} = {n}: a take is 1 or more, 0 the original"))),
+        .map(|(k, v)| match Choice::parse(&v) {
+            Some(c) => Ok((k, c)),
+            None => Err(bad(format!("{k:?} = {v}: a choice is a take's number (1 or more, 0 the original) or \"chip-<n>\" (a C64 take)"))),
         })
         .collect()
 }
@@ -203,8 +274,12 @@ struct TakeFile {
     key: String,
     intro_t: i64,
     loop_t: i64,
-    take: Option<i64>,
+    take: Option<toml::Value>,
     generator: Option<String>,
+    timeline: Option<String>,
+    own_intro_t: Option<i64>,
+    own_loop_t: Option<i64>,
+    source: Option<String>,
     #[serde(default)]
     note: Vec<TakeNote>,
 }
@@ -222,7 +297,7 @@ struct TakeNote {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Arranged {
     pub rec: ScoreRecord,
-    /// What made it (`generator` in its file).
+    /// What made it: an AI take's `generator`, a C64 take's `source`.
     pub generator: String,
     /// The drum and pad notes dropped for frames over [`SND_EVENTS`] events.
     pub dropped: (usize, usize),
@@ -242,9 +317,10 @@ struct Piece {
     cut: bool,
 }
 
-/// Take `n` of score `rec`, from the text of its `arranged.toml`, made into a record (see the
-/// module docs). Err: why it does not fit.
-pub fn arrange(rec: &ScoreRecord, n: u32, text: &str) -> Result<Arranged, String> {
+/// Take `choice` of score `rec`, from the text of its `arranged.toml`, made into a record (see
+/// the module docs): an AI take's on the score's timeline, a C64 take's a replacement on its own.
+/// Err: why it does not fit.
+pub fn arrange(rec: &ScoreRecord, choice: Choice, text: &str) -> Result<Arranged, String> {
     let f: TakeFile = toml::from_str(text).map_err(|e| format!("{TAKE_FILE} does not read: {}", toml_error(text, &e)))?;
     let key = score_key(rec);
     if f.key != key {
@@ -253,14 +329,54 @@ pub fn arrange(rec: &ScoreRecord, n: u32, text: &str) -> Result<Arranged, String
     if (f.intro_t, f.loop_t) != (i64::from(rec.intro_t), i64::from(rec.loop_t)) {
         return Err(format!("its timeline (intro_t {}, loop_t {}) is not the score's ({}, {})", f.intro_t, f.loop_t, rec.intro_t, rec.loop_t));
     }
-    if let Some(t) = f.take.filter(|&t| t != i64::from(n)) {
-        return Err(format!("it says take {t}, in take-{n}"));
+    let named = match (&f.take, choice) {
+        (None, _) => true,
+        (Some(toml::Value::Integer(t)), Choice::Take(n) | Choice::Chip(n)) => *t == i64::from(n),
+        (Some(toml::Value::String(t)), Choice::Chip(n)) => chip_number(t) == Some(n),
+        _ => false,
+    };
+    if !named {
+        let t = f.take.as_ref().map(ToString::to_string).unwrap_or_default();
+        return Err(format!("it says take {t}, in {}", choice.dir()));
     }
+    // a C64 take's own timeline: its intro and its loop (0: none)
+    let own = match (choice, f.timeline.as_deref()) {
+        (Choice::Take(_), None | Some("score")) => None,
+        (Choice::Take(_), Some(t)) => return Err(format!("its timeline is {t:?}: a take-<n> is on the score's (only a C64 take, chip-<n>, has its own)")),
+        (Choice::Chip(_), Some("own")) => {
+            let (Some(oi), Some(ol)) = (f.own_intro_t, f.own_loop_t) else {
+                return Err("it has no own_intro_t and own_loop_t (its own timeline)".into());
+            };
+            let why = if oi < 0 || ol < 0 {
+                "below 0"
+            } else if oi + ol == 0 {
+                "no length"
+            } else if oi + ol > OWN_MAX {
+                "longer than a score may be"
+            } else if ol != 0 && ol < i64::from(ZX_FRAME_TSTATES) {
+                "a loop shorter than a frame"
+            } else {
+                ""
+            };
+            if !why.is_empty() {
+                return Err(format!("its own timeline (own_intro_t {oi}, own_loop_t {ol}): {why}"));
+            }
+            Some((oi as u32, ol as u32))
+        }
+        (Choice::Chip(_), t) => return Err(format!("its timeline is {}: a C64 take's is \"own\"", t.map_or("not given".into(), |t| format!("{t:?}")))),
+    };
     if f.note.is_empty() {
         return Err("it has no notes".into());
     }
-    let (intro_t, loop_t) = (u64::from(rec.intro_t), u64::from(rec.loop_t));
+    // the record as it will be: a replacement plays with precedence; its events' sections
+    let base = match own {
+        Some(o) => ScoreRecord { replacement: Some(o), precedence: true, ..rec.clone() },
+        None => ScoreRecord { replacement: None, ..rec.clone() },
+    };
+    let (intro_t, loop_t) = base.event_lengths();
+    let (intro_t, loop_t) = (u64::from(intro_t), u64::from(loop_t));
     let end_t = (intro_t + loop_t) as i64;
+    let whose = if own.is_some() { "take's own" } else { "score's" };
     let drum = i64::from(SCORE_DRUM);
     for (k, x) in f.note.iter().enumerate() {
         let k = k + 1;
@@ -269,7 +385,7 @@ pub fn arrange(rec: &ScoreRecord, n: u32, text: &str) -> Result<Arranged, String
         } else if x.start_t < 0 || x.end_t <= x.start_t {
             format!("it starts at {} T and ends at {} T", x.start_t, x.end_t)
         } else if x.end_t > end_t {
-            format!("it ends at {} T, past the score's end at {end_t} T", x.end_t)
+            format!("it ends at {} T, past the {whose} end at {end_t} T", x.end_t)
         } else if x.voice < drum && !(64..=PERIOD_MAX).contains(&x.period_t) {
             format!("period_t {} (64-{PERIOD_MAX} for a note)", x.period_t)
         } else if x.voice == drum && x.period_t != 0 {
@@ -295,14 +411,32 @@ pub fn arrange(rec: &ScoreRecord, n: u32, text: &str) -> Result<Arranged, String
             return Err(format!("notes {a} and {b} overlap on voice {v}"));
         }
     }
+    // a score with no loop is followed only to its end: a C64 take's events past it never play,
+    // so its own timeline stops there (the notes past it left out, one across it cut)
+    let mut base = base;
+    let (intro_t, loop_t) = match base.replacement {
+        Some(_) if rec.loop_t == 0 && intro_t >= u64::from(rec.intro_t) => {
+            base.replacement = Some((rec.intro_t, 0));
+            (u64::from(rec.intro_t), 0)
+        }
+        _ => (intro_t, loop_t),
+    };
     let mut pieces = pieces(&notes, intro_t, loop_t);
     let dropped = fit_frames(&mut pieces)?;
     let [intro_events, loop_events] = events(&pieces);
+    for (ev, name) in [(&intro_events, "intro"), (&loop_events, "loop")] {
+        if ev.len() > EVENTS_MAX {
+            return Err(format!("its {name} has {} events, over {EVENTS_MAX}", ev.len()));
+        }
+    }
     let voices = notes.iter().filter(|x| x.voice < SCORE_DRUM).map(|x| x.voice + 1).max().unwrap_or(1);
     let mut roles = [0u8; SND_TONAL];
     roles[..usize::from(voices)].copy_from_slice(&TAKE_ROLES[..usize::from(voices)]);
-    let generator = f.generator.unwrap_or_else(|| "no generator named".into());
-    Ok(Arranged { rec: ScoreRecord { voices, roles, intro_events, loop_events, ..rec.clone() }, generator, dropped })
+    let generator = match own {
+        Some(_) => f.source.unwrap_or_else(|| "no source named".into()),
+        None => f.generator.unwrap_or_else(|| "no generator named".into()),
+    };
+    Ok(Arranged { rec: ScoreRecord { voices, roles, intro_events, loop_events, ..base }, generator, dropped })
 }
 
 /// The pieces of `notes` in the intro (`intro_t` from T0) and the loop's pass (`loop_t` from
@@ -352,7 +486,9 @@ fn pieces(notes: &[Note], intro_t: u64, loop_t: u64) -> Vec<Piece> {
 /// does not start where it ends.
 fn has_off(pieces: &[Piece], k: usize) -> bool {
     let p = &pieces[k];
-    !p.cut && (p.voice == SCORE_DRUM || !pieces.iter().any(|x| x.voice == p.voice && x.sec == p.sec && x.start == p.end))
+    // the pieces are in order of section and start
+    let at = pieces.partition_point(|x| (x.sec, x.start) < (p.sec, p.end));
+    !p.cut && (p.voice == SCORE_DRUM || !pieces[at..].iter().take_while(|x| (x.sec, x.start) == (p.sec, p.end)).any(|x| x.voice == p.voice))
 }
 
 /// The intro's and the loop's events of the pieces: a note on at each start, a note off at each
@@ -416,16 +552,16 @@ fn fit_frames(pieces: &mut Vec<Piece>) -> Result<(usize, usize), String> {
 pub enum Status {
     /// Takes, none chosen.
     Original,
-    /// Take `take` plays: its generator, and the drum and pad notes dropped.
-    Take { take: u32, generator: String, dropped: (usize, usize) },
+    /// Take `take` plays: its generator (a C64 take's source), and the drum and pad notes dropped.
+    Take { take: Choice, generator: String, dropped: (usize, usize) },
     /// Take `take` was chosen and does not fit: why.
-    Refused { take: u32, why: String },
+    Refused { take: Choice, why: String },
 }
 
 impl Status {
-    /// Its line in the report: `arranged: take 2 (<generator>)`, `arranged: original` or
-    /// `arranged: take 2 refused: <why>` (a shadow score's: `arranged: the live version` when
-    /// none is chosen).
+    /// Its line in the report: `arranged: take 2 (<generator>)` (`arranged: C64 take chip-1
+    /// (<source>)`), `arranged: original` or `arranged: take 2 refused: <why>` (a shadow score's:
+    /// `arranged: the live version` when none is chosen).
     pub fn text(&self, shadow: bool) -> String {
         match self {
             Status::Original if shadow => "arranged: the live version (no take chosen)".into(),
@@ -442,18 +578,17 @@ impl Status {
                 } else {
                     format!(", {} dropped (over {SND_EVENTS} events in a frame)", parts.join(" and "))
                 };
-                format!("arranged: take {take} ({generator}){dropped}")
+                format!("arranged: {take} ({generator}){dropped}")
             }
-            Status::Refused { take, why } => format!("arranged: take {take} refused: {why}"),
+            Status::Refused { take, why } => format!("arranged: {take} refused: {why}"),
         }
     }
 }
 
-/// Whether a score's folder holds a take (a `take-<n>/arranged.toml`).
+/// Whether a score's folder holds a take (a `take-<n>/arranged.toml` or `chip-<n>/arranged.toml`).
 pub fn has_takes(folder: &Path) -> bool {
-    std::fs::read_dir(folder).is_ok_and(|rd| {
-        rd.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.strip_prefix("take-").is_some_and(|k| k.parse::<u32>().is_ok())) && e.path().join(TAKE_FILE).is_file())
-    })
+    let named = |n: &str| n.strip_prefix("take-").is_some_and(|k| k.parse::<u32>().is_ok()) || chip_number(n).is_some();
+    std::fs::read_dir(folder).is_ok_and(|rd| rd.flatten().any(|e| e.file_name().to_str().is_some_and(named) && e.path().join(TAKE_FILE).is_file()))
 }
 
 /// Which score a take is of: score `k` of the game's list, or its shadow score `k`.
@@ -490,14 +625,14 @@ pub fn apply(
     list: &[u8],
     scores: &[ScoreRecord],
     shadows: &[ScoreRecord],
-    choices: &BTreeMap<String, u32>,
+    choices: &BTreeMap<String, Choice>,
     verify: Verify,
 ) -> Applied {
     let mut cur = list.to_vec();
     let mut recs = scores.to_vec();
     let chosen = |rec: &ScoreRecord| {
         let key = score_key(rec);
-        (dir.join(game).join(&key), choices.get(&format!("{game}/{key}")).copied().filter(|&n| n > 0))
+        (dir.join(game).join(&key), choices.get(&format!("{game}/{key}")).copied().filter(|&c| c != Choice::Take(0)))
     };
     let mut status = Vec::new();
     for (i, rec) in scores.iter().enumerate() {
@@ -533,9 +668,8 @@ pub fn apply(
 
 /// Take `take` of shadow score `i` (`rec`) in its `folder`: made into a record with precedence
 /// and added to the list `list`, checked and verified. Err: why not.
-fn one_shadow(folder: &Path, take: u32, rec: &ScoreRecord, i: usize, list: &[u8], verify: Verify) -> Result<(Arranged, Vec<u8>), String> {
-    let path = folder.join(format!("take-{take}")).join(TAKE_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("take-{take}/{TAKE_FILE}: {e}"))?;
+fn one_shadow(folder: &Path, take: Choice, rec: &ScoreRecord, i: usize, list: &[u8], verify: Verify) -> Result<(Arranged, Vec<u8>), String> {
+    let text = read_take(folder, take)?;
     let mut a = arrange(rec, take, &text)?;
     a.rec.precedence = true;
     let mut all = decode_scores(list)?;
@@ -552,14 +686,13 @@ fn one_shadow(folder: &Path, take: u32, rec: &ScoreRecord, i: usize, list: &[u8]
 /// record and put into the list, checked and verified. Err: why not.
 fn one_take(
     folder: &Path,
-    take: u32,
+    take: Choice,
     recs: &[ScoreRecord],
     i: usize,
     list: &[u8],
     verify: Verify,
 ) -> Result<(Arranged, Vec<u8>), String> {
-    let path = folder.join(format!("take-{take}")).join(TAKE_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("take-{take}/{TAKE_FILE}: {e}"))?;
+    let text = read_take(folder, take)?;
     let a = arrange(&recs[i], take, &text)?;
     let mut all = recs.to_vec();
     all[i] = a.rec.clone();
@@ -568,6 +701,12 @@ fn one_take(
     SndEngines::with_learned(&l).map_err(|e| format!("method B's decoder refuses it (error {e})"))?;
     verify(&l, i, Of::Score(i)).map_err(|why| format!("the replay: {why}"))?;
     Ok((a, l))
+}
+
+/// The text of take `take`'s file in the score's `folder`. Err: why it does not read.
+fn read_take(folder: &Path, take: Choice) -> Result<String, String> {
+    let dir = take.dir();
+    std::fs::read_to_string(folder.join(&dir).join(TAKE_FILE)).map_err(|e| format!("{dir}/{TAKE_FILE}: {e}"))
 }
 
 /// Whether a game's scores fit [`SCORES_BYTES_MAX`]. Err: how much they would take.
@@ -598,6 +737,7 @@ mod tests {
             code: 7,
             voices: 2,
             precedence: false,
+            replacement: None,
             roles: [SND_ROLE_LEAD, SND_ROLE_BASS, 0],
             intro_t: 10 * F + 10,
             loop_t: 20 * F,
@@ -666,7 +806,7 @@ mod tests {
         let (i, l) = (i64::from(s.intro_t), i64::from(s.loop_t));
         let a = arrange(
             &s,
-            1,
+            Choice::Take(1),
             &take(
                 &s,
                 &[
@@ -709,7 +849,7 @@ mod tests {
         assert_eq!(a.rec.loop_events, [ev(0, 0, Some((3000, 90))), ev(640, 0, None), ev(u(l - 6400), 0, Some((2500, 90)))]);
         // no loop: the intro alone
         let plain = ScoreRecord { loop_t: 0, loop_fp: vec![], loop_events: vec![], ..s.clone() };
-        let a = arrange(&plain, 1, &take(&plain, &[(0, 0, 640, 3000, 90), (3, 640, i, 0, 9)])).unwrap();
+        let a = arrange(&plain, Choice::Take(1), &take(&plain, &[(0, 0, 640, 3000, 90), (3, 640, i, 0, 9)])).unwrap();
         assert_eq!(a.rec.intro_events, [ev(0, 0, Some((3000, 90))), ev(640, 0, None), ev(640, D, Some((0, 9)))]);
         assert!(a.rec.loop_events.is_empty());
         // only the lead and the drum: one voice
@@ -721,7 +861,7 @@ mod tests {
         let s = score();
         let (i, l) = (i64::from(s.intro_t), i64::from(s.loop_t));
         let good = (0, 0, 640, 3000, 90);
-        let why = |notes: &[(i64, i64, i64, i64, i64)]| arrange(&s, 1, &take(&s, notes)).unwrap_err();
+        let why = |notes: &[(i64, i64, i64, i64, i64)]| arrange(&s, Choice::Take(1), &take(&s, notes)).unwrap_err();
         assert_eq!(why(&[good, (4, 0, 64, 0, 1)]), "note 2: voice 4 (0-3)");
         assert_eq!(why(&[(0, 640, 640, 3000, 90)]), "note 1: it starts at 640 T and ends at 640 T");
         assert_eq!(why(&[(0, -64, 640, 3000, 90)]), "note 1: it starts at -64 T and ends at 640 T");
@@ -734,14 +874,14 @@ mod tests {
         assert_eq!(why(&[(1, 500, 900, 100, 9), good, (1, 0, 501, 100, 9)]), "notes 1 and 3 overlap on voice 1");
         assert_eq!(why(&[]), "it has no notes");
         let text = take(&s, &[good]);
-        assert_eq!(arrange(&s, 2, &text).unwrap_err(), "it says take 1, in take-2");
+        assert_eq!(arrange(&s, Choice::Take(2), &text).unwrap_err(), "it says take 1, in take-2");
         let other = ScoreRecord { site: 0x8001, ..s.clone() };
-        assert_eq!(arrange(&other, 1, &text).unwrap_err(), format!("its key is {}, not the score's {}", score_key(&s), score_key(&other)));
+        assert_eq!(arrange(&other, Choice::Take(1), &text).unwrap_err(), format!("its key is {}, not the score's {}", score_key(&s), score_key(&other)));
         let longer = ScoreRecord { loop_t: s.loop_t + 64, ..s.clone() };
         let other = take(&longer, &[good]);
-        assert_eq!(arrange(&s, 1, &other).unwrap_err(), format!("its timeline (intro_t {i}, loop_t {}) is not the score's ({i}, {l})", l + 64));
-        assert!(arrange(&s, 1, "key = 3").unwrap_err().starts_with("arranged.toml does not read: line 1: "));
-        assert!(arrange(&s, 1, &text.replace("key", "kee")).unwrap_err().starts_with("arranged.toml does not read: "));
+        assert_eq!(arrange(&s, Choice::Take(1), &other).unwrap_err(), format!("its timeline (intro_t {i}, loop_t {}) is not the score's ({i}, {l})", l + 64));
+        assert!(arrange(&s, Choice::Take(1), "key = 3").unwrap_err().starts_with("arranged.toml does not read: line 1: "));
+        assert!(arrange(&s, Choice::Take(1), &text.replace("key", "kee")).unwrap_err().starts_with("arranged.toml does not read: "));
     }
 
     #[test]
@@ -753,29 +893,29 @@ mod tests {
         let mut notes = vec![(0, f, f + 640, 2000, 9), (0, f + 640, f + 1280, 2100, 9), (0, f + 1280, f + 1920, 2200, 9), (0, f + 1920, f + 2560, 2300, 9)];
         notes.extend([(2, f + 100, f + 200, 5000, 9), (2, f + 300, f + 400, 5000, 9)]);
         notes.extend([(3, f + 1000, f + 1100, 0, 9), (3, f + 1200, f + 1300, 0, 9), (3, f + 1400, f + 1500, 0, 9)]);
-        let a = arrange(&s, 1, &take(&s, &notes)).unwrap();
+        let a = arrange(&s, Choice::Take(1), &take(&s, &notes)).unwrap();
         assert_eq!(a.dropped, (3, 1));
         assert_eq!(a.rec.intro_events.len(), 7);
         assert!(a.rec.intro_events.iter().any(|e| e.t == F + 128) && !a.rec.intro_events.iter().any(|e| e.t == F + 320));
-        assert_eq!(Status::Take { take: 1, generator: "g".into(), dropped: a.dropped }.text(false), "arranged: take 1 (g), 3 drum notes and 1 pad note dropped (over 8 events in a frame)");
+        assert_eq!(Status::Take { take: Choice::Take(1), generator: "g".into(), dropped: a.dropped }.text(false), "arranged: take 1 (g), 3 drum notes and 1 pad note dropped (over 8 events in a frame)");
         // the lead and two drums, 9 events: the later drum goes
         notes.truncate(4);
         notes.extend([(3, f + 1000, f + 1100, 0, 9), (3, f + 1200, f + 1300, 0, 9)]);
-        let a = arrange(&s, 1, &take(&s, &notes)).unwrap();
+        let a = arrange(&s, Choice::Take(1), &take(&s, &notes)).unwrap();
         assert_eq!(a.dropped, (1, 0));
         let drums: Vec<u32> = a.rec.intro_events.iter().filter(|e| e.voice == D).map(|e| e.t).collect();
         assert_eq!(drums, [F + 1024, F + 1088]);
         // the lead and bass alone over it: refused
         let busy: Vec<_> = (0..5).flat_map(|k| [(0, 64 * (2 * k), 64 * (2 * k + 1), 2000, 9), (1, 64 * (2 * k), 64 * (2 * k + 1), 4000, 9)]).collect();
-        assert_eq!(arrange(&s, 1, &take(&s, &busy)).unwrap_err(), "frame 0 of the intro has more than 8 events on the lead and bass alone");
+        assert_eq!(arrange(&s, Choice::Take(1), &take(&s, &busy)).unwrap_err(), "frame 0 of the intro has more than 8 events on the lead and bass alone");
     }
 
     #[test]
     fn statuses() {
         assert_eq!(Status::Original.text(false), "arranged: original");
-        assert_eq!(Status::Take { take: 2, generator: "m".into(), dropped: (0, 0) }.text(false), "arranged: take 2 (m)");
-        assert_eq!(Status::Take { take: 2, generator: "m".into(), dropped: (1, 0) }.text(false), "arranged: take 2 (m), 1 drum note dropped (over 8 events in a frame)");
-        assert_eq!(Status::Refused { take: 3, why: "x".into() }.text(false), "arranged: take 3 refused: x");
+        assert_eq!(Status::Take { take: Choice::Take(2), generator: "m".into(), dropped: (0, 0) }.text(false), "arranged: take 2 (m)");
+        assert_eq!(Status::Take { take: Choice::Take(2), generator: "m".into(), dropped: (1, 0) }.text(false), "arranged: take 2 (m), 1 drum note dropped (over 8 events in a frame)");
+        assert_eq!(Status::Refused { take: Choice::Take(3), why: "x".into() }.text(false), "arranged: take 3 refused: x");
     }
 
     #[test]
@@ -812,13 +952,167 @@ mod tests {
     fn choices_files() {
         let dir = Tmp::new("choices");
         assert_eq!(read_choices(&dir.0), Ok(BTreeMap::new()));
-        std::fs::write(dir.0.join(CHOICES), "[choices]\n\"g/8000-0a0b0c0d\" = 2\n\"h/1\" = 0\n").unwrap();
-        assert_eq!(read_choices(&dir.0), Ok(BTreeMap::from([("g/8000-0a0b0c0d".into(), 2), ("h/1".into(), 0)])));
+        std::fs::write(dir.0.join(CHOICES), "[choices]\n\"g/8000-0a0b0c0d\" = 2\n\"h/1\" = 0\n\"h/2\" = \"chip-3\"\n").unwrap();
+        assert_eq!(
+            read_choices(&dir.0),
+            Ok(BTreeMap::from([("g/8000-0a0b0c0d".into(), Choice::Take(2)), ("h/1".into(), Choice::Take(0)), ("h/2".into(), Choice::Chip(3))]))
+        );
         std::fs::write(dir.0.join(CHOICES), "").unwrap();
         assert_eq!(read_choices(&dir.0), Ok(BTreeMap::new()));
-        std::fs::write(dir.0.join(CHOICES), "[choices]\n\"g/k\" = 1.5\n").unwrap();
+        // not TOML: the line
+        std::fs::write(dir.0.join(CHOICES), "[choices]\n\"g/k\" = \n").unwrap();
         let e = read_choices(&dir.0).unwrap_err();
         assert!(e.starts_with(&format!("{}: line 2: ", dir.0.join(CHOICES).display())), "{e}");
+        // values that name no take: the file and the key
+        for v in ["1.5", "-1", "4294967296", "\"two\"", "\"chip-0\"", "\"chip-\"", "\"chip-+1\"", "\"take-1\"", "\"chip-1 \"", "true", "[1]"] {
+            std::fs::write(dir.0.join(CHOICES), format!("[choices]\n\"g/k\" = {v}\n")).unwrap();
+            let e = read_choices(&dir.0).unwrap_err();
+            let want = format!(
+                "{}: \"g/k\" = {v}: a choice is a take's number (1 or more, 0 the original) or \"chip-<n>\" (a C64 take) (fix it, or choose again with tools/arrange-music pick)",
+                dir.0.join(CHOICES).display()
+            );
+            assert_eq!(e, want);
+        }
+        assert_eq!((Choice::Take(2).to_string(), Choice::Chip(1).to_string()), ("take 2".into(), "C64 take chip-1".into()));
+        assert_eq!((Choice::Take(2).dir(), Choice::Chip(1).dir()), ("take-2".into(), "chip-1".into()));
+    }
+
+    /// A C64 take of `s` (`chip-1`, saying `take`), on its own timeline: an intro of `oi` T and a
+    /// loop of `ol` T, then its notes.
+    fn chip(s: &ScoreRecord, take: &str, oi: i64, ol: i64, notes: &[(i64, i64, i64, i64, i64)]) -> String {
+        let mut t = format!(
+            "key = \"{}\"\nintro_t = {}\nloop_t = {}\ntake = {take}\ngenerator = \"chip sid\"\ntimeline = \"own\"\nown_intro_t = {oi}\nown_loop_t = {ol}\n\
+             source = \"C64: A Tune by Someone (1985 Nobody), subtune 2, X/A_Tune.sid\"\n[metrics]\nmelody_match = 0.5\n",
+            score_key(s),
+            s.intro_t,
+            s.loop_t
+        );
+        for (v, a, b, p, l) in notes {
+            t += &format!("[[note]]\nvoice = {v}\nstart_t = {a}\nend_t = {b}\nperiod_t = {p}\nlevel = {l}\n");
+        }
+        t
+    }
+
+    #[test]
+    fn a_chip_take_is_a_replacement_on_its_own_timeline() {
+        let s = score();
+        let f = i64::from(F);
+        // its own intro 3 frames and 100 T, its loop 7 frames and 10 T (the score's: 10 and 20)
+        let (oi, ol) = (3 * f + 100, 7 * f + 10);
+        let notes = [
+            // a lead note across the intro's end: cut there, restated at the loop's start
+            (0, 0, 640, 3000, 90),
+            (0, oi - 640, oi + 640, 2800, 90),
+            // a bass note to the loop's end (no off), a pad note
+            (1, oi + 1000, oi + ol, 9000, 50),
+            (2, 128, 1280, 5000, 40),
+            // drums: one ending where the next starts (shortened), one across the intro's end
+            // (not restated)
+            (3, 0, 640, 0, 200),
+            (3, 640, 1280, 0, 120),
+            (3, oi - 64, oi + 64, 0, 255),
+        ];
+        let u = |t: i64| ((t + 32) / 64 * 64) as u32;
+        for take in ["\"chip-1\"", "1"] {
+            let a = arrange(&s, Choice::Chip(1), &chip(&s, take, oi, ol, &notes)).unwrap();
+            assert_eq!((a.generator.as_str(), a.dropped), ("C64: A Tune by Someone (1985 Nobody), subtune 2, X/A_Tune.sid", (0, 0)));
+            // a replacement: precedence on, its own sections; the trigger and fingerprints kept
+            assert_eq!((a.rec.replacement, a.rec.precedence), (Some((oi as u32, ol as u32)), true));
+            assert_eq!(a.rec.event_lengths(), (oi as u32, ol as u32));
+            assert_eq!((a.rec.site, a.rec.code, a.rec.quiet, a.rec.intro_t, a.rec.loop_t), (s.site, s.code, s.quiet, s.intro_t, s.loop_t));
+            assert_eq!((&a.rec.intro_fp, &a.rec.loop_fp, score_key(&a.rec)), (&s.intro_fp, &s.loop_fp, score_key(&s)));
+            assert_eq!((a.rec.voices, a.rec.roles), (3, [SND_ROLE_LEAD, SND_ROLE_BASS, SND_ROLE_PAD]));
+            assert_eq!(
+                a.rec.intro_events,
+                [
+                    ev(0, 0, Some((3000, 90))),
+                    ev(0, D, Some((0, 200))),
+                    ev(128, 2, Some((5000, 40))),
+                    ev(576, D, None),
+                    ev(640, 0, None),
+                    ev(640, D, Some((0, 120))),
+                    ev(1280, 2, None),
+                    ev(1280, D, None),
+                    ev(u(oi - 640), 0, Some((2800, 90))),
+                    ev(u(oi - 64), D, Some((0, 255))),
+                ]
+            );
+            assert_eq!(a.rec.loop_events, [ev(0, 0, Some((2800, 90))), ev(640, 0, None), ev(1024, 1, Some((9000, 50)))]);
+            // packed and read back as it is
+            let list = soundlearn::encode_list_scores(&[], &[], std::slice::from_ref(&a.rec));
+            assert_eq!(list[4 + 3] & 0xC0, 0xC0, "bits 6 and 7");
+            assert_eq!(soundlearn::decode_scores(&list).unwrap()[0].replacement, a.rec.replacement);
+            assert!(SndEngines::with_learned(&list).is_ok());
+        }
+        // no loop of its own: the intro alone, past the score's end
+        let long = 40 * f;
+        let a = arrange(&s, Choice::Chip(1), &chip(&s, "\"chip-1\"", long, 0, &[(0, 0, 640, 3000, 90), (0, long - 640, long, 2000, 90)])).unwrap();
+        assert_eq!(a.rec.replacement, Some((long as u32, 0)));
+        assert_eq!(a.rec.intro_events, [ev(0, 0, Some((3000, 90))), ev(640, 0, None), ev(u(long - 640), 0, Some((2000, 90)))]);
+        assert!(a.rec.loop_events.is_empty());
+        // a score with no loop is followed only to its end: the take stops there, its loop and
+        // the notes past the end left out, a note across it cut
+        let short = ScoreRecord { loop_t: 0, loop_fp: Vec::new(), ..s.clone() };
+        let end = i64::from(short.intro_t);
+        let across = [(0, 0, 640, 3000, 90), (1, end - 640, end + 640, 9000, 50), (0, end + 64, end + 1280, 2000, 90)];
+        let a = arrange(&short, Choice::Chip(1), &chip(&short, "\"chip-1\"", end + 4 * f, ol, &across)).unwrap();
+        assert_eq!(a.rec.replacement, Some((short.intro_t, 0)));
+        assert_eq!(a.rec.intro_events, [ev(0, 0, Some((3000, 90))), ev(640, 0, None), ev(u(end - 640), 1, Some((9000, 50)))]);
+        assert!(a.rec.loop_events.is_empty());
+        assert_eq!(
+            Status::Take { take: Choice::Chip(1), generator: a.generator, dropped: (0, 0) }.text(false),
+            "arranged: C64 take chip-1 (C64: A Tune by Someone (1985 Nobody), subtune 2, X/A_Tune.sid)"
+        );
+        assert_eq!(Status::Refused { take: Choice::Chip(2), why: "x".into() }.text(true), "arranged: C64 take chip-2 refused: x");
+        // its frames counted on its own grid: at the end of frame 1 of its loop (across a frame
+        // from T0), 4 lead notes (5 events) and 3 drum hits (6): the 2 latest drums go
+        let at = oi + 2 * f - 3700;
+        let mut busy: Vec<_> = (0..4).map(|k| (0, at + 640 * k, at + 640 * (k + 1), 2000 + k, 9)).collect();
+        busy.extend((0..3).map(|k| (3, at + 3000 + 200 * k, at + 3100 + 200 * k, 0, 9)));
+        let a = arrange(&s, Choice::Chip(1), &chip(&s, "\"chip-1\"", oi, ol, &busy)).unwrap();
+        assert_eq!(a.dropped, (2, 0));
+        assert_eq!(a.rec.loop_events.len(), 7);
+        assert_eq!(a.rec.loop_events.iter().filter(|e| e.voice == D).map(|e| e.t).collect::<Vec<_>>(), [u(at + 3000 - oi), u(at + 3100 - oi)]);
+    }
+
+    #[test]
+    fn chip_takes_that_do_not_fit() {
+        let s = score();
+        let f = i64::from(F);
+        let (oi, ol) = (3 * f + 100, 7 * f + 10);
+        let good = [(0, 0, 640, 3000, 90)];
+        let why = |text: &str| arrange(&s, Choice::Chip(1), text).unwrap_err();
+        let ok = chip(&s, "\"chip-1\"", oi, ol, &good);
+        assert!(arrange(&s, Choice::Chip(1), &ok).is_ok());
+        assert_eq!(why(&chip(&s, "\"chip-2\"", oi, ol, &good)), "it says take \"chip-2\", in chip-1");
+        assert_eq!(why(&chip(&s, "2", oi, ol, &good)), "it says take 2, in chip-1");
+        // a chip take's file in a take-<n> folder, and an AI take's in a chip-<n> folder
+        assert_eq!(arrange(&s, Choice::Take(1), &ok).unwrap_err(), "it says take \"chip-1\", in take-1");
+        assert_eq!(
+            arrange(&s, Choice::Take(1), &ok.replace("take = \"chip-1\"", "take = 1")).unwrap_err(),
+            "its timeline is \"own\": a take-<n> is on the score's (only a C64 take, chip-<n>, has its own)"
+        );
+        assert_eq!(why(&take(&s, &good)), "its timeline is not given: a C64 take's is \"own\"");
+        assert_eq!(why(&ok.replace("timeline = \"own\"", "timeline = \"score\"")), "its timeline is \"score\": a C64 take's is \"own\"");
+        assert_eq!(why(&ok.replace(&format!("own_loop_t = {ol}\n"), "")), "it has no own_intro_t and own_loop_t (its own timeline)");
+        let own = |a: i64, b: i64| why(&chip(&s, "\"chip-1\"", a, b, &good));
+        assert_eq!(own(-64, ol), format!("its own timeline (own_intro_t -64, own_loop_t {ol}): below 0"));
+        assert_eq!(own(0, 0), "its own timeline (own_intro_t 0, own_loop_t 0): no length");
+        assert_eq!(own(oi, f - 1), format!("its own timeline (own_intro_t {oi}, own_loop_t {}): a loop shorter than a frame", f - 1));
+        assert!(arrange(&s, Choice::Chip(1), &chip(&s, "\"chip-1\"", OWN_MAX, 0, &good)).is_ok(), "the longest");
+        assert_eq!(own(OWN_MAX, f), format!("its own timeline (own_intro_t {OWN_MAX}, own_loop_t {f}): longer than a score may be"));
+        // the key and the score's header still the score's
+        let other = ScoreRecord { site: 0x8001, ..s.clone() };
+        assert_eq!(arrange(&other, Choice::Chip(1), &ok).unwrap_err(), format!("its key is {}, not the score's {}", score_key(&s), score_key(&other)));
+        // notes: within its own timeline, voices 0-3, periods, levels, no overlaps
+        let n = |notes: &[(i64, i64, i64, i64, i64)]| why(&chip(&s, "\"chip-1\"", oi, ol, notes));
+        assert_eq!(n(&[(0, 0, oi + ol + 1, 3000, 9)]), format!("note 1: it ends at {} T, past the take's own end at {} T", oi + ol + 1, oi + ol));
+        assert_eq!(n(&[(4, 0, 64, 3000, 9)]), "note 1: voice 4 (0-3)");
+        assert_eq!(n(&[(1, 0, 64, 63, 9)]), "note 1: period_t 63 (64-16777215 for a note)");
+        assert_eq!(n(&[(3, 0, 64, 1, 9)]), "note 1: period_t 1 (0 for a drum)");
+        assert_eq!(n(&[(2, 0, 64, 3000, 0)]), "note 1: level 0 (1-255)");
+        assert_eq!(n(&[(2, 0, 640, 3000, 9), (2, 600, 700, 3000, 9)]), "notes 1 and 2 overlap on voice 2");
+        assert_eq!(n(&[]), "it has no notes");
     }
 
     #[test]
@@ -838,26 +1132,26 @@ mod tests {
         assert!(has_takes(&folder));
         assert_eq!(apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &none, &ok).status, [Some(Status::Original)]);
         // chosen: in the list, verified with the list and the score's index
-        let chosen = BTreeMap::from([(format!("g/{key}"), 1)]);
+        let chosen = BTreeMap::from([(format!("g/{key}"), Choice::Take(1))]);
         let seen = std::cell::RefCell::new(Vec::new());
         let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &chosen, &|l, i, of| {
             assert_eq!(of, Of::Score(0));
             seen.borrow_mut().push((l.to_vec(), i));
             Ok(())
         });
-        let want = arrange(&s, 1, &take(&s, &[(0, 0, 640, 3000, 92)])).unwrap();
-        assert_eq!(got.status, [Some(Status::Take { take: 1, generator: "g 1".into(), dropped: (0, 0) })]);
+        let want = arrange(&s, Choice::Take(1), &take(&s, &[(0, 0, 640, 3000, 92)])).unwrap();
+        assert_eq!(got.status, [Some(Status::Take { take: Choice::Take(1), generator: "g 1".into(), dropped: (0, 0) })]);
         assert_eq!(soundlearn::decode_scores(&got.list).unwrap(), [want.rec]);
         assert_eq!(seen.into_inner(), [(got.list.clone(), 0)]);
         // the replay fails, or the take is not there: the original, with the reason
         let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &chosen, &|_, _, _| Err("it stops".into()));
         assert_eq!(
             got,
-            Applied { list: list.clone(), status: vec![Some(Status::Refused { take: 1, why: "the replay: it stops".into() })], shadow_status: vec![] }
+            Applied { list: list.clone(), status: vec![Some(Status::Refused { take: Choice::Take(1), why: "the replay: it stops".into() })], shadow_status: vec![] }
         );
-        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &BTreeMap::from([(format!("g/{key}"), 4)]), &ok);
+        let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), &[], &BTreeMap::from([(format!("g/{key}"), Choice::Take(4))]), &ok);
         assert_eq!(got.list, list);
-        assert!(matches!(&got.status[0], Some(Status::Refused { take: 4, why }) if why.starts_with("take-4/arranged.toml: ")), "{got:?}");
+        assert!(matches!(&got.status[0], Some(Status::Refused { take: Choice::Take(4), why }) if why.starts_with("take-4/arranged.toml: ")), "{got:?}");
     }
 
     #[test]
@@ -879,15 +1173,15 @@ mod tests {
         assert_eq!((got.list.as_slice(), got.shadow_status[0].as_ref()), (list.as_slice(), Some(&Status::Original)));
         assert_eq!(Status::Original.text(true), "arranged: the live version (no take chosen)");
         // chosen: after the scores, with precedence, verified as score 1 of the list
-        let chosen = BTreeMap::from([(format!("g/{key}"), 1)]);
+        let chosen = BTreeMap::from([(format!("g/{key}"), Choice::Take(1))]);
         let seen = std::cell::RefCell::new(Vec::new());
         let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), std::slice::from_ref(&shadow), &chosen, &|l, i, of| {
             seen.borrow_mut().push((l.to_vec(), i, of));
             Ok(())
         });
-        let mut want = arrange(&shadow, 1, &take(&shadow, &[(0, 0, 640, 3000, 92)])).unwrap().rec;
+        let mut want = arrange(&shadow, Choice::Take(1), &take(&shadow, &[(0, 0, 640, 3000, 92)])).unwrap().rec;
         want.precedence = true;
-        assert_eq!(got.shadow_status, [Some(Status::Take { take: 1, generator: "g 1".into(), dropped: (0, 0) })]);
+        assert_eq!(got.shadow_status, [Some(Status::Take { take: Choice::Take(1), generator: "g 1".into(), dropped: (0, 0) })]);
         let back = soundlearn::decode_scores(&list).unwrap().remove(0);
         assert_eq!(soundlearn::decode_scores(&got.list).unwrap(), [back, want]);
         assert_eq!(got.list[0], list[0] + 1);
@@ -898,11 +1192,11 @@ mod tests {
         let full = soundlearn::encode_list_scores(&[], &[], &eight);
         let got = apply(&dir.0, "g", &full, &eight, std::slice::from_ref(&shadow), &chosen, &ok);
         assert_eq!(got.list, full);
-        assert!(matches!(&got.shadow_status[0], Some(Status::Refused { take: 1, why }) if why.contains("8 scores already")), "{got:?}");
+        assert!(matches!(&got.shadow_status[0], Some(Status::Refused { take: Choice::Take(1), why }) if why.contains("8 scores already")), "{got:?}");
         // the replay fails: the list as it was
         let got = apply(&dir.0, "g", &list, std::slice::from_ref(&s), std::slice::from_ref(&shadow), &chosen, &|_, _, _| Err("it stops".into()));
         assert_eq!(got.list, list);
-        assert_eq!(got.shadow_status, [Some(Status::Refused { take: 1, why: "the replay: it stops".into() })]);
+        assert_eq!(got.shadow_status, [Some(Status::Refused { take: Choice::Take(1), why: "the replay: it stops".into() })]);
         // its score.toml says shadow
         assert!(score_toml("g", "G", &shadow).contains("\nshadow = true\n"));
         assert!(!score_toml("g", "G", &s).contains("shadow"));

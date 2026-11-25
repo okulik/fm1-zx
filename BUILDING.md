@@ -419,13 +419,15 @@ or on the FM-1).
 
 **The files**, in `DIR/arrange/` (under `build/personal/` by default, which git ignores):
 
-    choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original)
+    choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original;
+                                     "chip-<n>": a C64 take, see "Music from other versions")
     <game>/<key>/score.toml          the score's notes (tools/make-personal-pack)
                  original.mid, original.wav   the score alone
                  takes.toml          the takes made, for which score.toml, by what, how long each took
                  take-<n>/arranged.toml       the take as the FM-1 plays it
                  take-<n>/fm1.mid, fm1.wav    the same, to listen to (the drum's level picks a drum)
                  take-<n>/full.mid, full.wav  the original with everything the model wrote
+                 chip-<n>/...        a C64 take (see "Music from other versions")
 
 `arranged.toml` has `score.toml`'s header, `take`, `generator` (the model and its settings), a
 `[metrics]` table and notes on 4 voices: 0 the lead (the score's voice with the role lead, else its
@@ -488,6 +490,73 @@ tools/arrange-music generate DIR --offline`: uv uses only its cached packages an
 cached model, and it stops with how to get the model when it is not cached (one run without
 `--offline` downloads it). Run directly, `tools/arrange-music generate --offline` keeps the model
 offline, and `UV_OFFLINE=1` keeps uv offline too.
+
+### Music from other versions
+
+Many games also came out on the Commodore 64, often with a tune of their own on its SID chip. A
+recorded score (or a shadow score) can take its game's C64 tune as a take, next to the AI takes:
+the FM-1 then plays the C64 tune's notes from the moment the Spectrum tune starts, on the C64
+tune's own timeline (its own intro and loop), and stops when the beeper stops matching the
+Spectrum tune (the game has moved on), as any score does.
+
+    cd host && cargo build --release -p fmzx-pack && cd ..          # the SID converter
+    tools/arrange-music chip build/personal --sid-dir ~/C64Music      # candidates, as chip-<n> takes
+    tools/arrange-music pick build/personal                           # listen, choose chip-1, or --set
+    tools/make-personal-pack ~/games                                  # the packages, with the C64 take
+
+**What it needs.** A SID collection that you download yourself, such as the High Voltage SID
+Collection (its `C64Music` folder; any folder of `.sid` files works, and its
+`DOCUMENTS/STIL.txt`, when there is one, helps to find the tunes). The tool never downloads one.
+The converter is `fmzx-pack chip-notes` (`cd host && cargo build --release -p fmzx-pack`): it
+plays a SID file's tune in a 6502 and C64 model of its own and writes the notes. `tools/arrange-music`
+runs under uv as for the AI takes, and FluidSynth renders the takes; `chip.wav` (the C64's own
+sound) is written only when `sidplayfp` is on the PATH.
+
+**Finding the tune.** `tools/arrange-music chip DIR --sid-dir PATH [--game ID]... [--max N]
+[--force]` looks, for each score, for SID files whose file name or header title is the game's
+name, or whose STIL entry names it (more so when the entry mentions the Spectrum), converts 60 s
+of each candidate subtune and compares its melody with the score's: `melody_match` is the share of
+melodic steps (runs of four intervals, so a transposition or an octave change does not matter)
+the two have in common. Unrelated tunes score about 0 to 0.1, the same tune arranged again 0.2 to
+0.9; ornamented melodies score low even when they are the same tune. Candidates are ranked by
+melody match, then by how well the title matches, and the best N (default 3) are converted for
+180 s and written as `DIR/arrange/<game>/<key>/chip-<n>/` (`arranged.toml`, `fm1.mid`, `fm1.wav`,
+and `chip.wav` when it can be made). Most C64 versions play a different piece than the Spectrum
+game, so many scores find nothing that matches; the melody match says which candidates are worth
+a listen.
+
+**Choosing.** The `pick` page lists each chip take with its source (`C64: <title> by <author>
+(<released>), subtune N, <file>`) and melody match; choosing one saves `"<game>/<key>" = "chip-1"`
+in `choices.toml`, and `tools/arrange-music pick DIR --set GAME/KEY=chip-1` does the same without
+the page (`--list` prints the chip takes too). The next `tools/make-personal-pack` run packs the
+chosen take as a replacement score: the score's trigger and recorded edges are kept, so it starts
+with the Spectrum tune and follows the beeper as before, and its notes play on their own timeline
+(docs/pack-format.md, "replacement"). The take is checked as an AI take is, against its own
+timeline: the score's key, `timeline = "own"`, every note within `own_intro_t + own_loop_t`, voices
+0-3 with no overlaps, tonal periods 64 T or more, drum periods 0, levels 1-255; the same 8 events a
+frame (counted on its own sections), 128 KB and replay checks follow. `sound-report.txt` says:
+
+      arranged: C64 take chip-1 (C64: <title> by <author> (<released>), subtune 2, <file>)
+      arranged: C64 take chip-2 refused: note 6: it ends at 630000064 T, past the take's own end at 630000000 T
+
+and the table ends with `<name>: score <key> plays C64 take chip-1 (...)`.
+
+**What carries over, and what does not.** The notes of the SID's three voices (the highest on
+average plays the lead, the lowest the bass, the other the pad), their gates and pitch changes,
+noise as drum hits, and the volume and sustain as levels. Fast arpeggios become their lowest note
+held. The filter, pulse width, ring modulation and sync are not carried over, nor drums played as
+samples through the volume register; tunes for 2 or 3 SID chips, and tunes that call the C64's
+KERNAL, are refused. **Loops**: a loop is found only where the SID's registers repeat exactly,
+twice within the 180 s converted, with a pass of at least a second; tunes with free-running
+modulation never repeat exactly, and loops longer than 90 s are not found. Without a loop the take
+plays its notes once (up to 180 s) and then rests while the score still follows the beeper. Either
+way the C64 tune plays only as long as the Spectrum tune does: a score whose recording has no loop
+ends where its recording ends, however long the C64 tune is, and the pack keeps only the C64
+notes up to that end.
+
+**Rights.** The tunes belong to their authors. A chip take is for your own personal pack: keep the
+collection, the takes and the packs made with them to yourself. Nothing from a SID collection is
+part of the repository or its packages (the tests build their own made-up SID files).
 
 ## Music corpus
 

@@ -49,6 +49,7 @@ fn score() -> ScoreRecord {
         code: 0xDEAD_BEEF,
         voices: 2,
         precedence: false,
+        replacement: None,
         roles: [SND_ROLE_BASS, SND_ROLE_LEAD, 0],
         intro_t: 3 * F32,
         loop_t: 0,
@@ -478,6 +479,97 @@ fn the_precedence_bit() {
     assert!(append_score(&full, &first).unwrap_err().contains("8 scores already"));
 }
 
+/// [`looped`] as a replacement: its events on their own timeline (an intro of three buckets and a
+/// bit, a loop of four and a bit, past the fingerprint's sections), with precedence.
+fn replaced() -> ScoreRecord {
+    ScoreRecord {
+        precedence: true,
+        replacement: Some((3 * F32 + 500, 4 * F32 + 300)),
+        intro_events: vec![on(0, 0, 2716, 200), on(3 * F32, 1, 5000, 90), hit(3 * F32 + 448, 60)],
+        loop_events: vec![on(0, 0, 3000, 200), off(128, 1), on(4 * F32 + 256, 1, 6000, 90)],
+        ..looped()
+    }
+}
+
+/// A replacement's most event time (both sections), T.
+const EV_MAX: u32 = SND_SCORE_BUCKETS_MAX as u32 * ZX_FRAME_TSTATES;
+
+#[test]
+fn replacement_records() {
+    let refused = |l: Vec<u8>, what: &str| assert!(!decodes(&l), "{what}: {l:02X?}");
+    let ok = |s: ScoreRecord, what: &str| assert!(decodes(&list(std::slice::from_ref(&s))), "{what}: {s:?}");
+    let bad = |s: ScoreRecord, what: &str| refused(list(&[s]), what);
+    let s = replaced();
+    let l = list(std::slice::from_ref(&s));
+    assert!(decodes(&l));
+    // the voices byte with bits 6 and 7; ev_intro_t and ev_loop_t after the event counts; the
+    // pitches' count and the roles after them, the pitch table from byte 40
+    let r = &l[4..];
+    assert_eq!(r[3], 0xC0 | 2);
+    assert_eq!(&r[12..20], [(5 * F32 / 2).to_le_bytes(), (2 * F32 + 100).to_le_bytes()].concat(), "the fingerprint's sections as they were");
+    assert_eq!(&r[24..28], [3, 0, 3, 0]);
+    assert_eq!(&r[28..36], [(3 * F32 + 500).to_le_bytes(), (4 * F32 + 300).to_le_bytes()].concat());
+    assert_eq!(&r[36..40], [4, SND_ROLE_BASS, SND_ROLE_LEAD, 0]);
+    assert_eq!(&r[40..43], [0x9C, 0x0A, 0], "the lowest pitch, 2716 T");
+    // read back (the events past the fingerprint's sections kept), written back byte for byte
+    let back = decode_scores(&l).unwrap().remove(0);
+    assert_eq!(back.replacement, s.replacement);
+    assert_eq!(back.event_lengths(), (3 * F32 + 500, 4 * F32 + 300));
+    assert_eq!(back.intro_events.iter().map(|e| e.t).collect::<Vec<_>>(), [0, 3 * F32, 3 * F32 + 448]);
+    assert_eq!(back.loop_events.iter().map(|e| e.t).collect::<Vec<_>>(), [0, 128, 4 * F32 + 256]);
+    assert_eq!(replace_scores(&l, std::slice::from_ref(&back)).unwrap(), l);
+    let both = list(&[score(), s.clone()]);
+    assert_eq!(decode_scores(&both).unwrap()[1], back);
+    assert_eq!(score_key(&s), score_key(&looped()), "the key names the fingerprint's music");
+    assert_eq!(looped().event_lengths(), (5 * F32 / 2, 2 * F32 + 100), "a score's events on its fingerprint's sections");
+    // taken: no event loop; no event intro; events looping over a fingerprint with no loop; the
+    // most; each section's last unit; a score that is no replacement keeps its own limits
+    ok(ScoreRecord { replacement: Some((3 * F32 + 500, 0)), loop_events: vec![], ..s.clone() }, "no event loop");
+    ok(ScoreRecord { replacement: Some((0, F32)), intro_events: vec![], loop_events: vec![on(0, 0, 3000, 9)], ..s.clone() }, "no event intro");
+    ok(ScoreRecord { precedence: true, replacement: Some((F32, 2 * F32)), ..score() }, "over a fingerprint with no loop");
+    ok(ScoreRecord { replacement: Some((EV_MAX - F32, F32)), ..s.clone() }, "the most");
+    ok(ScoreRecord { replacement: Some((EV_MAX, 0)), loop_events: vec![], ..s.clone() }, "the most, no event loop");
+    ok(ScoreRecord { intro_events: vec![off(3 * F32 + 499, 0)], loop_events: vec![off(4 * F32 + 299, 0)], ..s.clone() }, "the last units");
+    // refused: bit 6 without bit 7
+    bad(ScoreRecord { precedence: false, ..s.clone() }, "a replacement without precedence");
+    refused(patched(3, &[0x42]), "bit 6 alone on a score");
+    // events past their own sections
+    refused(patched_of(&s, 28, &(3 * F32 + 448).to_le_bytes()), "an intro event at ev_intro_t");
+    refused(patched_of(&s, 32, &(4 * F32 + 256).to_le_bytes()), "a loop event at ev_loop_t");
+    refused(patched_of(&s, 32, &[0, 0, 0, 0]), "loop events with no event loop");
+    assert!(decodes(&patched_of(&s, 28, &(3 * F32 + 449).to_le_bytes())), "the intro event in its last unit");
+    // the lengths: not both 0, together at most EV_MAX, an event loop of a frame at least
+    let quiet = ScoreRecord { intro_events: vec![], loop_events: vec![], ..s.clone() };
+    bad(ScoreRecord { replacement: Some((0, 0)), ..quiet.clone() }, "no event section");
+    bad(ScoreRecord { replacement: Some((EV_MAX - F32 + 1, F32)), ..quiet.clone() }, "over the most");
+    bad(ScoreRecord { replacement: Some((u32::MAX, 0)), ..quiet.clone() }, "an intro of 2^32 - 1 T");
+    bad(ScoreRecord { replacement: Some((F32, u32::MAX - F32 + 1)), ..quiet.clone() }, "lengths wrapping 2^32");
+    bad(ScoreRecord { replacement: Some((F32, F32 - 1)), ..quiet.clone() }, "an event loop under a frame");
+    // a header cut off: a record of 36 bytes with bits 6 and 7
+    let short = raw(Head { voices: 0xC1, ..HEAD }, &[]);
+    assert_eq!(short.len() - 4, 36);
+    refused(short, "a replacement's header past its record");
+    // by hand: one voice, a one-bucket intro and no loop, no event, events of a frame; whole, and
+    // its size cut to 32 and 36 bytes
+    let mut r = vec![0, 0, 2, 0xC1, 0x23, 0x81, 0, 0, 0, 0, 0, 0];
+    for d in [F32, 0] {
+        r.extend(d.to_le_bytes());
+    }
+    r.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+    for d in [F32, 0] {
+        r.extend(d.to_le_bytes());
+    }
+    r.extend([1, 0, 0, 0, 100, 0, 0]);
+    r.extend(FP1);
+    r.resize(r.len().next_multiple_of(4), 0);
+    for size in [r.len(), 32, 36] {
+        let mut l = vec![1, 0, 0, 0];
+        l.extend(&r[..size]);
+        l[4..6].copy_from_slice(&(size as u16).to_le_bytes());
+        assert_eq!(decodes(&l), size == r.len(), "a raw replacement of {size} bytes: {l:02X?}");
+    }
+}
+
 /// [`looped`] with drum hits and offs in both sections, one voice.
 fn drummed() -> ScoreRecord {
     ScoreRecord {
@@ -847,6 +939,7 @@ fn record(r: &Run, notes: &[Note], m: &Machine, labels: &Labels) -> (ScoreRecord
         roles: [SND_ROLE_LEAD, SND_ROLE_BASS, 0],
         voices: 2,
         precedence: false,
+        replacement: None,
         intro_t: buckets as u32 * F32,
         loop_t: 0,
         intro_fp: live_fp(r, f0, t0, buckets),
@@ -1285,6 +1378,7 @@ fn record_loop(r: &Run, intro: &[Note], phrase: &[Note], m: &Machine, labels: &L
         roles: [SND_ROLE_LEAD, SND_ROLE_BASS, 0],
         voices: 2,
         precedence: false,
+        replacement: None,
         intro_t,
         loop_t,
         intro_fp: score_fingerprint(frames, t0, 0, u64::from(intro_t)),
@@ -1297,29 +1391,52 @@ fn record_loop(r: &Run, intro: &[Note], phrase: &[Note], m: &Machine, labels: &L
 
 /// The events of `s` as the player gives them, to T `until` from T0: the intro's, then each
 /// pass's from its start, the voices sounding at a pass's start that its first events do not
-/// restate released there, and the drum if it sounds.
+/// restate released there, and the drum if it sounds (on the events' own sections:
+/// [`ScoreRecord::event_lengths`]).
 fn score_timeline(s: &ScoreRecord, until: u64) -> Vec<(u64, u8, u32, u8)> {
+    timeline(s, until, false)
+}
+
+/// [`score_timeline`]; with no event loop, the voices and the drum sounding where the events end
+/// released there; with `end`, those sounding at `until` released there (the end of a score with
+/// no loop).
+fn timeline(s: &ScoreRecord, until: u64, end: bool) -> Vec<(u64, u8, u32, u8)> {
+    let (intro_t, loop_t) = s.event_lengths();
     let mut abs: Vec<Timed> = s.intro_events.iter().map(|e| (u64::from(e.t), e.voice, e.on)).collect();
     let mut sounding = [false; 4];
     for e in &s.intro_events {
         sounding[usize::from(e.voice)] = e.on.is_some();
     }
-    let restated: Vec<u8> = s.loop_events.iter().filter(|e| e.t == 0 && e.on.is_some() && e.voice != SCORE_DRUM).map(|e| e.voice).collect();
-    let mut start = u64::from(s.intro_t);
-    while start < until {
+    let release = |abs: &mut Vec<Timed>, sounding: &mut [bool; 4], at: u64, keep: &[u8]| {
         for v in 0..4u8 {
-            if sounding[usize::from(v)] && !restated.contains(&v) {
-                abs.push((start, v, None));
+            if sounding[usize::from(v)] && !keep.contains(&v) {
+                abs.push((at, v, None));
                 sounding[usize::from(v)] = false;
             }
         }
+    };
+    let restated: Vec<u8> = s.loop_events.iter().filter(|e| e.t == 0 && e.on.is_some() && e.voice != SCORE_DRUM).map(|e| e.voice).collect();
+    let mut start = u64::from(intro_t);
+    if loop_t == 0 {
+        release(&mut abs, &mut sounding, start, &[]);
+    }
+    while loop_t != 0 && start < until {
+        release(&mut abs, &mut sounding, start, &restated);
         for e in &s.loop_events {
             abs.push((start + u64::from(e.t), e.voice, e.on));
             sounding[usize::from(e.voice)] = e.on.is_some();
         }
-        start += u64::from(s.loop_t);
+        start += u64::from(loop_t);
     }
-    want(&abs.into_iter().filter(|e| e.0 < until).collect::<Vec<_>>())
+    abs.retain(|e| e.0 < until);
+    if end {
+        let mut sounding = [false; 4];
+        for e in &abs {
+            sounding[usize::from(e.1)] = e.2.is_some();
+        }
+        release(&mut abs, &mut sounding, until, &[]);
+    }
+    want(&abs)
 }
 
 const INTRO: [u8; 2] = [100, 80];
@@ -1472,6 +1589,144 @@ fn a_loop_the_tune_does_not_repeat_stops() {
     assert_eq!(played(&r, mine), expect);
 }
 
+// ---- a replacement -----------------------------------------------------------
+
+/// A replacement's own event sections: an intro of 9 frames and a bit, a loop of 13 frames and a
+/// bit (the repeating tune's phrase is about 32 frames, its intro 16).
+const EV_INTRO: u32 = 9 * F32 + 1000;
+const EV_LOOP: u32 = 13 * F32 + 777;
+
+/// `s` as a replacement on [`EV_INTRO`] and [`EV_LOOP`], with precedence: in the intro voice 0
+/// changing pitch, voice 1 on and off, a drum hit and off; in each pass voice 0 restated and off,
+/// a drum hit and off at its start, voice 1 on with no off (released at the next pass's start).
+/// Times on the 64-T grid.
+fn chip_of(s: &ScoreRecord) -> ScoreRecord {
+    let g = |t: u32| t / 64 * 64;
+    ScoreRecord {
+        precedence: true,
+        replacement: Some((EV_INTRO, EV_LOOP)),
+        intro_events: vec![
+            on(0, 0, 3000, 200),
+            on(0, 1, 9000, 120),
+            on(g(3 * F32 + 100), 0, 2500, 200),
+            off(g(5 * F32), 1),
+            hit(g(6 * F32), 200),
+            off(g(6 * F32) + 1984, SCORE_DRUM),
+            on(g(8 * F32), 0, 2200, 180),
+        ],
+        loop_events: vec![
+            on(0, 0, 2000, 200),
+            hit(0, 255),
+            off(1984, SCORE_DRUM),
+            on(g(4 * F32 + 300), 1, 7000, 100),
+            on(g(7 * F32), 0, 1800, 200),
+            off(g(11 * F32), 0),
+        ],
+        ..s.clone()
+    }
+}
+
+/// The repeating tune's score ([`record_loop`]) and its replacement ([`chip_of`]).
+fn chip_loop() -> (Vec<Note>, Vec<Note>, ScoreRecord, ScoreRecord) {
+    let (intro, phrase) = (tune(&INTRO), tune(&PHRASE));
+    let (code, labels) = program_with(3000, None, true);
+    let rec = run_on(loop_machine(3000, &intro, &phrase), REC_FRAMES, &encode_list(&[]), None);
+    let (s, _) = record_loop(&rec, &intro, &phrase, &fixtures::bare(&code), &labels);
+    assert!(s.loop_t > 2 * EV_LOOP && s.loop_t % EV_LOOP != 0 && s.intro_t != EV_INTRO, "{} {}", s.intro_t, s.loop_t);
+    let chip = chip_of(&s);
+    (intro, phrase, s, chip)
+}
+
+#[test]
+fn a_replacement_plays_on_its_own_timeline() {
+    let (intro, phrase, s, chip) = chip_loop();
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    let l = list(std::slice::from_ref(&chip));
+    assert!(decodes(&l));
+    let once = ScoreRecord { replacement: Some((EV_INTRO, 0)), loop_events: vec![], ..chip.clone() };
+    let lo = list(std::slice::from_ref(&once));
+    for delay in [3000u16, 5000, 7700] {
+        let r = run_on(loop_machine(delay, &intro, &phrase), LOOP_FRAMES, &l, None);
+        let (f0, t0) = first_edge(&r);
+        let decided = r.dec.len();
+        // followed by the tune's fingerprint round its loop: every frame from T0's on, through
+        // the fingerprint's intro and four of its passes at least
+        assert_eq!(claimed(&r, mine), (f0..decided).collect::<Vec<_>>(), "delay {delay}: T0 {t0} in frame {f0}");
+        let horizon = (decided - f0) as u64 * F - u64::from(t0);
+        assert!(horizon >= u64::from(s.intro_t) + 4 * u64::from(s.loop_t), "delay {delay}: {horizon} T");
+        // the events on their own intro and loop, eight passes of it at least, the voice a pass
+        // does not restate released at each pass's start
+        let expect = score_timeline(&chip, horizon);
+        assert_eq!(played(&r, mine), expect, "delay {delay}");
+        let starts: Vec<u64> = expect.iter().filter(|e| e.1 == SCORE_DRUM && e.3 == score_level(255)).map(|e| e.0).collect();
+        assert!(starts.len() >= 8, "delay {delay}: {} passes", starts.len());
+        assert_eq!(starts, (0..starts.len() as u64).map(|k| u64::from(EV_INTRO) + k * u64::from(EV_LOOP)).collect::<Vec<_>>(), "delay {delay}");
+        let releases = expect.iter().filter(|e| e.1 == 1 && e.2 == 0).count();
+        assert_eq!(releases, starts.len(), "delay {delay}: voice 1 off in the intro, then released at each pass's start but the first");
+        assert!((f0 + 1..decided).all(|k| r.fm[k]), "delay {delay}: FM throughout");
+        // with no event loop: the events end at ev_intro_t (voice 0 released there), the frames
+        // stay the score's while its fingerprint is followed
+        let r = run_on(loop_machine(delay, &intro, &phrase), LOOP_FRAMES, &lo, None);
+        assert_eq!(claimed(&r, mine), (f0..decided).collect::<Vec<_>>(), "delay {delay}, no event loop");
+        let expect = score_timeline(&once, horizon);
+        assert_eq!(expect.last(), Some(&(u64::from(EV_INTRO), 0, 0, 0)));
+        assert_eq!(played(&r, mine), expect, "delay {delay}, no event loop");
+    }
+}
+
+#[test]
+fn a_replacement_stops_when_the_tune_changes() {
+    let (intro, phrase, s, chip) = chip_loop();
+    let l = list(std::slice::from_ref(&chip));
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    let mut changed = phrase.clone();
+    for n in &mut changed[1..] {
+        n.n = 20;
+    }
+    let changed = loop_notes(&intro, &changed);
+    for delay in [3000u16, 7700] {
+        let plain = run_on(loop_machine(delay, &intro, &phrase), LOOP_FRAMES, &l, None);
+        let (f0, t0) = first_edge(&plain);
+        // in the fingerprint's third pass after the recorded one
+        let poke = f0 + ((u64::from(t0) + u64::from(s.intro_t) + 3 * u64::from(s.loop_t)) / F) as usize;
+        let r = run_on(loop_machine(delay, &intro, &phrase), LOOP_FRAMES, &l, Some((poke, &changed)));
+        let key = |(e, _): &(Vec<zx_edge>, u8)| e.iter().map(|e| (e.tstate, e.level, e.pc)).collect::<Vec<_>>();
+        let differs = (0..LOOP_FRAMES).find(|&f| key(&r.frames[f]) != key(&plain.frames[f])).expect("the tune changes");
+        let c = claimed(&r, mine);
+        let last = *c.last().unwrap();
+        assert_eq!(c, (f0..=last).collect::<Vec<_>>(), "delay {delay}");
+        assert!(last <= differs + 1 && last + 4 > differs, "delay {delay}: the score plays to frame {last}, the tune changed in {differs}");
+        assert!(r.dec[last + 1..].iter().all(|d| d.confident == 0), "delay {delay}");
+        assert!(r.fm[last + 2..].iter().all(|&on| !on), "delay {delay}: the beeper from frame {}", last + 2);
+        // the events up to its last frame as in the plain run, several of their own passes
+        let plain_ev: Vec<_> = played(&plain, mine).into_iter().filter(|e| ((e.0 + f0 as u64 * F + u64::from(t0)) / F) as usize <= last).collect();
+        assert_eq!(played(&r, mine), plain_ev, "delay {delay}");
+        assert!(plain_ev.iter().filter(|e| e.1 == SCORE_DRUM && e.3 == score_level(255)).count() >= 6, "delay {delay}");
+    }
+}
+
+#[test]
+fn a_replacement_ends_with_its_fingerprint() {
+    // over a tune with no loop: the events' own passes go on to the fingerprint's end, where the
+    // voices still sounding are released
+    let (notes, s, _) = recorded();
+    let chip = chip_of(&s);
+    let l = list(std::slice::from_ref(&chip));
+    assert!(decodes(&l));
+    let mine = SndEngines::new().entries().len() as u8 + 1;
+    assert!(s.intro_t > EV_INTRO + 2 * EV_LOOP);
+    for delay in [3000u16, 7700] {
+        let r = run(delay, &notes, FRAMES, &l, None);
+        let (f0, t0) = first_edge(&r);
+        assert_ne!(t0, 0, "delay {delay}");
+        let frames = s.intro_fp.len() + 1;
+        assert_eq!(claimed(&r, mine), (f0..f0 + frames).collect::<Vec<_>>(), "delay {delay}");
+        let expect = timeline(&chip, u64::from(s.intro_t), true);
+        assert!(expect.iter().any(|e| e.0 == u64::from(s.intro_t)), "delay {delay}: a voice sounds at the end");
+        assert_eq!(played(&r, mine), expect, "delay {delay}");
+    }
+}
+
 /// Random corruptions of a score's record: the decoder refuses or takes each without reading
 /// outside the list (run with `ZX_SANITIZE=1`), and method B plays what it takes.
 #[test]
@@ -1482,8 +1737,8 @@ fn corrupted_scores_are_safe() {
     // and with a loop: its last two buckets, a note on at its start
     let loop_events = vec![on(0, 0, 3000, 200), off(F32 + 64, 0)];
     let lp = ScoreRecord { loop_t: 2 * F32 + 640, loop_fp: s.intro_fp[4..6].to_vec(), loop_events, ..short.clone() };
-    // and drum events in both sections
-    for good in [list(&[short]), list(&[lp]), list(&[drummed()])] {
+    // and drum events in both sections; and replacements, one over the tune
+    for good in [list(&[short]), list(&[lp]), list(&[drummed()]), list(&[replaced()]), list(&[chip_of(&s)])] {
         corrupt(&notes, &good);
     }
 }
@@ -1524,7 +1779,9 @@ fn corrupt(notes: &[Note], good: &[u8]) {
                 }
             }
             Err(_) => {
-                assert!(decode_scores(&l).is_err(), "decode_scores refuses what the decoder refuses: {l:02X?}");
+                // (a record whose kind byte became 0 or 1 is no score: decode_scores does not look
+                // inside learned entries and kind-1 records)
+                assert!(l[6] < 2 || decode_scores(&l).is_err(), "decode_scores refuses what the decoder refuses: {l:02X?}");
                 refused += 1;
             }
         }

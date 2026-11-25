@@ -22,15 +22,17 @@
 //! a kind-1 record (roles for a built-in entry):
 //!   u16 size (16), u8 kind (1), u8 channels (1-3), u64 digest (the built-in entry's), u8 role[3], u8 0
 //! a kind-2 record (a recorded score: an intro and optionally a loop, times from each section's start):
-//!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (bits 0-6: 1-3 tonal voices;
+//!   u16 size (multiple of 4, the whole record), u8 kind (2), u8 voices (bits 0-5: 1-3 tonal voices;
+//!     bit 6: a replacement, its events on their own timeline, only with bit 7;
 //!     bit 7: precedence, the score keeps the frames the table claims too)
 //!   u16 site, u16 quiet, u32 code, u32 intro_t, u32 loop_t (0: no loop)
 //!   u16 intro_buckets, u16 loop_buckets (each section's whole buckets), u16 intro_events, u16 loop_events
+//!   a replacement's alone: u32 ev_intro_t, u32 ev_loop_t (its event sections; ev_loop_t 0: no event loop)
 //!   u8 n_pitches (1-255), u8 role[3], u24 pitch[n_pitches] (full periods, T)
 //!   fingerprint: the intro's buckets then the loop's, one nibble stream (low nibble first; a spare
 //!     nibble 0 to a whole byte): each section's first bucket nibble 8 and the count (two nibbles,
 //!     low first), each next the change (-7..+7, 4-bit signed) or nibble 8 and the count
-//!   events: the intro's, then the loop's; an event:
+//!   events: the intro's, then the loop's (a replacement's: its own sections'); an event:
 //!     varint dt (64-T units since the section's event before or its start; LEB128, <= 4 bytes)
 //!     u8 b (bits 0-1 the voice; bits 2-7: 0 a note off, else a note on of level b >> 2), a note on's u8 pitch index
 //!     (voice 3 the drum: bits 2-7 0 the drum off, else a drum hit of level b >> 2; no pitch byte)
@@ -121,6 +123,16 @@ pub struct ScoreRecord {
     /// entry claims too (bit 7 of the record's voices byte). The personal pack sets it on the
     /// chosen take of a shadow score (music a learned or built-in entry plays).
     pub precedence: bool,
+    /// A replacement's own event timeline, `(ev_intro_t, ev_loop_t)` in T (bit 6 of the record's
+    /// voices byte; the decoder takes it only with `precedence`). With it, `intro_events` are
+    /// timed from T0 below `ev_intro_t` and `loop_events` from each pass of the events' own loop
+    /// (pass k from T0 + `ev_intro_t` + k x `ev_loop_t`) below `ev_loop_t`, whatever the
+    /// fingerprint's sections; `ev_loop_t` 0: no event loop, the events end at `ev_intro_t`. The
+    /// fingerprint (`intro_t`, `loop_t`, the buckets) is followed as any score's, and the score
+    /// plays as long as it is. `ev_intro_t + ev_loop_t` is 1 to `SND_SCORE_BUCKETS_MAX` x
+    /// 69,888, and `ev_loop_t` 0 or at least 69,888. None: the events are on the fingerprint's
+    /// sections ([`ScoreRecord::event_lengths`]).
+    pub replacement: Option<(u32, u32)>,
     /// Per voice: its stored role in the FM synth (`SND_ROLE_*`; 0: none).
     pub roles: [u8; SND_TONAL],
     /// The intro's length: T from T0 (with no loop, the whole score).
@@ -132,12 +144,21 @@ pub struct ScoreRecord {
     pub intro_fp: Vec<u8>,
     /// The loop's whole buckets from a pass's start (`loop_t / ZX_FRAME_TSTATES` of them).
     pub loop_fp: Vec<u8>,
-    /// The intro's events, in time order, below `intro_t`.
+    /// The intro's events, in time order, below `intro_t` (a replacement's: below its `ev_intro_t`).
     pub intro_events: Vec<ScoreEvent>,
-    /// One pass's events, in time order, below `loop_t`: its first restate every voice sounding
+    /// One pass's events, in time order, below `loop_t` (a replacement's: below its `ev_loop_t`, on
+    /// the passes of its own loop): its first restate every voice sounding
     /// at its start (a note on at 0; the player releases at a pass's start the voices they do
     /// not restate).
     pub loop_events: Vec<ScoreEvent>,
+}
+
+impl ScoreRecord {
+    /// The lengths in T of the sections the events are timed in, `(intro, loop)`: a replacement's
+    /// own, else the fingerprint's (`intro_t`, `loop_t`). Loop 0: no event loop.
+    pub fn event_lengths(&self) -> (u32, u32) {
+        self.replacement.unwrap_or((self.intro_t, self.loop_t))
+    }
 }
 
 /// One event of a [`ScoreRecord`]: a tonal voice's note on or off, or a drum hit or off.
@@ -200,14 +221,18 @@ pub fn score_fingerprint(frames: &[(Vec<zx_edge>, u8)], t0: u32, from_t: u64, le
 
 /// Fixed part of an entry.
 const HEAD: usize = 36;
-/// A kind-2 record's voices byte: the precedence bit.
+/// A kind-2 record's voices byte: the precedence bit, the replacement bit.
 const PRECEDENCE: u8 = 0x80;
+const REPLACEMENT: u8 = 0x40;
+/// A replacement's event sections together, at most (T).
+const EV_MAX: u64 = SND_SCORE_BUCKETS_MAX as u64 * ZX_FRAME_TSTATES as u64;
 /// The kind byte of each.
 const KIND_LEARNED: u8 = 0;
 const KIND_ROLES: u8 = 1;
 const KIND_SCORE: u8 = 2;
-/// A kind-2 record's fixed part.
+/// A kind-2 record's fixed part (a replacement's: 8 bytes more).
 const SCORE_HEAD: usize = 32;
+const REPL_HEAD: usize = SCORE_HEAD + 8;
 /// A score's fingerprint: the nibble before a count.
 const ESC: u8 = 8;
 /// A score's most pitches.
@@ -346,7 +371,8 @@ fn score_events_into(b: &mut Vec<u8>, events: &[ScoreEvent], len: u32, pitches: 
 
 fn encode_score(r: &ScoreRecord) -> Vec<u8> {
     let pitches = score_pitches(r);
-    let mut b = vec![0, 0, KIND_SCORE, r.voices | if r.precedence { PRECEDENCE } else { 0 }];
+    let flags = if r.precedence { PRECEDENCE } else { 0 } | if r.replacement.is_some() { REPLACEMENT } else { 0 };
+    let mut b = vec![0, 0, KIND_SCORE, r.voices | flags];
     for w in [r.site, r.quiet] {
         b.extend(w.to_le_bytes());
     }
@@ -356,16 +382,21 @@ fn encode_score(r: &ScoreRecord) -> Vec<u8> {
     for w in [r.intro_fp.len(), r.loop_fp.len(), r.intro_events.len(), r.loop_events.len()] {
         b.extend((w as u16).to_le_bytes());
     }
+    if let Some((ev_intro_t, ev_loop_t)) = r.replacement {
+        b.extend(ev_intro_t.to_le_bytes());
+        b.extend(ev_loop_t.to_le_bytes());
+    }
     b.push(pitches.len() as u8);
     b.extend(r.roles);
-    debug_assert_eq!(b.len(), SCORE_HEAD);
+    debug_assert_eq!(b.len(), if r.replacement.is_some() { REPL_HEAD } else { SCORE_HEAD });
     for p in &pitches {
         b.extend(&p.to_le_bytes()[..3]);
     }
     let nib = score_nibbles(r);
     b.extend(nib.chunks(2).map(|c| c[0] | c.get(1).map_or(0, |h| h << 4)));
-    score_events_into(&mut b, &r.intro_events, r.intro_t, &pitches);
-    score_events_into(&mut b, &r.loop_events, r.loop_t, &pitches);
+    let (ev_intro_t, ev_loop_t) = r.event_lengths();
+    score_events_into(&mut b, &r.intro_events, ev_intro_t, &pitches);
+    score_events_into(&mut b, &r.loop_events, ev_loop_t, &pitches);
     b.resize(b.len().next_multiple_of(4), 0);
     let size = b.len() as u16;
     b[..2].copy_from_slice(&size.to_le_bytes());
@@ -441,10 +472,18 @@ fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
     let w = |at: usize| u16::from_le_bytes([r[at], r[at + 1]]);
     let d = |at: usize| u32::from_le_bytes([r[at], r[at + 1], r[at + 2], r[at + 3]]);
     let size = r.len();
-    let (voices, precedence) = (r[3] & !PRECEDENCE, r[3] & PRECEDENCE != 0);
+    let (voices, precedence, replaced) = (r[3] & !(PRECEDENCE | REPLACEMENT), r[3] & PRECEDENCE != 0, r[3] & REPLACEMENT != 0);
     let (intro_t, loop_t) = (d(12), d(16));
     let buckets = [usize::from(w(20)), usize::from(w(22))];
-    let np = usize::from(r[28]);
+    if replaced && !precedence {
+        return Err("a replacement without precedence".into());
+    }
+    if replaced && size < REPL_HEAD {
+        return Err(format!("a replacement of {size} bytes"));
+    }
+    let replacement = replaced.then(|| (d(28), d(32)));
+    let head = if replaced { REPL_HEAD } else { SCORE_HEAD };
+    let np = usize::from(r[head - 4]);
     if !(1..=SND_TONAL as u8).contains(&voices) {
         return Err(format!("{voices} voices"));
     }
@@ -454,11 +493,17 @@ fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
     if (intro_t == 0 && loop_t == 0) || (loop_t != 0 && buckets[1] == 0) {
         return Err(format!("an intro of {intro_t} T and a loop of {loop_t} T"));
     }
-    let fp0 = SCORE_HEAD + 3 * np;
+    if let Some((ei, el)) = replacement {
+        if (ei == 0 && el == 0) || u64::from(ei) + u64::from(el) > EV_MAX || (el != 0 && el < ZX_FRAME_TSTATES) {
+            return Err(format!("event sections of {ei} T and {el} T"));
+        }
+    }
+    let (ev_intro_t, ev_loop_t) = replacement.unwrap_or((intro_t, loop_t));
+    let fp0 = head + 3 * np;
     if np == 0 || fp0 > size {
         return Err(format!("{np} pitches"));
     }
-    let pitches: Vec<u32> = (0..np).map(|k| u32::from_le_bytes([r[SCORE_HEAD + 3 * k], r[SCORE_HEAD + 3 * k + 1], r[SCORE_HEAD + 3 * k + 2], 0])).collect();
+    let pitches: Vec<u32> = (0..np).map(|k| u32::from_le_bytes([r[head + 3 * k], r[head + 3 * k + 1], r[head + 3 * k + 2], 0])).collect();
     if let Some(p) = pitches.iter().find(|&&p| p < 64) {
         return Err(format!("a pitch of {p} T"));
     }
@@ -496,7 +541,7 @@ fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
     let mut at = fp0 + i.div_ceil(2);
     let mut sections = [Vec::new(), Vec::new()];
     for (s, ev) in sections.iter_mut().enumerate() {
-        let (n, len) = [(w(24), intro_t), (w(26), loop_t)][s];
+        let (n, len) = [(w(24), ev_intro_t), (w(26), ev_loop_t)][s];
         let units = u64::from(len).div_ceil(64);
         let mut u = 0u64;
         for k in 0..n {
@@ -540,7 +585,8 @@ fn decode_score(r: &[u8]) -> Result<ScoreRecord, String> {
         code: d(8),
         voices,
         precedence,
-        roles: [r[29], r[30], r[31]],
+        replacement,
+        roles: [r[head - 3], r[head - 2], r[head - 1]],
         intro_t,
         loop_t,
         intro_fp,

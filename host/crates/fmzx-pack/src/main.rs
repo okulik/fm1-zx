@@ -11,6 +11,10 @@
 //! `fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...` (the
 //!     personal pack, `tools/make-personal-pack`; `--app`: the images it goes with, at least one,
 //!     which set the room for it)
+//! `fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S] -o <notes.toml>` (a SID tune's
+//!     notes for `tools/arrange-music`: the `chipmusic` crate; `--subtune` defaults to the file's
+//!     start song, `--seconds` to 180)
+//! `fmzx-pack chip-notes --info <file.sid>` (the SID file's header)
 
 use fmzx_pack::inputs::{check_loader, default_cache, load_sdk, sha256_hex, Pins};
 use fmzx_pack::keymaps::keymaps_json;
@@ -29,7 +33,9 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
                       [--product FM-1_048] [--cache DIR] [--offline]
        fmzx-pack verify <pkg.fwsc> [--product FM-1_048]
-       fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...";
+       fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...
+       fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S (default 180)] -o <notes.toml>
+       fmzx-pack chip-notes --info <file.sid>";
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -142,6 +148,33 @@ fn personal(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn chip_notes(args: &[String]) -> Result<(), String> {
+    let o = opts(args, &["--subtune", "--seconds", "-o"], &["--info"])?;
+    let [path] = &o.free[..] else { return Err(USAGE.to_string()) };
+    if o.flags.iter().any(|f| f == "--info") {
+        let sid = chipmusic::SidFile::parse(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
+        print!("{path}: {}", sid.info());
+        return Ok(());
+    }
+    let subtune = match o.get("--subtune") {
+        Some(s) => Some(s.parse::<u16>().map_err(|_| format!("--subtune {s}: not a number\n{USAGE}"))?),
+        None => None,
+    };
+    let seconds = match o.get("--seconds") {
+        Some(s) => s
+            .parse::<f64>()
+            .ok()
+            .filter(|&x| x > 0.0 && x <= 3600.0)
+            .ok_or(format!("--seconds {s}: not a number of seconds from 0 to 3600\n{USAGE}"))?,
+        None => chipmusic::DEFAULT_SECONDS,
+    };
+    let out = o.need("-o")?;
+    let made = chipmusic::chip_notes(&read(path)?, subtune, seconds).map_err(|e| format!("{path}: cannot be played: {e}"))?;
+    std::fs::write(out, made.toml(path)).map_err(|e| format!("{out}: {e}"))?;
+    println!("{out}: {}", made.summary());
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     match args {
         [cmd, manifest, flag, out] if cmd == "games" && flag == "-o" => {
@@ -172,6 +205,7 @@ fn run(args: &[String]) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "fwsc" => fwsc(rest),
         [cmd, rest @ ..] if cmd == "verify" => verify(rest),
         [cmd, rest @ ..] if cmd == "personal" => personal(rest),
+        [cmd, rest @ ..] if cmd == "chip-notes" => chip_notes(rest),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -184,5 +218,26 @@ fn main() -> ExitCode {
             eprintln!("fmzx-pack: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// chip-notes caps a frame's events as the firmware plays them.
+    #[test]
+    fn chip_notes_frames_are_the_firmwares() {
+        assert_eq!(chipmusic::notes::EVENTS_PER_FRAME, zx_sys::SND_EVENTS);
+        assert_eq!(chipmusic::notes::FRAME_T, u64::from(zx_sys::ZX_FRAME_TSTATES));
+    }
+
+    #[test]
+    fn chip_notes_arguments() {
+        let run = |a: &[&str]| super::run(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_err();
+        assert!(run(&["chip-notes"]).starts_with("usage:"));
+        assert!(run(&["chip-notes", "x.sid", "--subtune", "one", "-o", "n.toml"]).starts_with("--subtune one: not a number"));
+        assert!(run(&["chip-notes", "x.sid", "--seconds", "0", "-o", "n.toml"]).starts_with("--seconds 0: not a number"));
+        assert!(run(&["chip-notes", "x.sid"]).starts_with("-o is required"));
+        assert!(run(&["chip-notes", "/nonexistent/x.sid", "-o", "n.toml"]).starts_with("/nonexistent/x.sid: "));
+        assert!(run(&["chip-notes", "--bad", "x.sid"]).starts_with("unknown option --bad"));
     }
 }

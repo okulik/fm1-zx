@@ -20,7 +20,8 @@ This tool adds a bass, a pad (chords, one note at a time) and a drum to each sco
 takes to choose from by ear; the next tools/make-personal-pack run packs the chosen takes. A
 score.toml with `shadow = true` is a shadow score: music a learned or built-in routine already
 plays live. Its takes are made like any score's; it is packed only when a take is chosen for it,
-and the take then replaces the live version.
+and the take then replaces the live version. A score can also take its game's tune from the
+game's C64 version, from a SID collection the owner has (chip, below).
 
   tools/arrange-music generate DIR [--takes N] [--game ID]... [--force] [--jobs J]
                                    [--model NAME] [--soundfont PATH] [--seed S] [--offline]
@@ -52,18 +53,65 @@ and the take then replaces the live version.
       is now, whatever generator made them (--force replaces them; a changed score.toml gets new
       ones); a run interrupted with the same generator and seed resumes at the missing takes.
 
+  tools/arrange-music chip DIR --sid-dir PATH [--game ID]... [--max N] [--force]
+                               [--fmzx-pack PATH] [--soundfont PATH]
+      For each score without chip takes (every score with --force; only the games named by
+      --game), looks for its game's C64 tune in the SID collection at PATH (HVSC's C64Music, or
+      any folder of .sid files; nothing is downloaded) and writes up to N takes (default 3) to
+      DIR/arrange/<game>/<key>/chip-<n>/, best first.
+      The collection is indexed once to DIR/arrange/.chip-index.json (again when the folder's or
+      STIL's modification time changes, or with --force): each .sid's path, its PSID/RSID header
+      (title, author, released, songs, start song) and its STIL entries (DOCUMENTS/STIL.txt: the
+      file's and each subtune's TITLE, NAME, ARTIST, AUTHOR, COMMENT).
+      Candidates: files whose file name or header title is the game's name (the score's name or
+      its id; words compared without case, punctuation, "the", with roman numerals as digits;
+      title match 1.0, or 0.6 when one name runs on from the other), or whose STIL entry names it
+      (0.8; 1.0 when the entry also mentions the Spectrum, as "[from the Spectrum game]" does).
+      At most 12 (file, subtune) pairs a score are checked, a subtune of each file in turn (one
+      STIL names first, then the start song, then the rest).
+      The melody check converts 60 s of each with `fmzx-pack chip-notes` (cached in
+      DIR/arrange/.chip-notes/) and compares the top lines: the score's lead voice (its loop
+      repeated to 60 s) and the chip tune's highest sounding pitch, each as the pitches held at
+      least 3 frames. melody_match is the share of interval 4-grams (intervals folded into -5..+6
+      semitones, so transposition and octave changes do not matter) the two have in common, over
+      the smaller set (at least 24, so a short jingle cannot match by chance): unrelated tunes score about 0-0.1, the same tune arranged
+      again 0.2-0.9; ornamented melodies score low even when they are the same tune, so listen.
+      pc_corr, the pitch-class histograms' correlation at the best transposition, is kept as a
+      weaker second measure. Rank: melody_match + 0.1 title_match + 0.1 for a STIL entry naming
+      the Spectrum.
+      The best N are converted for 180 s, each written as:
+        arranged.toml  the score's header, voices, roles and notes as a take's (the converter's
+                       voices: 0 the lead, the highest SID voice on average; 1 the bass, the
+                       lowest; 2 the pad; 3 the drum), with take = "chip-<n>", generator = "chip sid", timeline = "own"
+                       (the notes keep the chip tune's own timeline: own_intro_t, own_loop_t, from
+                       the converter's loop, own_loop_t 0 when none was found, and one pass of the
+                       loop; the score's intro_t and loop_t stay the fingerprint's), source
+                       ("C64: <title> by <author> (<released>), subtune N, <file>"), sid_file,
+                       subtune, stil (the STIL text that named the game, if any), and [metrics]
+                       melody_match, title_match, pc_corr, rank, stil_spectrum and notes a second
+        fm1.mid, fm1.wav  the notes on General MIDI instruments, rendered as the takes are
+        chip.wav       the C64's own sound, when sidplayfp is on PATH (else skipped, with a note)
+      The converter is --fmzx-pack PATH, else $FMZX_PACK, else host/target/release/fmzx-pack
+      (cd host && cargo build --release -p fmzx-pack). generate never touches chip-<n>/, and
+      generate --force leaves them alone.
+
   tools/arrange-music pick DIR [--port P] [--set GAME/KEY=N]... [--list]
       Serves a page on http://127.0.0.1:P/ (default 8765, or a free port) to listen to each
-      score's original and its takes and choose one, saved to DIR/arrange/choices.toml:
+      score's original, its takes and its chip takes and choose one, saved to
+      DIR/arrange/choices.toml:
           [choices]
           "<game>/<key>" = <take>     # 0 or absent: the original
-      --set writes choices without the page; --list prints every score, its takes, their metrics
-      and the choice. Choices of other scores in the file are kept. The page and the list mark a
-      shadow score "(replaces the live version when chosen)"; its original is the live version.
+          "<game>/<key>" = "chip-1"   # a chip take, by its folder
+      --set writes choices without the page (N, or chip-N); --list prints every score, its takes,
+      their metrics, its chip takes with their source and melody match, and the choice. Choices
+      of other scores in the file are kept. The page and the list mark a shadow score "(replaces
+      the live version when chosen)"; its original is the live version.
 
   tools/arrange-music selftest
-      Checks generate (with the rules generator), the files it writes, pick --set and --list, and
-      the page's save, in a temporary folder; no network, no model.
+      Checks generate (with the rules generator), the files it writes, chip (a small collection
+      of made-up SID files and a stand-in converter, both written in the temporary folder), pick
+      --set and --list, and the page's save, in a temporary folder; no network, no model, no
+      Rust build.
 
 Metrics (arranged.toml [metrics], printed by generate and pick --list), for comparing generators:
 key and key_r (Krumhansl-Schmuckler estimate from the original's notes, and its correlation);
@@ -1108,6 +1156,552 @@ def cmd_generate(a: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
+# chip: a game's tune from its C64 version, as a take
+#
+# The collection (HVSC or any folder of .sid files; nothing is fetched) is indexed once into
+# DIR/arrange/.chip-index.json: every .sid's path, its PSID/RSID header (title, author, released,
+# songs, start song) and its STIL entries (DOCUMENTS/STIL.txt: the file's and each subtune's TITLE,
+# NAME, ARTIST, AUTHOR and COMMENT). A score's candidates are the files whose name, header title
+# or STIL text names the game; their subtunes are checked against the score's melody with the
+# converter's notes (fmzx-pack chip-notes), ranked, and the best become chip-<n>/ takes.
+
+CHIP_T_HZ = 3_500_000  # the converter's times and periods: Spectrum T-states
+CHIP_FRAME_T = 69888  # a 50 Hz frame, for the melody check
+CHIP_CHECK_S = 60  # seconds of each candidate converted for the melody check
+CHIP_FULL_S = 180  # seconds converted for a take
+CHIP_CANDIDATES = 12  # (file, subtune) pairs checked per score
+CHIP_NGRAM = 4
+CHIP_NGRAM_MIN = 24  # the overlap's denominator is at least this, so a short jingle whose few
+                     # 4-grams all occur in a long score does not score as the same tune
+CHIP_INDEX_VERSION = 1
+STIL_FIELDS = ("TITLE", "NAME", "ARTIST", "AUTHOR", "COMMENT")
+ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
+
+
+def name_tokens(s: str) -> list[str]:
+    """Lowercase ASCII words of s, & as "and", roman numerals ii-ix as digits, "the" dropped."""
+    import re
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower().replace("&", " and ")
+    return [ROMAN.get(w, w) for w in re.split(r"[^a-z0-9]+", s) if w and w != "the"]
+
+
+def contains_seq(hay: list[str], needle: list[str]) -> bool:
+    k = len(needle)
+    return k > 0 and any(hay[i:i + k] == needle for i in range(len(hay) - k + 1))
+
+
+def psid_header(data: bytes) -> dict | None:
+    """The PSID/RSID header's fields (big-endian; strings Latin-1, zero-padded), or None."""
+    if len(data) < 0x76 or data[:4] not in (b"PSID", b"RSID"):
+        return None
+    u16 = lambda o: int.from_bytes(data[o:o + 2], "big")  # noqa: E731
+    text = lambda o: data[o:o + 32].split(b"\0", 1)[0].decode("latin-1").strip()  # noqa: E731
+    return {"rsid": data[:4] == b"RSID", "version": u16(4), "songs": max(1, u16(0x0E)), "start": max(1, u16(0x10)),
+            "title": text(0x16), "author": text(0x36), "released": text(0x56)}
+
+
+def find_stil(sid_dir: Path) -> Path | None:
+    """The collection's DOCUMENTS/STIL.txt: in the folder given or up to three folders below it
+    (a collection unpacked into a folder of its own, e.g. <dir>/<name>/C64Music), the shallowest."""
+    for depth in range(4):
+        found = sorted(sid_dir.glob("/".join(["*"] * depth + ["DOCUMENTS", "STIL.txt"])))
+        if found:
+            return found[0]
+    return None
+
+
+def parse_stil(text: str) -> dict[str, dict[str, list[list[str]]]]:
+    """STIL.txt as {"/path/file.sid": {"0" (the whole file) or "<subtune>": [[field, text], ...]}}.
+    Entries start with a line "/path"; "(#n)" starts subtune n; "FIELD: text" lines, continued
+    by indented lines; "#" lines are comments; directory entries (paths ending "/") are skipped."""
+    import re
+
+    out: dict[str, dict[str, list[list[str]]]] = {}
+    cur: dict[str, list[list[str]]] | None = None
+    sub = "0"
+    field_re = re.compile(r"^\s*([A-Z]+):\s?(.*)$")
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        if line.startswith("/"):
+            path = line.strip()
+            cur = None if path.endswith("/") else out.setdefault(path, {})
+            sub = "0"
+            continue
+        if cur is None:
+            continue
+        s = line.strip()
+        if not s:
+            continue
+        m = re.fullmatch(r"\(#(\d+)\)", s)
+        if m:
+            sub = m.group(1)
+            continue
+        m = field_re.match(line)
+        if m and m.group(1) in STIL_FIELDS:
+            cur.setdefault(sub, []).append([m.group(1), m.group(2).strip()])
+        elif line[:1].isspace() and cur.get(sub):
+            cur[sub][-1][1] += " " + s
+    return out
+
+
+def chip_index(d: Path, sid_dir: Path, rebuild: bool = False) -> dict:
+    """The collection's index, from DIR/arrange/.chip-index.json while its key (the collection's
+    path and modification times) holds, else built and saved."""
+    sid_dir = sid_dir.resolve()
+    stil = find_stil(sid_dir)
+    key = {"version": CHIP_INDEX_VERSION, "path": str(sid_dir), "mtime": sid_dir.stat().st_mtime_ns,
+           "stil": str(stil) if stil else "", "stil_mtime": stil.stat().st_mtime_ns if stil else 0}
+    cache = d / "arrange" / ".chip-index.json"
+    if not rebuild and cache.is_file():
+        try:
+            idx = json.loads(cache.read_text())
+            if idx.get("key") == key:
+                return idx
+        except (OSError, ValueError):
+            pass
+    print(f"{PROG}: indexing {sid_dir}", flush=True)
+    files = []
+    for root, dirs, names in os.walk(sid_dir):
+        dirs.sort()
+        for nm in sorted(names):
+            if not nm.lower().endswith(".sid"):
+                continue
+            p = Path(root) / nm
+            try:
+                with p.open("rb") as f:
+                    h = psid_header(f.read(0x76))
+            except OSError:
+                continue
+            if h:
+                files.append({"path": p.relative_to(sid_dir).as_posix(), **{k: h[k] for k in ("title", "author", "released", "songs", "start", "rsid")}})
+    stil_by: dict[str, dict] = {}
+    if stil:
+        base = stil.parent.parent  # STIL's paths start at the collection's C64Music folder
+        for path, entry in parse_stil(stil.read_text(encoding="latin-1")).items():
+            try:
+                rel = (base / path.lstrip("/")).relative_to(sid_dir).as_posix()
+            except ValueError:
+                continue
+            stil_by[rel] = entry
+    for f in files:
+        if f["path"] in stil_by:
+            f["stil"] = stil_by[f["path"]]
+    idx = {"key": key, "files": files}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    tmp.write_text(json.dumps(idx))
+    tmp.replace(cache)
+    print(f"{PROG}: {len(files)} SID files, {len(stil_by)} STIL entries", flush=True)
+    return idx
+
+
+def name_match(names: list[list[str]], t: str, exact: float, prefix: float) -> float:
+    """How well t (a file name's or title's words, joined) names the game: exact when it is one
+    of the names', prefix when one runs on from the other (at least 5 letters in common)."""
+    best = 0.0
+    for n in names:
+        c = "".join(n)
+        if not c or not t:
+            continue
+        if t == c:
+            best = max(best, exact)
+        elif min(len(t), len(c)) >= 5 and (t.startswith(c) or c.startswith(t)):
+            best = max(best, prefix)
+    return best
+
+
+def stil_match(names: list[list[str]], block: tuple[list[str], str]) -> tuple[float, bool, str]:
+    """(match, spectrum, text) for one STIL block (its words, its text): 0.8 when a TITLE, NAME or
+    COMMENT names the game (its words in a row), 1.0 when that block also mentions the Spectrum."""
+    toks, text = block
+    if not any(len("".join(n)) >= 3 and contains_seq(toks, n) for n in names):
+        return 0.0, False, ""
+    spectrum = "spectrum" in toks
+    return (1.0 if spectrum else 0.8), spectrum, text
+
+
+def index_words(idx: dict) -> list[tuple[dict, str, str, dict[str, tuple[list[str], str]]]]:
+    """Per indexed file, once a run: (the entry, its file name's words joined, its title's, and
+    per STIL block its TITLE, NAME and COMMENT words and text)."""
+    if "_words" not in idx:
+        out = []
+        for f in idx.get("files", []):
+            blocks = {}
+            for s, lines in f.get("stil", {}).items():
+                text = " ".join(t for k, t in lines if k in ("TITLE", "NAME", "COMMENT"))
+                if text:
+                    blocks[s] = (name_tokens(text), text)
+            out.append((f, "".join(name_tokens(Path(f["path"]).stem)), "".join(name_tokens(f.get("title", ""))), blocks))
+        idx["_words"] = out
+    return idx["_words"]
+
+
+@dataclass
+class ChipCandidate:
+    file: dict  # the index's entry
+    subtune: int
+    title_match: float
+    spectrum: bool = False
+    stil: str = ""
+    prior: float = 0.0
+    melody_match: float = 0.0
+    pc_corr: float = 0.0
+    rank: float = 0.0
+    error: str = ""
+
+
+def chip_candidates(score: Score, idx: dict, limit: int = CHIP_CANDIDATES) -> list[ChipCandidate]:
+    """The (file, subtune) pairs to check for the score, at most limit: files whose file name or
+    header title names the game (the score's name or its id), or whose STIL entry does; files in
+    order of how well, a subtune of each file in turn (a subtune STIL names first, then the start
+    song, then the rest in order)."""
+    names = [n for n in (name_tokens(score.name), name_tokens(score.game.replace("-", " "))) if n]
+    names = [n for i, n in enumerate(names) if n not in names[:i]]
+    per_file: list[tuple[float, list[ChipCandidate]]] = []
+    for f, stem, title, stil in index_words(idx):
+        base = max(name_match(names, stem, 1.0, 0.6), name_match(names, title, 1.0, 0.6))
+        fm, fsp, ftext = stil_match(names, stil["0"]) if "0" in stil else (0.0, False, "")
+        subs = {}
+        for s, block in stil.items():
+            if s != "0" and s.isdigit() and 1 <= int(s) <= f["songs"]:
+                m, sp, text = stil_match(names, block)
+                if m:
+                    subs[int(s)] = (m, sp, text)
+        file_match = max(base, fm)
+        if file_match < 0.5 and not subs:
+            continue
+        cands = []
+        for s in range(1, f["songs"] + 1):
+            m, sp, text = subs.get(s, (0.0, False, ""))
+            tm = max(file_match, m)
+            if tm < 0.5:
+                continue
+            c = ChipCandidate(f, s, round(tm, 3), sp or fsp, text or ftext)
+            c.prior = tm + (1.0 if s in subs else 0.0) + (0.3 if c.spectrum else 0.0) + (0.2 if s == f["start"] else 0.0) - s * 1e-3
+            cands.append(c)
+        if cands:
+            cands.sort(key=lambda c: -c.prior)
+            per_file.append((cands[0].prior, cands))
+    per_file.sort(key=lambda x: (-x[0], x[1][0].file["path"]))
+    out: list[ChipCandidate] = []
+    rnd = 0
+    while len(out) < limit and any(rnd < len(cs) for _, cs in per_file):
+        for _, cs in per_file:
+            if rnd < len(cs) and len(out) < limit:
+                out.append(cs[rnd])
+        rnd += 1
+    return out
+
+
+def frame_pitches(notes: list[tuple[int, int, int]], clock_hz: int, frames: int) -> list[list[int]]:
+    """Per 50 Hz frame, the MIDI pitches sounding: notes are (start_t, end_t, period_t)."""
+    out: list[list[int]] = [[] for _ in range(frames)]
+    scale = CHIP_T_HZ / clock_hz
+    for s, e, per in notes:
+        if per <= 0:
+            continue
+        m = int(round(midi_of_period(clock_hz, per)))
+        a, b = int(s * scale) // CHIP_FRAME_T, min(int(e * scale) // CHIP_FRAME_T, frames)
+        for k in range(max(a, 0), b):
+            out[k].append(m)
+    return out
+
+
+def score_lead_frames(score: Score, seconds: float = CHIP_CHECK_S) -> list[list[int]]:
+    """The score's lead voice over its first `seconds`, its loop repeated to fill them."""
+    mv = score.melody_voice()
+    lead = [(n.start_t, n.end_t, n.period_t) for n in score.tonal() if n.voice == mv]
+    intro, loop = int(score.header.get("intro_t", 0)), int(score.header.get("loop_t", 0))
+    end = score.tstate(seconds)
+    notes = list(lead)
+    if loop > 0:
+        k = 1
+        while intro + k * loop < end:
+            notes += [(s + k * loop, e + k * loop, p) for s, e, p in lead if s >= intro]
+            k += 1
+    frames = int(seconds * CHIP_T_HZ / CHIP_FRAME_T)
+    return frame_pitches(notes, score.clock_hz, frames)
+
+
+def melody_of(frames: list[list[int]]) -> list[int]:
+    """The top line as note pitches: the top pitch held at least 3 frames, a repeat of the last
+    one kept once (ornaments, arpeggio steps and vibrato drop out)."""
+    out: list[int] = []
+    run_p, run_n = None, 0
+    for f in frames + [[]]:
+        top = max(f) if f else None
+        if top is not None and top == run_p:
+            run_n += 1
+            continue
+        if run_p is not None and run_n >= 3 and (not out or out[-1] != run_p):
+            out.append(run_p)
+        run_p, run_n = top, 1
+    return out
+
+
+def interval_ngrams(m: list[int], n: int = CHIP_NGRAM) -> set[tuple[int, ...]]:
+    """The melody's n-grams of intervals folded into -5..+6 semitones (so octave jumps and the
+    register an arrangement chose still match), repeated notes left out."""
+    iv = [d - 12 if d > 6 else d for d in ((b - a) % 12 for a, b in zip(m, m[1:])) if d != 0]
+    return {tuple(iv[i:i + n]) for i in range(len(iv) - n + 1)}
+
+
+def pc_correlation(a: list[list[int]], b: list[list[int]]) -> float:
+    """The pitch-class histograms' correlation at the best transposition (frames sounding)."""
+    import numpy as np
+
+    ha, hb = np.zeros(12), np.zeros(12)
+    for f in a:
+        for m in f:
+            ha[m % 12] += 1
+    for f in b:
+        for m in f:
+            hb[m % 12] += 1
+    if ha.std() == 0 or hb.std() == 0:
+        return 0.0
+    return float(max(np.corrcoef(ha, np.roll(hb, -r))[0, 1] for r in range(12)))
+
+
+def melody_match(score_frames: list[list[int]], chip_frames: list[list[int]]) -> tuple[float, float]:
+    """(melody_match, pc_corr). melody_match: the share of interval 4-grams of the two top lines
+    in common, over the smaller set (at least CHIP_NGRAM_MIN): unrelated tunes score about 0-0.1,
+    the same tune in another arrangement 0.2-0.9. pc_corr: the pitch-class correlation, a weak
+    second measure (related keys score 0.7-0.9)."""
+    ga, gb = interval_ngrams(melody_of(score_frames)), interval_ngrams(melody_of(chip_frames))
+    mm = len(ga & gb) / max(min(len(ga), len(gb)), CHIP_NGRAM_MIN) if ga and gb else 0.0
+    return round(mm, 3), round(pc_correlation(score_frames, chip_frames), 3)
+
+
+def chip_rank(c: ChipCandidate) -> float:
+    """The melody check decides; a title match and a STIL entry naming the Spectrum break ties."""
+    return round(c.melody_match + 0.1 * c.title_match + (0.1 if c.spectrum else 0.0), 4)
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def find_converter(given: str | None) -> str:
+    """fmzx-pack with chip-notes: --fmzx-pack, $FMZX_PACK, else host/target/release/fmzx-pack."""
+    fp = given or os.environ.get("FMZX_PACK") or str(repo_root() / "host" / "target" / "release" / "fmzx-pack")
+    hint = "build it with: cd host && cargo build --release -p fmzx-pack"
+    if not Path(fp).is_file():
+        die(f"no {fp}: {hint} (or --fmzx-pack PATH)")
+    r = subprocess.run([fp, "chip-notes", "--help"], capture_output=True, text=True)
+    if "chip-notes" not in r.stdout + r.stderr:
+        die(f"{fp} has no chip-notes command: {hint}")
+    return fp
+
+
+def run_converter(fp: str, sid: Path, subtune: int, seconds: int, out: Path) -> tuple[dict | None, str]:
+    """The converter's notes for (sid, subtune) over `seconds`, cached at out (the result, or the
+    converter's refusal, kept while the SID file and the converter are unchanged): (the notes
+    TOML, "") or (None, why not)."""
+    stamp = out.with_suffix(".src")
+    src = f"{sid} {sid.stat().st_mtime_ns} {subtune} {seconds} {fp} {Path(fp).stat().st_mtime_ns}\n"
+    old = stamp.read_text() if stamp.is_file() else ""
+    if old.startswith(src):
+        if old[len(src):].startswith("refused: "):
+            return None, old[len(src) + 9:].strip()
+        doc = read_toml(out) if out.is_file() else {}
+        if doc:
+            return doc, ""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    r = subprocess.run([fp, "chip-notes", str(sid), "--subtune", str(subtune), "--seconds", str(seconds), "-o", str(out)],
+                       capture_output=True, text=True)
+    if r.returncode != 0 or not out.is_file():
+        lines = (r.stderr or r.stdout).strip().splitlines()
+        why = lines[-1] if lines else f"exit {r.returncode}"
+        stamp.write_text(f"{src}refused: {why}\n")
+        return None, why
+    stamp.write_text(src)
+    doc = read_toml(out)
+    return (doc, "") if doc else (None, "unreadable notes")
+
+
+def chip_notes_cache(d: Path, c: ChipCandidate, seconds: int) -> Path:
+    h = hashlib.sha256(f"{c.file['path']}#{c.subtune}#{seconds}".encode()).hexdigest()[:16]
+    return d / "arrange" / ".chip-notes" / f"{h}.toml"
+
+
+def chip_voices(score: Score, notes_doc: dict) -> tuple[dict[int, list[Note]], int, int]:
+    """The converter's notes on the take's voices, on the score's clock (its voices are already
+    the take's: 0 the lead, the highest SID voice on average; 1 the bass, the lowest; 2 the pad;
+    3 the drum). Returns (voices, own_intro_t, own_loop_t); notes past one pass of the loop are
+    dropped, notes on a voice trimmed not to overlap, drum hits to end DRUM_GAP_T before the next."""
+    k = score.clock_hz / CHIP_T_HZ
+    loop_t = int(round(int(notes_doc.get("loop_t", 0)) * k))
+    intro_t = int(round(int(notes_doc.get("intro_t", 0)) * k))
+    if loop_t <= 0:
+        loop_t = 0
+        if intro_t <= 0:
+            intro_t = int(round(float(notes_doc.get("seconds", CHIP_FULL_S)) * score.clock_hz))
+    total = intro_t + loop_t
+    raw = []
+    for n in notes_doc.get("note", []):
+        v, s, e = int(n["voice"]), int(round(int(n["start_t"]) * k)), int(round(int(n["end_t"]) * k))
+        per = int(round(int(n.get("period_t", 0)) * k))
+        if 0 <= v <= 3 and 0 <= s < total:
+            raw.append((v, s, min(e, total), per if v < 3 else 0, max(1, min(255, int(n.get("level", 128))))))
+    voices: dict[int, list[Note]] = {0: [], 1: [], 2: [], 3: []}
+    for v, s, e, p, lv in raw:
+        if v == 3 or p > 0:
+            voices[v].append(Note(v, s, e, p, lv))
+    for v, ns in voices.items():
+        ns.sort(key=lambda n: (n.start_t, n.end_t))
+        kept = []
+        for i, n in enumerate(ns):
+            if i + 1 < len(ns):
+                n.end_t = min(n.end_t, ns[i + 1].start_t - (DRUM_GAP_T if v == 3 else 0))
+            if n.end_t > n.start_t:
+                kept.append(n)
+        voices[v] = kept
+    return voices, intro_t, loop_t
+
+
+def chip_source(c: ChipCandidate) -> str:
+    """"C64: <title> by <author> (<released>), subtune N, <file>"; HVSC's "<?>" (unknown) as "?"."""
+    f = c.file
+    field = lambda k: " ".join((f.get(k) or "").replace("<?>", "?").split()).strip()  # noqa: E731
+    author = field("author")
+    return (f"C64: {field('title') or Path(f['path']).stem} by {'unknown' if author in ('', '?') else author} "
+            f"({field('released') or '?'}), subtune {c.subtune}, {f['path']}")
+
+
+def chip_dirs(score_dir: Path) -> list[tuple[int, Path]]:
+    out = []
+    for p in score_dir.glob("chip-*"):
+        n = p.name[5:]
+        if n.isdigit() and (p / "arranged.toml").is_file():
+            out.append((int(n), p))
+    return sorted(out)
+
+
+def sid_renderer() -> str | None:
+    return shutil.which("sidplayfp")
+
+
+def write_chip_take(score: Score, n: int, c: ChipCandidate, notes_doc: dict, sid: Path, renderer: Renderer) -> dict:
+    voices, own_intro, own_loop = chip_voices(score, notes_doc)
+    secs = max(score.sec(own_intro + own_loop), 1e-6)
+    m = {"melody_match": c.melody_match, "title_match": c.title_match, "pc_corr": c.pc_corr, "rank": c.rank,
+         "stil_spectrum": c.spectrum}
+    for v, nm in ((0, "lead"), (1, "bass"), (2, "pad"), (3, "drums")):
+        m[f"{nm}_nps"] = round(len(voices[v]) / secs, 2)
+    doc = dict(score.header)
+    doc["voices"] = 3
+    doc["roles"] = list(TAKE_ROLES)
+    doc["take"] = f"chip-{n}"
+    doc["generator"] = "chip sid"
+    doc["timeline"] = "own"
+    doc["own_intro_t"] = own_intro
+    doc["own_loop_t"] = own_loop
+    doc["source"] = chip_source(c)
+    doc["sid_file"] = c.file["path"]
+    doc["subtune"] = c.subtune
+    if c.stil:
+        doc["stil"] = c.stil[:300]
+    doc["metrics"] = m
+    doc["note"] = [asdict(x) for x in sorted((x for v in voices.values() for x in v), key=lambda x: (x.start_t, x.voice))]
+    final = score.dir / f"chip-{n}"
+    tmp = score.dir / f".chip-{n}.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    dump_toml(tmp / "arranged.toml", doc)
+    fm1_midi(score, voices, tmp / "fm1.mid")
+    renderer.render(tmp / "fm1.mid", tmp / "fm1.wav", secs)
+    sp = sid_renderer()
+    if sp:
+        play = min(int(math.ceil(secs)), CHIP_FULL_S)
+        r = subprocess.run([sp, f"-w{tmp / 'chip.wav'}", f"-o{c.subtune}", f"-t{play}", str(sid)], capture_output=True)
+        if r.returncode != 0:
+            (tmp / "chip.wav").unlink(missing_ok=True)
+    shutil.rmtree(final, ignore_errors=True)
+    tmp.replace(final)
+    return m
+
+
+def chip_score(d: Path, score: Score, idx: dict, sid_dir: Path, fp: str, keep: int, force: bool, renderer: Renderer) -> int:
+    log = lambda msg: print(f"[{score.id}] {msg}", flush=True)  # noqa: E731
+    if chip_dirs(score.dir) and not force:
+        return 0
+    for _, p in chip_dirs(score.dir):
+        shutil.rmtree(p)
+    if score.melody_voice() is None:
+        log("no notes: skipped")
+        return 0
+    cands = chip_candidates(score, idx)
+    if not cands:
+        log(f"{score.name}: no SID file names the game")
+        return 0
+    lead = score_lead_frames(score)
+    checked = []
+    for c in cands:
+        sid = sid_dir / c.file["path"]
+        doc, why = run_converter(fp, sid, c.subtune, CHIP_CHECK_S, chip_notes_cache(d, c, CHIP_CHECK_S))
+        if doc is None:
+            log(f"  {c.file['path']} #{c.subtune}: not converted ({why})")
+            continue
+        tonal = [(int(n["start_t"]), int(n["end_t"]), int(n.get("period_t", 0)))
+                 for n in doc.get("note", []) if int(n["voice"]) < 3 and int(n.get("period_t", 0)) > 0]
+        if not tonal:
+            log(f"  {c.file['path']} #{c.subtune}: no notes in {CHIP_CHECK_S} s")
+            continue
+        chip = frame_pitches(tonal, CHIP_T_HZ, int(CHIP_CHECK_S * CHIP_T_HZ / CHIP_FRAME_T))
+        c.melody_match, c.pc_corr = melody_match(lead, chip)
+        c.rank = chip_rank(c)
+        log(f"  {c.file['path']} #{c.subtune}: melody match {c.melody_match:.2f}, title match {c.title_match:.2f}"
+            f"{', STIL: Spectrum' if c.spectrum else ''}, pitch classes {c.pc_corr:.2f}")
+        checked.append(c)
+    checked.sort(key=lambda c: (-c.rank, c.file["path"], c.subtune))
+    n = 0
+    for c in checked:
+        if n >= keep:
+            break
+        sid = sid_dir / c.file["path"]
+        doc, why = run_converter(fp, sid, c.subtune, CHIP_FULL_S, chip_notes_cache(d, c, CHIP_FULL_S))
+        if doc is None:
+            log(f"  {c.file['path']} #{c.subtune}: not converted ({why})")
+            continue
+        n += 1
+        write_chip_take(score, n, c, doc, sid, renderer)
+        log(f"chip-{n}: {chip_source(c)}; melody match {c.melody_match:.2f}")
+    log(f"{score.name}: {len(cands)} candidates, {len(checked)} checked, {n} chip takes")
+    return n
+
+
+def cmd_chip(a: argparse.Namespace) -> int:
+    d = Path(a.dir)
+    sid_dir = Path(a.sid_dir).expanduser()
+    if not sid_dir.is_dir():
+        die(f"no folder {sid_dir} (--sid-dir: the SID collection you downloaded, such as HVSC's C64Music)")
+    if a.max < 1:
+        die("--max must be at least 1")
+    scores = find_scores(d, a.game)
+    if not scores:
+        print(f"{PROG}: no scores under {d / 'arrange'}")
+        return 0
+    pending = [s for s in scores if a.force or not chip_dirs(s.dir)]
+    print(f"{PROG}: {len(scores)} scores, {len(pending)} to search for chip takes (up to {a.max} each)", flush=True)
+    if not pending:
+        return 0
+    fp = find_converter(a.fmzx_pack)
+    idx = chip_index(d, sid_dir, rebuild=a.force)
+    renderer = Renderer(a.soundfont)
+    if not renderer.ok:
+        print(f"{PROG}: {renderer.why_not()}")
+    if not sid_renderer():
+        print(f"{PROG}: no sidplayfp on PATH: no chip.wav (the C64's own sound); fm1.wav only")
+    made = sum(chip_score(d, s, idx, sid_dir.resolve(), fp, a.max, a.force, renderer) for s in pending)
+    print(f"{PROG}: {made} chip takes; listen and choose with: {PROG} pick {d}")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # pick
 
 
@@ -1115,11 +1709,33 @@ def choices_path(d: Path) -> Path:
     return d / "arrange" / "choices.toml"
 
 
-def read_choices(d: Path) -> dict[str, int]:
-    return {str(k): int(v) for k, v in read_toml(choices_path(d)).get("choices", {}).items()}
+Choice = int | str  # a take's number (0: the original) or a chip take's dir, "chip-<n>"
 
 
-def write_choices(d: Path, update: dict[str, int]) -> dict[str, int]:
+def parse_choice(v) -> Choice | None:
+    """A choices.toml value: a number (an arranged take, 0 the original) or "chip-<n>"."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v >= 0 else None
+    if isinstance(v, str):
+        if v.isdigit():
+            return int(v)
+        if v.startswith("chip-") and v[5:].isdigit() and int(v[5:]) > 0:
+            return f"chip-{int(v[5:])}"
+    return None
+
+
+def read_choices(d: Path) -> dict[str, Choice]:
+    out = {}
+    for k, v in read_toml(choices_path(d)).get("choices", {}).items():
+        c = parse_choice(v)
+        if c is not None:
+            out[str(k)] = c
+    return out
+
+
+def write_choices(d: Path, update: dict[str, Choice]) -> dict[str, Choice]:
     ch = read_choices(d)
     ch.update(update)
     choices_path(d).parent.mkdir(parents=True, exist_ok=True)
@@ -1136,9 +1752,26 @@ def score_entries(d: Path) -> list[dict]:
             doc = read_toml(p / "arranged.toml")
             takes.append({"n": n, "generator": doc.get("generator", ""), "metrics": doc.get("metrics", {}),
                           "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file()})
+        chips = []
+        for n, p in chip_dirs(s.dir):
+            doc = read_toml(p / "arranged.toml")
+            mt = doc.get("metrics", {})
+            chips.append({"name": f"chip-{n}", "source": doc.get("source", ""), "stil": doc.get("stil", ""),
+                          "melody_match": mt.get("melody_match", 0.0), "title_match": mt.get("title_match", 0.0),
+                          "fm1": (p / "fm1.wav").is_file(), "chip": (p / "chip.wav").is_file()})
         out.append({"id": s.id, "game": s.game, "name": s.name, "key": s.key, "seconds": round(s.seconds, 1), "shadow": s.shadow,
-                    "original": (s.dir / "original.wav").is_file(), "takes": takes, "choice": choices.get(s.id, 0)})
+                    "original": (s.dir / "original.wav").is_file(), "takes": takes, "chips": chips, "choice": choices.get(s.id, 0)})
     return out
+
+
+def choice_ok(entry: dict, v: Choice) -> bool:
+    if isinstance(v, str):
+        return v in {c["name"] for c in entry["chips"]}
+    return v == 0 or v in {t["n"] for t in entry["takes"]}
+
+
+def chip_line(c: dict) -> str:
+    return f"{c['source']} \u2014 melody match {float(c['melody_match']):.2f}"
 
 
 def apply_set(d: Path, sets: list[str]) -> None:
@@ -1146,12 +1779,12 @@ def apply_set(d: Path, sets: list[str]) -> None:
     update = {}
     for s in sets:
         sid, eq, n = s.rpartition("=")
-        if not eq or not n.isdigit():
-            die(f"--set {s}: expected GAME/KEY=N")
+        n_ = parse_choice(n) if eq else None
+        if n_ is None:
+            die(f"--set {s}: expected GAME/KEY=N or GAME/KEY=chip-N")
         if sid not in entries:
             die(f"--set {s}: no score {sid} under {d / 'arrange'}")
-        n_ = int(n)
-        if n_ and n_ not in {t["n"] for t in entries[sid]["takes"]}:
+        if not choice_ok(entries[sid], n_):
             die(f"--set {s}: {sid} has no take {n_}")
         update[sid] = n_
     write_choices(d, update)
@@ -1170,11 +1803,14 @@ def print_list(d: Path) -> None:
         ch = e["choice"]
         shadow = f" {SHADOW_MARK}" if e["shadow"] else ""
         original = " (the live version)" if e["shadow"] else " (original)"
-        print(f"{e['id']}  ({e['name']}, {e['seconds']} s){shadow}  takes: {' '.join(str(t['n']) for t in e['takes']) or '-'}  "
+        names = [str(t["n"]) for t in e["takes"]] + [c["name"] for c in e["chips"]]
+        print(f"{e['id']}  ({e['name']}, {e['seconds']} s){shadow}  takes: {' '.join(names) or '-'}  "
               f"choice: {ch}{original if ch == 0 else ''}")
         for t in e["takes"]:
             print(f"  take {t['n']}: {t['generator']}")
             print(f"    {metrics_line(t['metrics'])}")
+        for c in e["chips"]:
+            print(f"  {c['name']}: {chip_line(c)}")
 
 
 PAGE = """<!doctype html>
@@ -1232,14 +1868,22 @@ for (const e of DATA) {
       (t.full ? player(url(e, 'take-' + t.n + '/full.wav'), 'full arrangement') : '') +
       '</div><div class="m" title="' + esc(t.generator) + '">' + esc(fmt(t.metrics)) + '</div></div>';
   }
-  if (!e.takes.length) html += '<p class="m">No takes yet: tools/arrange-music generate</p>';
+  for (const c of e.chips) {
+    html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="' + esc(c.name) + '"' + (e.choice === c.name ? ' checked' : '') +
+      '> ' + esc(c.name) + '</label><div class="audios">' +
+      (c.fm1 ? player(url(e, c.name + '/fm1.wav'), 'FM-1') : '<small>no render</small>') +
+      (c.chip ? player(url(e, c.name + '/chip.wav'), 'C64') : '') +
+      '</div><div class="m"' + (c.stil ? ' title="' + esc(c.stil) + '"' : '') + '>' + esc(c.source) + ' \u2014 melody match ' +
+      (+c.melody_match).toFixed(2) + '</div></div>';
+  }
+  if (!e.takes.length && !e.chips.length) html += '<p class="m">No takes yet: tools/arrange-music generate (or chip)</p>';
   html += '</div>';
 }
 list.innerHTML = html || '<p>No scores.</p>';
 document.addEventListener('play', ev => { for (const a of document.querySelectorAll('audio')) if (a !== ev.target) a.pause(); }, true);
 document.getElementById('save').onclick = async () => {
   const choices = {};
-  for (const e of DATA) { const r = document.querySelector('input[name="' + CSS.escape('c-' + e.id) + '"]:checked'); if (r) choices[e.id] = +r.value; }
+  for (const e of DATA) { const r = document.querySelector('input[name="' + CSS.escape('c-' + e.id) + '"]:checked'); if (r) choices[e.id] = /^\\d+$/.test(r.value) ? +r.value : r.value; }
   const st = document.getElementById('status');
   try {
     const res = await fetch('/save', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({choices})});
@@ -1337,9 +1981,10 @@ def make_handler(d: Path) -> type:
             entries = {e["id"]: e for e in score_entries(d)}
             update = {}
             for sid, v in choices.items():
-                if sid not in entries or not isinstance(v, int) or (v and v not in {t["n"] for t in entries[sid]["takes"]}):
+                c = parse_choice(v) if isinstance(v, (int, str)) else None
+                if sid not in entries or c is None or not choice_ok(entries[sid], c):
                     return self._json(400, {"error": f"no take {v} for {sid}"})
-                update[sid] = v
+                update[sid] = c
             write_choices(d, update)
             self._json(200, {"path": str(choices_path(d)), "choices": update})
 
@@ -1405,6 +2050,78 @@ def selftest_score(path: Path, game: str, key: str, shadow: bool = False) -> Non
         doc["shadow"] = True
     doc["note"] = notes
     dump_toml(path, doc)
+
+
+SELFTEST_MELODY = [60, 64, 67, 72, 71, 67, 64, 62]  # selftest_score's lead: these, then these + 5
+
+
+def selftest_sid(path: Path, title: str, author: str, released: str, songs: dict[str, list[int]], start: int = 1,
+                 rsid: bool = False) -> None:
+    """A made-up SID file: a version 2 PSID (or RSID) header, then, as its "data", the melodies of
+    its subtunes as JSON, which only the stand-in converter reads."""
+    h = bytearray(0x7C)
+    h[0:4] = b"RSID" if rsid else b"PSID"
+    for off, v in ((4, 2), (6, 0x7C), (8, 0x1000), (0x0A, 0x1000), (0x0C, 0x1003), (0x0E, len(songs)), (0x10, start)):
+        h[off:off + 2] = v.to_bytes(2, "big")
+    for off, txt in ((0x16, title), (0x36, author), (0x56, released)):
+        b = txt.encode("latin-1")[:32]
+        h[off:off + len(b)] = b
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(h) + json.dumps(songs).encode())
+
+
+SELFTEST_CONVERTER = r'''
+import json, sys
+from pathlib import Path
+a = sys.argv[1:]
+if not a or a[0] != "chip-notes" or "--help" in a:
+    print("usage: fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S] -o <notes.toml>")
+    sys.exit(0 if a and a[0] == "chip-notes" else 2)
+f, sub, secs, out = a[1], int(a[a.index("--subtune") + 1]), int(a[a.index("--seconds") + 1]), a[a.index("-o") + 1]
+with open(Path(__file__).with_name("calls.log"), "a") as lg:
+    lg.write(f"{Path(f).name} {sub} {secs}\n")
+data = Path(f).read_bytes()
+if data[:4] == b"RSID":
+    print("chip-notes: RSID tunes are not supported", file=sys.stderr)
+    sys.exit(1)
+text = lambda o: data[o:o + 32].split(b"\0")[0].decode("latin-1")
+mel = json.loads(data[int.from_bytes(data[6:8], "big"):])[str(sub)]
+beat = 875000
+period = lambda p: round(3500000 / (440 * 2 ** ((p - 69) / 12)))
+lines = [f"file = {json.dumps(f)}", f"subtune = {sub}", f"title = {json.dumps(text(0x16))}", f"author = {json.dumps(text(0x36))}",
+         f"released = {json.dumps(text(0x56))}", "clock_hz = 985248", f"seconds = {secs}", "intro_t = 0", f"loop_t = {len(mel) * beat}"]
+t, i = 0, 0
+while t < secs * 3500000:
+    p = mel[i % len(mel)]
+    notes = [(0, t, t + beat - 20000, period(p), 120), (3, t, t + 100000, 0, 150)]
+    if i % 4 == 0:
+        notes.append((1, t, t + 4 * beat - 20000, period(p - 24), 90))
+    for v, s, e, per, lv in sorted(notes, key=lambda n: n[0]):
+        lines += ["", "[[note]]", f"voice = {v}", f"start_t = {s}", f"end_t = {e}", f"period_t = {per}", f"level = {lv}"]
+    t, i = t + beat, i + 1
+Path(out).write_text("\n".join(lines) + "\n")
+'''
+
+
+def selftest_collection(root: Path) -> Path:
+    """A small made-up collection under root/C64Music, with a STIL; returns its folder."""
+    c = root / "C64Music"
+    m = SELFTEST_MELODY
+    both = m + [x + 5 for x in m]
+    selftest_sid(c / "GAMES" / "S-Z" / "Test_Tune.sid", "Test Tune", "Ann Example", "1985 Nobody Soft",
+                 {"1": [60, 62, 60, 65, 64, 60, 67, 65, 63, 58], "2": [x + 3 for x in both]})
+    selftest_sid(c / "MUSICIANS" / "E" / "Example_Bob" / "Cover.sid", "Some Cover", "Bob Example", "1999 Example Group",
+                 {"1": [50, 52, 50, 53], "2": [x + 12 for x in m]})
+    selftest_sid(c / "GAMES" / "A-F" / "Another_Game.sid", "Another Game", "Cy Example", "1986 Nobody Soft", {"1": m})
+    selftest_sid(c / "MUSICIANS" / "R" / "Rs_Example" / "Test_Tune.sid", "Test Tune", "Di Example", "1987", {"1": m}, rsid=True)
+    (c / "DOCUMENTS").mkdir(parents=True, exist_ok=True)
+    (c / "DOCUMENTS" / "STIL.txt").write_text(
+        "#############\n#  STIL (made up)\n#############\n\n### /GAMES/A-F/ #####\n\n"
+        "/GAMES/A-F/Another_Game.sid\nCOMMENT: Music from the Spectrum version of\n         another game.\n\n"
+        "/MUSICIANS/E/\nCOMMENT: A folder entry.\n\n"
+        "/MUSICIANS/E/Example_Bob/Cover.sid\n(#1)\n  TITLE: Something Else\n(#2)\n  TITLE: Test Tune (title)\n"
+        " ARTIST: Ann Example\nCOMMENT: Covers the title music of the Spectrum\n         game.\n", encoding="latin-1")
+    return c
 
 
 def cmd_selftest(a: argparse.Namespace) -> int:
@@ -1476,6 +2193,79 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         run("generate", str(d), "--model", "rules", "--takes", "2", "--force", "--seed", "7", "--game", "test-game")
         other = (d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes()
         check(first != other, "another seed gives another take")
+
+        # chip: a made-up collection and a stand-in converter
+        check(name_tokens("The Quest of Bloop II & Co.") == ["quest", "of", "bloop", "2", "and", "co"], "chip: names compared as words")
+        coll = selftest_collection(d / "c64")
+        conv = d / "conv" / "fmzx-pack"
+        conv.parent.mkdir()
+        conv.write_text(f"#!{sys.executable}\n" + SELFTEST_CONVERTER)
+        conv.chmod(0o755)
+        hdr = psid_header((coll / "GAMES" / "S-Z" / "Test_Tune.sid").read_bytes())
+        check(hdr is not None and (hdr["title"], hdr["author"], hdr["released"], hdr["songs"], hdr["start"], hdr["rsid"])
+              == ("Test Tune", "Ann Example", "1985 Nobody Soft", 2, 1, False), "chip: PSID header")
+        stil = parse_stil((coll / "DOCUMENTS" / "STIL.txt").read_text(encoding="latin-1"))
+        cover = stil.get("/MUSICIANS/E/Example_Bob/Cover.sid", {})
+        check(set(stil) == {"/GAMES/A-F/Another_Game.sid", "/MUSICIANS/E/Example_Bob/Cover.sid"}, "chip: STIL entries (folder entries skipped)")
+        check(cover.get("2", [[]])[0] == ["TITLE", "Test Tune (title)"] and cover["2"][2] == ["COMMENT", "Covers the title music of the Spectrum game."],
+              "chip: STIL subtune fields, continued lines joined")
+        check(run("chip", str(d), "--sid-dir", str(coll), "--max", "2", "--fmzx-pack", str(conv)) == 0, "chip --max 2")
+        idx = json.loads((d / "arrange" / ".chip-index.json").read_text())
+        check(idx["key"]["path"] == str(coll.resolve()) and len(idx["files"]) == 4, "chip: the collection indexed, with its key")
+        check(any(f["path"] == "MUSICIANS/E/Example_Bob/Cover.sid" and "2" in f.get("stil", {}) for f in idx["files"]), "chip: the index has STIL entries by file")
+        calls = (conv.parent / "calls.log").read_text().split("\n")[:-1]
+        checks60 = sorted(c for c in calls if c.endswith(" 60"))
+        check(checks60 == ["Cover.sid 2 60", "Test_Tune.sid 1 60", "Test_Tune.sid 1 60", "Test_Tune.sid 2 60"],
+              "chip: candidates by file name, title and STIL subtune; checked once each for three scores")
+        check(not any(c.startswith("Another_Game") for c in calls), "chip: a STIL entry naming the Spectrum but not the game is no candidate")
+        check(sorted(c for c in calls if c.endswith(" 180")) == ["Cover.sid 2 180", "Test_Tune.sid 2 180"], "chip: the best 2 converted in full")
+        sdir = d / "arrange" / "test-game" / keys[0]
+        score = load_score(sdir / "score.toml")
+        check([n for n, _ in chip_dirs(sdir)] == [1, 2], "chip: chip-1 and chip-2")
+        c1, c2 = read_toml(sdir / "chip-1" / "arranged.toml"), read_toml(sdir / "chip-2" / "arranged.toml")
+        check(c1.get("source") == "C64: Test Tune by Ann Example (1985 Nobody Soft), subtune 2, GAMES/S-Z/Test_Tune.sid", "chip-1: the source line")
+        check(c2.get("source", "").startswith("C64: Some Cover by Bob Example (1999 Example Group), subtune 2,") and "Spectrum" in c2.get("stil", ""),
+              "chip-2: the STIL-named subtune, with its STIL text")
+        m1, m2 = c1.get("metrics", {}), c2.get("metrics", {})
+        check(m1.get("melody_match", 0) == round(12 / CHIP_NGRAM_MIN, 3) and m2.get("melody_match", 0) == round(4 / CHIP_NGRAM_MIN, 3)
+              and m1.get("rank", 0) > m2.get("rank", 0),
+              "chip: ranked by the melody check (the whole tune transposed: its 12 distinct 4-grams; half of it an octave up: 4)")
+        check(m1.get("title_match") == 1.0 and m2.get("title_match") == 1.0 and m2.get("stil_spectrum") is True, "chip: title match")
+        for f in ("game", "name", "key", "clock_hz", "intro_t", "loop_t"):
+            check(c1.get(f) == score.header[f], f"chip-1: {f} as the score's")
+        check(c1.get("take") == "chip-1" and c1.get("generator") == "chip sid" and c1.get("timeline") == "own"
+              and c1.get("voices") == 3 and c1.get("roles") == TAKE_ROLES, "chip-1: take, generator, timeline, voices, roles")
+        loop_t = 16 * 875000
+        check(c1.get("own_intro_t") == 0 and c1.get("own_loop_t") == loop_t, "chip-1: own_intro_t and own_loop_t from the converter's loop")
+        notes = c1.get("note", [])
+        by = {v: sorted((x for x in notes if x["voice"] == v), key=lambda x: x["start_t"]) for v in range(4)}
+        mel = [x + 3 for x in SELFTEST_MELODY + [y + 5 for y in SELFTEST_MELODY]]
+        check([round(midi_of_period(score.clock_hz, x["period_t"])) for x in by[0]] == mel, "chip-1: the converter's voice 0 is the lead")
+        check(len(by[1]) == 4 and not by[2] and len(by[3]) == 16, "chip-1: its voice 1 the bass, its drum on 3")
+        check(all(0 <= x["start_t"] < x["end_t"] <= loop_t for x in notes), "chip-1: one pass of the own loop")
+        check(all(a_["end_t"] <= b_["start_t"] for v in range(4) for a_, b_ in zip(by[v], by[v][1:])), "chip-1: no overlaps on a voice")
+        check(all(a_["end_t"] + DRUM_GAP_T <= b_["start_t"] for a_, b_ in zip(by[3], by[3][1:])) and all(x["period_t"] == 0 for x in by[3]),
+              "chip-1: drum hits")
+        try:
+            ok = len(mido.MidiFile(str(sdir / "chip-1" / "fm1.mid")).tracks) >= 2
+        except (OSError, ValueError, EOFError):
+            ok = False
+        check(ok, "chip-1: fm1.mid")
+        if renderer.ok:
+            check((sdir / "chip-1" / "fm1.wav").stat().st_size > 1000, "chip-1: fm1.wav")
+        check((sdir / "chip-1" / "chip.wav").is_file() == bool(sid_renderer()), "chip-1: chip.wav only with a SID renderer")
+        chip1 = (sdir / "chip-1" / "arranged.toml").read_bytes()
+        check(run("chip", str(d), "--sid-dir", str(coll), "--fmzx-pack", str(conv)) == 0
+              and len((conv.parent / "calls.log").read_text().splitlines()) == len(calls), "chip again: scores with chip takes are left alone")
+        check(run("generate", str(d), "--model", "rules", "--takes", "2", "--force", "--game", "test-game") == 0
+              and (sdir / "chip-1" / "arranged.toml").read_bytes() == chip1 and [n for n, _ in chip_dirs(sdir)] == [1, 2],
+              "generate --force leaves chip takes alone")
+        check(run("chip", str(d), "--sid-dir", str(coll), "--max", "3", "--force", "--game", "test-game", "--fmzx-pack", str(conv)) == 0
+              and [n for n, _ in chip_dirs(sdir)] == [1, 2, 3] and (sdir / "chip-1" / "arranged.toml").read_bytes() == chip1,
+              "chip --force --max 3: the same takes again, and a third")
+        c3 = read_toml(sdir / "chip-3" / "arranged.toml")
+        check(c3.get("sid_file") == "GAMES/S-Z/Test_Tune.sid" and c3.get("subtune") == 1 and c3["metrics"]["melody_match"] < 0.2,
+              "chip: a tune the converter refuses is skipped; the unrelated subtune comes last")
         check(run("pick", str(d), "--set", f"test-game/{keys[0]}=2", f"test-game/{keys[1]}=0") == 0, "pick --set with two choices")
         ch = read_toml(choices_path(d)).get("choices", {})
         check(ch == {"other-game/0000-00000000": 3, f"test-game/{keys[0]}": 2, f"test-game/{keys[1]}": 0}, "choices.toml: set, other games kept")
@@ -1496,6 +2286,19 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(SHADOW_MARK in lines[f"test-game/{keys[2]}"] and "(the live version)" in lines[f"test-game/{keys[2]}"], "pick --list marks the shadow score")
         check(SHADOW_MARK not in lines[f"test-game/{keys[0]}"], "pick --list marks no other score")
         check(run("pick", str(d), "--set", f"test-game/{keys[2]}=1") == 0, "pick --set chooses a take of the shadow score")
+        check("  chip-1: C64: Test Tune by Ann Example (1985 Nobody Soft), subtune 2, GAMES/S-Z/Test_Tune.sid \u2014 melody match 0.50" in out
+              and "takes: 1 2 chip-1 chip-2 chip-3" in lines[f"test-game/{keys[0]}"], "pick --list shows chip takes with source and melody match")
+        check(run("pick", str(d), "--set", f"test-game/{keys[1]}=chip-1") == 0
+              and read_toml(choices_path(d))["choices"][f"test-game/{keys[1]}"] == "chip-1", "pick --set GAME/KEY=chip-1")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["pick", str(d), "--list"])
+        check(any(ln.startswith(f"test-game/{keys[1]}") and "choice: chip-1" in ln for ln in buf.getvalue().splitlines()), "pick --list shows a chip choice")
+        try:
+            main(["pick", str(d), "--set", f"test-game/{keys[0]}=chip-9"])
+            check(False, "pick --set of a missing chip take fails")
+        except SystemExit as e:
+            check(e.code != 0, "pick --set of a missing chip take fails")
         srv = serve(d, 0)
         port = srv.server_address[1]
         th = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -1520,6 +2323,18 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             ch = read_toml(choices_path(d)).get("choices", {})
             check(ch.get(f"test-game/{keys[1]}") == 1 and ch.get(f"test-game/{keys[0]}") == 2 and ch.get("other-game/0000-00000000") == 3
                   and ch.get(f"test-game/{keys[2]}") == 1, "choices.toml after the page's save")
+            check("melody match" in page and '"name": "chip-1"' in page and "Ann Example" in page, "page lists the chip takes")
+            body = json.dumps({"choices": {f"test-game/{keys[0]}": "chip-2"}}).encode()
+            req = urllib.request.Request(base + "/save", data=body, headers={"Content-Type": "application/json"})
+            check(urllib.request.urlopen(req).status == 200 and read_toml(choices_path(d))["choices"].get(f"test-game/{keys[0]}") == "chip-2",
+                  "page save of a chip take")
+            body = json.dumps({"choices": {f"test-game/{keys[0]}": "chip-7"}}).encode()
+            req = urllib.request.Request(base + "/save", data=body, headers={"Content-Type": "application/json"})
+            try:
+                urllib.request.urlopen(req)
+                check(False, "page save of a missing chip take refused")
+            except urllib.error.HTTPError as e:
+                check(e.code == 400, "page save of a missing chip take refused")
         finally:
             srv.shutdown()
             srv.server_close()
@@ -1544,14 +2359,22 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--soundfont", help="the .sf2 for renders (default: Homebrew fluid-synth's)")
     g.add_argument("--seed", type=int, default=1, help="the seed the takes derive from (default 1)")
     g.add_argument("--offline", action="store_true", help="fetch nothing: only the cached model")
+    c = sub.add_parser("chip", help="takes from the games' C64 tunes, in a SID collection you have")
+    c.add_argument("dir")
+    c.add_argument("--sid-dir", required=True, help="the SID collection's folder (such as HVSC's C64Music); nothing is downloaded")
+    c.add_argument("--game", action="append", help="only this game's scores (repeatable)")
+    c.add_argument("--max", type=int, default=3, help="chip takes per score (default 3)")
+    c.add_argument("--force", action="store_true", help="search again for scores that have chip takes (and index the collection again)")
+    c.add_argument("--fmzx-pack", help="the fmzx-pack with chip-notes (default $FMZX_PACK, else host/target/release/fmzx-pack)")
+    c.add_argument("--soundfont", help="the .sf2 for renders (default: Homebrew fluid-synth's)")
     p = sub.add_parser("pick", help="listen and choose a take per score")
     p.add_argument("dir")
     p.add_argument("--port", type=int, default=8765, help="the page's port on 127.0.0.1 (default 8765, else a free one)")
-    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original) without the page; several at once, or --set again")
+    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original; chip-N: a chip take) without the page; several at once, or --set again")
     p.add_argument("--list", action="store_true", help="print the scores, their takes and choices")
-    sub.add_parser("selftest", help="check generate and pick in a temporary folder")
+    sub.add_parser("selftest", help="check generate, chip and pick in a temporary folder")
     a = ap.parse_args(argv)
-    return {"generate": cmd_generate, "pick": cmd_pick, "selftest": cmd_selftest}[a.cmd](a)
+    return {"generate": cmd_generate, "chip": cmd_chip, "pick": cmd_pick, "selftest": cmd_selftest}[a.cmd](a)
 
 
 if __name__ == "__main__":

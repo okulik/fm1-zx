@@ -476,7 +476,9 @@ void snd_learned_roles(const uint8_t *list, uint32_t avail, snd_engine *table, u
  * every time from its first edge, an intro and optionally a loop that repeats, which the
  * personal-pack builder recorded as note events with the speaker edges of each frame-long bucket
  * (its fingerprint). Method B plays a score from its trigger edge, round its loop, while the live
- * edges keep agreeing with the fingerprint (snd_b_scores; the rules in learned.c). */
+ * edges keep agreeing with the fingerprint (snd_b_scores; the rules in learned.c). A replacement
+ * score's events have their own intro and loop, played from the trigger edge while its fingerprint
+ * is followed. */
 #define SND_SCORES_MAX 8u             /* kind-2 records per game */
 #define SND_SCORE_BUCKETS_MAX 12000u  /* whole buckets of a score's fingerprint, intro and loop (4 minutes) */
 

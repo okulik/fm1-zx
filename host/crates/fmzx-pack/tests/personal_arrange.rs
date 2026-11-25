@@ -6,8 +6,11 @@
 //! the pack is as learned (takes but no choice say `arranged: original`); a take chosen in
 //! `choices.toml` (four voices, drums among them) goes into the pack in place of the score's
 //! notes and the replay verifies it; takes that do not fit (the wrong key, overlapping notes, a
-//! note past the score's end) leave the original with the reason; a choice naming no score is a
-//! note, and a choices file that does not read fails the run. The music of a routine the learner
+//! note past the score's end) leave the original with the reason; a C64 take (`chip-1`, on its
+//! own timeline with another loop than the score's) goes in as a replacement record, which the
+//! replay verifies, and C64 takes that do not fit or are not there leave the original with the
+//! reason; a choice naming no score is a note, and a choices file that does not read, or a
+//! choice that names no take, fails the run. The music of a routine the learner
 //! learned (`games/test/tune.sna`) is a shadow score: written out with `shadow = true`, packed
 //! only once a take is chosen for it, and then with precedence, so that the replay verifies it
 //! over the learned entry. Every folder holds only generated test programs.
@@ -383,13 +386,118 @@ fn chosen_takes_go_into_the_pack() {
     run(&games.0, &out.0);
     assert_eq!(list(&out.0), original);
 
-    // a choices file that does not read fails the run, naming it
-    write(&choices, "[choices]\n\"looper/x\" = \"two\"\n");
+    // a C64 take chosen: a replacement on its own timeline (another loop than the score's)
+    let (c_text, c_intro, c_loop, own) = chip(&rec);
+    write(&folder.join("chip-1/arranged.toml"), &c_text);
+    write(&choices, &format!("[choices]\n\"looper/{key}\" = \"chip-1\"\n"));
+    let r = run(&games.0, &out.0);
+    let shown = table(&r);
+    let rep = report(&out.0);
+    println!("{shown}\n{rep}");
+    let chipped = list(&out.0);
+    assert_eq!(score_voices_byte(&chipped) & 0xC0, 0xC0, "the replacement and precedence bits");
+    let got = decode_scores(&chipped).unwrap();
+    assert_eq!(got.len(), 1);
+    let a = &got[0];
+    assert_eq!((a.replacement, a.precedence), (Some(own), true));
+    assert_eq!(a.event_lengths(), own);
+    assert_ne!(own.1, rec.loop_t);
+    assert_eq!((a.intro_events.clone(), a.loop_events.clone()), (c_intro, c_loop));
+    assert_eq!((a.voices, a.roles), (2, [SND_ROLE_LEAD, SND_ROLE_BASS, 0]));
+    assert_eq!(
+        (a.site, a.quiet, a.code, a.intro_t, a.loop_t, &a.intro_fp, &a.loop_fp),
+        (rec.site, rec.quiet, rec.code, rec.intro_t, rec.loop_t, &rec.intro_fp, &rec.loop_fp)
+    );
+    assert!(rep.contains(&format!("\n      arranged: C64 take chip-1 ({CHIP_SOURCE})\n")), "{rep}");
+    assert!(shown.contains(&format!("looper: score {key} plays C64 take chip-1 ({CHIP_SOURCE})\n")) && shown.contains(", 1 arranged)\n"), "{shown}");
+    soundlearn::scores::verify(&load, &schedule(u64::from(crc32fast::hash(&sna))), &chipped, 0, true).expect("the C64 take verified");
+
+    // C64 takes that do not fit, or are not there: the original, with the reason
+    let end = own.0 + own.1;
+    let bad = [
+        (c_text.replace("timeline = \"own\"", "timeline = \"score\""), "its timeline is \"score\": a C64 take's is \"own\"".to_string()),
+        (
+            c_text.clone() + &format!("\n[[note]]\nvoice = 2\nstart_t = 64\nend_t = {}\nperiod_t = 9000\nlevel = 50\n", end + 64),
+            format!("note 6: it ends at {} T, past the take's own end at {end} T", end + 64),
+        ),
+        (
+            c_text.replace(&format!("own_loop_t = {}\n", own.1), "own_loop_t = 1000\n"),
+            format!("its own timeline (own_intro_t {}, own_loop_t 1000): a loop shorter than a frame", own.0),
+        ),
+    ];
+    for (n, (text, why)) in bad.iter().enumerate() {
+        let n = n + 2;
+        write(&folder.join(format!("chip-{n}/arranged.toml")), &text.replace("take = \"chip-1\"", &format!("take = \"chip-{n}\"")));
+        write(&choices, &format!("[choices]\n\"looper/{key}\" = \"chip-{n}\"\n"));
+        let r = run(&games.0, &out.0);
+        assert_eq!(list(&out.0), original, "chip-{n}");
+        let rep = report(&out.0);
+        assert!(rep.contains(&format!("\n      arranged: C64 take chip-{n} refused: {why}")), "{rep}");
+        assert!(table(&r).contains(&format!("looper: score {key}: C64 take chip-{n} refused, the original plays: {why}")), "{}", table(&r));
+    }
+    write(&choices, &format!("[choices]\n\"looper/{key}\" = \"chip-9\"\n"));
+    run(&games.0, &out.0);
+    assert_eq!(list(&out.0), original);
+    assert!(report(&out.0).contains("\n      arranged: C64 take chip-9 refused: chip-9/arranged.toml: "), "{}", report(&out.0));
+
+    // a choices file that does not read fails the run, naming it (and the key)
+    write(&choices, "[choices]\n\"looper/x\" = \n");
     let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad choices file");
     assert!(e.contains("choices.toml: line 2: ") && e.contains(&choices.canonicalize().unwrap().display().to_string()), "{e}");
-    write(&choices, "[choices]\n\"looper/x\" = -1\n");
-    let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad take number");
-    assert!(e.contains("\"looper/x\" = -1: a take is 1 or more, 0 the original"), "{e}");
+    for v in ["-1", "\"two\"", "\"chip-0\"", "2.5"] {
+        write(&choices, &format!("[choices]\n\"looper/x\" = {v}\n"));
+        let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad choice");
+        assert!(e.contains(&format!("choices.toml: \"looper/x\" = {v}: a choice is a take's number (1 or more, 0 the original) or \"chip-<n>\"")), "{e}");
+    }
+}
+
+/// The source line of [`chip`]'s take.
+const CHIP_SOURCE: &str = "C64: A Made-up Tune by Nobody (1985 Nowhere), subtune 2, M/Made_Up.sid";
+
+/// A C64 take of the score (`chip-1`) on its own timeline, its intro 30 frames and 1,000 T, its
+/// loop 45 frames and 777 T: a lead note, a bass note across the intro's end (restated at the
+/// loop's start), a lead note to the loop's end (no note off) and a drum hit in each section;
+/// the events it gives (intro, loop) and its own timeline.
+fn chip(rec: &ScoreRecord) -> (String, Vec<ScoreEvent>, Vec<ScoreEvent>, (u32, u32)) {
+    let f = 69_888u64;
+    let (oi, ol) = (30 * f + 1000, 45 * f + 777);
+    let at = |u: u64| u * 64;
+    let notes: Vec<(u8, u64, u64, u32, u8)> = vec![
+        (0, 0, at(2000), 4000, 200),
+        (1, at(500), oi + at(1000), 16000, 120),
+        (0, oi + at(1500), oi + ol, 3500, 180),
+        (3, at(100), at(110), 0, 200),
+        (3, oi + at(200), oi + at(210), 0, 152),
+    ];
+    let mut text = format!(
+        "game = \"looper\"\nname = \"looper\"\nkey = \"{}\"\nclock_hz = 3500000\nintro_t = {}\nloop_t = {}\nvoices = 3\n\
+         roles = [\"lead\", \"bass\", \"pad\"]\ntake = \"chip-1\"\ngenerator = \"chip sid\"\ntimeline = \"own\"\n\
+         own_intro_t = {oi}\nown_loop_t = {ol}\nsource = \"{CHIP_SOURCE}\"\nsid_file = \"M/Made_Up.sid\"\nsubtune = 2\n\n\
+         [metrics]\nmelody_match = 0.9\ntitle_match = 1.0\n",
+        score_key(rec),
+        rec.intro_t,
+        rec.loop_t
+    );
+    for (v, s, e, p, l) in notes {
+        text += &format!("\n[[note]]\nvoice = {v}\nstart_t = {s}\nend_t = {e}\nperiod_t = {p}\nlevel = {l}\n");
+    }
+    let d = SCORE_DRUM;
+    let intro = vec![ev(0, 0, Some((4000, 200))), ev(100, d, Some((0, 200))), ev(110, d, None), ev(500, 1, Some((16000, 120))), ev(2000, 0, None)];
+    let looped = vec![ev(0, 1, Some((16000, 120))), ev(200, d, Some((0, 152))), ev(210, d, None), ev(1000, 1, None), ev(1500, 0, Some((3500, 180)))];
+    (text, intro, looped, (oi as u32, ol as u32))
+}
+
+/// The voices byte of the first recorded score (kind-2 record) in an entry list.
+fn score_voices_byte(list: &[u8]) -> u8 {
+    let mut at = 4;
+    for _ in 0..list[0] {
+        let size = usize::from(u16::from_le_bytes([list[at], list[at + 1]]));
+        if list[at + 2] == 2 {
+            return list[at + 3];
+        }
+        at += size;
+    }
+    panic!("no score in the list");
 }
 
 /// `games/test/tune.sna`: a tune its learned entry plays.

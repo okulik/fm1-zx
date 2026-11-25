@@ -11,6 +11,7 @@ license = "GPL-3.0-or-later AND GPL-3.0-only"
 publish = false
 
 [dependencies]
+chipmusic = { path = "../chipmusic" }
 crc32fast = "1.5.5"
 lz4_flex = "0.14.0"
 png = "0.18"

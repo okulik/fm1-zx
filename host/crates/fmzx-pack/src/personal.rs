@@ -77,8 +77,9 @@
 //!
 //! After the learning (from the cache or not), each game's recorded scores and shadow scores are
 //! written to `<out>/arrange/<game-id>/<key>/score.toml`, and the takes `<out>/arrange/choices.toml`
-//! chooses go into the pack in place of the scores' notes, or (a shadow score's) after the scores
-//! with precedence ([`crate::arrange`]), every run: the cache holds the learned list and the
+//! chooses (AI takes, and C64 takes as replacement records on their own timeline) go into the pack
+//! in place of the scores' notes, or (a shadow score's) after the scores with precedence
+//! ([`crate::arrange`]), every run: the cache holds the learned list and the
 //! shadow scores, so a changed choice never needs the game learned again. A take is verified by a
 //! replay of the run that recorded its score, as the cache keeps it
 //! ([`soundlearn::scores::verify`]). In `sound-report.txt` a score with takes or a choice gets a
@@ -325,8 +326,9 @@ const REPORT_HEAD: &str = "\
 # (FM: engines plays it in step with the beeper), or why it has none. Each recorded score's notes
 # are written to arrange/<game>/<key>/score.toml for tools/arrange-music; a score with takes, or
 # a take chosen in arrange/choices.toml, says under its line which plays: `arranged: take 2
-# (<what made it>)` (with any notes dropped for frames over 8 events), `arranged: original`, or
-# `arranged: take 2 refused: <why>` (the original plays). Music a learned or built-in routine plays
+# (<what made it>)` or `arranged: C64 take chip-1 (<where the tune comes from>)` (with any notes
+# dropped for frames over 8 events), `arranged: original`, or `arranged: take 2 refused: <why>`
+# (the original plays). Music a learned or built-in routine plays
 # gets a shadow score (`shadow score: ...; packed only with a chosen take`): its notes are written
 # out the same way, and it goes into the pack only with a take chosen for it, which then plays in
 # place of the routine (`arranged: the live version (no take chosen)` until then).
@@ -532,10 +534,10 @@ fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<(Vec<St
             let (what, live) = if shadow { ("shadow score", "the live version") } else { ("score", "the original") };
             match st {
                 Some(Status::Take { take, generator, .. }) => {
-                    lines.push(format!("{}: {what} {} plays take {take} ({generator})", j.name, score_key(rec)))
+                    lines.push(format!("{}: {what} {} plays {take} ({generator})", j.name, score_key(rec)))
                 }
                 Some(Status::Refused { take, why }) => {
-                    lines.push(format!("{}: {what} {}: take {take} refused, {live} plays: {why}", j.name, score_key(rec)))
+                    lines.push(format!("{}: {what} {}: {take} refused, {live} plays: {why}", j.name, score_key(rec)))
                 }
                 _ => {}
             }
@@ -1147,6 +1149,7 @@ mod tests {
             code: 1,
             voices: 1,
             precedence: false,
+            replacement: None,
             roles: [0; 3],
             intro_t: 10 * zx_sys::ZX_FRAME_TSTATES,
             loop_t: 0,
@@ -1215,7 +1218,7 @@ mod tests {
             "  OUT at 8057h, heard in 9 frames (9 edges)\n    recorded score: 1.0 s from frame 3, 1 voice, 1 note, 0.1 KB (score {ka})\n\
              \x20   recorded score (key 3 once): 1.0 s from frame 9, 1 voice, 1 note, 0.1 KB (score {kb})\n  OUT at 9000h, code only\n"
         );
-        let status = [Some(Status::Refused { take: 2, why: "w".into() }), None, Some(Status::Original)];
+        let status = [Some(Status::Refused { take: arrange::Choice::Take(2), why: "w".into() }), None, Some(Status::Original)];
         let got = with_status(&details, &[a.clone(), b.clone(), c.clone()], &status, &[], &[]);
         assert_eq!(
             got,
@@ -1232,7 +1235,7 @@ mod tests {
         let (a, b) = (ScoreRecord { precedence: true, ..a_score(0x8057) }, ScoreRecord { precedence: true, ..a_score(0x9000) });
         let (ka, kb) = (score_key(&a), score_key(&b));
         let details = format!("  OUT at 8057h, heard in 9 frames (9 edges)\n    shadow score: 1.0 s from frame 3, 1 voice, 1 note, 0.1 KB (score {ka}{SHADOW_TAIL})\n");
-        let status = [Some(Status::Take { take: 1, generator: "g".into(), dropped: (0, 0) }), Some(Status::Original)];
+        let status = [Some(Status::Take { take: arrange::Choice::Take(1), generator: "g".into(), dropped: (0, 0) }), Some(Status::Original)];
         let got = with_status(&details, &[], &[], &[a, b], &status);
         assert_eq!(
             got,
