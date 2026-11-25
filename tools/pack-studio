@@ -51,7 +51,9 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       all/personal-games.toml (after you deleted or commented out some entries there), else
       build/studio/<file name without .toml>.
       Long steps run one at a time in the background; their output goes to W/studio.log. The
-      bottom line shows the step running, how many wait, and its last output line.
+      bottom line shows the step running, how many wait, and what it is doing (a takes job's
+      take and pass, else its last output line; a message of the last 5 s first); J lists every
+      job (the jobs view, below).
       --sid-dir PATH   the SID collection to use (HVSC's C64Music, or any folder of .sid files)
                        instead of the one the studio downloads (below)
       --ay-dir PATH    the AY collection to use (a folder holding music/ay, or any folder of
@@ -102,7 +104,10 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       A / S / Y      the same for every game with scores
       g              generate the marked methods: an AI job per game with A, a SID job per game
                      with S, an AY job per game with Y (the SID or AY collection is downloaded
-                     first when there is none)
+                     first when there is none); it says how many it queued ("queued 5 jobs (2 AI,
+                     3 SID): J shows them"), and a game with a takes job waiting or running has
+                     "…" ("*" without UTF-8; yellow while it runs) after its methods
+      J              the jobs (below)
       r              learn again (the plan: sizes change with the choices)
       b              build the firmware: the packages (fmzx.fwsc, fmzx-preview.fwsc) of each pack,
                      with each game's chosen music, in W/pack-<n>/
@@ -110,7 +115,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
   titles bold, the chosen candidate green, marked methods AI magenta, SID cyan, AY yellow (dim
   when not), errors and refusals red, the bottom line yellow while a step runs, green when one
-  is done, red when one failed; while learning, learning yellow, learned green, cached dim green.
+  is done, red when one failed; while learning, learning yellow, learned green, cached dim green;
+  on the jobs view, running yellow, done green, failed red, waiting dim.
 
   The game screen: the game's scores (key, seconds, shadow or not, what the last plan says
   plays), and per score its candidates:
@@ -124,18 +130,44 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
                               wrote ay.wav
   A game with no scores lists the whole game's beeper and FM, to listen to.
       Up/Down, j/k   move
-      Enter          play the candidate (stopping the one playing)
-      space, Esc     stop (Esc with nothing playing goes back)
-      c              choose the candidate for its score (tools/arrange-music pick W/all
-                     --set GAME/KEY=N); the chosen one is marked *
+      Enter, space   play the candidate, or stop it when it is the one playing (playing
+                     another stops the one playing)
+      Esc            stop (with nothing playing: back)
+      c              choose the candidate for its score: written to W/all/arrange/choices.toml
+                     at once (as tools/arrange-music pick --set does); the chosen one is marked *
+                     and the others not
       a / s / y / g  mark AI / SID / AY for this game, generate them (Y: AY for every game)
-      Left, h, Backspace   back; l the log
+      Left, h, Backspace   back; l the log; J the jobs
   What plays: music-preview's render of exactly what the FM-1 plays (W/previews/<game>__<key>__
   <take>.wav, made in the background, "rendering..." until it is ready, then played; kept until
   the take changes); without music-preview, the renders tools/arrange-music wrote: original.wav
   (General MIDI, for take 0), take-<n>/fm1.wav, chip-<n>/fm1.wav, ay-<n>/fm1.wav. A candidate with nothing to
   play says why. The player is afplay on macOS, else ffplay, paplay or aplay; FMZX_PLAYER="cmd
   args" overrides (the file is added last).
+
+  The jobs view (J on every screen; J, Esc, Left or h goes back): every job of the session, run
+  one at a time in this order: the one running, those waiting (in the order they run; SID and AY
+  takes held until their collection's download is done), then those finished, newest first. Per
+  job its state (running m:ss yellow, waiting dim, done in N s green, failed red, cancelled, or
+  skipped when a job before it in its chain failed or its collection did not download), what it
+  is (AI, SID or AY takes, the method in its colour; a collection's download, the learning, a
+  render, a choice, a pack's build), its game, and a line: while an AI job runs, "take 2 of 4,
+  pass 'bass', 38% (about 24 min left)" (from tools/arrange-music generate's progress lines: the
+  passes drums, bass, chords; the time left from the takes done, else its estimate), a SID or AY
+  job "checking candidates: 3 of 12", a download its MB, the learning its header; when it is
+  done, its result from tools/arrange-music's summary line (its docstring, "The summary line"):
+  "3 takes, best melody match 0.73 (C64: <title> by <author> (<released>))" (with "weak: maybe
+  another tune, listen" under 0.15), "no C64 tune found by that name", "0 takes, 4 songs skipped
+  (48K beeper or CPC tunes)", "4 takes written, 3 min 12 s", "had its SID takes already:
+  nothing to do"; a failed job its exit code and last output line. A finished takes job also
+  says its result on the bottom line ("SID takes for <game>: 3 (best match 0.73); Enter on the
+  game to listen"). The jobs are the session's (their output is in W/studio.log too).
+      Up/Down, j/k   move (PgUp/PgDn, Home/End)
+      Enter          the job's own output, scrollable (l: the whole log)
+      o              open the job's game, to listen to its takes
+      x              cancel: a waiting job leaves the queue at once; the running one, after y, is
+                     stopped (SIGTERM to its process group, SIGKILL 5 s later; a download stops at
+                     its next block) and marked cancelled
 
   The build (b, or --build): the plan again (choices change the packed sizes), then the packs
   filled with 1-9 (or f), each as W/pack-<n>/ under its own number (packs with no game skipped);
@@ -218,11 +250,15 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       their links, each pack's fmzx-pack and tools/make-packages runs, the stale-pack removal, the
       retry when a pack does not fit, a games file as the input, the methods file, generate and
       choose through --set (AI, SID and AY, on the screen's path and through --generate), --try,
-      the previews, --status, the SID and AY downloads (from a server on 127.0.0.1) and the safe
+      the previews, --status, the jobs (their states, a waiting one cancelled, a running one
+      stopped, takes held for a download that fails, the result of AI, SID and AY jobs from
+      tools/arrange-music's output: a C64 tune found, none found by name, songs the converter
+      refuses, the progress of an AI job; what g says and the games marked), the SID and AY downloads (from a server on 127.0.0.1) and the safe
       unpacking (archive listings with a path escaping their folder, a link or a device; a
       made-up .7z, written and read by bsdtar when it is there, and .tar.gz, and ones with a
       path escaping their folder or a link), and the screen (in a pseudo-terminal, resized down
-      to 1x1; while learning, in colour and with NO_COLOR), in a temporary folder with stand-ins for every tool: no network, no Docker, no
+      to 1x1; the jobs view and a job's output at 80x24; while learning, in colour and with
+      NO_COLOR), in a temporary folder with stand-ins for every tool: no network, no Docker, no
       cargo.
 
 Stand-ins (the selftest's; the real tools are the default): FMZX_PACK (the fmzx-pack binary;
@@ -252,6 +288,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import textwrap
 import threading
 import time
 import tomllib
@@ -446,6 +483,19 @@ def read_choices(all_dir: Path) -> dict[str, int | str]:
         if c is not None:
             out[str(k)] = c
     return out
+
+
+def write_choice(all_dir: Path, sid: str, choice: int | str) -> None:
+    """Sets "<game>/<key>" to choice in all/arrange/choices.toml, as tools/arrange-music pick --set
+    does (the other choices kept, sorted by key; 0 the original), atomically."""
+    path = all_dir / "arrange" / "choices.toml"
+    ch = {str(k): v for k, v in read_toml(path).get("choices", {}).items() if parse_choice(v) is not None}
+    ch[sid] = choice
+    lines = ["[choices]"] + [f"{json.dumps(k)} = {json.dumps(v)}" for k, v in sorted(ch.items())]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".toml.tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(path)
 
 
 def choice_label(c: int | str | None) -> str:
@@ -1470,10 +1520,201 @@ def fetch_ay(root: Path, progress: Callable[[str], None], log: Callable[[str], N
 
 
 # ---------------------------------------------------------------------------------------------
+# What a takes job is doing, and what it did: tools/arrange-music's progress lines and its summary
+# line ("summary: kind=sid game=ID scores=1 pending=1 takes=3 ... best=0.73 seconds=41 source=...")
+
+
+TAKES_LABEL = {"ai": "AI", "sid": "SID", "ay": "AY"}
+AMT_PASSES = ("drums", "bass", "chords")  # tools/arrange-music's amt passes, in order
+ORIGIN = {"sid": "C64", "ay": "Spectrum 128"}
+WEAK_MATCH = 0.15  # a best melody match under this is probably another tune
+RE_AI_HEAD = re.compile(r"(\d+) scores, (\d+) to arrange \((\d+) takes each")
+RE_OWN_HEAD = re.compile(r"(\d+) scores, (\d+) to search for")
+RE_SCORE = re.compile(r"^\[[^\]]+\] .*: [\d.]+ s of music, \d+ notes; (\d+) takes with \w+(?:, roughly (.+) a take)?$")
+RE_PASS_AT = re.compile(r"^\[[^\]]+\] take (\d+) (\w+): ([\d.]+)/([\d.]+) s, \d+ notes, \d+ s so far, about (.+) left in this take")
+RE_PASS_DONE = re.compile(r"^\[[^\]]+\] take (\d+) (\w+): \d+ notes in \d+ s")
+RE_TAKE_DONE = re.compile(r"^\[[^\]]+\] take (\d+)/(\d+) in ([^:]+):")
+RE_CANDS = re.compile(r"^\[[^\]]+\] .*: (\d+) candidates to check$")
+RE_CHECKED = re.compile(r"^\[[^\]]+\]   \S.* #\d+: (melody match|not converted|no notes)")
+RE_OWN_TAKE = re.compile(r"^\[[^\]]+\] (chip|ay)-\d+: ")
+RE_UV = re.compile(r"^(Downloading|Downloaded|Installed|Prepared|Resolved|Building|Built|Updating|Updated) ")
+
+
+def parse_summary(line: str) -> dict[str, str] | None:
+    """tools/arrange-music's summary line as its fields; None for any other line."""
+    s = line.strip()
+    if not s.startswith("summary: "):
+        return None
+    body, _, source = s[len("summary: "):].partition(" source=")
+    doc = dict(kv.split("=", 1) for kv in body.split() if "=" in kv)
+    if source:
+        doc["source"] = source
+    return doc
+
+
+def parse_dur(text: str) -> float | None:
+    """tools/arrange-music's durations ("40 s", "12 min", "1.5 h") in seconds; None for "?"."""
+    m = re.fullmatch(r"\s*([\d.]+) (s|min|h)\s*", text)
+    if not m:
+        return None
+    return float(m[1]) * {"s": 1, "min": 60, "h": 3600}[m[2]]
+
+
+def fmt_secs(s: float) -> str:
+    """A job's time: "12 s", "3 min 12 s", "1 h 4 min"."""
+    s = max(0, int(round(s)))
+    if s < 60:
+        return f"{s} s"
+    if s < 3600:
+        return f"{s // 60} min {s % 60} s"
+    return f"{s // 3600} h {s % 3600 // 60} min"
+
+
+def short_source(source: str) -> str:
+    """A take's source without its subtune and file: "C64: <title> by <author> (<released>)"."""
+    return re.split(r", (?:subtune|song) \d+,", source, maxsplit=1)[0].strip()
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def summary_text(kind: str, s: dict[str, str]) -> str:
+    """A finished takes job's result in words, from its summary line."""
+    num = lambda k: int(s.get(k, "0") or 0) if str(s.get(k, "0")).isdigit() else 0  # noqa: E731
+    label = TAKES_LABEL.get(kind, kind.upper())
+    if s.get("scores") == "0":
+        return "no scores to arrange"
+    if s.get("pending") == "0":
+        return f"had its {label} takes already: nothing to do"
+    takes = num("takes")
+    if kind == "ai":
+        secs = float(s["seconds"]) if s.get("seconds", "").isdigit() else None
+        return f"{plural(takes, 'take')} written" + (f", {fmt_secs(secs)}" if secs is not None else "")
+    refused = num("refused")
+    skipped = ""
+    if refused:
+        skipped = (f", {plural(refused, 'song')} skipped (48K beeper or CPC tunes)" if kind == "ay"
+                   else f", {plural(refused, 'tune')} skipped (the converter refuses it)" if refused == 1
+                   else f", {plural(refused, 'tune')} skipped (the converter refuses them)")
+    if takes:
+        best = s.get("best", "-")
+        weak = ""
+        try:
+            weak = "; weak: maybe another tune, listen" if float(best) < WEAK_MATCH else ""
+        except ValueError:
+            pass
+        src = short_source(s.get("source", ""))
+        return f"{plural(takes, 'take')}, best melody match {best}" + (f" ({src})" if src else "") + weak + skipped
+    if num("candidates") == 0:
+        return f"no {ORIGIN.get(kind, kind)} tune found by that name"
+    return f"0 takes{skipped}" + ("" if refused >= num("candidates") else f" ({plural(num('candidates'), 'candidate')}, none converted)")
+
+
+class TakesWatch:
+    """A takes job's (tools/arrange-music generate, chip or ay) progress, fed its output lines:
+    what it is doing (running_text) and, at its end, its summary line's fields."""
+
+    def __init__(self, kind: str):
+        self.kind = kind
+        self.summary: dict[str, str] | None = None
+        self.phase = ""
+        self.takes_each = 0
+        self.pending = 0
+        self.score_i = 0
+        self.todo = 0  # takes to write for the current score
+        self.take_est: float | None = None  # seconds a take, as estimated
+        self.take_times: list[float] = []
+        self.done_in_score = 0
+        self.take: int | None = None
+        self.pass_ = ""
+        self.pct = 0.0
+        self.take_left: float | None = None
+        self.at = 0.0
+        self.cands = 0
+        self.checked = 0
+        self.written = 0
+
+    def feed(self, line: str, now: float | None = None) -> None:
+        s = line.strip()
+        now = time.monotonic() if now is None else now
+        if (sm := parse_summary(s)) is not None:
+            self.summary = sm
+        elif "downloading the model" in s:
+            self.phase = "downloading the model (about 1.4 GB, once)"
+        elif RE_UV.match(s):
+            self.phase = "uv: getting tools/arrange-music's packages (once)"
+        elif m := RE_AI_HEAD.search(s):
+            self.pending, self.takes_each, self.phase = int(m[2]), int(m[3]), ""
+        elif m := RE_OWN_HEAD.search(s):
+            self.pending, self.phase = int(m[2]), ""
+        elif s.startswith("tools/arrange-music: indexing "):
+            self.phase = "indexing the collection (once)"
+        elif m := RE_SCORE.match(s):
+            self.score_i += 1
+            self.todo, self.take_est = int(m[1]), parse_dur(m[2] or "")
+            self.done_in_score, self.take, self.pass_, self.pct, self.take_left, self.phase = 0, None, "", 0.0, None, ""
+        elif m := RE_PASS_AT.match(s):
+            self.take, self.pass_ = int(m[1]), m[2]
+            si = AMT_PASSES.index(m[2]) if m[2] in AMT_PASSES else 0
+            self.pct = (si + float(m[3]) / max(float(m[4]), 1e-6)) / len(AMT_PASSES)
+            self.take_left, self.at = parse_dur(m[5]), now
+        elif m := RE_PASS_DONE.match(s):
+            self.take, self.pass_ = int(m[1]), m[2]
+            si = AMT_PASSES.index(m[2]) if m[2] in AMT_PASSES else 0
+            self.pct, self.take_left = (si + 1) / len(AMT_PASSES), None
+        elif m := RE_TAKE_DONE.match(s):
+            self.done_in_score += 1
+            self.takes_each = self.takes_each or int(m[2])
+            d = parse_dur(m[3])
+            if d is not None:
+                self.take_times.append(d)
+            self.take, self.pass_, self.pct, self.take_left = None, "", 0.0, None
+        elif m := RE_CANDS.match(s):
+            self.cands += int(m[1])
+            self.phase = ""
+        elif RE_CHECKED.match(s):
+            self.checked += 1
+        elif RE_OWN_TAKE.match(s):
+            self.written += 1
+
+    def running_text(self, now: float | None = None) -> str:
+        now = time.monotonic() if now is None else now
+        if self.phase:
+            return self.phase
+        if self.kind != "ai":
+            if not self.cands:
+                return "looking for the game's tune by name"
+            return f"checking candidates: {self.checked} of {self.cands}" + (f", {plural(self.written, 'take')} written" if self.written else "")
+        if not self.score_i:
+            return "starting"
+        pre = f"score {self.score_i} of {self.pending}, " if self.pending > 1 else ""
+        n = self.takes_each or self.todo
+        take = self.take or (n - self.todo + self.done_in_score + 1)
+        text = f"{pre}take {take} of {n}"
+        if self.pass_:
+            text += f", pass '{self.pass_}', {self.pct * 100:.0f}%"
+        avg = sum(self.take_times) / len(self.take_times) if self.take_times else self.take_est
+        if avg is not None:
+            here = max(0.0, self.take_left - (now - self.at)) if self.take_left is not None else avg * (1 - self.pct)
+            later = max(0, self.todo - self.done_in_score - 1)
+            text += f" ({fmt_left(here + later * avg)} left)"
+        return text
+
+
+# ---------------------------------------------------------------------------------------------
 # Jobs: one at a time, in a thread (the screen) or in turn (--status, --build)
 
 
-@dataclass
+CANCELLED_RC = -15  # a cancelled job's exit code (as when stopped with SIGTERM)
+FINISHED = ("done", "failed", "cancelled", "skipped")
+
+
+class Cancelled(Exception):
+    """Raised in a function job (a download) when it is cancelled."""
+
+
+@dataclass(eq=False)
 class Job:
     title: str
     argv: list[str] | None = None
@@ -1483,16 +1724,84 @@ class Job:
     chain: str | None = None  # when it fails, the waiting jobs of its chain are dropped
     on_done: Callable[[Job], None] | None = None
     on_line: Callable[[str], None] | None = None  # each output line, in the job's thread
+    kind: str = ""  # ai, sid, ay (takes), dl-sid, dl-ay, learn, reuse, render, choose, pack, setup
+    what: str = ""  # its kind in words, on the jobs view (else the title)
+    game: str = ""  # the game it is for (or what it works on), on the jobs view
+    gid: str = ""  # the game's id
+    detail: Callable[[], str] | None = None  # while it runs, its line on the jobs view
+    wait_note: str = ""  # why it waits (a collection's download)
+    skip_note: str = ""  # why it was skipped
     rc: int | None = None
     progress: str = ""
-    tail: deque = field(default_factory=lambda: deque(maxlen=400))
+    tail: deque = field(default_factory=lambda: deque(maxlen=2000))
     runner: Runner | None = None
+    state: str = "new"  # waiting, running, then done, failed, cancelled or skipped
+    n: int = 0  # its number in the session
+    added: float = 0.0
+    started: float | None = None
+    ended: float | None = None
+    cancelled: bool = False
+    watch: TakesWatch | None = None
+
+    def __post_init__(self):
+        if self.kind in TAKES_LABEL:
+            self.watch = TakesWatch(self.kind)
+
+    def check(self) -> None:
+        """A function job calls this (through out and its progress) to stop when cancelled."""
+        if self.cancelled:
+            raise Cancelled()
 
     def out(self, line: str) -> None:
+        self.check()
         self.runner._line(self, line)
 
     def text(self) -> str:
         return "".join(self.tail)
+
+    def last_line(self) -> str:
+        for ln in reversed(self.tail):
+            if ln.strip() and not ln.startswith("== "):
+                return ln.strip()
+        return ""
+
+
+def job_state(j: Job, now: float) -> tuple[str, str]:
+    """A job's state in words and its colour: run, ok, err, wait or off."""
+    if j.state == "running":
+        e = int(now - (j.started or now))
+        return f"running {e // 60}:{e % 60:02}", "run"
+    if j.state == "done":
+        return f"done in {fmt_secs((j.ended or now) - (j.started or now))}", "ok"
+    if j.state == "failed":
+        return "failed", "err"
+    if j.state in ("cancelled", "skipped"):
+        return j.state, "off"
+    return "waiting", "wait"
+
+
+def job_detail(j: Job, now: float) -> str:
+    """A job's line beside its state: what it does while it runs, what it did when finished."""
+    last = j.last_line()
+    if j.state == "waiting":
+        return j.wait_note
+    if j.state == "skipped":
+        return j.skip_note
+    if j.state == "cancelled":
+        return "stopped while it ran" if j.started else "taken off the queue"
+    if j.state == "running":
+        if j.watch:
+            return j.watch.running_text(now)
+        if j.detail:
+            with contextlib.suppress(Exception):
+                if d := j.detail():
+                    return d
+        return j.progress or last
+    if j.state == "failed":
+        return f"exit {j.rc}" + (f": {last}" if last else "")
+    if j.watch and j.watch.summary is not None:
+        return summary_text(j.kind, j.watch.summary)
+    return last
 
 
 class Runner:
@@ -1510,17 +1819,73 @@ class Runner:
         self.proc: subprocess.Popen | None = None
         self.stopping = False
         self.failed: list[Job] = []  # the jobs that failed, in turn
+        self.jobs: list[Job] = []  # every job of the session, in the order submitted
+        self.after: Callable[[Job], None] | None = None  # each finished job, after its on_done
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = log_path.open("a", encoding="utf-8", errors="replace")
         if threaded:
             threading.Thread(target=self._worker, daemon=True).start()
 
-    def submit(self, job: Job) -> Job:
+    def submit(self, job: Job, hold: bool = False) -> Job:
+        """Queues the job; held, it waits (listed) until release."""
         job.runner = self
+        job.state, job.added = "waiting", time.monotonic()
         with self.cond:
-            self.pending.append(job)
-            self.cond.notify()
+            self.jobs.append(job)
+            job.n = len(self.jobs)
+            if not hold:
+                self.pending.append(job)
+                self.cond.notify()
         return job
+
+    def release(self, job: Job) -> None:
+        """A held job into the queue."""
+        with self.cond:
+            if job.state == "waiting" and job not in self.pending:
+                self.pending.append(job)
+                self.cond.notify()
+
+    def skip(self, job: Job, why: str) -> None:
+        """A held job dropped (its on_done not run)."""
+        job.state, job.skip_note, job.ended = "skipped", why, time.monotonic()
+        self._line(job, f"== skipped: {job.title} ({why})")
+
+    def cancel(self, job: Job) -> str:
+        """A waiting job off the queue ("cancelled"; its on_done runs, through pump, with
+        CANCELLED_RC), or the running one stopped ("stopping": its process group gets SIGTERM,
+        SIGKILL 5 s later; a function job stops at its next line); "" for a finished job."""
+        with self.cond:
+            if job.state == "waiting":
+                if job in self.pending:
+                    self.pending.remove(job)
+                job.cancelled, job.rc, job.state, job.ended = True, CANCELLED_RC, "cancelled", time.monotonic()
+                self.done.append(job)
+                what = "cancelled"
+            elif job.state == "running" and job is self.current:
+                job.cancelled = True
+                what = "stopping"
+            else:
+                return ""
+        if what == "cancelled":
+            self._line(job, f"== cancelled: {job.title}")
+        else:
+            self._kill(self.proc)
+        return what
+
+    @staticmethod
+    def _kill(p: subprocess.Popen | None) -> None:
+        if p is None or p.poll() is not None:
+            return
+        with contextlib.suppress(OSError):
+            os.killpg(p.pid, signal.SIGTERM)
+
+        def later() -> None:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                p.wait(5)
+                return
+            with contextlib.suppress(OSError):
+                os.killpg(p.pid, signal.SIGKILL)
+        threading.Thread(target=later, daemon=True).start()
 
     def busy(self) -> bool:
         return self.current is not None or bool(self.pending)
@@ -1537,6 +1902,9 @@ class Runner:
             self.log.flush()
         if line.strip() and not line.startswith("== "):
             self.last_line = line.strip()
+        if job.watch:
+            with contextlib.suppress(Exception):
+                job.watch.feed(line)
         if job.on_line:
             with contextlib.suppress(Exception):
                 job.on_line(line)
@@ -1547,28 +1915,43 @@ class Runner:
             sys.stderr.write(line)
             sys.stderr.flush()
 
-    def _run(self, job: Job) -> None:
+    def _start(self) -> Job:
+        """The next job, running from now (the lock held: a cancel sees it waiting or running)."""
+        job = self.pending.popleft()
         self.current = job
+        job.state, job.started = "running", time.monotonic()
+        return job
+
+    def _run(self, job: Job) -> None:
         stamp = time.strftime("%H:%M:%S")
         self._line(job, f"== {stamp} {job.title}" + (f": {shlex.join(job.argv)}" if job.argv else ""))
         try:
             if job.argv:
                 env = dict(os.environ, **(job.env or {}))
-                self.proc = subprocess.Popen(job.argv, cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
-                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                             errors="replace", bufsize=1, start_new_session=True)
-                for line in self.proc.stdout:
+                proc = subprocess.Popen(job.argv, cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                        errors="replace", bufsize=1, start_new_session=True)
+                with self.lock:
+                    self.proc = proc
+                if job.cancelled:  # cancelled as it started
+                    self._kill(proc)
+                for line in proc.stdout:
                     self._line(job, line)
-                job.rc = self.proc.wait()
+                job.rc = proc.wait()
             else:
                 job.rc = job.fn(job)
+        except Cancelled:
+            job.rc = CANCELLED_RC
         except Exception as e:  # noqa: BLE001 - a job's failure is reported, the studio goes on
             for ln in traceback.format_exception_only(e):
                 self._line(job, ln)
             job.rc = 1
         finally:
-            self.proc = None
-        self._line(job, f"== {job.title}: " + ("done" if job.rc == 0 else f"failed (exit {job.rc})"))
+            with self.lock:
+                self.proc = None
+        job.state = "done" if job.rc == 0 else "cancelled" if job.cancelled else "failed"
+        job.ended = time.monotonic()
+        self._line(job, f"== {job.title}: " + {"done": "done", "cancelled": "cancelled"}.get(job.state, f"failed (exit {job.rc})"))
         self.current = None
 
     def _worker(self) -> None:
@@ -1576,7 +1959,7 @@ class Runner:
             with self.cond:
                 while not self.pending:
                     self.cond.wait()
-                job = self.pending.popleft()
+                job = self._start()
             self._run(job)
             with self.lock:
                 self.done.append(job)
@@ -1590,9 +1973,12 @@ class Runner:
                 for j in dropped:
                     self.pending.remove(j)
             for j in dropped:
-                self._line(j, f"== skipped: {j.title} ({job.title} failed)")
+                j.state, j.skip_note, j.ended = "skipped", f"{job.title} " + ("cancelled" if job.cancelled else "failed"), time.monotonic()
+                self._line(j, f"== skipped: {j.title} ({j.skip_note})")
         if job.on_done:
             job.on_done(job)
+        if self.after:
+            self.after(job)
 
     def pump(self) -> bool:
         """Runs the finished jobs' on_done in this (the screen's) thread; True when any finished."""
@@ -1608,7 +1994,8 @@ class Runner:
     def drain(self) -> None:
         """Without a thread: runs every job, the ones their on_done adds included."""
         while self.pending:
-            job = self.pending.popleft()
+            with self.lock:
+                job = self._start()
             self._run(job)
             self._finish(job)
 
@@ -1717,6 +2104,7 @@ class Studio:
         self.errors: list[str] = []  # what stopped a step before it ran (the headless commands report them)
         self._cands: dict[tuple, list[Candidate]] = {}
         self._choices: tuple[int, dict] | None = None
+        runner.after = self.job_finished
 
     # -- messages and data
 
@@ -1785,20 +2173,22 @@ class Studio:
         if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") != "1":
             for preset in ("fm1", "fm1-preview"):
                 self.runner.submit(Job(f"device build {preset} (configure)",
-                                       [str(ROOT / "tools/fm1-docker"), "cmake", "--preset", preset], chain="start"))
+                                       [str(ROOT / "tools/fm1-docker"), "cmake", "--preset", preset], chain="start",
+                                       kind="setup"))
                 self.runner.submit(Job(f"device build {preset}",
                                        [str(ROOT / "tools/fm1-docker"), "cmake", "--build", "--preset", preset],
-                                       chain="start"))
+                                       chain="start", kind="setup"))
         if not self.tools.fmzx_pack_given:
             self.runner.submit(Job("build fmzx-pack", ["cargo", "build", "--release", "-p", "fmzx-pack"],
-                                   cwd=ROOT / "host", chain="start"))
+                                   cwd=ROOT / "host", chain="start", kind="setup"))
         if preview and not self.tools.preview_given:
             def preview_built(j: Job) -> None:
                 self.changed()
                 if j.rc != 0:
                     self.flash("music-preview did not build: playing the renders tools/arrange-music wrote")
             self.runner.submit(Job("build music-preview", ["cargo", "build", "--release", "-p", "music", "--bin",
-                                                           "music-preview"], cwd=ROOT / "host", on_done=preview_built))
+                                                           "music-preview"], cwd=ROOT / "host", on_done=preview_built,
+                                   kind="setup"))
         if learn:
             self.runner.submit(self.plan_job("start"))
 
@@ -1819,7 +2209,7 @@ class Studio:
                 if not got:
                     j.out(f"no earlier learning to reuse under {shown_path(search)}")
                 return 0
-            self.runner.submit(Job("reuse earlier learning", fn=reuse))
+            self.runner.submit(Job("reuse earlier learning", fn=reuse, kind="reuse"))
         live = self.live = Live(self.live_rows())
 
         def done(j: Job) -> None:
@@ -1841,7 +2231,8 @@ class Studio:
                                f"for a room of {kb(self.plan.room)}", "ok")
             if then:
                 then(j)
-        return Job("learn the games (plan)", argv, chain=chain, on_done=done, on_line=live.apply)
+        return Job("learn the games (plan)", argv, chain=chain, on_done=done, on_line=live.apply, kind="learn",
+                   what="learn the games", detail=lambda: live.header())
 
     def live_rows(self) -> list[LiveRow]:
         """The rows of the list while learning: the games file's entries when it is there,
@@ -1987,22 +2378,63 @@ class Studio:
         if not self.tools.arrange_given() and not shutil.which("uv"):
             self.fail("AI, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
             return
+        errors = len(self.errors)
+        counts, total = [], 0
         for g in ai:
             argv = [self.tools.arrange, "generate", str(self.all), "--game", g.id]
             if self.args.model:
                 argv += ["--model", self.args.model]
             if self.args.offline:
                 argv += ["--offline"]
-            self.runner.submit(Job(f"AI takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed))
+            self.runner.submit(Job(f"AI takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed, kind="ai",
+                                   what="AI takes", game=g.name, gid=g.id))
+        if ai:
+            counts.append(f"{len(ai)} AI")
+            total += len(ai)
+        downloads = 0
         for gs_, kind, cmd, opt in ((sid, "SID", "chip", "--sid-dir"), (ay, "AY", "ay", "--ay-dir")):
-            if gs_:
-                def queue(d: Path, gs_=gs_, kind=kind, cmd=cmd, opt=opt) -> None:
-                    for g in gs_:
-                        self.runner.submit(Job(f"{kind} takes for {g.name}",
-                                               [self.tools.arrange, cmd, str(self.all), "--game", g.id, opt, str(d)],
-                                               env=self.uv_env(), on_done=self.changed))
-                self.with_collection(kind, queue)
-        self.flash(f"queued: {len(ai)} AI, {len(sid)} SID, {len(ay)} AY")
+            if not gs_:
+                continue
+            state, d, why = self.collection(kind)
+            if state == "fail":
+                self.fail(why)
+                continue
+            jobs = [Job(f"{kind} takes for {g.name}", env=self.uv_env(), on_done=self.changed, kind=kind.lower(),
+                        what=f"{kind} takes", game=g.name, gid=g.id) for g in gs_]
+
+            def argv_of(j: Job, d: Path, cmd=cmd, opt=opt) -> list[str]:
+                return [self.tools.arrange, cmd, str(self.all), "--game", j.gid, opt, str(d)]
+            if state == "ready":
+                for j in jobs:
+                    j.argv = argv_of(j, d)
+                    self.runner.submit(j)
+            else:
+                for j in jobs:
+                    j.wait_note = f"after the {kind} collection's download"
+                    self.runner.submit(j, hold=True)
+
+                def go(d: Path | None, jobs=jobs, argv_of=argv_of, kind=kind) -> None:
+                    for j in jobs:
+                        if j.state != "waiting":
+                            continue
+                        if d is None:
+                            self.runner.skip(j, f"the {kind} collection did not download")
+                        else:
+                            j.argv, j.wait_note = argv_of(j, d), ""
+                            self.runner.release(j)
+                downloads += self.download(kind, go)
+            counts.append(f"{len(gs_)} {kind}")
+            total += len(gs_)
+        if downloads:
+            counts.append(plural(downloads, "download"))
+            total += downloads
+        if not total:
+            return
+        msg = f"queued {plural(total, 'job')} ({', '.join(counts)})" + (": J shows them" if self.runner.threaded else "")
+        if len(self.errors) > errors:
+            self.flash(f"{msg}; {self.errors[-1]}", "err")
+        else:
+            self.flash(msg)
 
     def generate_headless(self, methods: list[str], ids: list[str]) -> None:
         """--generate: marks methods for the games given (every game with scores when none) and
@@ -2024,45 +2456,89 @@ class Studio:
         save_methods(self.w, self.methods)
         self.generate([g.id for g in gs], tuple(methods))
 
-    def with_collection(self, kind: str, then: Callable[[Path], None]) -> None:
-        """Runs then(the collection's folder) for "SID" or "AY": the one given (--sid-dir,
-        --ay-dir) or downloaded, else after a download job (none with --offline)."""
+    def collection(self, kind: str) -> tuple[str, Path | None, str]:
+        """The "SID" or "AY" collection: ("ready", its folder, ""), the one given (--sid-dir,
+        --ay-dir) or downloaded before; ("download", None, ""); or ("fail", None, why)."""
         given, opt, find, root = ((self.args.sid_dir, "--sid-dir", self.sid_dir, hvsc_root()) if kind == "SID"
                                   else (self.args.ay_dir, "--ay-dir", self.ay_dir, ay_root()))
         d = find()
         if given:
-            if d is None:
-                self.fail(f"{opt} {given}: no such folder")
-            else:
-                then(d)
-            return
+            return ("ready", d, "") if d else ("fail", None, f"{opt} {given}: no such folder")
         if d:
-            then(d)
-            return
+            return "ready", d, ""
         if self.args.offline:
-            self.fail(f"{kind}: --offline downloads nothing: give {opt} PATH, or put the collection in {root}")
-            return
+            return "fail", None, f"{kind}: --offline downloads nothing: give {opt} PATH, or put the collection in {root}"
+        return "download", None, ""
+
+    def download(self, kind: str, then: Callable[[Path | None], None]) -> int:
+        """Runs then(the collection's folder, or None when it did not download) after the "SID"
+        or "AY" collection's download job; returns 1 when it queued that job, 0 when one was
+        queued before."""
+        find, root = (self.sid_dir, hvsc_root()) if kind == "SID" else (self.ay_dir, ay_root())
         if kind in self.waiters:
             self.waiters[kind].append(then)
-            return
+            return 0
         self.waiters[kind] = [then]
 
         def fetch(j: Job) -> int:
             def progress(s: str) -> None:
+                j.check()
                 j.progress = s
             (fetch_hvsc if kind == "SID" else fetch_ay)(root, progress, j.out)
             return 0
 
         def fetched(j: Job) -> None:
             waiters = self.waiters.pop(kind, [])
-            d = find()
-            if j.rc != 0 or d is None:
-                self.flash(f"the {kind} collection did not download (l: the log)")
-                return
+            d = find() if j.rc == 0 else None
+            if d is None and not j.cancelled:
+                self.flash(f"the {kind} collection did not download (J: its job, l: the log)", "err")
             for t in waiters:
                 t(d)
-        self.runner.submit(Job(f"download the {kind} collection ({'HVSC' if kind == 'SID' else 'chris-y/AY'})", fn=fetch,
-                               on_done=fetched))
+        src = "HVSC" if kind == "SID" else "chris-y/AY"
+        self.runner.submit(Job(f"download the {kind} collection ({src})", fn=fetch, on_done=fetched,
+                               kind=f"dl-{kind.lower()}", what=f"download {kind} collection", game=src))
+        return 1
+
+    # -- the jobs
+
+    def job_finished(self, j: Job) -> None:
+        """Each finished job (after its on_done): a cancelled one said, a takes job's result."""
+        if j.state == "cancelled":
+            self.flash(f"cancelled: {j.title}" + (" (stopped while it ran)" if j.started else ""))
+            return
+        if j.kind not in TAKES_LABEL:
+            return
+        label, screen = TAKES_LABEL[j.kind], self.runner.threaded
+        if j.rc != 0:
+            self.flash(f"{label} takes for {j.game} failed" + (" (J: its output)" if screen else ""), "err")
+            return
+        sm = j.watch.summary if j.watch else None
+        hint = "; Enter on the game to listen" if screen else ""
+        if sm is None:
+            self.flash(f"{label} takes for {j.game}: done{hint}", "ok")
+            return
+        n = int(sm["takes"]) if sm.get("takes", "").isdigit() else 0
+        if n:
+            best = f" (best match {sm['best']})" if sm.get("best", "-") != "-" else " written" if j.kind == "ai" else ""
+            self.flash(f"{label} takes for {j.game}: {n}{best}{hint}", "ok")
+        else:
+            self.flash(f"{label} takes for {j.game}: {summary_text(j.kind, sm)}")
+
+    def cancel_job(self, j: Job) -> None:
+        what = self.runner.cancel(j)
+        if what == "stopping":
+            self.flash(f"stopping: {j.title}")
+        elif not what:
+            self.flash(f"{j.title}: {j.state}, nothing to cancel")
+
+    def busy_games(self) -> dict[str, str]:
+        """The games with a takes job waiting or running: id -> "running" or "waiting"."""
+        out: dict[str, str] = {}
+        for j in self.runner.jobs:
+            if j.gid and j.kind in TAKES_LABEL and j.state in ("waiting", "running"):
+                if out.get(j.gid) != "running":
+                    out[j.gid] = j.state
+        return out
 
     # -- listening and choosing
 
@@ -2095,6 +2571,11 @@ class Studio:
 
             def rendered(j: Job) -> None:
                 self.rendering.discard(cid)
+                if j.cancelled:
+                    tmp.unlink(missing_ok=True)
+                    if self.want_play == cid:
+                        self.want_play = None
+                    return
                 ok = j.rc == 0 and tmp.is_file()
                 if ok:
                     tmp.replace(path)
@@ -2113,7 +2594,8 @@ class Studio:
                     self.flash(err or f"render failed ({self.failed[cid]}): playing {c.file.name}")
                 else:
                     self.flash(f"{c.label}: render failed: {self.failed[cid]}")
-            self.runner.submit(Job(f"render {g.name} {key} {c.take}", argv, on_done=rendered))
+            self.runner.submit(Job(f"render {g.name} {key} {c.take}", argv, on_done=rendered, kind="render", what="render",
+                                   game=f"{g.name}: {c.label}", gid=g.id))
             self.flash(f"rendering {c.label}...")
 
     def stop(self) -> None:
@@ -2126,8 +2608,6 @@ class Studio:
             return "playing"
         if cid in self.rendering:
             return "rendering..."
-        if f"{g.id}/{key}" in self.choosing and c.choice is not None:
-            return ""
         if cid in self.failed:
             return f"render failed: {self.failed[cid]}"
         how, _, note = self.route(g, key, c)
@@ -2138,16 +2618,25 @@ class Studio:
             self.flash(f"{c.label} is there to compare: not a choice")
             return
         sid = f"{g.id}/{sc.key}"
-        self.choosing.add(sid)
+        try:
+            write_choice(self.all, sid, c.choice)
+        except OSError as e:
+            self.flash(f"choosing failed: {e}", "err")
+            return
+        self.changed()
+        with contextlib.suppress(OSError, ValueError):
+            self.runner.log.write(f"== chose {choice_label(c.choice)} for {sid}\n")
+            self.runner.log.flush()
+        self.flash(f"{g.name}: {sc.key} plays {choice_label(c.choice)} (b builds with it)", "ok")
 
-        def chosen(j: Job) -> None:
-            self.choosing.discard(sid)
-            self.changed()
-            self.flash(f"{g.name}: {sc.key} plays {choice_label(c.choice)} (b builds with it)" if j.rc == 0
-                       else "choosing failed (l: the log)")
-        self.runner.submit(Job(f"choose {choice_label(c.choice)} for {sid}",
-                               [self.tools.arrange, "pick", str(self.all), "--set", f"{sid}={c.choice}"],
-                               env=self.uv_env(), on_done=chosen))
+    def toggle_play(self, g: Game, key: str, c: Candidate) -> None:
+        """Plays the candidate, or stops it when it is the one playing or being rendered to play."""
+        cid = self.cand_id(g, key, c)
+        if self.player.what == cid or self.want_play == cid:
+            self.stop()
+            self.flash(f"stopped {c.label}")
+        else:
+            self.play(g, key, c)
 
     # -- building
 
@@ -2209,7 +2698,8 @@ class Studio:
         for a in apps():
             argv += ["--app", str(a)]
         self.runner.submit(Job(f"pack {n} ({len(br.packs[i])} games)", argv, chain="build",
-                               on_done=lambda j: self._packed(i, j)))
+                               on_done=lambda j: self._packed(i, j), kind="pack", what=f"build pack {n}",
+                               game=plural(len(br.packs[i]), "game")))
 
     def _packages(self, i: int) -> None:
         n = self.build_run.numbers[i]
@@ -2226,7 +2716,8 @@ class Studio:
                 return self._finish(f"pack {n}'s packages failed (see the log)")
             self.build_run.built = i + 1
             return self._pack(i + 1) if i + 1 < len(self.build_run.packs) else self._finish(None)
-        self.runner.submit(Job(f"pack {n}: the packages and their verify", argv, env=env, chain="build", on_done=done))
+        self.runner.submit(Job(f"pack {n}: the packages and their verify", argv, env=env, chain="build", on_done=done,
+                               kind="pack", what=f"pack {n}'s packages", game="fmzx.fwsc, fmzx-preview.fwsc"))
 
     def _packed(self, i: int, j: Job) -> None:
         br = self.build_run
@@ -2355,12 +2846,14 @@ class Studio:
 # The screen (curses): a thin layer over Studio
 
 
-HELP_GAMES = ("Enter open  a/s/y mark  g make-takes  1-9/0 pack  f fill  p packs  b build-firmware  r re-learn  "
+HELP_GAMES = ("Enter open  a/s/y mark  g make-takes  J jobs  1-9/0 pack  f fill  p packs  b build-firmware  r re-learn  "
               "l log  ? help  q quit")
-HELP_LIVE = "1-9/0 pack  l log  ? help  q quit"
-HELP_GAME = "Enter play  Space stop  c choose  a/s/y mark  g make-takes  Esc back  l log  ? help"
-HELP_PACKS = "1-9 pack  0/x none  f fill  Enter open  b build-firmware  Esc back  l log  q quit"
-HELP_TEXT = "j/k PgUp/PgDn scroll  Home/End  q/Esc back"
+HELP_LIVE = "1-9/0 pack  J jobs  l log  ? help  q quit"
+HELP_GAME = "Enter play/stop  c choose  a/s/y mark  g make-takes  J jobs  Esc back  l log  ? help"
+HELP_PACKS = "1-9 pack  0/x none  f fill  Enter open  b build-firmware  J jobs  Esc back  l log  q quit"
+HELP_TEXT = "j/k PgUp/PgDn scroll  Home/End  J jobs  q/Esc back"
+HELP_JOBS = "Enter output  o open-game  x cancel/stop  Esc back  l log  ? help  q quit"
+HELP_JOB_TEXT = "j/k PgUp/PgDn scroll  Home/End  o open-game  x cancel/stop  Esc back"
 # the methods to mark: key, label on a row, what it is
 METHOD_KEYS = (("a", "AI", "ai", "AI arrangement"), ("s", "SID", "sid", "C64 version"),
                ("y", "AY", "ay", "Spectrum 128 version"))
@@ -2414,6 +2907,13 @@ class UI:
         self.text_off = 0  # lines up from the end (log) or down from the top (others)
         self.text_kind = ""
         self.confirm_quit = False
+        self.confirm_stop: Job | None = None  # the running job x asks to stop
+        self.ji = 0  # jobs view cursor (index into its jobs)
+        self.jsel: Job | None = None  # the job under it: the cursor follows it as the jobs move
+        self.jtop = 0
+        self.jobs_from = "games"
+        self.text_job: Job | None = None  # the job whose output the text screen shows
+        self.game_from = "games"
         self.quit = False
         self.utf8 = "UTF-8" in locale.getpreferredencoding(False).upper().replace("UTF8", "UTF-8")
         self.dash = "—" if self.utf8 else "-"
@@ -2492,13 +2992,16 @@ class UI:
 
     def draw_status(self, h: int, w: int) -> None:
         r, st = self.st.runner, self.st
-        if self.confirm_quit:
+        j = r.current
+        flash_age = time.monotonic() - st.flash_at
+        if self.confirm_stop is not None:
+            msg, a = f"stop {self.confirm_stop.title}? It is running (y/n)", self.attr["bar_err"]
+        elif self.confirm_quit:
             msg, a = "jobs are running: quit and stop them? (y/n)", self.attr["bar_err"]
-        elif r.current is not None:
-            j = r.current
-            msg = f"[{j.title}] " + (f"+{r.waiting()} waiting  " if r.waiting() else "") + (j.progress or r.last_line)
+        elif j is not None and not (flash_age < 5 and st.flash_msg):
+            msg = f"[{j.title}] " + (f"+{r.waiting()} waiting  " if r.waiting() else "") + (job_detail(j, time.monotonic()) or r.last_line)
             a = self.attr["bar_run"]
-        elif time.monotonic() - st.flash_at < 8 and st.flash_msg:
+        elif flash_age < 8 and st.flash_msg:
             msg = st.flash_msg
             a = self.attr[{"ok": "bar_ok", "err": "bar_err"}.get(st.flash_kind, "bar")]
         else:
@@ -2574,6 +3077,7 @@ class UI:
         self.gtop = max(0, self.gtop)
         nw, hw = self.columns(w)
         over_packs = {n for n, _ in packs_over(p, st.packs)}
+        busy = st.busy_games()
         for k, g in enumerate(p.games[self.gtop:self.gtop + rows]):
             i = self.gtop + k
             y = top + k
@@ -2597,8 +3101,11 @@ class UI:
                 dot = "\u00b7" if self.utf8 else "."
                 text = label if on else dot * len(label)
                 x = self.put(y, x + 1, text, (self.attr[m] if on else self.attr["dim"]) | rv)
+            jobs = busy.get(g.id)
+            x = self.put(y, x, ("\u2026" if self.utf8 else "*") if jobs else " ",
+                         (self.attr["run"] if jobs == "running" else self.attr["dim"]) | rv)
             summary = st.choice_summary(g)
-            x = self.put(y, x + 2, summary, base)
+            x = self.put(y, x + 1, summary, base)
             if not g.left_out and g.scores:
                 self.put(y, x + 3, g.music, self.attr["dim"] | rv)
 
@@ -2693,8 +3200,6 @@ class UI:
             sel = self.ctop + k == sel_row
             chosen = s is not None and c.choice is not None and ch.get(f"{g.id}/{s.key}", 0) == c.choice
             state = st.state_of(g, key, c)
-            if s is not None and f"{g.id}/{s.key}" in st.choosing and c.choice is not None:
-                state = "choosing..."
             rv = self.attr["sel"] if sel else 0
             unavailable = state.startswith(("nothing to play", "no "))
             self.put(y, 0, " " * w, rv)
@@ -2704,7 +3209,7 @@ class UI:
             self.put(y, x, f"{c.label[:26]:<26} ", la | rv)
             x = 32
             if state:
-                sa = (self.attr["warn"] if state in ("playing", "rendering...", "choosing...")
+                sa = (self.attr["warn"] if state in ("playing", "rendering...")
                       else self.attr["err"] if state.startswith("render failed") else self.attr["dim"])
                 self.put(y, x, f"[{state}] ", sa | rv)
                 x += len(state) + 3
@@ -2761,6 +3266,134 @@ class UI:
             x = self.put(y, x, f"{g.name[:nw]:<{nw}}", self.attr["name"] | rv)
             self.put(y, x, f" {kb(g.packed):>9}", rv)
 
+    def job_list(self) -> list[tuple[str, list[Job]]]:
+        """The jobs view's groups: running; waiting, in the order they run (the held ones, which
+        wait for a download, last); finished, newest first."""
+        r = self.st.runner
+        with r.lock:
+            jobs, queue = list(r.jobs), list(r.pending)
+        held = [j for j in jobs if j.state == "waiting" and j not in queue]
+        done = sorted((j for j in jobs if j.state in FINISHED), key=lambda j: j.ended or 0, reverse=True)
+        return [("running", [j for j in jobs if j.state == "running"]),
+                ("waiting", [j for j in queue if j.state == "waiting"] + held), ("finished", done)]
+
+    def jobs_flat(self) -> list[Job]:
+        return [j for _, js in self.job_list() for j in js]
+
+    def follow(self, flat: list[Job]) -> Job | None:
+        """The job under the cursor, the cursor moved to where it is now in the list."""
+        if self.jsel is not None and self.jsel in flat:
+            self.ji = flat.index(self.jsel)
+        self.ji = max(0, min(self.ji, len(flat) - 1))
+        self.jsel = flat[self.ji] if flat else None
+        return self.jsel
+
+    def put_what(self, y: int, x: int, what: str, width: int, attr: int = 0) -> int:
+        """A job's kind, its method word (AI, SID, AY) in the method's colour."""
+        text = f"{what[:width]:<{width}}"
+        m = re.search(r"\b(AI|SID|AY)\b", text)
+        if not m:
+            return self.put(y, x, text, attr)
+        x0 = self.put(y, x, text[:m.start()], attr)
+        x0 = self.put(y, x0, m[1], self.attr[m[1].lower()] | attr)
+        return self.put(y, x0, text[m.end():], attr)
+
+    def draw_jobs(self, h: int, w: int) -> None:
+        now = time.monotonic()
+        groups = self.job_list()
+        n = {k: len(js) for k, js in groups}
+        x = self.put(0, 0, "jobs", self.attr["title"])
+        self.put(0, x, f"  {n['running']} running, {n['waiting']} waiting, {n['finished']} finished; one at a time, in this order",
+                 self.attr["dim"])
+        self.put_help(h - 2, HELP_JOBS)
+        flat = [j for _, js in groups for j in js]
+        if not flat:
+            self.put(2, 2, "no jobs yet: g makes the takes of the methods marked (a, s, y)", self.attr["dim"])
+            return
+        sel_job = self.follow(flat)
+        ww = min(24, max(len(j.what or j.title) for j in flat))
+        gw = min(22, max((len(j.game) for j in flat), default=0))
+        x_detail = 2 + 14 + 1 + ww + 2 + (gw + 2 if gw else 0)
+        indent = 17 if w >= 60 else 4
+        # ("head", text, None), ("job", job, its detail when it fits beside it), ("more", job, a line of its
+        # detail below it, wrapped, at most 3)
+        rows: list[tuple[str, object, str]] = []
+        for key, js in groups:
+            if not js:
+                continue
+            rows.append(("head", f"{key} ({len(js)})" if key != "running" else key, ""))
+            for j in js:
+                d = job_detail(j, now)
+                if len(d) <= w - x_detail - 1:
+                    rows.append(("job", j, d))
+                    continue
+                rows.append(("job", j, ""))
+                lines = textwrap.wrap(d, max(8, w - indent - 1))
+                if len(lines) > 3:
+                    lines = lines[:2] + [textwrap.shorten(" ".join(lines[2:]), max(8, w - indent - 1), placeholder=" ...")]
+                rows += [("more", j, ln) for ln in lines]
+        sel_row = next(i for i, r in enumerate(rows) if r[0] == "job" and r[1] is sel_job)
+        avail = h - 4
+        if avail <= 0:
+            return
+        last = sel_row
+        while last + 1 < len(rows) and rows[last + 1][0] == "more":
+            last += 1
+        if sel_row - 1 < self.jtop:
+            self.jtop = max(0, sel_row - 1)
+        if last >= self.jtop + avail:
+            self.jtop = max(0, min(sel_row, last - avail + 1))
+        for k, (kind, item, d) in enumerate(rows[self.jtop:self.jtop + avail]):
+            y = 2 + k
+            if kind == "head":
+                self.put(y, 0, item, self.attr["head"])
+                continue
+            j = item
+            state, sk = job_state(j, now)
+            sa = {"run": self.attr["run"], "ok": self.attr["ok"], "err": self.attr["err"], "wait": self.attr["dim"],
+                  "off": self.attr["dim"]}[sk]
+            da = self.attr["err"] if sk == "err" else self.attr["dim"] if sk in ("wait", "off") else 0
+            sel = j is sel_job
+            rv = self.attr["sel"] if sel else 0
+            if kind == "more":
+                if sel:
+                    self.put(y, 0, " " * w, rv)
+                self.put(y, indent, d, (da if not sel else 0) | rv)
+                continue
+            self.put(y, 0, " " * w, rv)
+            x = self.put(y, 0, "> " if sel else "  ", rv)
+            x = self.put(y, x, f"{state:<14} ", sa | rv)
+            x = self.put_what(y, x, j.what or j.title, ww, rv)
+            x = self.put(y, x + 2, f"{j.game[:gw]:<{gw}}", self.attr["name"] | rv) if gw else x
+            if d:
+                self.put(y, x_detail, d, (da if not sel else 0) | rv)
+
+    def open_jobs(self) -> None:
+        if self.screen == "text":
+            if self.text_from != "jobs":
+                self.jobs_from = self.text_from
+        elif self.screen != "jobs":
+            self.jobs_from = self.screen
+        self.screen, self.ji, self.jsel, self.jtop = "jobs", 0, None, 0
+
+    def open_game_of(self, j: Job) -> None:
+        """o: the job's game (to listen to its takes)."""
+        st = self.st
+        g = st.plan.game(j.gid) if st.plan and j.gid else None
+        if g is None:
+            st.flash(f"{j.title}: no game to open", "err")
+        elif g.left_out:
+            st.flash(f"{g.name}: left out ({g.reason or g.how})")
+        else:
+            self.game, self.ci, self.ctop, self.screen, self.game_from = g, 0, 0, "game", "jobs"
+
+    def cancel_job(self, j: Job) -> None:
+        """x: a waiting job off the queue at once; the running one after a y."""
+        if j.state == "running":
+            self.confirm_stop = j
+        else:
+            self.st.cancel_job(j)
+
     def open_text(self, kind: str) -> None:
         self.text_from = self.screen if self.screen != "text" else self.text_from
         self.screen = "text"
@@ -2779,6 +3412,12 @@ class UI:
                 return ["(no log yet)"]
         if self.text_kind == "summary":
             return self.st.summary or ["(no build yet)"]
+        if self.text_kind == "job":
+            j = self.text_job
+            lines = [ln.rstrip("\n") for ln in j.tail]
+            if len(j.tail) == j.tail.maxlen:
+                lines.insert(0, "(its earlier lines: l, the log)")
+            return lines or ["(no output yet)"]
         return (__doc__ or "").splitlines()
 
     def line_attr(self, ln: str) -> int:
@@ -2797,15 +3436,24 @@ class UI:
 
     def draw_text(self, h: int, w: int) -> None:
         lines = self.text_content()
-        title = {"log": f"log: {self.st.runner.log_path}", "summary": "the build", "help": "help"}[self.text_kind]
-        self.put(0, 0, title, self.attr["title"])
-        self.put_help(h - 2, HELP_TEXT)
+        if self.text_kind == "job":
+            j = self.text_job
+            state, sk = job_state(j, time.monotonic())
+            x = self.put(0, 0, j.title, self.attr["title"])
+            x = self.put(0, x + 2, state, {"run": self.attr["run"], "ok": self.attr["ok"], "err": self.attr["err"]}.get(sk, self.attr["dim"]))
+            d = job_detail(j, time.monotonic())
+            if d and d != j.last_line():
+                self.put(0, x + 2, d, self.attr["dim"])
+        else:
+            title = {"log": f"log: {self.st.runner.log_path}", "summary": "the build", "help": "help"}[self.text_kind]
+            self.put(0, 0, title, self.attr["title"])
+        self.put_help(h - 2, HELP_JOB_TEXT if self.text_kind == "job" else HELP_TEXT)
         rows = h - 3
         if rows <= 0:
             return
         span = max(0, len(lines) - rows)
         self.text_off = max(0, min(self.text_off, span))
-        top = span - self.text_off if self.text_kind == "log" else self.text_off
+        top = span - self.text_off if self.text_kind in ("log", "job") else self.text_off
         for k, ln in enumerate(lines[top:top + rows]):
             self.put(1 + k, 0, ln, self.line_attr(ln))
 
@@ -2817,10 +3465,18 @@ class UI:
             with contextlib.suppress(Exception):
                 c.update_lines_cols()
             return
+        if self.confirm_stop is not None:
+            if ch in (ord("y"), ord("Y")):
+                self.st.cancel_job(self.confirm_stop)
+            self.confirm_stop = None
+            return
         if self.confirm_quit:
             if ch in (ord("y"), ord("Y")):
                 self.quit = True
             self.confirm_quit = False
+            return
+        if ch == ord("J") and self.screen != "jobs":
+            self.open_jobs()
             return
         getattr(self, f"key_{self.screen}")(ch)
 
@@ -2913,7 +3569,7 @@ class UI:
             if g.left_out:
                 st.flash(f"{g.name}: left out ({g.reason or g.how})")
             else:
-                self.game, self.ci, self.ctop, self.screen = g, 0, 0, "game"
+                self.game, self.ci, self.ctop, self.screen, self.game_from = g, 0, 0, "game", "games"
 
     def key_packs(self, ch: int) -> None:
         st, c = self.st, self.c
@@ -2943,7 +3599,7 @@ class UI:
                 moved = [r[2] for r in self.pack_rows() if r[0] == "game"]
                 self.pi = next((i for i, x in enumerate(moved) if x.id == g.id), self.pi)
         elif g and ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
-            self.game, self.ci, self.ctop, self.screen = g, 0, 0, "game"
+            self.game, self.ci, self.ctop, self.screen, self.game_from = g, 0, 0, "game", "games"
 
     def key_game(self, ch: int) -> None:
         st, c, g = self.st, self.c, self.game
@@ -2952,9 +3608,11 @@ class UI:
         h, _ = self.scr.getmaxyx()
         cur = cands[self.ci] if cands and self.ci < len(cands) else None
         if ch in (c.KEY_LEFT, ord("h"), c.KEY_BACKSPACE, 127, 8) or (ch == 27 and st.player.what is None and not st.want_play):
-            self.screen = "games"
-        elif ch in (27, ord(" ")):
+            self.screen = self.game_from if self.game_from != "packs" or st.plan else "games"
+        elif ch == 27:
             st.stop()
+        elif cur and ch == ord(" "):
+            st.toggle_play(g, cur[2], cur[3])
         elif ch in (ord("q"), ord("Q")):
             self.ask_quit()
         elif ch == ord("l"):
@@ -2976,19 +3634,47 @@ class UI:
         elif self.moves(ch):
             self.ci = self.move(ch, self.ci, len(cands), max(1, h - 8))
         elif cur and ch in (10, 13, c.KEY_ENTER):
-            st.play(g, cur[2], cur[3])
+            st.toggle_play(g, cur[2], cur[3])
         elif cur and ch == ord("c"):
             if cur[1] is None:
                 st.flash("the whole game: nothing to choose")
             else:
                 st.choose(g, cur[1], cur[3])
 
+    def key_jobs(self, ch: int) -> None:
+        c = self.c
+        h, _ = self.scr.getmaxyx()
+        flat = self.jobs_flat()
+        j = self.follow(flat)
+        if ch in (c.KEY_LEFT, ord("h"), ord("J"), 27, c.KEY_BACKSPACE, 127, 8):
+            self.screen = self.jobs_from if self.jobs_from != "packs" or self.st.plan else "games"
+        elif ch in (ord("q"), ord("Q")):
+            self.ask_quit()
+        elif ch == ord("l"):
+            self.open_text("log")
+        elif ch == ord("?"):
+            self.open_text("help")
+        elif self.moves(ch) and flat:
+            self.ji = self.move(ch, self.ji, len(flat), max(1, (h - 4) // 2))
+            self.jsel = flat[self.ji]
+        elif j and ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
+            self.text_job = j
+            self.open_text("job")
+        elif j and ch == ord("o"):
+            self.open_game_of(j)
+        elif j and ch == ord("x"):
+            self.cancel_job(j)
+
     def key_text(self, ch: int) -> None:
         c = self.c
         h, _ = self.scr.getmaxyx()
         page = max(1, h - 4)
-        sign = 1 if self.text_kind == "log" else -1  # the log counts from its end
-        if ch in (ord("q"), ord("Q"), 27, ord("l"), ord("?"), c.KEY_LEFT, ord("h")):
+        sign = 1 if self.text_kind in ("log", "job") else -1  # the log and a job's output count from their end
+        if self.text_kind == "job" and ch == ord("o"):
+            self.open_game_of(self.text_job)
+        elif self.text_kind == "job" and ch == ord("x"):
+            self.cancel_job(self.text_job)
+        elif ch in (ord("q"), ord("Q"), 27, ord("l"), ord("?"), c.KEY_LEFT, ord("h")):
             self.screen = self.text_from
         elif ch in (c.KEY_UP, ord("k")):
             self.text_off += sign
@@ -3013,6 +3699,8 @@ class UI:
                 self.open_text("summary")
             if self.screen == "packs" and not st.plan:
                 self.screen = "games"
+            if self.confirm_stop is not None and self.confirm_stop.state != "running":
+                self.confirm_stop = None
             st.player.poll()
             self.draw()
             try:
@@ -3260,6 +3948,16 @@ elif cmd in ("generate", "chip", "ay"):
                                              'song 2, games/Alpha.ay"\n[metrics]\nmelody_match = 0.37\n')
             (t / "ay.wav").write_bytes(b"RIFF")
     print(cmd, "done for", game)
+    n = len(list((d / "arrange" / game).glob("*/score.toml")))
+    kind = {"generate": "ai", "chip": "sid", "ay": "ay"}[cmd]
+    if cmd == "generate":
+        print(f"summary: kind=ai game={game} scores={n} pending={n} takes={n} model=rules seconds=0")
+    else:
+        src = ("C64: Alpha by Someone (1987), subtune 1, MUSICIANS/S/Someone/Alpha.sid" if cmd == "chip"
+               else "Spectrum 128: Alpha by Someone, song 2, games/Alpha.ay")
+        best = "0.42" if cmd == "chip" else "0.37"
+        print(f"summary: kind={kind} game={game} scores={n} pending={n} takes={n} candidates=2 checked=2 refused={int(cmd == 'ay')} "
+              f"best={best if n else '-'} seconds=0" + (f" source={src}" if n else ""))
 else:
     sys.exit(2)
 '''
@@ -3296,6 +3994,64 @@ data = b"\0\0" * 800
 out.write_bytes(b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
                 + b"data" + struct.pack("<I", len(data)) + data)
 '''
+
+# tools/arrange-music's output, as it prints it (the jobs' summaries are read from these)
+SAMPLE_AI = """\
+tools/arrange-music: 1 scores, 1 to arrange (4 takes each, amt, seed 1)
+tools/arrange-music: 45 s of music; roughly 40 min in all
+[alpha/8951-1a2b3c4d] Alpha: 45.0 s of music, 812 notes; 4 takes with amt, roughly 10 min a take
+[alpha/8951-1a2b3c4d] take 1 drums: 340 notes in 120 s (0.35 s a note on mps)
+[alpha/8951-1a2b3c4d] take 1 bass: 210 notes in 200 s (0.95 s a note on mps)
+[alpha/8951-1a2b3c4d] take 1 chords: 400 notes in 220 s (0.55 s a note on mps)
+[alpha/8951-1a2b3c4d] take 1/4 in 9 min: key C major (r 0.81); in key bass 0.92 pad 0.88; consonance bass 0.71 pad 0.66
+[alpha/8951-1a2b3c4d] take 2 drums: 300 notes in 110 s (0.37 s a note on mps)
+[alpha/8951-1a2b3c4d] take 2 bass: 6.8/45.0 s, 120 notes, 150 s so far, about 6 min left in this take
+@@
+[alpha/8951-1a2b3c4d] take 2/4 in 9 min: key C major (r 0.81)
+[alpha/8951-1a2b3c4d] take 3/4 in 9 min: key C major (r 0.81)
+[alpha/8951-1a2b3c4d] take 4/4 in 9 min: key C major (r 0.81)
+tools/arrange-music: done; listen and choose with: tools/arrange-music pick W/all
+summary: kind=ai game=alpha scores=1 pending=1 takes=4 model=amt seconds=2172
+"""
+SAMPLE_SID = """\
+tools/arrange-music: 1 scores, 1 to search for chip takes (up to 3 each)
+tools/arrange-music: indexing /c/C64Music
+@@
+tools/arrange-music: 4 SID files, 2 STIL entries
+tools/arrange-music: no sidplayfp on PATH: no chip.wav (the C64's own sound); fm1.wav only
+[alpha/8951-1a2b3c4d] Alpha: 4 candidates to check
+[alpha/8951-1a2b3c4d]   MUSICIANS/E/Example_Bob/Cover.sid #2: melody match 0.17, title match 1.00, STIL: Spectrum, pitch classes 0.62
+[alpha/8951-1a2b3c4d]   MUSICIANS/R/Rs_Example/Alpha.sid #1: not converted (chip-notes: RSID tunes are not supported)
+@@
+[alpha/8951-1a2b3c4d]   GAMES/A-F/Alpha.sid #1: melody match 0.73, title match 1.00, pitch classes 0.85
+[alpha/8951-1a2b3c4d]   GAMES/A-F/Alpha.sid #2: melody match 0.05, title match 1.00, pitch classes 0.40
+[alpha/8951-1a2b3c4d] chip-1: C64: Alpha by Ann Example (1985 Nobody Soft), subtune 1, GAMES/A-F/Alpha.sid; melody match 0.73
+[alpha/8951-1a2b3c4d] chip-2: C64: Some Cover by Bob Example (1999 Example Group), subtune 2, MUSICIANS/E/Example_Bob/Cover.sid; melody match 0.17
+[alpha/8951-1a2b3c4d] chip-3: C64: Alpha by Ann Example (1985 Nobody Soft), subtune 2, GAMES/A-F/Alpha.sid; melody match 0.05
+[alpha/8951-1a2b3c4d] Alpha: 4 candidates, 3 checked, 1 refused by the converter, 3 chip takes
+tools/arrange-music: 3 chip takes; listen and choose with: tools/arrange-music pick W/all
+summary: kind=sid game=alpha scores=1 pending=1 takes=3 candidates=4 checked=3 refused=1 best=0.73 seconds=41 \
+source=C64: Alpha by Ann Example (1985 Nobody Soft), subtune 1, GAMES/A-F/Alpha.sid
+"""
+SAMPLE_SID_NONE = """\
+tools/arrange-music: 1 scores, 1 to search for chip takes (up to 3 each)
+[bravo/0A00-12345678] Bravo: no SID file names the game
+tools/arrange-music: 0 chip takes; listen and choose with: tools/arrange-music pick W/all
+summary: kind=sid game=bravo scores=1 pending=1 takes=0 candidates=0 checked=0 refused=0 best=- seconds=0
+"""
+SAMPLE_AY_REFUSED = """\
+tools/arrange-music: 1 scores, 1 to search for ay takes (up to 3 each)
+[alpha/8951-1a2b3c4d] Alpha: 4 candidates to check
+[alpha/8951-1a2b3c4d] Alpha: 4 candidates, 0 checked, 4 refused by the converter, 0 ay takes
+tools/arrange-music: 0 ay takes (4 candidate songs skipped: the converter refuses them, such as 48K beeper tunes and Amstrad CPC \
+songs); listen and choose with: tools/arrange-music pick W/all
+summary: kind=ay game=alpha scores=1 pending=1 takes=0 candidates=4 checked=0 refused=4 best=- seconds=3
+"""
+SAMPLE_AY_HAD = """\
+tools/arrange-music: 1 scores, 0 to search for ay takes (up to 3 each)
+summary: kind=ay game=alpha scores=1 pending=0 takes=0 candidates=0 checked=0 refused=0 best=- seconds=0
+"""
+
 
 SELFTEST_HEADER = """\
 # Your games for tools/pack-studio (BUILDING.md, "Your own games"), in the syntax of
@@ -3608,18 +4364,17 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         check("melody match 0.37; Spectrum 128: Alpha by Someone, song 2" in cands["ay-1"].info and cands["ay-1"].choice == "ay-1"
               and cands["zx128-1"].choice is None and cands["zx128-1"].direct, "candidates: the AY take's source and match, its own sound")
         st.choose(g, sc, cands["ay-1"])
-        runner.drain()
-        check(["pick", str(w / "all"), "--set", "alpha/8951-1a2b3c4d=ay-1"] in [json.loads(ln) for ln in calls.read_text().splitlines()]
-              and read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "ay-1"} and st.choice_summary(g) == "ay-1",
-              "choose: pick --set GAME/KEY=ay-1, read back")
+        check(read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "ay-1"} and st.choice_summary(g) == "ay-1"
+              and runner.waiting() == 0 and runner.current is None, "choose: written at once (no job), read back")
         check(preview_argv("mp", w / "all", "alpha", sc.key, "ay-1", Path("o.wav"))[-4:] == ["--take", "ay-1", "-o", "o.wav"],
               "listen: an AY take through music-preview --take ay-<n>")
+        write_choice(w / "all", "zeta/0000-00000000", 3)
         st.choose(g, sc, cands["chip-1"])
-        runner.drain()
-        check(["pick", str(w / "all"), "--set", "alpha/8951-1a2b3c4d=chip-1"] in
-              [json.loads(ln) for ln in calls.read_text().splitlines()], "choose: pick --set GAME/KEY=chip-1")
-        check(read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "chip-1"} and st.choice_summary(g) == "chip-1",
-              "choose: the choice read back")
+        text = (w / "all" / "arrange" / "choices.toml").read_text()
+        check(read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "chip-1", "zeta/0000-00000000": 3}
+              and text == '[choices]\n"alpha/8951-1a2b3c4d" = "chip-1"\n"zeta/0000-00000000" = 3\n',
+              "choose: another choice replaces it, the other scores' kept, sorted")
+        check(st.choice_summary(g) == "chip-1", "choose: the choice read back")
         st.choose(g, sc, cands["beeper"])
         check(not runner.pending, "choose: the beeper is not a choice")
         st.play(g, sc.key, cands["1"])
@@ -4016,6 +4771,124 @@ Attributes = A_ prw-r--r--
         check(rc == 1 and packs == {1: ["bravo"], 2: ["alpha", "charlie"]},
               "build: a pack filled that does not fit fails, no game moved to another pack")
 
+        # -- the jobs: what a takes job does and did (tools/arrange-music's output), queue and cancel
+        def watched(kind: str, text: str, upto: int | None = None) -> TakesWatch:
+            wt = TakesWatch(kind)
+            for part in text.split("@@\n")[:upto]:
+                for ln in part.splitlines():
+                    wt.feed(ln, 100.0)
+            return wt
+        wt = watched("ai", SAMPLE_AI, 1)
+        check(wt.running_text(100.0) == "take 2 of 4, pass 'bass', 38% (about 24 min left)",
+              f"jobs: an AI job's take, pass, share of the take and time left from its progress lines ({wt.running_text(100.0)})")
+        wt = watched("ai", SAMPLE_AI)
+        check(wt.summary is not None and summary_text("ai", wt.summary) == "4 takes written, 36 min 12 s",
+              f"jobs: an AI job's result from its summary line ({wt.summary and summary_text('ai', wt.summary)})")
+        wt = watched("sid", SAMPLE_SID, 1)
+        check(wt.running_text() == "indexing the collection (once)", f"jobs: a SID job indexing ({wt.running_text()})")
+        wt = watched("sid", SAMPLE_SID, 2)
+        check(wt.running_text() == "checking candidates: 2 of 4", f"jobs: a SID job's candidates ({wt.running_text()})")
+        wt = watched("sid", SAMPLE_SID)
+        check(summary_text("sid", wt.summary) == "3 takes, best melody match 0.73 (C64: Alpha by Ann Example (1985 Nobody Soft)), "
+              "1 tune skipped (the converter refuses it)", f"jobs: a SID job's result ({summary_text('sid', wt.summary)})")
+        check(summary_text("sid", watched("sid", SAMPLE_SID_NONE).summary) == "no C64 tune found by that name",
+              "jobs: a SID job that found no tune by the game's name")
+        check(summary_text("ay", watched("ay", SAMPLE_AY_REFUSED).summary) == "0 takes, 4 songs skipped (48K beeper or CPC tunes)",
+              "jobs: an AY job whose songs the converter refused")
+        check(summary_text("ay", watched("ay", SAMPLE_AY_HAD).summary) == "had its AY takes already: nothing to do",
+              "jobs: an AY job with nothing to do")
+        check(summary_text("sid", {**watched("sid", SAMPLE_SID).summary, "best": "0.08"}).endswith("; weak: maybe another tune, listen, "
+                                                                                                    "1 tune skipped (the converter refuses it)"),
+              "jobs: a weak best match said")
+        check(parse_summary("summary: kind=sid game=a takes=1 best=0.5 source=C64: X by Y, subtune 1, A/B C.sid")
+              == {"kind": "sid", "game": "a", "takes": "1", "best": "0.5", "source": "C64: X by Y, subtune 1, A/B C.sid"}
+              and parse_summary("tools/arrange-music: done") is None, "jobs: the summary line read, source to the line's end")
+        check(parse_dur("40 s") == 40 and parse_dur("12 min") == 720 and parse_dur("1.5 h") == 5400 and parse_dur("?") is None
+              and fmt_secs(192) == "3 min 12 s" and fmt_secs(7) == "7 s", "jobs: durations read and written")
+
+        rj = Runner(t / "jobs.log", threaded=False)
+        seen = []
+        py = sys.executable
+        j1 = rj.submit(Job("one", [py, "-c", "print('one')"], on_done=lambda j: seen.append(("one", j.rc))))
+        j2 = rj.submit(Job("two", [py, "-c", "print('two')"], on_done=lambda j: seen.append(("two", j.rc))))
+        j3 = rj.submit(Job("three", [py, "-c", "print('three')"]))
+        jh = rj.submit(Job("held"), hold=True)
+        check([j.state for j in rj.jobs] == ["waiting"] * 4 and list(rj.pending) == [j1, j2, j3] and [j.n for j in rj.jobs] == [1, 2, 3, 4],
+              "jobs: queued in order, numbered; a held one listed, not queued")
+        check(rj.cancel(j2) == "cancelled" and j2.state == "cancelled" and list(rj.pending) == [j1, j3] and rj.pump()
+              and seen == [("two", CANCELLED_RC)], "jobs: x on a waiting job takes it off the queue; its on_done runs (cancelled)")
+        rj.drain()
+        rj.skip(jh, "no collection")
+        check([j.state for j in rj.jobs] == ["done", "cancelled", "done", "skipped"] and ("one", 0) in seen and rj.cancel(j1) == ""
+              and jh.skip_note == "no collection" and j1.last_line() == "one" and job_state(j1, j1.ended)[1] == "ok"
+              and job_detail(j2, 0) == "taken off the queue",
+              "jobs: the others run; a finished job cannot be cancelled; a held one skipped with why")
+        rt = Runner(t / "jobs-threaded.log", threaded=True)
+        slow = rt.submit(Job("slow", [py, "-c", "import time; print('started', flush=True); time.sleep(60)"]))
+
+        def blocks(j: Job) -> int:
+            for i in range(1200):
+                j.out(f"block {i}")
+                time.sleep(0.05)
+            return 0
+        fnj = rt.submit(Job("blocks", fn=blocks))
+        after = rt.submit(Job("after", [py, "-c", "print('after')"]))
+
+        def until(cond: Callable[[], bool], secs: float) -> bool:
+            end = time.monotonic() + secs
+            while time.monotonic() < end and not cond():
+                time.sleep(0.02)
+            return cond()
+        ok = until(lambda: slow.state == "running" and "started" in slow.text(), 10)
+        t0 = time.monotonic()
+        stopping = rt.cancel(slow)
+        ok = ok and until(lambda: fnj.state == "running", 10)
+        took = time.monotonic() - t0
+        check(ok and stopping == "stopping" and slow.state == "cancelled" and slow.rc != 0 and took < 5
+              and job_detail(slow, 0) == "stopped while it ran" and "== slow: cancelled" in slow.text(),
+              f"jobs: x then y on the running job stops its process ({took:.1f} s), marked cancelled; the next one starts")
+        ok = until(lambda: "block 3" in fnj.text(), 10) and rt.cancel(fnj) == "stopping"
+        check(ok and until(lambda: after.state == "done", 10) and fnj.state == "cancelled",
+              "jobs: a function job (a download) stops at its next line; the queue goes on")
+        rt.pump()
+
+        # g: what it queues and says; SID takes held for the collection's download, skipped when it fails
+        args = parse_args([str(games), "-o", str(w)])
+        os.environ["FMZX_HVSC_DIR"], os.environ["FMZX_HVSC_API"] = str(t / "hvsc-none"), "http://127.0.0.1:9/none.json"
+        rg = Runner(t / "jobs-g.log", threaded=False)
+        sg = Studio(games.resolve(), w, args, rg)
+        sg.methods = {"alpha": {"sid", "ai"}}
+        with contextlib.redirect_stderr(io.StringIO()):
+            sg.generate()
+        sidj = next((j for j in rg.jobs if j.kind == "sid"), None)
+        check(sg.flash_msg == "queued 3 jobs (1 AI, 1 SID, 1 download)" and sidj is not None and sidj.state == "waiting"
+              and sidj not in rg.pending and sidj.wait_note == "after the SID collection's download"
+              and [j.kind for j in rg.pending] == ["ai", "dl-sid"] and sg.busy_games() == {"alpha": "waiting"},
+              f"g: says what it queued ({sg.flash_msg}); the SID job held for the download; the game marked")
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            rg.drain()
+        dl = next(j for j in rg.jobs if j.kind == "dl-sid")
+        check(dl.state == "failed" and sidj.state == "skipped" and sidj.skip_note == "the SID collection did not download"
+              and sg.busy_games() == {} and job_detail(dl, 0).startswith("exit 1"),
+              f"g: the download fails, the SID job skipped ({sidj.state}: {sidj.skip_note})")
+        os.environ["FMZX_HVSC_DIR"] = env["FMZX_HVSC_DIR"]
+        del os.environ["FMZX_HVSC_API"]
+        rg.threaded = True  # the screen's words
+        fin = Job("SID takes for Alpha", kind="sid", game="Alpha", gid="alpha")
+        for ln in SAMPLE_SID.replace("@@\n", "").splitlines():
+            fin.watch.feed(ln)
+        fin.rc, fin.state = 0, "done"
+        sg.job_finished(fin)
+        msg1 = sg.flash_msg
+        none = Job("SID takes for Bravo", kind="sid", game="Bravo", gid="bravo")
+        for ln in SAMPLE_SID_NONE.splitlines():
+            none.watch.feed(ln)
+        none.rc, none.state = 0, "done"
+        sg.job_finished(none)
+        check(msg1 == "SID takes for Alpha: 3 (best match 0.73); Enter on the game to listen"
+              and sg.flash_msg == "SID takes for Bravo: no C64 tune found by that name",
+              f"jobs: a finished takes job says its result ({msg1}; {sg.flash_msg})")
+
         # -- the screen, in a pseudo-terminal: keys, a resize down to 3x10, quit
         import fcntl
         import pty
@@ -4069,6 +4942,55 @@ Attributes = A_ prw-r--r--
               "screen: c chose through pick --set")
         check("P1" in text_out and "P2" in text_out and "in no pack" in text_out or "no game put in a pack" in text_out,
               "screen: the packs panel")
+
+        # -- the jobs view at 80x24: g, J, a job's output, back
+        wj = t / "w-jobs"
+        wj.mkdir()
+        (wj / "studio.toml").write_text('[methods]\nalpha = ["ai", "sid", "ay"]\n')
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.environ.update({"TERM": "xterm-256color", "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
+            try:
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), str(games), "-o", str(wj),
+                                          "--sid-dir", str(t / "sids"), "--ay-dir", str(t / "ays")])
+            finally:
+                os._exit(127)
+        size(fd, 24, 80)
+        os.kill(pid, signal.SIGWINCH)
+        out, status = _wait_pty(fd, pid, 2.0)
+        steps = {}
+        for k, label in ((b"g", "g"), (b"", "wait"), (b"J", "jobs"), (b"j", ""), (b"\r", "output"), (b"\x1b", "back"),
+                         (b"x", "x"), (b"J", "games")):
+            if k:
+                os.write(fd, k)
+            o, status = _wait_pty(fd, pid, 1.5 if label == "wait" else 0.4)
+            out += o
+            steps[label] = o.decode("utf-8", "replace")
+        os.write(fd, b"q")
+        o, status = _wait_pty(fd, pid, 1.0)
+        if status is None:
+            os.write(fd, b"y")
+            o, status = _wait_pty(fd, pid, 5.0)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        os.close(fd)
+        jt = out.decode("utf-8", "replace")
+        check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in jt,
+              "jobs view: exit 0" + ("" if "Traceback" not in jt else ": " + jt[jt.find("Traceback"):][:600]))
+        check("queued 3 jobs (1 AI, 1 SID, 1 AY): J shows them" in steps["g"], "jobs view: g says what it queued and that J shows it")
+        check("takes for Alpha: 1 (best match" in steps["g"] + steps["wait"], "jobs view: a finished takes job's result on the bottom line")
+        jv = steps["jobs"]
+        plain = re.sub(r"\x1b(\[[0-9;?]*[A-Za-z]|\([AB0])", "", jv)  # the colours out
+        missing = [x for x in ("finished (5)", "done in", "SID takes", "AI takes", "AY takes", "learn the games",
+                               "reuse earlier learning", "best melody match 0.42 (C64: Alpha by Someone (1987))",
+                               "1 take written", "1 song skipped (48K beeper or CPC tunes)", "cancel/stop") if x not in plain]
+        check(not missing and re.search(r"\x1b\[3[1-6]m", jv) is not None,
+              f"jobs view: each job, its state, what and game, its result, in colour; its keys (missing: {missing})")
+        check("chip done for alpha" in steps["output"] and "summary: kind=sid" in steps["output"],
+              "jobs view: Enter shows the job's own output")
+        check("nothing to cancel" in steps["x"], "jobs view: x on a finished job says there is nothing to cancel")
+        check("Alpha" in steps["games"] or "pack-studio" in steps["games"], "jobs view: J goes back")
 
         # -- the screen while learning (a slow stand-in), with colours and with NO_COLOR
         def learn_screen(wd: Path, extra: dict) -> tuple[str, int | None, str]:

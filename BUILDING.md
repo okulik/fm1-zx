@@ -202,11 +202,19 @@ panel says so, and `r` measures again.
 
 Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `1`-`9`/`0` as above, `f`
 fills, `p` the packs, `a`/`s`/`y` mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g`
-generates what is marked, `r` learns again, `b` builds, `l` shows the log, `?` the full help, `q`
-quits. On a game: Enter plays, space or Esc stops, `c` chooses, `a`/`s`/`y`/`g` as before, Left,
-`h` or Backspace goes back. Long steps run one at a time in the background; the bottom line shows
-the step (yellow while it runs, then green when done or red when it failed), how many wait and its
-last output line. The screen is in colour (`NO_COLOR` set: bold and reverse only).
+generates what is marked, `J` lists the jobs, `r` learns again, `b` builds, `l` shows the log, `?`
+the full help, `q` quits. On a game: Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c` chooses it (at once; the chosen one is marked `*`), `a`/`s`/`y`/`g`
+as before, Left, `h` or Backspace goes back. Long steps run one at a time in the background; the
+bottom line shows the step (yellow while it runs, then green when done or red when it failed), how
+many wait and what it is doing. `J`, on every screen, lists every job of the session: the one
+running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
+MB), those waiting in the order they run, and those finished with their result, read from
+`tools/arrange-music`'s summary line (`3 takes, best melody match 0.73 (C64: …)`, `no C64 tune
+found by that name`, `0 takes, 4 songs skipped (48K beeper or CPC tunes)`); Enter shows a job's
+own output, `o` opens its game to listen, `x` takes a waiting job off the queue or, after `y`,
+stops the running one. `g` says how many jobs it queued, and the games list marks a game whose
+takes are waiting or being made with `…`. The screen is in colour (`NO_COLOR` set: bold and
+reverse only).
 
 Without the screen: `--assign ID=N` (again for more) puts a game in pack N (0: in none; a pack it
 would take over refuses it) and `--auto-fill` fills the packs as `f` does; `--generate` marks the

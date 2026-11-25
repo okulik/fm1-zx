@@ -235,6 +235,22 @@ the digest matches and takes 1 to N are done; a changed `score.toml` gets new ta
 Any other value (a negative number, `"chip-0"`, `"ay-0"`, `"take-1"`, a float) fails the pack's run with the
 file and the key named.
 
+### The summary line (printed by tools/arrange-music generate, chip and ay)
+
+Each of the three commands ends with one line of `key=value` fields, kept stable for
+`tools/pack-studio`'s jobs view and for scripts:
+
+    summary: kind=ai game=some-game scores=1 pending=1 takes=4 model=amt seconds=2172
+    summary: kind=sid game=some-game scores=1 pending=1 takes=3 candidates=4 checked=3 refused=1 best=0.73 seconds=41 source=C64: <title> by <author> (<released>), subtune 1, <file>
+
+`kind` is `ai`, `sid` or `ay`; `game` the `--game` ids, comma-separated, or `all`; `scores` the
+scores found, `pending` those worked on (the others had their takes), `takes` the takes written;
+for `sid` and `ay`, `candidates` the (file, subtune) pairs that name the game, `checked` those
+converted and compared, `refused` those the converter refused, `best` the melody match of the
+take written with the best one (`-` with none) and `source` that take's source line, last and to
+the end of the line (absent with no take). No other value holds a space. A command that stops on
+an error prints none.
+
 ### The record
 
 A chosen take becomes a kind-2 record's events: [pack-format.md, "Entry list"](pack-format.md#entry-list)

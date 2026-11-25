@@ -134,11 +134,24 @@ version, from a collection of .ay files the owner has (ay, below).
       of other scores in the file are kept. The page and the list mark a shadow score "(replaces
       the live version when chosen)"; its original is the live version.
 
+  The summary line: generate, chip and ay each end with one line of key=value fields, kept
+  stable for tools/pack-studio's jobs view and for scripts (each on one line):
+      summary: kind=ai game=<ids|all> scores=N pending=N takes=N model=NAME seconds=S
+      summary: kind=sid game=<ids|all> scores=N pending=N takes=N candidates=N checked=N refused=N best=M seconds=S source=...
+  kind is ai (generate), sid (chip) or ay (ay); game the --game ids, comma-separated, or all;
+  scores the scores found; pending those worked on (the others had their takes); takes the takes
+  written; candidates the (file, subtune) pairs that name the game; checked those converted and
+  compared; refused those the converter refused; best the melody match of the take written with
+  the best one (two decimals, or - with no take), and source that take's source line (absent with
+  no take); seconds the command's time. source comes last and runs to the end of the line; no
+  other value holds a space. A command that stops on an error prints no summary line.
+
   tools/arrange-music selftest
       Checks generate (with the rules generator), the files it writes, chip (a small collection
       of made-up SID files and a stand-in converter, both written in the temporary folder), ay
-      (made-up .ay files, through the same stand-in), pick --set and --list, and the page's save,
-      in a temporary folder; no network, no model, no Rust build.
+      (made-up .ay files, through the same stand-in), the summary lines (a C64 tune found, none
+      found by name, songs the converter refuses, scores that have their takes), pick --set and
+      --list, and the page's save, in a temporary folder; no network, no model, no Rust build.
 
 Metrics (arranged.toml [metrics], printed by generate and pick --list), for comparing generators:
 key and key_r (Krumhansl-Schmuckler estimate from the original's notes, and its correlation);
@@ -1121,7 +1134,7 @@ def generate_score(path: str, settings: Settings, force: bool) -> dict:
     digest = score.digest()
     complete, done = takes_state(score, settings, digest)
     if complete and not force:
-        return {"id": score.id, "skipped": True}
+        return {"id": score.id, "skipped": True, "takes": 0}
     if force:
         done = set()
     todo = [n for n in range(1, settings.takes + 1) if n not in done]
@@ -1131,7 +1144,7 @@ def generate_score(path: str, settings: Settings, force: bool) -> dict:
         (score.dir / "takes.toml").unlink(missing_ok=True)
     if not score.tonal():
         settings.log("no notes: skipped")
-        return {"id": score.id, "skipped": True}
+        return {"id": score.id, "skipped": True, "takes": 0}
     est = estimate_seconds(score, settings)
     settings.log(f"{score.name}: {score.seconds:.1f} s of music, {len(score.notes)} notes; {len(todo)} takes with {settings.model}"
                  + (f", roughly {fmt_dur(est)} a take" if est else ""))
@@ -1151,14 +1164,26 @@ def generate_score(path: str, settings: Settings, force: bool) -> dict:
         settings.log(f"take {n}/{settings.takes} in {fmt_dur(secs)}: {metrics_line(m)}")
         state["done"][str(n)] = {"generator": take.generator, "seconds": round(secs, 1), **({"info": json.dumps(take.info)} if take.info else {})}
         dump_toml(score.dir / "takes.toml", state)
-    return {"id": score.id, "skipped": False}
+    return {"id": score.id, "skipped": False, "takes": len(todo)}
 
 
 def _worker(path: str, settings: dict, force: bool) -> dict:
     return generate_score(path, Settings(**settings), force)
 
 
+def summary_line(kind: str, games: list[str] | None, t0: float, **fields) -> str:
+    """A command's last line, for tools/pack-studio's jobs view (the docstring, "The summary
+    line"): `summary: kind=K game=G k=v ... seconds=S [source=...]`, source last, to the line's
+    end; the other values hold no spaces."""
+    source = fields.pop("source", None)
+    parts = [f"kind={kind}", f"game={','.join(games) if games else 'all'}"]
+    parts += [f"{k}={v}" for k, v in fields.items()]
+    parts.append(f"seconds={time.time() - t0:.0f}")
+    return "summary: " + " ".join(parts) + (f" source={source}" if source else "")
+
+
 def cmd_generate(a: argparse.Namespace) -> int:
+    t0 = time.time()
     d = Path(a.dir)
     if a.model not in GENERATORS:
         die(f"unknown model {a.model} (have: {', '.join(sorted(GENERATORS))})")
@@ -1170,6 +1195,7 @@ def cmd_generate(a: argparse.Namespace) -> int:
     scores = find_scores(d, a.game)
     if not scores:
         print(f"{PROG}: no scores under {d / 'arrange'}")
+        print(summary_line("ai", a.game, t0, scores=0, pending=0, takes=0, model=a.model), flush=True)
         return 0
     settings = Settings(model=a.model, takes=a.takes, seed=a.seed, offline=a.offline, soundfont=a.soundfont)
     renderer = Renderer(a.soundfont)
@@ -1183,17 +1209,19 @@ def cmd_generate(a: argparse.Namespace) -> int:
     if pending and est[0] is not None:
         total = sum(e or 0 for e in est) * a.takes / max(a.jobs, 1)
         print(f"{PROG}: {sum(s.seconds for s in pending):.0f} s of music; roughly {fmt_dur(total)} in all", flush=True)
+    made = 0
     if a.jobs <= 1 or len(pending) <= 1:
         for s in pending:
-            generate_score(str(s.path), Settings(**asdict(settings)), a.force)
+            made += generate_score(str(s.path), Settings(**asdict(settings)), a.force)["takes"]
     else:
         ctx = mp.get_context("spawn")
         with ProcessPoolExecutor(max_workers=a.jobs, mp_context=ctx) as ex:
             futs = [ex.submit(_worker, str(s.path), asdict(settings), a.force) for s in pending]
             for f in as_completed(futs):
-                f.result()
+                made += f.result()["takes"]
     if pending:
         print(f"{PROG}: done; listen and choose with: {PROG} pick {d}")
+    print(summary_line("ai", a.game, t0, scores=len(scores), pending=len(pending), takes=made, model=a.model), flush=True)
     return 0
 
 
@@ -1729,21 +1757,32 @@ def write_own_take(kind: OwnKind, score: Score, n: int, c: ChipCandidate, notes_
     return m
 
 
+@dataclass
+class OwnResult:
+    """What own_score did for a score."""
+    takes: int = 0  # takes written
+    refused: set = field(default_factory=set)  # the (file, subtune) pairs the converter refused
+    candidates: int = 0
+    checked: int = 0  # candidates converted and compared
+    best: ChipCandidate | None = None  # the take written with the best melody match
+
+
 def own_score(kind: OwnKind, d: Path, score: Score, cands: list[ChipCandidate], coll: Path, fp: str, keep: int, force: bool,
-              renderer: Renderer) -> tuple[int, set[tuple[str, int]]]:
-    """The score's takes of this kind from its candidates: (takes written, the (file, subtune)
-    pairs the converter refused)."""
+              renderer: Renderer) -> OwnResult:
+    """The score's takes of this kind from its candidates."""
     log = lambda msg: print(f"[{score.id}] {msg}", flush=True)  # noqa: E731
+    res = OwnResult(candidates=len(cands))
     if own_dirs(score.dir, kind) and not force:
-        return 0, set()
+        return OwnResult()
     for _, p in own_dirs(score.dir, kind):
         shutil.rmtree(p)
     if score.melody_voice() is None:
         log("no notes: skipped")
-        return 0, set()
+        return res
     if not cands:
         log(f"{score.name}: no {kind.collection} file names the game")
-        return 0, set()
+        return res
+    log(f"{score.name}: {len(cands)} candidates to check")
     lead = score_lead_frames(score)
     checked = []
     refused = set()
@@ -1782,33 +1821,50 @@ def own_score(kind: OwnKind, d: Path, score: Score, cands: list[ChipCandidate], 
         n += 1
         write_own_take(kind, score, n, c, doc, coll / c.file["path"], renderer)
         log(f"{kind.prefix}-{n}: {kind.source(c)}; melody match {c.melody_match:.2f}")
+        if res.best is None or c.melody_match > res.best.melody_match:
+            res.best = c
     said = f", {len(refused)} refused by the converter" if refused else ""
     log(f"{score.name}: {len(cands)} candidates, {len(checked)} checked{said}, {n} {kind.prefix} takes")
-    return n, refused
+    res.takes, res.refused, res.checked = n, refused, len(checked)
+    return res
 
 
-def own_pending(a: argparse.Namespace, kind: OwnKind) -> tuple[Path, list[Score]] | None:
-    """The workspace and the scores to search for takes of this kind, after the common checks."""
+def own_pending(a: argparse.Namespace, kind: OwnKind) -> tuple[Path, list[Score], list[Score]]:
+    """The workspace, its scores (those of --game) and the scores to search for takes of this
+    kind, after the common checks."""
     d = Path(a.dir)
     if a.max < 1:
         die("--max must be at least 1")
     scores = find_scores(d, a.game)
     if not scores:
         print(f"{PROG}: no scores under {d / 'arrange'}")
-        return None
+        return d, [], []
     pending = [s for s in scores if a.force or not own_dirs(s.dir, kind)]
     print(f"{PROG}: {len(scores)} scores, {len(pending)} to search for {kind.prefix} takes (up to {a.max} each)", flush=True)
-    return (d, pending) if pending else None
+    return d, scores, pending
+
+
+def own_summary(kind: OwnKind, a: argparse.Namespace, t0: float, scores: list[Score], pending: list[Score],
+                results: list[OwnResult]) -> str:
+    """chip's or ay's summary line: the takes written, the candidates, those checked, the songs
+    the converter refused, and the best take's melody match and source."""
+    best = max((r.best for r in results if r.best), key=lambda c: c.melody_match, default=None)
+    refused = set().union(*(r.refused for r in results))
+    return summary_line("sid" if kind is CHIP else "ay", a.game, t0, scores=len(scores), pending=len(pending),
+                        takes=sum(r.takes for r in results), candidates=sum(r.candidates for r in results),
+                        checked=sum(r.checked for r in results), refused=len(refused),
+                        best=f"{best.melody_match:.2f}" if best else "-", source=kind.source(best) if best else None)
 
 
 def cmd_chip(a: argparse.Namespace) -> int:
+    t0 = time.time()
     sid_dir = Path(a.sid_dir).expanduser()
     if not sid_dir.is_dir():
         die(f"no folder {sid_dir} (--sid-dir: the SID collection you downloaded, such as HVSC's C64Music)")
-    got = own_pending(a, CHIP)
-    if not got:
+    d, scores, pending = own_pending(a, CHIP)
+    if not pending:
+        print(own_summary(CHIP, a, t0, scores, pending, []), flush=True)
         return 0
-    d, pending = got
     fp = find_converter(a.fmzx_pack)
     idx = chip_index(d, sid_dir, rebuild=a.force)
     renderer = Renderer(a.soundfont)
@@ -1816,8 +1872,9 @@ def cmd_chip(a: argparse.Namespace) -> int:
         print(f"{PROG}: {renderer.why_not()}")
     if not sid_renderer():
         print(f"{PROG}: no sidplayfp on PATH: no chip.wav (the C64's own sound); fm1.wav only")
-    made = sum(own_score(CHIP, d, s, chip_candidates(s, idx), sid_dir.resolve(), fp, a.max, a.force, renderer)[0] for s in pending)
-    print(f"{PROG}: {made} chip takes; listen and choose with: {PROG} pick {d}")
+    results = [own_score(CHIP, d, s, chip_candidates(s, idx), sid_dir.resolve(), fp, a.max, a.force, renderer) for s in pending]
+    print(f"{PROG}: {sum(r.takes for r in results)} chip takes; listen and choose with: {PROG} pick {d}")
+    print(own_summary(CHIP, a, t0, scores, pending, results), flush=True)
     return 0
 
 
@@ -1938,13 +1995,14 @@ def ay_candidates(score: Score, idx: dict, limit: int = CHIP_CANDIDATES) -> list
 
 
 def cmd_ay(a: argparse.Namespace) -> int:
+    t0 = time.time()
     ay_dir = Path(a.ay_dir).expanduser()
     if not ay_dir.is_dir():
         die(f"no folder {ay_dir} (--ay-dir: a collection of .ay files, such as Project AY's)")
-    got = own_pending(a, AY)
-    if not got:
+    d, scores, pending = own_pending(a, AY)
+    if not pending:
+        print(own_summary(AY, a, t0, scores, pending, []), flush=True)
         return 0
-    d, pending = got
     fp = find_converter(a.fmzx_pack)
     idx = ay_index(d, ay_dir, rebuild=a.force)
     renderer = Renderer(a.soundfont)
@@ -1952,14 +2010,12 @@ def cmd_ay(a: argparse.Namespace) -> int:
         print(f"{PROG}: {renderer.why_not()}")
     if not ay_renderer():
         print(f"{PROG}: no ffmpeg that reads .ay files (libgme): no ay.wav (the Spectrum 128's own sound); fm1.wav only")
-    made, refused = 0, set()
-    for s in pending:
-        n, r = own_score(AY, d, s, ay_candidates(s, idx), ay_dir.resolve(), fp, a.max, a.force, renderer)
-        made, refused = made + n, refused | r
-    k = len(refused)
+    results = [own_score(AY, d, s, ay_candidates(s, idx), ay_dir.resolve(), fp, a.max, a.force, renderer) for s in pending]
+    k = len(set().union(*(r.refused for r in results)))
     said = (f" ({k} candidate song{'s' if k != 1 else ''} skipped: the converter refuses them, such as 48K beeper tunes"
             " and Amstrad CPC songs)") if k else ""
-    print(f"{PROG}: {made} ay takes{said}; listen and choose with: {PROG} pick {d}")
+    print(f"{PROG}: {sum(r.takes for r in results)} ay takes{said}; listen and choose with: {PROG} pick {d}")
+    print(own_summary(AY, a, t0, scores, pending, results), flush=True)
     return 0
 
 
@@ -2293,7 +2349,7 @@ def cmd_pick(a: argparse.Namespace) -> int:
 # selftest
 
 
-def selftest_score(path: Path, game: str, key: str, shadow: bool = False) -> None:
+def selftest_score(path: Path, game: str, key: str, shadow: bool = False, name: str = "Test tune") -> None:
     """A small invented tune: an intro and a loop, a melody, a bass voice and a pad voice; a shadow
     score's when `shadow`."""
     clock = 3500000
@@ -2310,7 +2366,7 @@ def selftest_score(path: Path, game: str, key: str, shadow: bool = False) -> Non
             notes.append({"voice": 1, "start_t": i * beat, "end_t": min(i * beat + 8 * beat, intro_t + loop_t), "period_t": period_of_midi(clock, 55), "level": 60})
     notes.sort(key=lambda n: (n["start_t"], n["voice"]))
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = {"game": game, "name": "Test tune", "key": key, "clock_hz": clock, "intro_t": intro_t, "loop_t": loop_t,
+    doc = {"game": game, "name": name, "key": key, "clock_hz": clock, "intro_t": intro_t, "loop_t": loop_t,
            "voices": 3, "roles": ["bass", "pad", "lead"]}
     if shadow:
         doc["shadow"] = True
@@ -2434,7 +2490,21 @@ def selftest_collection(root: Path) -> Path:
     return c
 
 
+def selftest_summary(out: str) -> dict:
+    """The summary line's fields in a command's output ({} without one)."""
+    lines = [ln for ln in out.splitlines() if ln.startswith("summary: ")]
+    if len(lines) != 1:
+        return {}
+    body, _, source = lines[0][len("summary: "):].partition(" source=")
+    doc = dict(kv.split("=", 1) for kv in body.split())
+    if source:
+        doc["source"] = source
+    return doc
+
+
 def cmd_selftest(a: argparse.Namespace) -> int:
+    import contextlib
+    import io
     import mido
     import urllib.request
 
@@ -2445,6 +2515,13 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         if not cond:
             fails.append(what)
 
+    def summed(*args: str) -> tuple[int, dict, str]:
+        """Runs a command; its exit code, its summary line's fields, its output."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([*args])
+        return rc, selftest_summary(buf.getvalue()), buf.getvalue()
+
     with tempfile.TemporaryDirectory(prefix="arrange-selftest-") as tmp:
         d = Path(tmp)
         keys = ["1234-0badc0de", "5678-12345678", "9ABC-0f0f0f0f"]
@@ -2454,7 +2531,11 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(not load_score(d / "arrange" / "test-game" / keys[0] / "score.toml").shadow, "one without, as a score")
         dump_toml(choices_path(d), {"choices": {"other-game/0000-00000000": 3}})
         run = lambda *args: main([*args])  # noqa: E731
-        check(run("generate", str(d), "--model", "rules", "--takes", "2", "--jobs", "2") == 0, "generate --model rules --takes 2 --jobs 2")
+        rc, sm, _ = summed("generate", str(d), "--model", "rules", "--takes", "2", "--jobs", "2")
+        check(rc == 0, "generate --model rules --takes 2 --jobs 2")
+        check(sm.get("seconds", "").isdigit() and {k: v for k, v in sm.items() if k != "seconds"}
+              == {"kind": "ai", "game": "all", "scores": "3", "pending": "3", "takes": "6", "model": "rules"},
+              f"generate: its summary line, 6 takes for 3 scores ({sm})")
         renderer = Renderer(None)
         for k in keys:
             sdir = d / "arrange" / "test-game" / k
@@ -2495,7 +2576,10 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         if not renderer.ok:
             print(f"skip  renders: {renderer.why_not()}")
         first = (d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes()
-        check(run("generate", str(d), "--model", "rules", "--takes", "2", "--seed", "9") == 0, "generate again, another seed")
+        rc, sm, _ = summed("generate", str(d), "--model", "rules", "--takes", "2", "--seed", "9")
+        check(rc == 0, "generate again, another seed")
+        check(sm.get("pending") == "0" and sm.get("takes") == "0" and sm.get("scores") == "3",
+              f"generate again: the summary says the scores had their takes ({sm})")
         check((d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes() == first, "scores with takes are left alone")
         check(run("generate", str(d), "--model", "rules", "--takes", "2", "--force", "--game", "test-game") == 0, "generate --force")
         again = (d / "arrange" / "test-game" / keys[0] / "take-1" / "arranged.toml").read_bytes()
@@ -2519,7 +2603,15 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(set(stil) == {"/GAMES/A-F/Another_Game.sid", "/MUSICIANS/E/Example_Bob/Cover.sid"}, "chip: STIL entries (folder entries skipped)")
         check(cover.get("2", [[]])[0] == ["TITLE", "Test Tune (title)"] and cover["2"][2] == ["COMMENT", "Covers the title music of the Spectrum game."],
               "chip: STIL subtune fields, continued lines joined")
-        check(run("chip", str(d), "--sid-dir", str(coll), "--max", "2", "--fmzx-pack", str(conv)) == 0, "chip --max 2")
+        rc, sm, _ = summed("chip", str(d), "--sid-dir", str(coll), "--max", "2", "--fmzx-pack", str(conv))
+        check(rc == 0, "chip --max 2")
+        sdirs = [d / "arrange" / "test-game" / k for k in keys]
+        made = [read_toml(p / "arranged.toml") for sd in sdirs for _, p in chip_dirs(sd)]
+        top = max(made, key=lambda x: x["metrics"]["melody_match"]) if made else {}
+        check(sm.get("kind") == "sid" and sm.get("game") == "all" and sm.get("scores") == "3" and sm.get("pending") == "3"
+              and sm.get("takes") == str(len(made)) and sm.get("best") == f"{top['metrics']['melody_match']:.2f}"
+              and sm.get("source") == top.get("source") and int(sm.get("candidates", 0)) >= int(sm.get("checked", 0)) > 0,
+              f"chip: its summary line, the takes written and the best one's match and source ({sm})")
         idx = json.loads((d / "arrange" / ".chip-index.json").read_text())
         check(idx["key"]["path"] == str(coll.resolve()) and len(idx["files"]) == 4, "chip: the collection indexed, with its key")
         check(any(f["path"] == "MUSICIANS/E/Example_Bob/Cover.sid" and "2" in f.get("stil", {}) for f in idx["files"]), "chip: the index has STIL entries by file")
@@ -2565,8 +2657,10 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             check((sdir / "chip-1" / "fm1.wav").stat().st_size > 1000, "chip-1: fm1.wav")
         check((sdir / "chip-1" / "chip.wav").is_file() == bool(sid_renderer()), "chip-1: chip.wav only with a SID renderer")
         chip1 = (sdir / "chip-1" / "arranged.toml").read_bytes()
-        check(run("chip", str(d), "--sid-dir", str(coll), "--fmzx-pack", str(conv)) == 0
-              and len((conv.parent / "calls.log").read_text().splitlines()) == len(calls), "chip again: scores with chip takes are left alone")
+        rc, sm, _ = summed("chip", str(d), "--sid-dir", str(coll), "--fmzx-pack", str(conv))
+        check(rc == 0 and len((conv.parent / "calls.log").read_text().splitlines()) == len(calls), "chip again: scores with chip takes are left alone")
+        check(sm.get("pending") == "0" and sm.get("takes") == "0" and sm.get("best") == "-" and "source" not in sm,
+              f"chip again: the summary says so ({sm})")
         check(run("generate", str(d), "--model", "rules", "--takes", "2", "--force", "--game", "test-game") == 0
               and (sdir / "chip-1" / "arranged.toml").read_bytes() == chip1 and [n for n, _ in chip_dirs(sdir)] == [1, 2],
               "generate --force leaves chip takes alone")
@@ -2584,9 +2678,6 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             check(False, "pick --set of a missing take fails")
         except SystemExit as e:
             check(e.code != 0, "pick --set of a missing take fails")
-        import contextlib
-        import io
-
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             main(["pick", str(d), "--list"])
@@ -2661,6 +2752,9 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             ok = run("ay", str(d), "--ay-dir", str(acoll), "--max", "2", "--game", "test-game", "--fmzx-pack", str(conv)) == 0
         said = buf.getvalue()
         check(ok, "ay --max 2")
+        sm = selftest_summary(said)
+        check(sm.get("kind") == "ay" and sm.get("game") == "test-game" and sm.get("takes") == "6" and int(sm.get("refused", 0)) >= 1
+              and sm.get("source", "").startswith("Spectrum 128: "), f"ay: its summary line, the songs the converter refused counted ({sm})")
         aidx = json.loads((d / "arrange" / ".ay-index.json").read_text())
         check(aidx["key"]["path"] == str(acoll.resolve()) and sorted(f["path"] for f in aidx["files"])
               == ["games/Compilation.ay", "games/Test_Tune.ay", "games/Unrelated.ay", "misc/Test_Tune.ay"],
@@ -2722,6 +2816,16 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         finally:
             srv.shutdown()
             srv.server_close()
+        # the summary when no file names the game
+        d2 = d / "nomatch"
+        selftest_score(d2 / "arrange" / "nothing-alike" / keys[0] / "score.toml", "nothing-alike", keys[0], name="Nothing Alike")
+        rc, sm, _ = summed("chip", str(d2), "--sid-dir", str(coll), "--game", "nothing-alike", "--fmzx-pack", str(conv))
+        rc2, sm2, _ = summed("ay", str(d2), "--ay-dir", str(acoll), "--game", "nothing-alike", "--fmzx-pack", str(conv))
+        check(rc == 0 and rc2 == 0 and sm.get("game") == "nothing-alike" and sm.get("pending") == "1" and sm.get("candidates") == "0"
+              and sm.get("takes") == "0" and sm.get("best") == "-" and sm2.get("kind") == "ay" and sm2.get("candidates") == "0",
+              f"chip and ay: the summary when no file names the game ({sm}; {sm2})")
+        rc, sm, _ = summed("generate", str(d2), "--model", "rules", "--game", "nobody")
+        check(rc == 0 and sm.get("scores") == "0" and sm.get("game") == "nobody", f"generate: the summary with no scores ({sm})")
     print(f"selftest: {'FAILED, ' + str(len(fails)) + ' checks' if fails else 'all checks passed'}")
     return 1 if fails else 0
 
