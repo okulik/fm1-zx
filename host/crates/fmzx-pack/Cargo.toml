@@ -28,6 +28,8 @@ fm1-soc = { git = "https://github.com/joakimeriksson/fm1-emu", rev = "93cb7ee3f7
 zx-tests = { path = "../zx-tests" }
 # music re-exports our tzx module; its test checks that path
 music = { path = "../music" }
+# to read plan.json back
+serde_json = "1"
 
 [lints]
 workspace = true

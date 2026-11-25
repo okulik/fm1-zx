@@ -41,10 +41,10 @@
 //! which [`build_pack`] makes `<out>/games.bin`; `<out>/keymaps.json` is the browser page's key
 //! table. A pack bigger than the room the app slot leaves it (the limit) is refused, listing
 //! every game by packed size, largest first. Each run first removes the outputs of the last one
-//! (`games.bin`, `keymaps.json`, the two packages, `sound-report.txt` and `converted/`), so a
-//! failed run leaves no pack or packages that look valid; an output folder that holds any of them
-//! without being a personal pack's (no `personal-games.toml`, no `converted/manifest.toml` of
-//! ours) is refused.
+//! (`games.bin`, `keymaps.json`, the two packages, `sound-report.txt`, `plan.json` and
+//! `converted/`), so a failed run leaves no pack or packages that look valid; an output folder
+//! that holds any of them without being a personal pack's (no `personal-games.toml`, no
+//! `converted/manifest.toml` of ours) is refused.
 //!
 //! # The music
 //!
@@ -77,7 +77,7 @@
 //!
 //! After the learning (from the cache or not), each game's recorded scores and shadow scores are
 //! written to `<out>/arrange/<game-id>/<key>/score.toml`, and the takes `<out>/arrange/choices.toml`
-//! chooses (AI takes, and C64 takes as replacement records on their own timeline) go into the pack
+//! chooses (AI takes, and C64 and Spectrum 128 takes as replacement records on their own timeline) go into the pack
 //! in place of the scores' notes, or (a shadow score's) after the scores with precedence
 //! ([`crate::arrange`]), every run: the cache holds the learned list and the
 //! shadow scores, so a changed choice never needs the game learned again. A take is verified by a
@@ -87,13 +87,27 @@
 //! `(score 8951-1a2b3c4d)`; [`Status::text`]), and the game's line `, 1 arranged` when a take
 //! plays; [`table`] ends with a line per take chosen (that plays, or refused and why) and per
 //! choice that names no score of the pack (ignored).
+//!
+//! # The plan
+//!
+//! [`run_plan`] (`fmzx-pack personal --plan`) is a run up to the pack: the games converted, their
+//! music learned and arranged, the pack built to measure it, but a pack over the room is no error,
+//! and no `games.bin` or `keymaps.json` is written (those of an earlier run are removed as by any
+//! run). It writes `sound-report.txt`, the scores and `<out>/plan.json`: the room and the pack's
+//! size in bytes, and each game (the packed ones in pack order, then those left out) with its id,
+//! name, file, how it went in, its bytes in the pack with its music (`null` when left out), why it
+//! was left out (else `null`), its music line (`null` when left out) and its scores and shadow
+//! scores: key, whether a shadow score, length in seconds (intro and one loop pass), and what
+//! plays (`original`, `take 2 (<generator>)`, `chip-1 (<source>)`, `ay-1 (<source>)` or
+//! `refused: <why>`). A run of
+//! either kind removes the plan of an earlier one.
 
-use crate::arrange::{self, Of, Status, ARRANGE, CHOICES};
+use crate::arrange::{self, Choice, Of, Status, ARRANGE, CHOICES, CLOCK_HZ};
 use crate::keymaps::keymaps_json;
 use crate::keys::{inputs, parse_keys, Step};
 use crate::layout::pack_room;
 use crate::manifest::{game_path, parse_manifest, parse_personal_manifest, Game, NAME_MAX};
-use crate::pack::{attach_sound, build_pack};
+use crate::pack::{attach_sound, build_pack, sound_list};
 use crate::tapeload::{self, Kind, Loaded};
 use soundlearn::listen::{candidates, choose_run, run_inputs, Inputs, RunKind, KEYS};
 use soundlearn::report::SHADOW_TAIL;
@@ -107,10 +121,12 @@ use zx_sys::{pack_game_at, Machine, SndEngines, PACK_MAX_RAW};
 /// The editable games file, in the output folder.
 pub const GAMES_FILE: &str = "personal-games.toml";
 /// The outputs of a run, removed when the next one starts; `converted/` too (not `sound-cache/`).
-const OUTPUTS: [&str; 5] = ["games.bin", "keymaps.json", "fmzx.fwsc", "fmzx-preview.fwsc", SOUND_REPORT];
+const OUTPUTS: [&str; 6] = ["games.bin", "keymaps.json", "fmzx.fwsc", "fmzx-preview.fwsc", SOUND_REPORT, PLAN];
 const CONVERTED: &str = "converted";
 /// The learned music's details, in the output folder.
 pub const SOUND_REPORT: &str = "sound-report.txt";
+/// The plan ([`run_plan`]), in the output folder.
+pub const PLAN: &str = "plan.json";
 /// The learned music's cache, in the output folder.
 const SOUND_CACHE: &str = "sound-cache";
 const MISSING: &str = "# missing:";
@@ -141,13 +157,15 @@ pub struct Row {
 }
 
 /// A run's outcome: the games in games file order, then the folder's files that did not load;
-/// the pack's size and the room left beside it, in bytes; the learned music's line for each
-/// packed game, in pack order (`<name>: music learned (...)`); a line per take chosen and per
-/// choice that names no score (see the module docs).
+/// the pack's size, the room for it and the room left beside it (0 when it does not fit, which
+/// only a plan allows), in bytes; the learned music's line for each packed game, in pack order
+/// (`<name>: music learned (...)`); a line per take chosen and per choice that names no score
+/// (see the module docs).
 #[derive(Clone, Debug)]
 pub struct Report {
     pub rows: Vec<Row>,
     pub used: u32,
+    pub room: u32,
     pub free: u32,
     pub sound: Vec<String>,
     pub arranged: Vec<String>,
@@ -163,6 +181,16 @@ pub fn run(input: &Path, out: &Path) -> Result<Report, String> {
 /// leave ([`pack_room`]); `None` is the room beside an empty image.
 #[doc(hidden)]
 pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Report, String> {
+    build(input, out, limit, false)
+}
+
+/// The plan: [`run_with_limit`] up to the pack, which may be over the limit, writing
+/// `<out>/plan.json` and no pack (see the module docs).
+pub fn run_plan(input: &Path, out: &Path, limit: Option<u32>) -> Result<Report, String> {
+    build(input, out, limit, true)
+}
+
+fn build(input: &Path, out: &Path, limit: Option<u32>, plan: bool) -> Result<Report, String> {
     let limit = limit.unwrap_or_else(|| pack_room(0));
     let shown = |p: &Path| p.display().to_string();
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", shown(out)))?;
@@ -283,15 +311,18 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
     if let Some((j, e)) = jobs.iter().zip(&sounds).find_map(|(j, s)| s.override_error.as_ref().map(|e| (j, e))) {
         return Err(format!("game {:?}: {e}", j.name));
     }
-    let (arranged, notes) = arrange_all(&out.join(ARRANGE), &jobs, &mut sounds)?;
+    let (arranged, notes, plan_scores) = arrange_all(&out.join(ARRANGE), &jobs, &mut sounds)?;
     let mut pack = build_pack(&manifest_path)?;
     attach_sound(&mut pack, &sounds.iter().map(|s| s.list.clone()).collect::<Vec<_>>())?;
+    let mut with_music = Vec::new(); // per packed game: its bytes and its list's
     for (i, (_, _, r)) in packed.iter().enumerate() {
         let g = pack_game_at(&pack, i as u32).map_err(|e| format!("the pack just built does not read back (error {e})"))?;
         rows[*r].packed = Some(g.stored_len());
+        let music = sound_list(&pack, i as u32).map_or(0, <[u8]>::len);
+        with_music.push(g.stored_len().saturating_add(u32::try_from(music).unwrap_or(u32::MAX)));
     }
     let used = u32::try_from(pack.len()).unwrap_or(u32::MAX);
-    if used > limit {
+    if used > limit && !plan {
         return Err(too_big(&rows, used, limit, &games_file, input.is_dir()));
     }
     let manifest = parse_manifest(&text).map_err(|e| format!("{}: {e}", shown(&manifest_path)))?;
@@ -304,11 +335,104 @@ pub fn run_with_limit(input: &Path, out: &Path, limit: Option<u32>) -> Result<Re
     for ((j, s), l) in jobs.iter().zip(&sounds).zip(&sound) {
         details += &format!("\n{l}\n{}{}", keys_note(j, s), s.details);
     }
-    for (name, bytes) in [("keymaps.json", keymaps.as_bytes()), (SOUND_REPORT, details.as_bytes()), ("games.bin", &pack[..])] {
+    let plan_text = plan.then(|| {
+        // the rows' ids: each games file entry's (its row has its index), then one for each file
+        // that has no entry, from its name
+        let mut taken: HashSet<String> = games.iter().map(|g| g.id.clone()).collect();
+        let ids: Vec<String> = (0..rows.len())
+            .map(|i| match games.get(i) {
+                Some(g) => g.id.clone(),
+                None => {
+                    let id = unique_id(&rows[i].name, &taken);
+                    taken.insert(id.clone());
+                    id
+                }
+            })
+            .collect();
+        let packed_games = packed.iter().enumerate().map(|(k, (_, _, r))| (*r, Some((with_music[k], sounds[k].line.as_str(), &plan_scores[k][..]))));
+        let left = rows.iter().enumerate().filter(|(_, w)| w.packed.is_none()).map(|(r, _)| (r, None));
+        let objects: Vec<String> = packed_games.chain(left).map(|(r, got)| plan_game(&ids[r], &rows[r], got)).collect();
+        format!("{{\n  \"room\": {limit},\n  \"used\": {used},\n  \"games\": [{}\n  ]\n}}\n", objects.join(","))
+    });
+    let mut writes: Vec<(&str, &[u8])> = vec![(SOUND_REPORT, details.as_bytes())];
+    match &plan_text {
+        Some(t) => writes.push((PLAN, t.as_bytes())),
+        None => writes.extend([("keymaps.json", keymaps.as_bytes()), ("games.bin", &pack[..])]),
+    }
+    for (name, bytes) in writes {
         let p = out.join(name);
         std::fs::write(&p, bytes).map_err(|e| format!("{}: {e}", shown(&p)))?;
     }
-    Ok(Report { rows, used, free: limit - used, sound, arranged: arranged.into_iter().chain(notes).collect() })
+    let free = limit.saturating_sub(used);
+    Ok(Report { rows, used, room: limit, free, sound, arranged: arranged.into_iter().chain(notes).collect() })
+}
+
+/// A score in the plan: its key, whether a shadow score, its length in seconds and what plays.
+#[derive(Clone, Debug)]
+struct PlanScore {
+    key: String,
+    shadow: bool,
+    seconds: f64,
+    status: String,
+}
+
+/// What plays for a score, as the plan says it (see the module docs).
+fn plan_status(st: Option<&Status>) -> String {
+    match st {
+        Some(Status::Take { take: Choice::Take(n), generator, .. }) => format!("take {n} ({generator})"),
+        Some(Status::Take { take, generator, .. }) => format!("{} ({generator})", take.dir()),
+        Some(Status::Refused { why, .. }) => format!("refused: {why}"),
+        Some(Status::Original) | None => "original".into(),
+    }
+}
+
+/// A game's object in `plan.json`: `got` its bytes with its music, its music line and its
+/// scores, when packed.
+fn plan_game(id: &str, w: &Row, got: Option<(u32, &str, &[PlanScore])>) -> String {
+    let opt = |s: Option<&str>| s.map_or("null".to_string(), json_string);
+    let scores: Vec<String> = got
+        .map_or(&[][..], |g| g.2)
+        .iter()
+        .map(|p| {
+            format!(
+                "\n        {{\"key\": {}, \"shadow\": {}, \"seconds\": {:.1}, \"status\": {}}}",
+                json_string(&p.key),
+                p.shadow,
+                p.seconds,
+                json_string(&p.status)
+            )
+        })
+        .collect();
+    let scores = if scores.is_empty() { "[]".to_string() } else { format!("[{}\n      ]", scores.join(",")) };
+    format!(
+        "\n    {{\n      \"id\": {},\n      \"name\": {},\n      \"file\": {},\n      \"how\": {},\n      \"packed\": {},\n      \
+         \"reason\": {},\n      \"music\": {},\n      \"scores\": {scores}\n    }}",
+        json_string(id),
+        json_string(&w.name),
+        json_string(&w.file),
+        json_string(&w.how),
+        got.map_or("null".to_string(), |g| g.0.to_string()),
+        opt(w.reason.as_deref()),
+        opt(got.map(|g| g.1)),
+    )
+}
+
+/// A JSON string.
+fn json_string(s: &str) -> String {
+    let mut o = String::from('"');
+    for c in s.chars() {
+        match c {
+            '"' => o += "\\\"",
+            '\\' => o += "\\\\",
+            '\n' => o += "\\n",
+            '\r' => o += "\\r",
+            '\t' => o += "\\t",
+            c if u32::from(c) < 0x20 => o += &format!("\\u{:04x}", u32::from(c)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
 }
 
 const REPORT_HEAD: &str = "\
@@ -368,7 +492,7 @@ fn keys_note(j: &Job, s: &Sound) -> String {
 }
 
 /// The machine of a converted file, started as the device starts it.
-fn machine(file: &str, data: &[u8]) -> Result<Machine, String> {
+pub fn machine(file: &str, data: &[u8]) -> Result<Machine, String> {
     let mut m = Machine::new();
     match Path::new(file).extension().and_then(|e| e.to_str()) {
         Some("sna") => m.load_sna(data).map_err(|e| format!("not a loadable .sna (error {e})"))?,
@@ -446,17 +570,7 @@ pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<
         Some(Err(e)) => (None, Some(e)),
         None => (None, None),
     };
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(data);
-    if let Some(t) = &script {
-        crc.update(t.as_bytes());
-    }
-    for (out, roles) in instruments {
-        crc.update(&out.to_le_bytes());
-        crc.update(&[roles.len() as u8]);
-        crc.update(roles);
-    }
-    let path = cache.join(format!("{:08x}-{LEARNER_VERSION}.bin", crc.finalize()));
+    let path = cache_path(data, script.as_deref(), instruments, cache);
     if let Some((list, runs, line, details, shadows)) = std::fs::read(&path).ok().as_deref().and_then(cache_decode) {
         return Sound { list, shadows, runs, line, details, keys_error, override_error: None };
     }
@@ -470,6 +584,23 @@ pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<
         let _ = std::fs::remove_file(&tmp);
     }
     Sound { keys_error, ..got }
+}
+
+/// The cache file [`learn_music`] reads and writes for a game: `data` its converted file's bytes,
+/// `script` its key script's text (if it has one), `instruments` its overrides, `cache` the cache
+/// folder (see the module docs).
+pub fn cache_path(data: &[u8], script: Option<&str>, instruments: &BTreeMap<u16, Vec<u8>>, cache: &Path) -> PathBuf {
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(data);
+    if let Some(t) = script {
+        crc.update(t.as_bytes());
+    }
+    for (out, roles) in instruments {
+        crc.update(&out.to_le_bytes());
+        crc.update(&[roles.len() as u8]);
+        crc.update(roles);
+    }
+    cache.join(format!("{:08x}-{LEARNER_VERSION}.bin", crc.finalize()))
 }
 
 /// Learns a game's music under its key script's steps, or the run [`choose_run`] chooses, with
@@ -508,15 +639,20 @@ fn learn_converted(file: &str, data: &[u8], steps: Option<Vec<Step>>, instrument
     Sound { list, shadows, runs, line: got.line, details: run_line + &got.details, keys_error: None, override_error: got.override_error }
 }
 
+/// [`arrange_all`]'s lines for the takes chosen, its notes, and each game's scores for the plan.
+type ArrangedAll = (Vec<String>, Vec<String>, Vec<Vec<PlanScore>>);
+
 /// Writes every game's scores out and puts the chosen takes into the lists, the games' lines and
 /// details (see the module docs); `dir` the arranged music's folder. Returns the lines for the
-/// takes chosen, and the notes on choices that name no score. Err: a choices file that does not
-/// read, or a score file that cannot be written.
-fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<(Vec<String>, Vec<String>), String> {
+/// takes chosen, the notes on choices that name no score, and each game's scores and shadow
+/// scores as the plan gives them. Err: a choices file that does not read, or a score file that
+/// cannot be written.
+fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<ArrangedAll, String> {
     let choices = arrange::read_choices(dir)?;
     let mut known: HashSet<String> = HashSet::new();
     let mut lines = Vec::new();
-    for (j, s) in jobs.iter().zip(sounds.iter_mut()) {
+    let mut plan: Vec<Vec<PlanScore>> = vec![Vec::new(); jobs.len()];
+    for ((j, s), planned) in jobs.iter().zip(sounds.iter_mut()).zip(plan.iter_mut()) {
         // a game with shadow scores alone: an empty list, kept only if a take goes in
         let Some(list) = s.list.clone().or_else(|| (!s.shadows.is_empty()).then(|| encode_list_scores(&[], &[], &[]))) else { continue };
         // the list went through method B's decoder: its scores read back
@@ -531,6 +667,8 @@ fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<(Vec<St
         let got = arrange::apply(dir, &j.id, &list, &scores, &s.shadows, &choices, &|l, i, of| verify_take(j, runs.as_ref(), l, i, of));
         let all = scores.iter().zip(&got.status).map(|(r, st)| (r, st, false)).chain(s.shadows.iter().zip(&got.shadow_status).map(|(r, st)| (r, st, true)));
         for (rec, st, shadow) in all {
+            let seconds = (f64::from(rec.intro_t) + f64::from(rec.loop_t)) / f64::from(CLOCK_HZ);
+            planned.push(PlanScore { key: score_key(rec), shadow, seconds, status: plan_status(st.as_ref()) });
             let (what, live) = if shadow { ("shadow score", "the live version") } else { ("score", "the original") };
             match st {
                 Some(Status::Take { take, generator, .. }) => {
@@ -558,7 +696,7 @@ fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<(Vec<St
         .filter(|k| !known.contains(*k))
         .map(|k| format!("{}: {k:?} names no score of the pack; ignored", dir.join(CHOICES).display()))
         .collect();
-    Ok((lines, notes))
+    Ok((lines, notes, plan))
 }
 
 /// A game's details with each score's status under its `recorded score` line (the line that
@@ -598,8 +736,14 @@ fn with_status(details: &str, scores: &[ScoreRecord], status: &[Option<Status>],
 /// Verifies by replay score `index` of `list`, a game's list with a take in it, in the run that
 /// recorded the score `of` (`runs`, kept with the learned list). Err: why not.
 fn verify_take(j: &Job, runs: Option<&ScoreRuns>, list: &[u8], index: usize, of: Of) -> Result<(), String> {
+    verify_in_run(&j.file, &j.data, runs, list, index, of)
+}
+
+/// [`verify_take`] for the converted file `file` (`data` its bytes): the check the pack applies
+/// to a take. Err: why it does not play.
+pub fn verify_in_run(file: &str, data: &[u8], runs: Option<&ScoreRuns>, list: &[u8], index: usize, of: Of) -> Result<(), String> {
     let inputs = runs.and_then(|r| r.inputs(of)).ok_or("the run that recorded it is not known")?;
-    let load = || machine(&j.file, &j.data).unwrap_or_else(|_| Machine::new());
+    let load = || machine(file, data).unwrap_or_else(|_| Machine::new());
     soundlearn::scores::verify(&load, &inputs, list, index, true)
 }
 
@@ -609,6 +753,19 @@ fn verify_take(j: &Job, runs: Option<&ScoreRuns>, list: &[u8], index: usize, of:
 pub enum LearnerRun {
     Script(Vec<Step>),
     Kind(RunKind, u64),
+}
+
+impl LearnerRun {
+    /// The run's inputs.
+    pub fn inputs(&self) -> Inputs {
+        match self {
+            LearnerRun::Kind(kind, seed) => run_inputs(*kind, *seed),
+            LearnerRun::Script(steps) => {
+                let steps = steps.clone();
+                Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS))
+            }
+        }
+    }
 }
 
 /// The runs a game's scores were recorded from: the learner's run, and per score (in the list's
@@ -627,13 +784,9 @@ impl ScoreRuns {
             Of::Score(k) => self.scores.get(k)?,
             Of::Shadow(k) => self.shadows.get(k)?,
         };
-        Some(match (run, &self.learner) {
-            (Some(kind), _) => run_inputs(*kind, 0),
-            (None, LearnerRun::Kind(kind, seed)) => run_inputs(*kind, *seed),
-            (None, LearnerRun::Script(steps)) => {
-                let steps = steps.clone();
-                Box::new(move |f| inputs(&steps, u64::from(f) * FRAME_MS))
-            }
+        Some(match run {
+            Some(kind) => run_inputs(*kind, 0),
+            None => self.learner.inputs(),
         })
     }
 
@@ -812,7 +965,11 @@ pub fn table(r: &Report) -> String {
     for w in r.rows.iter().filter(|w| w.packed.is_some()) {
         s += &game_line(w, how);
     }
-    s += &format!("used {} of {} KB, {} KB free\n", kb(r.used), kb(r.used + r.free), kb(r.free));
+    s += &if r.used > r.room {
+        format!("used {} of {} KB, {} KB over\n", kb(r.used), kb(r.room), kb(r.used - r.room))
+    } else {
+        format!("used {} of {} KB, {} KB free\n", kb(r.used), kb(r.room), kb(r.free))
+    };
     if r.rows.iter().any(|w| w.packed.is_none()) {
         s += &format!("left out:\n{}", left_out_list(&r.rows));
     }
@@ -1250,5 +1407,15 @@ mod tests {
         assert_eq!(commented_id("id = \"live\""), None);
         assert_eq!(commented_id("# ids are made from names"), None);
         assert_eq!(commented_id("# identity"), None);
+    }
+
+    #[test]
+    fn json_strings() {
+        assert_eq!(json_string("a\"b\\c\nd\te\u{1}f é"), "\"a\\\"b\\\\c\\nd\\te\\u0001f é\"");
+        assert_eq!(plan_status(None), "original");
+        assert_eq!(plan_status(Some(&Status::Original)), "original");
+        assert_eq!(plan_status(Some(&Status::Take { take: Choice::Chip(1), generator: "C64: x".into(), dropped: (1, 0) })), "chip-1 (C64: x)");
+        assert_eq!(plan_status(Some(&Status::Take { take: Choice::Ay(2), generator: "Spectrum 128: x".into(), dropped: (0, 0) })), "ay-2 (Spectrum 128: x)");
+        assert_eq!(plan_status(Some(&Status::Refused { take: Choice::Take(2), why: "no".into() })), "refused: no");
     }
 }

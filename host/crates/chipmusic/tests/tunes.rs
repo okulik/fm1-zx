@@ -272,7 +272,7 @@ fn three_voices_gates_legato_and_retriggers() {
     f[25].extend([(4, 0x40), (18, 0x10)]);
     let n = play(&psid(&[Song { frames: f, loop_to: None }]), 1, 2.0);
     // lead: SID voice 1 (highest), bass: SID voice 2 (lowest), pad: SID voice 3
-    assert_eq!(n.notes.sid_voice, [Some(0), Some(1), Some(2)]);
+    assert_eq!(n.notes.chip_voice, [Some(0), Some(1), Some(2)]);
     let t = |k: u64| t_of(k * FRAME);
     let lead = voice(&n, 0);
     assert_eq!(

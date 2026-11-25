@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use zx_sys::{zx_edge, Beeper, Machine, SndDecoder, SndFrame, SND_DELAY_FRAMES};
 
 pub mod corpus;
+pub mod preview;
 pub mod score;
 pub mod synthetic;
 pub mod truth;

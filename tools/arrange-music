@@ -21,7 +21,8 @@ takes to choose from by ear; the next tools/make-personal-pack run packs the cho
 score.toml with `shadow = true` is a shadow score: music a learned or built-in routine already
 plays live. Its takes are made like any score's; it is packed only when a take is chosen for it,
 and the take then replaces the live version. A score can also take its game's tune from the
-game's C64 version, from a SID collection the owner has (chip, below).
+game's C64 version, from a SID collection the owner has (chip, below), or from its Spectrum 128
+version, from a collection of .ay files the owner has (ay, below).
 
   tools/arrange-music generate DIR [--takes N] [--game ID]... [--force] [--jobs J]
                                    [--model NAME] [--soundfont PATH] [--seed S] [--offline]
@@ -95,23 +96,47 @@ game's C64 version, from a SID collection the owner has (chip, below).
       (cd host && cargo build --release -p fmzx-pack). generate never touches chip-<n>/, and
       generate --force leaves them alone.
 
+  tools/arrange-music ay DIR --ay-dir PATH [--game ID]... [--max N] [--force]
+                             [--fmzx-pack PATH] [--soundfont PATH]
+      chip's counterpart for the game's Spectrum 128 tune: for each score without ay takes, looks
+      in the collection of ZXAYEMUL .ay files at PATH (Project AY's music/ay, with games/ and
+      misc/, or any folder of .ay files; nothing is downloaded) and writes up to N takes (default
+      3) to DIR/arrange/<game>/<key>/ay-<n>/, best first.
+      The collection is indexed once to DIR/arrange/.ay-index.json (again when the folder's
+      modification time changes, or with --force): each .ay's path and its header's author and
+      misc strings, songs, first song and the songs' names.
+      Candidates: files whose file name or misc string is the game's name, or one of whose songs'
+      names is (compared as chip compares them; title match 1.0, or 0.6 when one name runs on
+      from the other); at a tie, a file under games/ first, then one under misc/. At most 12 (file,
+      song) pairs a score are checked, a song of each file in turn (one named for the game first,
+      then the first song, then the rest). Songs the converter refuses (48K beeper tunes,
+      Amstrad CPC and SAM songs, files that need a special player) are skipped without a line
+      each and counted. The melody check, the rank (without STIL) and the takes are chip's, with
+      take = "ay-<n>", generator = "chip ay", source ("Spectrum 128: <title> by <author>, song N,
+      <file>": the song's name, else the file's misc string), ay_file and subtune (the song,
+      1-based). ay.wav, the Spectrum 128's own sound, is written when ffmpeg reads .ay files
+      (its libgme demuxer), else skipped with a note. chip and generate leave ay-<n>/ alone, and
+      ay leaves chip-<n>/ and take-<n>/ alone.
+
   tools/arrange-music pick DIR [--port P] [--set GAME/KEY=N]... [--list]
       Serves a page on http://127.0.0.1:P/ (default 8765, or a free port) to listen to each
-      score's original, its takes and its chip takes and choose one, saved to
+      score's original, its takes and its chip and ay takes and choose one, saved to
       DIR/arrange/choices.toml:
           [choices]
           "<game>/<key>" = <take>     # 0 or absent: the original
           "<game>/<key>" = "chip-1"   # a chip take, by its folder
-      --set writes choices without the page (N, or chip-N); --list prints every score, its takes,
-      their metrics, its chip takes with their source and melody match, and the choice. Choices
+          "<game>/<key>" = "ay-1"     # an ay take, by its folder
+      --set writes choices without the page (N, chip-N or ay-N); --list prints every score, its
+      takes, their metrics, its chip and ay takes with their source and melody match, and the
+      choice. Choices
       of other scores in the file are kept. The page and the list mark a shadow score "(replaces
       the live version when chosen)"; its original is the live version.
 
   tools/arrange-music selftest
       Checks generate (with the rules generator), the files it writes, chip (a small collection
-      of made-up SID files and a stand-in converter, both written in the temporary folder), pick
-      --set and --list, and the page's save, in a temporary folder; no network, no model, no
-      Rust build.
+      of made-up SID files and a stand-in converter, both written in the temporary folder), ay
+      (made-up .ay files, through the same stand-in), pick --set and --list, and the page's save,
+      in a temporary folder; no network, no model, no Rust build.
 
 Metrics (arranged.toml [metrics], printed by generate and pick --list), for comparing generators:
 key and key_r (Krumhansl-Schmuckler estimate from the original's notes, and its correlation);
@@ -1523,14 +1548,14 @@ def run_converter(fp: str, sid: Path, subtune: int, seconds: int, out: Path) -> 
     return (doc, "") if doc else (None, "unreadable notes")
 
 
-def chip_notes_cache(d: Path, c: ChipCandidate, seconds: int) -> Path:
+def own_notes_cache(d: Path, kind: OwnKind, c: ChipCandidate, seconds: int) -> Path:
     h = hashlib.sha256(f"{c.file['path']}#{c.subtune}#{seconds}".encode()).hexdigest()[:16]
-    return d / "arrange" / ".chip-notes" / f"{h}.toml"
+    return d / "arrange" / f".{kind.prefix}-notes" / f"{h}.toml"
 
 
 def chip_voices(score: Score, notes_doc: dict) -> tuple[dict[int, list[Note]], int, int]:
     """The converter's notes on the take's voices, on the score's clock (its voices are already
-    the take's: 0 the lead, the highest SID voice on average; 1 the bass, the lowest; 2 the pad;
+    the take's: 0 the lead, the highest chip voice on average; 1 the bass, the lowest; 2 the pad;
     3 the drum). Returns (voices, own_intro_t, own_loop_t); notes past one pass of the loop are
     dropped, notes on a voice trimmed not to overlap, drum hits to end DRUM_GAP_T before the next."""
     k = score.clock_hz / CHIP_T_HZ
@@ -1563,96 +1588,168 @@ def chip_voices(score: Score, notes_doc: dict) -> tuple[dict[int, list[Note]], i
     return voices, intro_t, loop_t
 
 
+def clean_field(f: dict, k: str) -> str:
+    """An index entry's text field on one line; HVSC's "<?>" (unknown) as "?"."""
+    return " ".join((f.get(k) or "").replace("<?>", "?").split()).strip()
+
+
 def chip_source(c: ChipCandidate) -> str:
-    """"C64: <title> by <author> (<released>), subtune N, <file>"; HVSC's "<?>" (unknown) as "?"."""
+    """"C64: <title> by <author> (<released>), subtune N, <file>"."""
     f = c.file
-    field = lambda k: " ".join((f.get(k) or "").replace("<?>", "?").split()).strip()  # noqa: E731
-    author = field("author")
-    return (f"C64: {field('title') or Path(f['path']).stem} by {'unknown' if author in ('', '?') else author} "
-            f"({field('released') or '?'}), subtune {c.subtune}, {f['path']}")
+    author = clean_field(f, "author")
+    return (f"C64: {clean_field(f, 'title') or Path(f['path']).stem} by {'unknown' if author in ('', '?') else author} "
+            f"({clean_field(f, 'released') or '?'}), subtune {c.subtune}, {f['path']}")
 
 
-def chip_dirs(score_dir: Path) -> list[tuple[int, Path]]:
-    out = []
-    for p in score_dir.glob("chip-*"):
-        n = p.name[5:]
-        if n.isdigit() and (p / "arranged.toml").is_file():
-            out.append((int(n), p))
-    return sorted(out)
+def ay_source(c: ChipCandidate) -> str:
+    """"Spectrum 128: <title> by <author>, song N, <file>": the song's name, else the file's misc
+    string, else its file name."""
+    f = c.file
+    titles = f.get("titles", [])
+    title = " ".join((titles[c.subtune - 1] if c.subtune <= len(titles) else "").split()) or clean_field(f, "misc") or Path(f["path"]).stem
+    author = clean_field(f, "author")
+    return f"Spectrum 128: {title} by {'unknown' if author in ('', '?') else author}, song {c.subtune}, {f['path']}"
 
 
 def sid_renderer() -> str | None:
     return shutil.which("sidplayfp")
 
 
-def write_chip_take(score: Score, n: int, c: ChipCandidate, notes_doc: dict, sid: Path, renderer: Renderer) -> dict:
+def render_sid(sid: Path, subtune: int, seconds: int, out: Path) -> bool:
+    sp = sid_renderer()
+    return bool(sp) and subprocess.run([sp, f"-w{out}", f"-o{subtune}", f"-t{seconds}", str(sid)], capture_output=True, check=False).returncode == 0
+
+
+_AY_RENDERER: list[str | None] = []
+
+
+def ay_renderer() -> str | None:
+    """ffmpeg, when it reads .ay files (its libgme demuxer); else None."""
+    if not _AY_RENDERER:
+        import re
+
+        ff = shutil.which("ffmpeg")
+        if ff:
+            r = subprocess.run([ff, "-hide_banner", "-formats"], capture_output=True, text=True, check=False)
+            ff = ff if re.search(r"^\s*D\S*\s+libgme\b", r.stdout, re.MULTILINE) else None
+        _AY_RENDERER.append(ff)
+    return _AY_RENDERER[0]
+
+
+def render_ay(ay: Path, subtune: int, seconds: int, out: Path) -> bool:
+    ff = ay_renderer()
+    return bool(ff) and subprocess.run([ff, "-y", "-loglevel", "error", "-f", "libgme", "-track_index", str(subtune - 1), "-i", str(ay),
+                                        "-t", str(seconds), str(out)], capture_output=True, check=False).returncode == 0
+
+
+@dataclass(frozen=True)
+class OwnKind:
+    """A kind of take on its own timeline: a tune from another version of the game."""
+    prefix: str  # the takes' folders, <prefix>-<n>/
+    generator: str  # arranged.toml's generator
+    label: str  # "C64 take"
+    file_key: str  # arranged.toml's key naming the tune's file
+    sound: str  # the other version's own sound, beside fm1.wav
+    sound_label: str  # its label on the page
+    collection: str  # what the collection holds, for messages
+    source: Callable[[ChipCandidate], str]
+    render: Callable[[Path, int, int, Path], bool]
+    quiet_refusals: bool  # tunes the converter refuses are only counted, not each logged
+
+
+CHIP = OwnKind("chip", "chip sid", "C64 take", "sid_file", "chip.wav", "C64", "SID", chip_source, render_sid, False)
+AY = OwnKind("ay", "chip ay", "Spectrum 128 take", "ay_file", "ay.wav", "Spectrum 128", "AY", ay_source, render_ay, True)
+OWN_KINDS = (CHIP, AY)
+
+
+def own_dirs(score_dir: Path, kind: OwnKind) -> list[tuple[int, Path]]:
+    out = []
+    for p in score_dir.glob(f"{kind.prefix}-*"):
+        n = p.name[len(kind.prefix) + 1:]
+        if n.isdigit() and (p / "arranged.toml").is_file():
+            out.append((int(n), p))
+    return sorted(out)
+
+
+def chip_dirs(score_dir: Path) -> list[tuple[int, Path]]:
+    return own_dirs(score_dir, CHIP)
+
+
+def write_own_take(kind: OwnKind, score: Score, n: int, c: ChipCandidate, notes_doc: dict, tune: Path, renderer: Renderer) -> dict:
     voices, own_intro, own_loop = chip_voices(score, notes_doc)
     secs = max(score.sec(own_intro + own_loop), 1e-6)
-    m = {"melody_match": c.melody_match, "title_match": c.title_match, "pc_corr": c.pc_corr, "rank": c.rank,
-         "stil_spectrum": c.spectrum}
+    m = {"melody_match": c.melody_match, "title_match": c.title_match, "pc_corr": c.pc_corr, "rank": c.rank}
+    if kind is CHIP:
+        m["stil_spectrum"] = c.spectrum
     for v, nm in ((0, "lead"), (1, "bass"), (2, "pad"), (3, "drums")):
         m[f"{nm}_nps"] = round(len(voices[v]) / secs, 2)
     doc = dict(score.header)
     doc["voices"] = 3
     doc["roles"] = list(TAKE_ROLES)
-    doc["take"] = f"chip-{n}"
-    doc["generator"] = "chip sid"
+    doc["take"] = f"{kind.prefix}-{n}"
+    doc["generator"] = kind.generator
     doc["timeline"] = "own"
     doc["own_intro_t"] = own_intro
     doc["own_loop_t"] = own_loop
-    doc["source"] = chip_source(c)
-    doc["sid_file"] = c.file["path"]
+    doc["source"] = kind.source(c)
+    doc[kind.file_key] = c.file["path"]
     doc["subtune"] = c.subtune
     if c.stil:
         doc["stil"] = c.stil[:300]
     doc["metrics"] = m
     doc["note"] = [asdict(x) for x in sorted((x for v in voices.values() for x in v), key=lambda x: (x.start_t, x.voice))]
-    final = score.dir / f"chip-{n}"
-    tmp = score.dir / f".chip-{n}.tmp"
+    final = score.dir / f"{kind.prefix}-{n}"
+    tmp = score.dir / f".{kind.prefix}-{n}.tmp"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
     dump_toml(tmp / "arranged.toml", doc)
     fm1_midi(score, voices, tmp / "fm1.mid")
     renderer.render(tmp / "fm1.mid", tmp / "fm1.wav", secs)
-    sp = sid_renderer()
-    if sp:
-        play = min(int(math.ceil(secs)), CHIP_FULL_S)
-        r = subprocess.run([sp, f"-w{tmp / 'chip.wav'}", f"-o{c.subtune}", f"-t{play}", str(sid)], capture_output=True)
-        if r.returncode != 0:
-            (tmp / "chip.wav").unlink(missing_ok=True)
+    if not kind.render(tune, c.subtune, min(int(math.ceil(secs)), CHIP_FULL_S), tmp / kind.sound):
+        (tmp / kind.sound).unlink(missing_ok=True)
     shutil.rmtree(final, ignore_errors=True)
     tmp.replace(final)
     return m
 
 
-def chip_score(d: Path, score: Score, idx: dict, sid_dir: Path, fp: str, keep: int, force: bool, renderer: Renderer) -> int:
+def own_score(kind: OwnKind, d: Path, score: Score, cands: list[ChipCandidate], coll: Path, fp: str, keep: int, force: bool,
+              renderer: Renderer) -> tuple[int, set[tuple[str, int]]]:
+    """The score's takes of this kind from its candidates: (takes written, the (file, subtune)
+    pairs the converter refused)."""
     log = lambda msg: print(f"[{score.id}] {msg}", flush=True)  # noqa: E731
-    if chip_dirs(score.dir) and not force:
-        return 0
-    for _, p in chip_dirs(score.dir):
+    if own_dirs(score.dir, kind) and not force:
+        return 0, set()
+    for _, p in own_dirs(score.dir, kind):
         shutil.rmtree(p)
     if score.melody_voice() is None:
         log("no notes: skipped")
-        return 0
-    cands = chip_candidates(score, idx)
+        return 0, set()
     if not cands:
-        log(f"{score.name}: no SID file names the game")
-        return 0
+        log(f"{score.name}: no {kind.collection} file names the game")
+        return 0, set()
     lead = score_lead_frames(score)
     checked = []
-    for c in cands:
-        sid = sid_dir / c.file["path"]
-        doc, why = run_converter(fp, sid, c.subtune, CHIP_CHECK_S, chip_notes_cache(d, c, CHIP_CHECK_S))
+    refused = set()
+
+    def convert(c: ChipCandidate, seconds: int) -> dict | None:
+        doc, why = run_converter(fp, coll / c.file["path"], c.subtune, seconds, own_notes_cache(d, kind, c, seconds))
         if doc is None:
-            log(f"  {c.file['path']} #{c.subtune}: not converted ({why})")
+            refused.add((c.file["path"], c.subtune))
+            if not kind.quiet_refusals:
+                log(f"  {c.file['path']} #{c.subtune}: not converted ({why})")
+        return doc
+
+    for c in cands:
+        doc = convert(c, CHIP_CHECK_S)
+        if doc is None:
             continue
         tonal = [(int(n["start_t"]), int(n["end_t"]), int(n.get("period_t", 0)))
                  for n in doc.get("note", []) if int(n["voice"]) < 3 and int(n.get("period_t", 0)) > 0]
         if not tonal:
             log(f"  {c.file['path']} #{c.subtune}: no notes in {CHIP_CHECK_S} s")
             continue
-        chip = frame_pitches(tonal, CHIP_T_HZ, int(CHIP_CHECK_S * CHIP_T_HZ / CHIP_FRAME_T))
-        c.melody_match, c.pc_corr = melody_match(lead, chip)
+        tune = frame_pitches(tonal, CHIP_T_HZ, int(CHIP_CHECK_S * CHIP_T_HZ / CHIP_FRAME_T))
+        c.melody_match, c.pc_corr = melody_match(lead, tune)
         c.rank = chip_rank(c)
         log(f"  {c.file['path']} #{c.subtune}: melody match {c.melody_match:.2f}, title match {c.title_match:.2f}"
             f"{', STIL: Spectrum' if c.spectrum else ''}, pitch classes {c.pc_corr:.2f}")
@@ -1662,33 +1759,39 @@ def chip_score(d: Path, score: Score, idx: dict, sid_dir: Path, fp: str, keep: i
     for c in checked:
         if n >= keep:
             break
-        sid = sid_dir / c.file["path"]
-        doc, why = run_converter(fp, sid, c.subtune, CHIP_FULL_S, chip_notes_cache(d, c, CHIP_FULL_S))
+        doc = convert(c, CHIP_FULL_S)
         if doc is None:
-            log(f"  {c.file['path']} #{c.subtune}: not converted ({why})")
             continue
         n += 1
-        write_chip_take(score, n, c, doc, sid, renderer)
-        log(f"chip-{n}: {chip_source(c)}; melody match {c.melody_match:.2f}")
-    log(f"{score.name}: {len(cands)} candidates, {len(checked)} checked, {n} chip takes")
-    return n
+        write_own_take(kind, score, n, c, doc, coll / c.file["path"], renderer)
+        log(f"{kind.prefix}-{n}: {kind.source(c)}; melody match {c.melody_match:.2f}")
+    said = f", {len(refused)} refused by the converter" if refused else ""
+    log(f"{score.name}: {len(cands)} candidates, {len(checked)} checked{said}, {n} {kind.prefix} takes")
+    return n, refused
 
 
-def cmd_chip(a: argparse.Namespace) -> int:
+def own_pending(a: argparse.Namespace, kind: OwnKind) -> tuple[Path, list[Score]] | None:
+    """The workspace and the scores to search for takes of this kind, after the common checks."""
     d = Path(a.dir)
-    sid_dir = Path(a.sid_dir).expanduser()
-    if not sid_dir.is_dir():
-        die(f"no folder {sid_dir} (--sid-dir: the SID collection you downloaded, such as HVSC's C64Music)")
     if a.max < 1:
         die("--max must be at least 1")
     scores = find_scores(d, a.game)
     if not scores:
         print(f"{PROG}: no scores under {d / 'arrange'}")
+        return None
+    pending = [s for s in scores if a.force or not own_dirs(s.dir, kind)]
+    print(f"{PROG}: {len(scores)} scores, {len(pending)} to search for {kind.prefix} takes (up to {a.max} each)", flush=True)
+    return (d, pending) if pending else None
+
+
+def cmd_chip(a: argparse.Namespace) -> int:
+    sid_dir = Path(a.sid_dir).expanduser()
+    if not sid_dir.is_dir():
+        die(f"no folder {sid_dir} (--sid-dir: the SID collection you downloaded, such as HVSC's C64Music)")
+    got = own_pending(a, CHIP)
+    if not got:
         return 0
-    pending = [s for s in scores if a.force or not chip_dirs(s.dir)]
-    print(f"{PROG}: {len(scores)} scores, {len(pending)} to search for chip takes (up to {a.max} each)", flush=True)
-    if not pending:
-        return 0
+    d, pending = got
     fp = find_converter(a.fmzx_pack)
     idx = chip_index(d, sid_dir, rebuild=a.force)
     renderer = Renderer(a.soundfont)
@@ -1696,8 +1799,150 @@ def cmd_chip(a: argparse.Namespace) -> int:
         print(f"{PROG}: {renderer.why_not()}")
     if not sid_renderer():
         print(f"{PROG}: no sidplayfp on PATH: no chip.wav (the C64's own sound); fm1.wav only")
-    made = sum(chip_score(d, s, idx, sid_dir.resolve(), fp, a.max, a.force, renderer) for s in pending)
+    made = sum(own_score(CHIP, d, s, chip_candidates(s, idx), sid_dir.resolve(), fp, a.max, a.force, renderer)[0] for s in pending)
     print(f"{PROG}: {made} chip takes; listen and choose with: {PROG} pick {d}")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# ay: a game's tune from its Spectrum 128 version, as a take
+#
+# The collection (any folder of ZXAYEMUL .ay files, such as Project AY's: games/ and misc/;
+# nothing is fetched) is indexed once into DIR/arrange/.ay-index.json: every .ay's path, its
+# author and misc strings, its songs' names, the number of songs and the first song. A score's
+# candidates are the files whose file name, misc string or a song's name names the game; they are
+# checked and ranked as chip's, and the best become ay-<n>/ takes.
+
+AY_INDEX_VERSION = 1
+
+
+def ay_header(data: bytes) -> dict | None:
+    """A ZXAYEMUL header's fields: author, misc, songs, start (1-based) and the songs' names
+    (pointers big-endian, signed, from their own position; strings Latin-1, NUL-terminated, at
+    most 255 bytes), or None when it is not one."""
+    if len(data) < 20 or data[:8] != b"ZXAYEMUL":
+        return None
+
+    def ptr(at: int) -> int | None:
+        """Where the pointer at `at` points (one landing before the file's start read unsigned,
+        as files over 32 KB need); None for 0 or past the end."""
+        if at + 2 > len(data):
+            return None
+        raw = int.from_bytes(data[at:at + 2], "big", signed=True)
+        p = at + raw if at + raw >= 0 else at + (raw & 0xFFFF)
+        return p if raw and p < len(data) else None
+
+    def text(at: int) -> str:
+        p = ptr(at)
+        if p is None:
+            return ""
+        return " ".join(data[p:p + 255].split(b"\0", 1)[0].decode("latin-1").split())
+
+    songs = data[16] + 1
+    table = ptr(18)
+    if table is None:
+        return None
+    titles = [text(table + 4 * k) for k in range(songs)]
+    return {"author": text(12), "misc": text(14), "songs": songs, "start": min(data[17] + 1, songs), "titles": titles}
+
+
+def ay_index(d: Path, ay_dir: Path, rebuild: bool = False) -> dict:
+    """The collection's index, from DIR/arrange/.ay-index.json while its key (the collection's
+    path and modification time) holds, else built and saved."""
+    ay_dir = ay_dir.resolve()
+    key = {"version": AY_INDEX_VERSION, "path": str(ay_dir), "mtime": ay_dir.stat().st_mtime_ns}
+    cache = d / "arrange" / ".ay-index.json"
+    if not rebuild and cache.is_file():
+        try:
+            idx = json.loads(cache.read_text())
+            if idx.get("key") == key:
+                return idx
+        except (OSError, ValueError):
+            pass
+    print(f"{PROG}: indexing {ay_dir}", flush=True)
+    files = []
+    for root, dirs, names in os.walk(ay_dir):
+        dirs.sort()
+        for nm in sorted(names):
+            if not nm.lower().endswith(".ay"):
+                continue
+            p = Path(root) / nm
+            try:
+                h = ay_header(p.read_bytes())
+            except OSError:
+                continue
+            if h:
+                files.append({"path": p.relative_to(ay_dir).as_posix(), **h})
+    idx = {"key": key, "files": files}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    tmp.write_text(json.dumps(idx))
+    tmp.replace(cache)
+    print(f"{PROG}: {len(files)} AY files", flush=True)
+    return idx
+
+
+def ay_candidates(score: Score, idx: dict, limit: int = CHIP_CANDIDATES) -> list[ChipCandidate]:
+    """The (file, song) pairs to check for the score, at most limit: files whose file name or misc
+    string names the game (1.0, or 0.6 when one name runs on from the other), or one of whose
+    songs' names does; files in order of how well (at a tie, one under games/ first, then one
+    under misc/, then the path), a song of each file in turn (a song named for the game first, then the first song,
+    then the rest in order)."""
+    names = [n for n in (name_tokens(score.name), name_tokens(score.game.replace("-", " "))) if n]
+    names = [n for i, n in enumerate(names) if n not in names[:i]]
+    if "_words" not in idx:
+        idx["_words"] = [(f, "".join(name_tokens(Path(f["path"]).stem)), "".join(name_tokens(f.get("misc", ""))),
+                          ["".join(name_tokens(t)) for t in f.get("titles", [])]) for f in idx.get("files", [])]
+    per_file: list[tuple[float, bool, str, list[ChipCandidate]]] = []
+    for f, stem, misc, titles in idx["_words"]:
+        file_match = max(name_match(names, stem, 1.0, 0.6), name_match(names, misc, 1.0, 0.6))
+        song_match = {s: name_match(names, t, 1.0, 0.6) for s, t in enumerate(titles, 1)}
+        cands = []
+        for s in range(1, f["songs"] + 1):
+            tm = max(file_match, song_match.get(s, 0.0))
+            if tm < 0.5:
+                continue
+            c = ChipCandidate(f, s, round(tm, 3))
+            c.prior = tm + (1.0 if song_match.get(s, 0.0) >= 0.5 else 0.0) + (0.2 if s == f["start"] else 0.0) - s * 1e-3
+            cands.append(c)
+        if cands:
+            cands.sort(key=lambda c: -c.prior)
+            folder = f["path"].split("/", 1)[0] if "/" in f["path"] else ""
+            per_file.append((cands[0].prior, {"games": 0, "misc": 1}.get(folder, 2), f["path"], cands))
+    per_file.sort(key=lambda x: (-x[0], x[1], x[2]))
+    out: list[ChipCandidate] = []
+    rnd = 0
+    while len(out) < limit and any(rnd < len(x[3]) for x in per_file):
+        for x in per_file:
+            if rnd < len(x[3]) and len(out) < limit:
+                out.append(x[3][rnd])
+        rnd += 1
+    return out
+
+
+def cmd_ay(a: argparse.Namespace) -> int:
+    ay_dir = Path(a.ay_dir).expanduser()
+    if not ay_dir.is_dir():
+        die(f"no folder {ay_dir} (--ay-dir: a collection of .ay files, such as Project AY's)")
+    got = own_pending(a, AY)
+    if not got:
+        return 0
+    d, pending = got
+    fp = find_converter(a.fmzx_pack)
+    idx = ay_index(d, ay_dir, rebuild=a.force)
+    renderer = Renderer(a.soundfont)
+    if not renderer.ok:
+        print(f"{PROG}: {renderer.why_not()}")
+    if not ay_renderer():
+        print(f"{PROG}: no ffmpeg that reads .ay files (libgme): no ay.wav (the Spectrum 128's own sound); fm1.wav only")
+    made, refused = 0, set()
+    for s in pending:
+        n, r = own_score(AY, d, s, ay_candidates(s, idx), ay_dir.resolve(), fp, a.max, a.force, renderer)
+        made, refused = made + n, refused | r
+    k = len(refused)
+    said = (f" ({k} candidate song{'s' if k != 1 else ''} skipped: the converter refuses them, such as 48K beeper tunes"
+            " and Amstrad CPC songs)") if k else ""
+    print(f"{PROG}: {made} ay takes{said}; listen and choose with: {PROG} pick {d}")
     return 0
 
 
@@ -1709,11 +1954,11 @@ def choices_path(d: Path) -> Path:
     return d / "arrange" / "choices.toml"
 
 
-Choice = int | str  # a take's number (0: the original) or a chip take's dir, "chip-<n>"
+Choice = int | str  # a take's number (0: the original) or a chip or ay take's dir, "chip-<n>", "ay-<n>"
 
 
 def parse_choice(v) -> Choice | None:
-    """A choices.toml value: a number (an arranged take, 0 the original) or "chip-<n>"."""
+    """A choices.toml value: a number (an arranged take, 0 the original), "chip-<n>" or "ay-<n>"."""
     if isinstance(v, bool):
         return None
     if isinstance(v, int):
@@ -1721,8 +1966,10 @@ def parse_choice(v) -> Choice | None:
     if isinstance(v, str):
         if v.isdigit():
             return int(v)
-        if v.startswith("chip-") and v[5:].isdigit() and int(v[5:]) > 0:
-            return f"chip-{int(v[5:])}"
+        for kind in OWN_KINDS:
+            n = v.removeprefix(f"{kind.prefix}-")
+            if n != v and n.isdigit() and int(n) > 0:
+                return f"{kind.prefix}-{int(n)}"
     return None
 
 
@@ -1752,13 +1999,15 @@ def score_entries(d: Path) -> list[dict]:
             doc = read_toml(p / "arranged.toml")
             takes.append({"n": n, "generator": doc.get("generator", ""), "metrics": doc.get("metrics", {}),
                           "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file()})
-        chips = []
-        for n, p in chip_dirs(s.dir):
-            doc = read_toml(p / "arranged.toml")
-            mt = doc.get("metrics", {})
-            chips.append({"name": f"chip-{n}", "source": doc.get("source", ""), "stil": doc.get("stil", ""),
-                          "melody_match": mt.get("melody_match", 0.0), "title_match": mt.get("title_match", 0.0),
-                          "fm1": (p / "fm1.wav").is_file(), "chip": (p / "chip.wav").is_file()})
+        chips = []  # the takes on their own timeline: chip-<n>, then ay-<n>
+        for kind in OWN_KINDS:
+            for n, p in own_dirs(s.dir, kind):
+                doc = read_toml(p / "arranged.toml")
+                mt = doc.get("metrics", {})
+                chips.append({"name": f"{kind.prefix}-{n}", "label": kind.label, "source": doc.get("source", ""), "stil": doc.get("stil", ""),
+                              "melody_match": mt.get("melody_match", 0.0), "title_match": mt.get("title_match", 0.0),
+                              "fm1": (p / "fm1.wav").is_file(), "own": kind.sound if (p / kind.sound).is_file() else "",
+                              "own_label": kind.sound_label})
         out.append({"id": s.id, "game": s.game, "name": s.name, "key": s.key, "seconds": round(s.seconds, 1), "shadow": s.shadow,
                     "original": (s.dir / "original.wav").is_file(), "takes": takes, "chips": chips, "choice": choices.get(s.id, 0)})
     return out
@@ -1781,7 +2030,7 @@ def apply_set(d: Path, sets: list[str]) -> None:
         sid, eq, n = s.rpartition("=")
         n_ = parse_choice(n) if eq else None
         if n_ is None:
-            die(f"--set {s}: expected GAME/KEY=N or GAME/KEY=chip-N")
+            die(f"--set {s}: expected GAME/KEY=N, GAME/KEY=chip-N or GAME/KEY=ay-N")
         if sid not in entries:
             die(f"--set {s}: no score {sid} under {d / 'arrange'}")
         if not choice_ok(entries[sid], n_):
@@ -1870,13 +2119,13 @@ for (const e of DATA) {
   }
   for (const c of e.chips) {
     html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="' + esc(c.name) + '"' + (e.choice === c.name ? ' checked' : '') +
-      '> ' + esc(c.name) + '</label><div class="audios">' +
+      '> ' + esc(c.name) + ' <small class="m">' + esc(c.label) + '</small></label><div class="audios">' +
       (c.fm1 ? player(url(e, c.name + '/fm1.wav'), 'FM-1') : '<small>no render</small>') +
-      (c.chip ? player(url(e, c.name + '/chip.wav'), 'C64') : '') +
+      (c.own ? player(url(e, c.name + '/' + c.own), esc(c.own_label)) : '') +
       '</div><div class="m"' + (c.stil ? ' title="' + esc(c.stil) + '"' : '') + '>' + esc(c.source) + ' \u2014 melody match ' +
       (+c.melody_match).toFixed(2) + '</div></div>';
   }
-  if (!e.takes.length && !e.chips.length) html += '<p class="m">No takes yet: tools/arrange-music generate (or chip)</p>';
+  if (!e.takes.length && !e.chips.length) html += '<p class="m">No takes yet: tools/arrange-music generate (or chip, or ay)</p>';
   html += '</div>';
 }
 list.innerHTML = html || '<p>No scores.</p>';
@@ -2081,6 +2330,14 @@ f, sub, secs, out = a[1], int(a[a.index("--subtune") + 1]), int(a[a.index("--sec
 with open(Path(__file__).with_name("calls.log"), "a") as lg:
     lg.write(f"{Path(f).name} {sub} {secs}\n")
 data = Path(f).read_bytes()
+if data[:8] == b"ZXAYEMUL":
+    mel = json.loads(data[data.index(b"\0JSON") + 5:])[str(sub)]
+    if mel is None:
+        print(f"fmzx-pack: {f}: cannot be played: a beeper tune (no AY writes)", file=sys.stderr)
+        sys.exit(1)
+    data = bytearray(0x7C)
+    data[6:8] = (0x7C).to_bytes(2, "big")
+    data += json.dumps({str(sub): mel}).encode()
 if data[:4] == b"RSID":
     print("chip-notes: RSID tunes are not supported", file=sys.stderr)
     sys.exit(1)
@@ -2101,6 +2358,42 @@ while t < secs * 3500000:
     t, i = t + beat, i + 1
 Path(out).write_text("\n".join(lines) + "\n")
 '''
+
+
+def selftest_ay(path: Path, author: str, misc: str, songs: list[tuple[str, list[int] | None]], first: int = 0) -> None:
+    """A made-up .ay file: a ZXAYEMUL header, its author and misc strings, its songs' table (each
+    song's name, and a data pointer to a stub), then, after "\\0JSON", the songs' melodies (None: a
+    tune the stand-in converter refuses, as a 48K beeper tune), which only the stand-in reads."""
+    b = bytearray(b"ZXAYEMUL") + bytes([3, 3, 0, 0]) + bytes(4) + bytes([len(songs) - 1, first]) + bytes(2)
+    rel = lambda at, to: b.__setitem__(slice(at, at + 2), (to - at).to_bytes(2, "big", signed=True))  # noqa: E731
+    table = len(b)
+    b += bytes(4 * len(songs))
+    stub = len(b)
+    b += bytes(14)
+    for at, txt in [(12, author), (14, misc)] + [(table + 4 * k, name) for k, (name, _) in enumerate(songs)]:
+        rel(at, len(b))
+        b += txt.encode("latin-1") + b"\0"
+    rel(18, table)
+    for k in range(len(songs)):
+        rel(table + 4 * k + 2, stub)
+    b += b"\0JSON" + json.dumps({str(k + 1): mel for k, (_, mel) in enumerate(songs)}).encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(b))
+
+
+def selftest_ay_collection(root: Path) -> Path:
+    """A small made-up .ay collection under root/ay (games/ and misc/); returns its folder."""
+    c = root / "ay"
+    m = SELFTEST_MELODY
+    both = m + [x + 5 for x in m]
+    selftest_ay(c / "games" / "Test_Tune.ay", "Ann Example", "1987 Nobody Soft",
+                [("Title", [60, 62, 60, 65, 64, 60, 67, 65, 63, 58]), ("In game", [x - 2 for x in both])])
+    selftest_ay(c / "misc" / "Test_Tune.ay", "Bob Example", "", [("Test Tune", None)])
+    selftest_ay(c / "games" / "Compilation.ay", "Cy Example", "Various", [("Another Game", m), ("Test Tune (128K)", [x + 7 for x in m])], first=0)
+    selftest_ay(c / "games" / "Unrelated.ay", "Di Example", "Unrelated", [("Unrelated", m)])
+    (c / "games" / "Broken.ay").write_bytes(b"ZXAYEMUL\0")
+    (c / "games" / "Readme.txt").write_text("not a tune")
+    return c
 
 
 def selftest_collection(root: Path) -> Path:
@@ -2338,6 +2631,80 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         finally:
             srv.shutdown()
             srv.server_close()
+
+        # ay: a made-up .ay collection, through the same stand-in converter
+        acoll = selftest_ay_collection(d / "ay-coll")
+        h = ay_header((acoll / "games" / "Compilation.ay").read_bytes())
+        check(h == {"author": "Cy Example", "misc": "Various", "songs": 2, "start": 1, "titles": ["Another Game", "Test Tune (128K)"]},
+              "ay: the ZXAYEMUL header, its strings by relative pointers")
+        check(ay_header(b"ZXAYEMUL\0") is None and ay_header(b"PSID" + bytes(40)) is None, "ay: no header in a short or other file")
+        calls_before = len((conv.parent / "calls.log").read_text().splitlines())
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ok = run("ay", str(d), "--ay-dir", str(acoll), "--max", "2", "--game", "test-game", "--fmzx-pack", str(conv)) == 0
+        said = buf.getvalue()
+        check(ok, "ay --max 2")
+        aidx = json.loads((d / "arrange" / ".ay-index.json").read_text())
+        check(aidx["key"]["path"] == str(acoll.resolve()) and sorted(f["path"] for f in aidx["files"])
+              == ["games/Compilation.ay", "games/Test_Tune.ay", "games/Unrelated.ay", "misc/Test_Tune.ay"],
+              "ay: the collection indexed (a file with no header and other files left out)")
+        acalls = (conv.parent / "calls.log").read_text().splitlines()[calls_before:]
+        a60 = sorted(c for c in acalls if c.endswith(" 60"))
+        check(a60 == sorted(["Test_Tune.ay 1 60", "Test_Tune.ay 2 60", "Test_Tune.ay 1 60", "Compilation.ay 2 60"] * 1),
+              "ay: candidates by file name and song name; checked once each for three scores")
+        check(not any(c.startswith("Unrelated") for c in acalls) and not any(c == "Compilation.ay 1 60" for c in acalls),
+              "ay: files and songs that do not name the game are no candidates")
+        check("refused by the converter" in said and "48K beeper" in said and "beeper tune" not in said.replace("48K beeper tunes", ""),
+              "ay: a song the converter refuses is skipped quietly, and counted")
+        check([n for n, _ in own_dirs(sdir, AY)] == [1, 2], "ay: ay-1 and ay-2")
+        a1, a2 = read_toml(sdir / "ay-1" / "arranged.toml"), read_toml(sdir / "ay-2" / "arranged.toml")
+        check(a1.get("source") == "Spectrum 128: In game by Ann Example, song 2, games/Test_Tune.ay"
+              and a1.get("ay_file") == "games/Test_Tune.ay" and a1.get("subtune") == 2, "ay-1: the source line, ay_file, subtune")
+        check(a2.get("source") == "Spectrum 128: Test Tune (128K) by Cy Example, song 2, games/Compilation.ay", "ay-2: named by its song")
+        check(a1.get("take") == "ay-1" and a1.get("generator") == "chip ay" and a1.get("timeline") == "own"
+              and a1.get("own_intro_t") == 0 and a1.get("own_loop_t") == loop_t and a1.get("voices") == 3, "ay-1: take, generator, own timeline")
+        check(a1["metrics"]["melody_match"] == round(12 / CHIP_NGRAM_MIN, 3) and a1["metrics"]["rank"] > a2["metrics"]["rank"],
+              "ay: ranked by the melody check")
+        for f in ("game", "name", "key", "clock_hz", "intro_t", "loop_t"):
+            check(a1.get(f) == score.header[f], f"ay-1: {f} as the score's")
+        check(not (sdir / "ay-1" / "ay.wav").is_file() or bool(ay_renderer()), "ay-1: ay.wav only with an AY renderer")
+        check([n for n, _ in chip_dirs(sdir)] == [1, 2, 3], "ay leaves chip takes alone")
+        ay1 = (sdir / "ay-1" / "arranged.toml").read_bytes()
+        n_calls = len((conv.parent / "calls.log").read_text().splitlines())
+        check(run("ay", str(d), "--ay-dir", str(acoll), "--fmzx-pack", str(conv)) == 0
+              and len((conv.parent / "calls.log").read_text().splitlines()) == n_calls, "ay again: scores with ay takes are left alone")
+        check(run("chip", str(d), "--sid-dir", str(coll), "--max", "1", "--force", "--game", "test-game", "--fmzx-pack", str(conv)) == 0
+              and (sdir / "ay-1" / "arranged.toml").read_bytes() == ay1, "chip --force leaves ay takes alone")
+        check(parse_choice("ay-2") == "ay-2" and parse_choice("ay-0") is None and parse_choice("ay-x") is None, "ay: choices name ay-<n>")
+        check(run("pick", str(d), "--set", f"test-game/{keys[0]}=ay-2") == 0
+              and read_toml(choices_path(d))["choices"][f"test-game/{keys[0]}"] == "ay-2", "pick --set GAME/KEY=ay-2")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["pick", str(d), "--list"])
+        out = buf.getvalue()
+        lines = {ln.split()[0]: ln for ln in out.splitlines() if ln.startswith("test-game/")}
+        check("  ay-1: Spectrum 128: In game by Ann Example, song 2, games/Test_Tune.ay \u2014 melody match 0.50" in out
+              and "takes: 1 2 chip-1 ay-1 ay-2" in lines[f"test-game/{keys[0]}"] and "choice: ay-2" in lines[f"test-game/{keys[0]}"],
+              "pick --list shows ay takes with source and melody match, and an ay choice")
+        try:
+            main(["pick", str(d), "--set", f"test-game/{keys[0]}=ay-9"])
+            check(False, "pick --set of a missing ay take fails")
+        except SystemExit as e:
+            check(e.code != 0, "pick --set of a missing ay take fails")
+        srv = serve(d, 0)
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            base = f"http://127.0.0.1:{srv.server_address[1]}"
+            page = urllib.request.urlopen(base + "/").read().decode()
+            check('"name": "ay-1"' in page and '"label": "Spectrum 128 take"' in page and "In game by Ann Example" in page, "page lists the ay takes")
+            body = json.dumps({"choices": {f"test-game/{keys[1]}": "ay-1"}}).encode()
+            req = urllib.request.Request(base + "/save", data=body, headers={"Content-Type": "application/json"})
+            check(urllib.request.urlopen(req).status == 200 and read_toml(choices_path(d))["choices"].get(f"test-game/{keys[1]}") == "ay-1",
+                  "page save of an ay take")
+        finally:
+            srv.shutdown()
+            srv.server_close()
     print(f"selftest: {'FAILED, ' + str(len(fails)) + ' checks' if fails else 'all checks passed'}")
     return 1 if fails else 0
 
@@ -2367,14 +2734,22 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--force", action="store_true", help="search again for scores that have chip takes (and index the collection again)")
     c.add_argument("--fmzx-pack", help="the fmzx-pack with chip-notes (default $FMZX_PACK, else host/target/release/fmzx-pack)")
     c.add_argument("--soundfont", help="the .sf2 for renders (default: Homebrew fluid-synth's)")
+    y = sub.add_parser("ay", help="takes from the games' Spectrum 128 tunes, in a collection of .ay files you have")
+    y.add_argument("dir")
+    y.add_argument("--ay-dir", required=True, help="the .ay collection's folder (such as Project AY's); nothing is downloaded")
+    y.add_argument("--game", action="append", help="only this game's scores (repeatable)")
+    y.add_argument("--max", type=int, default=3, help="ay takes per score (default 3)")
+    y.add_argument("--force", action="store_true", help="search again for scores that have ay takes (and index the collection again)")
+    y.add_argument("--fmzx-pack", help="the fmzx-pack with chip-notes (default $FMZX_PACK, else host/target/release/fmzx-pack)")
+    y.add_argument("--soundfont", help="the .sf2 for renders (default: Homebrew fluid-synth's)")
     p = sub.add_parser("pick", help="listen and choose a take per score")
     p.add_argument("dir")
     p.add_argument("--port", type=int, default=8765, help="the page's port on 127.0.0.1 (default 8765, else a free one)")
-    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original; chip-N: a chip take) without the page; several at once, or --set again")
+    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original; chip-N, ay-N: a chip or ay take) without the page; several at once, or --set again")
     p.add_argument("--list", action="store_true", help="print the scores, their takes and choices")
-    sub.add_parser("selftest", help="check generate, chip and pick in a temporary folder")
+    sub.add_parser("selftest", help="check generate, chip, ay and pick in a temporary folder")
     a = ap.parse_args(argv)
-    return {"generate": cmd_generate, "chip": cmd_chip, "pick": cmd_pick, "selftest": cmd_selftest}[a.cmd](a)
+    return {"generate": cmd_generate, "chip": cmd_chip, "ay": cmd_ay, "pick": cmd_pick, "selftest": cmd_selftest}[a.cmd](a)
 
 
 if __name__ == "__main__":

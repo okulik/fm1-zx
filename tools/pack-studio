@@ -1,0 +1,2555 @@
+#!/usr/bin/env -S uv run --script
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# /// script
+# requires-python = ">=3.11,<3.13"
+# dependencies = [
+#     "py7zr==1.1.4",
+# ]
+# ///
+"""A terminal studio for your own games: music per game, by ear, then the packs
+(BUILDING.md, "Your own games").
+
+Point it at a folder of ZX Spectrum games (.sna, .z80, .tap, .tzx). Per game, mark one or more
+ways to make its music, listen to the results, choose one per score, and build: the studio splits
+the games into as many packs as they need, each a full pair of update packages (fmzx.fwsc and
+fmzx-preview.fwsc) with each game's chosen music.
+
+  tools/pack-studio <games folder> [-o W] [--sid-dir PATH] [--ay-dir PATH] [--offline] [--model NAME]
+      Opens the studio (curses). The folder is only read; everything goes under the workspace W,
+      build/studio/<folder name> unless -o says otherwise (build/ is git-ignored).
+      At start, in the background: both device builds (as tools/make-personal-pack runs them, in
+      Docker; FMZX_SKIP_DEVICE_BUILD=1 skips them), fmzx-pack and music-preview
+      (cd host && cargo build --release; when music-preview does not build, the studio plays the
+      renders tools/arrange-music wrote instead), then the learning run:
+          fmzx-pack personal <folder> -o W/all --app <fm1 app> --app <fm1-preview app> --plan
+      which converts and learns every game and writes W/all/personal-games.toml (your edits to it
+      are kept, as for tools/make-personal-pack), the scores in W/all/arrange/ and W/all/plan.json
+      (each game: how it went in, its packed size with its chosen music, its music line and its
+      scores).
+      Long steps run one at a time in the background; their output goes to W/studio.log. The
+      bottom line shows the step running, how many wait, and its last output line.
+      --sid-dir PATH   the SID collection to use (HVSC's C64Music, or any folder of .sid files)
+                       instead of the one the studio downloads (below)
+      --ay-dir PATH    the AY collection to use (a folder holding music/ay, or any folder of
+                       .ay files) instead of the one the studio downloads (below)
+      --offline        download nothing: SID takes need --sid-dir or a collection already in
+                       build/hvsc/, AY takes --ay-dir or one in build/ay/; tools/arrange-music
+                       runs with UV_OFFLINE=1 and generate --offline; tools/make-personal-pack
+                       with --offline
+      --model NAME     the generator for AI takes (tools/arrange-music generate --model: amt, the
+                       default, or rules)
+
+  The methods, per game (marked in W/studio.toml):
+      F  FM   the FM-1 plays the music learned from the game's code and memory: always there,
+              take 0, "the original" (for a shadow score, the routine playing live)
+      A  AI   arranged takes (a bass, a pad and a drum around the melody):
+              tools/arrange-music generate W/all --game ID [--model NAME], takes take-<n>
+      S  SID  the game's C64 tune: tools/arrange-music chip W/all --game ID --sid-dir PATH,
+              takes chip-<n>
+      Y  AY   the game's Spectrum 128 tune: tools/arrange-music ay W/all --game ID --ay-dir PATH,
+              takes ay-<n>
+  AI, SID and AY work on a game's scores (recorded or shadow scores, BUILDING.md "Arranged music"); a
+  game with none has nothing to arrange: its music plays as FM from its code, or on the beeper.
+
+  The games screen: a row per game, its name, how it went in, its packed size, its methods (a
+  capital letter when marked), and per score the choice (original, take-2, chip-1, ay-1), else
+  "nothing to arrange: FM from code" or "beeper". Games left out are dimmed, with why.
+      Up/Down, j/k   move (PgUp/PgDn, Home/End)
+      Enter          open the game
+      a / s / y      mark or unmark AI / SID / AY for the game
+      A / S / Y      the same for every game with scores
+      g              generate the marked methods: an AI job per game with A, a SID job per game
+                     with S, an AY job per game with Y (the SID or AY collection is downloaded
+                     first when there is none)
+      r              learn again (the plan: sizes change with the choices)
+      b              build the packs
+      l              the log (W/studio.log); ? this text; q quit (asks when jobs are running)
+
+  The game screen: the game's scores (key, seconds, shadow or not, what the last plan says
+  plays), and per score its candidates:
+      beeper                  the game's own sound (to compare; not a choice)
+      FM (from code/memory)   take 0
+      AI take-<n>             with its key, consonance and notes a second (arranged.toml [metrics])
+      SID chip-<n>            with its source and melody match
+      C64 original (chip-<n>) the C64's own sound, when tools/arrange-music wrote chip.wav
+      AY ay-<n>               with its source and melody match
+      Spectrum 128 original (ay-<n>)  the Spectrum 128's own sound, when tools/arrange-music
+                              wrote ay.wav
+  A game with no scores lists the whole game's beeper and FM, to listen to.
+      Up/Down, j/k   move
+      Enter          play the candidate (stopping the one playing)
+      space, Esc     stop (Esc with nothing playing goes back)
+      c              choose the candidate for its score (tools/arrange-music pick W/all
+                     --set GAME/KEY=N); the chosen one is marked *
+      a / s / y / g  mark AI / SID / AY for this game, generate them (Y: AY for every game)
+      Left, h, Backspace   back; l the log
+  What plays: music-preview's render of exactly what the FM-1 plays (W/previews/<game>__<key>__
+  <take>.wav, made in the background, "rendering..." until it is ready, then played; kept until
+  the take changes); without music-preview, the renders tools/arrange-music wrote: original.wav
+  (General MIDI, for take 0), take-<n>/fm1.wav, chip-<n>/fm1.wav, ay-<n>/fm1.wav. A candidate with nothing to
+  play says why. The player is afplay on macOS, else ffplay, paplay or aplay; FMZX_PLAYER="cmd
+  args" overrides (the file is added last).
+
+  The build (b): the plan again (choices change the packed sizes), then the packed games in name
+  order fill pack 1 while the total stays within the room minus 2% (and the pack's own overhead,
+  the plan's bytes beyond its games), then pack 2, and so on. Each pack is W/pack-<n>/:
+  personal-games.toml (the header and those games' entries from W/all/personal-games.toml, as
+  written there, [game.keys] and [game.instruments] tables included; a relative file made
+  absolute), the links sound-cache -> ../all/sound-cache and arrange -> ../all/arrange (the
+  learned music and the choices are shared), and the packages, built by
+      FMZX_SKIP_DEVICE_BUILD=1 tools/make-personal-pack W/pack-<n>/personal-games.toml -o W/pack-<n>
+  A pack that fails with "the pack does not fit" gives its last game to the next pack and is
+  built again; a game that does not fit in a pack of its own is left out of every pack, and the
+  summary says so. Packs beyond that count that the studio made (a W/pack-<m>/.pack-studio
+  marker) are removed. The summary lists each pack, its games and its fmzx.fwsc; the studio prints
+  it again when it closes. Install a pack's fmzx.fwsc as docs/install.md describes.
+
+  The SID collection: with no --sid-dir, the studio uses build/hvsc/<version>/ (repo root),
+  downloading it on the first SID job: the High Voltage SID Collection, version and address from
+  https://hvsc.c64.org/api/v1/version/7z (about 85 MB, progress on the bottom line), streamed to
+  a .part file and renamed when complete, then unpacked into build/hvsc/<version>/ (about 380 MB,
+  half a minute), the archive then deleted. py7zr reads the member list: a member whose path is
+  absolute or holds "..", or that is a link, refuses the whole archive. The collection's archive
+  packs its SID files with BCJ2, which py7zr does not read, so bsdtar (libarchive: macOS's tar)
+  or 7-Zip (7zz, 7z or 7za) unpacks it; py7zr unpacks archives it reads. Every path unpacked is
+  checked to stay inside, and nothing in the archive is ever run. The collection is the folder
+  holding DOCUMENTS/STIL.txt (C64Music). The tunes belong to their authors: keep the collection and the
+  packs made with it to yourself (BUILDING.md, "Music from other versions").
+
+  The AY collection: with no --ay-dir, the studio uses build/ay/<commit>/music/ay (repo root),
+  downloading it on the first AY job: the chris-y/AY repository on GitHub (Spectrum AY music;
+  music/ay/games/ holds the games' tunes, music/ay/misc/ more), its newest commit from
+  https://api.github.com/repos/chris-y/AY/commits/main, its archive from
+  https://codeload.github.com/chris-y/AY/tar.gz/<commit> (about 30 MB, progress on the bottom
+  line), streamed to a .part file and renamed when complete, then read as a stream: only the
+  members under music/ay are unpacked, into build/ay/<first 12 digits of the commit>/; a member
+  whose path is absolute or holds "..", or one under music/ay that is a link or a device,
+  refuses the whole archive; every path unpacked is checked to stay inside, the archive is then
+  deleted, and nothing in it is ever run. The same holds for these tunes: keep them and the
+  packs made with them to yourself.
+
+  tools/pack-studio <games folder> --status [-o W] [--sid-dir PATH] [--ay-dir PATH]
+      Prints the games, their methods, scores, candidates and choices, the packs a build would
+      make and the packs built; runs the start steps and the learning first when W/all/plan.json
+      is missing.
+  tools/pack-studio <games folder> --build [-o W] [--sid-dir PATH] [--ay-dir PATH] [--offline]
+      The start steps and the build, without the screen; prints the summary. Exit 1 when a step
+      fails or a game fits in no pack.
+  tools/pack-studio selftest
+      Checks the split, the games-file subsets ([game.keys] tables kept), the pack folders and
+      their links, the stale-pack removal, the retry when a pack does not fit, the methods file,
+      generate and choose through --set (AI, SID and AY), the previews, --status, the SID and AY
+      downloads (from a server on 127.0.0.1) and the safe unpacking (a made-up .7z and .tar.gz,
+      and ones with a path escaping their folder or a link), and the screen (in a pseudo-terminal, resized down to 3x10), in a temporary folder
+      with stand-ins for every tool: no network, no Docker, no cargo.
+
+Stand-ins (the selftest's; the real tools are the default): FMZX_PACK (the fmzx-pack binary;
+no cargo build of it then), FMZX_ARRANGE_MUSIC, FMZX_MAKE_PERSONAL_PACK, FMZX_MUSIC_PREVIEW (no
+cargo build of it then), FMZX_HVSC_API (the version query's address), FMZX_HVSC_DIR (instead of
+build/hvsc), FMZX_AY_API (the commit query's address), FMZX_AY_TARBALL (the archive's address,
+{sha} the commit), FMZX_AY_DIR (instead of build/ay).
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import io
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tomllib
+import traceback
+import urllib.parse
+import urllib.request
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
+from typing import Callable
+
+PROG = "tools/pack-studio"
+ROOT = Path(__file__).resolve().parent.parent
+MARGIN = 0.02  # of the room, kept free in each pack
+MARKER = ".pack-studio"  # in each W/pack-<n>/ the studio made
+HVSC_API = "https://hvsc.c64.org/api/v1/version/7z"
+AY_API = "https://api.github.com/repos/chris-y/AY/commits/main"  # the AY collection's newest commit
+AY_TARBALL = "https://codeload.github.com/chris-y/AY/tar.gz/{sha}"
+UNPACK_MAX = 8 << 30  # bytes an archive may unpack to
+NOT_FIT = "the pack does not fit"
+APPS = [ROOT / "build/fm1/platform/fm1/fmzx_app.bin", ROOT / "build/fm1-preview/platform/fm1/fmzx_app.bin"]
+METHODS = ("ai", "sid", "ay")
+
+
+def die(msg: str) -> None:
+    print(f"{PROG}: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def kb(n: int | float | None) -> str:
+    return "-" if n is None else f"{n / 1024:.1f} KB"
+
+
+# ---------------------------------------------------------------------------------------------
+# Tools
+
+
+@dataclass
+class Tools:
+    fmzx_pack: str
+    arrange: str
+    make_pack: str
+    music_preview: str
+    fmzx_pack_given: bool  # a stand-in: no cargo build of it
+    preview_given: bool
+
+    @staticmethod
+    def from_env() -> Tools:
+        e = os.environ
+        return Tools(
+            fmzx_pack=e.get("FMZX_PACK") or str(ROOT / "host/target/release/fmzx-pack"),
+            arrange=e.get("FMZX_ARRANGE_MUSIC") or str(ROOT / "tools/arrange-music"),
+            make_pack=e.get("FMZX_MAKE_PERSONAL_PACK") or str(ROOT / "tools/make-personal-pack"),
+            music_preview=e.get("FMZX_MUSIC_PREVIEW") or str(ROOT / "host/target/release/music-preview"),
+            fmzx_pack_given=bool(e.get("FMZX_PACK")),
+            preview_given=bool(e.get("FMZX_MUSIC_PREVIEW")),
+        )
+
+    def preview_ok(self) -> bool:
+        return os.access(self.music_preview, os.X_OK)
+
+
+def hvsc_root() -> Path:
+    return Path(os.environ.get("FMZX_HVSC_DIR") or ROOT / "build/hvsc")
+
+
+def ay_root() -> Path:
+    return Path(os.environ.get("FMZX_AY_DIR") or ROOT / "build/ay")
+
+
+# ---------------------------------------------------------------------------------------------
+# The plan (plan.json, written by fmzx-pack personal --plan)
+
+
+@dataclass
+class Score:
+    key: str
+    shadow: bool
+    seconds: float
+    status: str
+
+
+@dataclass
+class Game:
+    id: str
+    name: str
+    file: str
+    how: str
+    packed: int | None
+    reason: str | None
+    music: str
+    scores: list[Score]
+
+    @property
+    def left_out(self) -> bool:
+        return self.packed is None
+
+    @property
+    def can_arrange(self) -> bool:
+        return bool(self.scores) and not self.left_out
+
+    def plays(self) -> str:
+        """What plays for a game with nothing to arrange."""
+        return "nothing to arrange: FM from code" if self.music.startswith("music learned") else "beeper"
+
+
+@dataclass
+class Plan:
+    room: int
+    used: int
+    games: list[Game]
+
+    def game(self, gid: str) -> Game | None:
+        return next((g for g in self.games if g.id == gid), None)
+
+    def packed(self) -> list[Game]:
+        """The packed games in name order (the picker's: A to Z, case not counting)."""
+        return sorted((g for g in self.games if not g.left_out), key=lambda g: (g.name.casefold(), g.id))
+
+    def overhead(self) -> int:
+        """The pack's bytes beyond its games' (header, directory, shared tables)."""
+        return max(0, self.used - sum(g.packed or 0 for g in self.games))
+
+
+def parse_plan(doc: dict) -> Plan:
+    games = []
+    for r in doc.get("games", []):
+        scores = [Score(str(s["key"]), bool(s.get("shadow", False)), float(s.get("seconds", 0.0)), str(s.get("status", "")))
+                  for s in (r.get("scores") or [])]
+        packed = r.get("packed")
+        games.append(Game(str(r["id"]), str(r.get("name", r["id"])), str(r.get("file", "")), str(r.get("how", "")),
+                          None if packed is None else int(packed), r.get("reason"), str(r.get("music", "")), scores))
+    return Plan(int(doc.get("room", 0)), int(doc.get("used", 0)), games)
+
+
+def load_plan(path: Path) -> Plan | None:
+    try:
+        return parse_plan(json.loads(path.read_text()))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Choices, takes and candidates (W/all/arrange/, tools/arrange-music's layout)
+
+
+def read_toml(path: Path) -> dict:
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def parse_choice(v) -> int | str | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v >= 0 else None
+    if isinstance(v, str):
+        if v.isdigit():
+            return int(v)
+        if re.fullmatch(r"(chip|ay)-[1-9][0-9]*", v):
+            return v
+    return None
+
+
+def read_choices(all_dir: Path) -> dict[str, int | str]:
+    out = {}
+    for k, v in read_toml(all_dir / "arrange" / "choices.toml").get("choices", {}).items():
+        c = parse_choice(v)
+        if c is not None:
+            out[str(k)] = c
+    return out
+
+
+def choice_label(c: int | str | None) -> str:
+    if c in (None, 0):
+        return "original"
+    return f"take-{c}" if isinstance(c, int) else str(c)
+
+
+def numbered(d: Path, prefix: str) -> list[tuple[int, Path]]:
+    out = []
+    for p in d.glob(prefix + "*"):
+        n = p.name[len(prefix):]
+        if n.isdigit() and (p / "arranged.toml").is_file():
+            out.append((int(n), p))
+    return sorted(out)
+
+
+def metrics_line(m: dict) -> str:
+    f = lambda k: float(m.get(k, 0) or 0)  # noqa: E731
+    return (f"key {m.get('key') or '?'}; consonance bass {f('bass_consonance'):.2f} pad {f('pad_consonance'):.2f}; "
+            f"notes/s lead {m.get('lead_nps', 0)} bass {m.get('bass_nps', 0)} pad {m.get('pad_nps', 0)} "
+            f"drums {m.get('drums_nps', 0)}")
+
+
+@dataclass
+class Candidate:
+    label: str
+    take: str  # the preview's take: "beeper", "fm" (the whole game), "0", "<n>", "chip-<n>", "c64-<n>", "ay-<n>", "zx128-<n>"
+    choice: int | str | None  # the value for pick --set; None: not a choice
+    info: str
+    file: Path | None = None  # tools/arrange-music's render, played without music-preview
+    source: Path | None = None  # a preview older than this is made again
+    direct: bool = False  # always the file (the C64's or the Spectrum 128's own sound)
+
+
+WHOLE_GAME = "game"  # the preview key of a game without scores
+
+
+def score_candidates(all_dir: Path, gid: str, sc: Score | None) -> list[Candidate]:
+    if sc is None:
+        return [Candidate("beeper", "beeper", None, "the game's own sound"),
+                Candidate("FM (from code/memory)", "fm", None, "what FM: engines plays")]
+    d = all_dir / "arrange" / gid / sc.key
+    out = [Candidate("beeper", "beeper", None, "the game's own sound, to compare", source=d / "score.toml"),
+           Candidate("FM (from code/memory)", "0", 0,
+                     "take 0: the live version (the routine)" if sc.shadow else "take 0: the original",
+                     d / "original.wav", d / "score.toml")]
+    for n, p in numbered(d, "take-"):
+        doc = read_toml(p / "arranged.toml")
+        gen = str(doc.get("generator", "")).split(" ")[0]
+        out.append(Candidate(f"AI take-{n}" + (f" ({gen})" if gen else ""), str(n), n,
+                             metrics_line(doc.get("metrics", {})), p / "fm1.wav", p / "arranged.toml"))
+    for n, p in numbered(d, "chip-"):
+        doc = read_toml(p / "arranged.toml")
+        mm = float(doc.get("metrics", {}).get("melody_match", 0.0) or 0.0)
+        out.append(Candidate(f"SID chip-{n}", f"chip-{n}", f"chip-{n}",
+                             f"melody match {mm:.2f}; {doc.get('source', '?')}", p / "fm1.wav", p / "arranged.toml"))
+        if (p / "chip.wav").is_file():
+            out.append(Candidate(f"C64 original (chip-{n})", f"c64-{n}", None, "the C64's own sound (sidplayfp)",
+                                 p / "chip.wav", direct=True))
+    for n, p in numbered(d, "ay-"):
+        doc = read_toml(p / "arranged.toml")
+        mm = float(doc.get("metrics", {}).get("melody_match", 0.0) or 0.0)
+        out.append(Candidate(f"AY ay-{n}", f"ay-{n}", f"ay-{n}",
+                             f"melody match {mm:.2f}; {doc.get('source', '?')}", p / "fm1.wav", p / "arranged.toml"))
+        if (p / "ay.wav").is_file():
+            out.append(Candidate(f"Spectrum 128 original (ay-{n})", f"zx128-{n}", None, "the Spectrum 128's own sound (ffmpeg)",
+                                 p / "ay.wav", direct=True))
+    return out
+
+
+def preview_path(w: Path, gid: str, key: str, take: str) -> Path:
+    return w / "previews" / f"{gid}__{key}__{take}.wav"
+
+
+def preview_argv(tool: str, all_dir: Path, gid: str, key: str, take: str, out: Path) -> list[str]:
+    a = [tool, str(all_dir), "--game", gid]
+    if key != WHOLE_GAME:
+        a += ["--score", key]
+    if take == "beeper":
+        a += ["--beeper"]
+    elif take != "fm":
+        a += ["--take", take]
+    return a + ["-o", str(out)]
+
+
+def play_route(w: Path, gid: str, key: str, c: Candidate, preview_ok: bool) -> tuple[str, Path | None, str]:
+    """How a candidate plays: ("file", path, note), ("render", preview path, note) or
+    ("none", None, why)."""
+    if c.direct:
+        return ("file", c.file, c.file.name) if c.file and c.file.is_file() else ("none", None, f"no {c.file.name if c.file else 'file'}")
+    if preview_ok:
+        out = preview_path(w, gid, key, c.take)
+        try:
+            fresh = out.is_file() and (c.source is None or not c.source.exists()
+                                       or out.stat().st_mtime >= c.source.stat().st_mtime)
+        except OSError:
+            fresh = False
+        return ("file", out, "music-preview") if fresh else ("render", out, "music-preview")
+    if c.file and c.file.is_file():
+        note = f"{c.file.name} (General MIDI render)" if c.file.name == "original.wav" else c.file.name
+        return "file", c.file, note
+    if c.file is None:
+        return "none", None, "nothing to play: music-preview is not built"
+    return "none", None, f"nothing to play: no {c.file.name} (music-preview is not built; FluidSynth renders)"
+
+
+# ---------------------------------------------------------------------------------------------
+# The studio's state (W/studio.toml)
+
+
+def load_methods(w: Path) -> dict[str, set[str]]:
+    doc = read_toml(w / "studio.toml")
+    out = {}
+    for gid, ms in doc.get("methods", {}).items():
+        if isinstance(ms, list):
+            out[str(gid)] = {m for m in ms if m in METHODS}
+    return out
+
+
+def save_methods(w: Path, methods: dict[str, set[str]]) -> None:
+    lines = ["# tools/pack-studio: the music methods marked per game (FM is always there)", "[methods]"]
+    for gid in sorted(methods):
+        ms = [m for m in METHODS if m in methods[gid]]
+        if ms:
+            lines.append(f"{json.dumps(gid)} = [{', '.join(json.dumps(m) for m in ms)}]")
+    w.mkdir(parents=True, exist_ok=True)
+    tmp = w / "studio.toml.tmp"
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(w / "studio.toml")
+
+
+# ---------------------------------------------------------------------------------------------
+# The split and the pack folders
+
+
+def split_packs(games: list[tuple[str, int]], room: int, overhead: int = 0, margin: float = MARGIN) -> list[list[str]]:
+    """Games (id, packed bytes) in order into packs: each filled while its total stays within
+    room minus the margin minus the overhead. A game bigger than that gets a pack of its own."""
+    limit = room * (1 - margin) - overhead
+    packs: list[list[str]] = []
+    cur: list[str] = []
+    total = 0
+    for gid, size in games:
+        if cur and total + size > limit:
+            packs.append(cur)
+            cur, total = [], 0
+        cur.append(gid)
+        total += size
+    if cur:
+        packs.append(cur)
+    return packs
+
+
+GAME_RE = re.compile(r"^[ \t]*\[\[[ \t]*game[ \t]*\]\][ \t]*(#.*)?\r?\n?$")
+COMMENTED_GAME_RE = re.compile(r"^[ \t]*#[ \t#]*\[\[[ \t]*game[ \t]*\]\]")
+
+
+def _comment(line: str) -> bool:
+    return line.lstrip().startswith("#")
+
+
+def split_games_file(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """A personal games file as (its header comment, [(id, entry text)]): each entry from its
+    [[game]] line to its last line (its [game.*] tables and the comment lines right after them
+    included; blank lines, a commented-out game or a "# missing:" line below it are not)."""
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, ln in enumerate(lines) if GAME_RE.match(ln)]
+    header = []
+    for ln in lines[:starts[0] if starts else len(lines)]:
+        if not ln.strip() or not _comment(ln):
+            break
+        header.append(ln)
+    entries = []
+    for k, s in enumerate(starts):
+        chunk = lines[s:starts[k + 1] if k + 1 < len(starts) else len(lines)]
+        last = max(i for i, ln in enumerate(chunk) if i == 0 or (ln.strip() and not _comment(ln)))
+        end = last + 1
+        while end < len(chunk) and chunk[end].strip() and _comment(chunk[end]) \
+                and not COMMENTED_GAME_RE.match(chunk[end]) and not chunk[end].lstrip().startswith("# missing:"):
+            end += 1
+        body = "".join(chunk[:end])
+        if not body.endswith("\n"):
+            body += "\n"
+        try:
+            doc = tomllib.loads(body)
+            gid = str(doc["game"][0]["id"])
+        except (tomllib.TOMLDecodeError, KeyError, IndexError, TypeError) as e:
+            raise ValueError(f"the games file's entry at line {s + 1} does not read: {e}") from None
+        entries.append((gid, body))
+    return "".join(header), entries
+
+
+def absolute_file(entry: str, base: Path) -> str:
+    """The entry with a relative `file` made absolute from base (the games file's folder)."""
+    f = tomllib.loads(entry)["game"][0].get("file")
+    if not isinstance(f, str) or Path(f).is_absolute():
+        return entry
+    lines = entry.splitlines(keepends=True)
+    for i, ln in enumerate(lines[1:], 1):
+        if ln.lstrip().startswith("["):
+            break
+        if re.match(r"^[ \t]*file[ \t]*=", ln):
+            lines[i] = f"file = {json.dumps(str((base / f).resolve()))}\n"
+            break
+    return "".join(lines)
+
+
+def subset_games_file(text: str, ids: list[str], base: Path, note: str) -> str:
+    header, entries = split_games_file(text)
+    by = dict(entries)
+    missing = [g for g in ids if g not in by]
+    if missing:
+        raise ValueError(f"no entry for {', '.join(missing)} in the games file")
+    out = header + "".join(f"# {ln}\n" for ln in note.splitlines()) + "\n"
+    return out + "\n".join(absolute_file(by[g], base) for g in ids)
+
+
+def is_studio_pack(d: Path) -> bool:
+    return (d / MARKER).is_file()
+
+
+def write_pack_folder(w: Path, n: int, ids: list[str], text: str) -> Path:
+    """W/pack-<n>/: the marker, the games file and the two links into W/all."""
+    d = w / f"pack-{n}"
+    if d.exists() and any(d.iterdir()) and not is_studio_pack(d):
+        raise ValueError(f"{d} is not the studio's (no {MARKER}): move it away")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / MARKER).write_text(json.dumps({"games": ids}) + "\n")
+    (d / "personal-games.toml").write_text(text)
+    for name in ("sound-cache", "arrange"):
+        (w / "all" / name).mkdir(parents=True, exist_ok=True)
+        link = d / name
+        target = Path("..") / "all" / name
+        if link.is_symlink():
+            if Path(os.readlink(link)) == target:
+                continue
+            link.unlink()
+        elif link.is_dir():
+            shutil.rmtree(link)
+        elif link.exists():
+            link.unlink()
+        link.symlink_to(target, target_is_directory=True)
+    return d
+
+
+def pack_folders(w: Path) -> list[tuple[int, Path]]:
+    out = []
+    for d in w.glob("pack-*"):
+        n = d.name[5:]
+        if n.isdigit() and d.is_dir():
+            out.append((int(n), d))
+    return sorted(out)
+
+
+def remove_stale_packs(w: Path, count: int) -> list[Path]:
+    """Removes W/pack-<m> for m > count that the studio made; returns them."""
+    gone = []
+    for n, d in pack_folders(w):
+        if n > count and is_studio_pack(d):
+            shutil.rmtree(d)  # the links inside are removed, not followed
+            gone.append(d)
+    return gone
+
+
+def pack_summary(w: Path, plan: Plan | None) -> list[str]:
+    """The packs on disk the studio made: each pack's games and its fmzx.fwsc."""
+    out = []
+    for n, d in pack_folders(w):
+        if not is_studio_pack(d):
+            continue
+        try:
+            ids = json.loads((d / MARKER).read_text()).get("games", [])
+        except (OSError, ValueError):
+            ids = []
+        games = [plan.game(g) if plan else None for g in ids]
+        names = [g.name if g else gid for g, gid in zip(games, ids)]
+        size = sum((g.packed or 0) for g in games if g) if plan else None
+        fw = d / "fmzx.fwsc"
+        where = str(fw) if fw.is_file() else f"{fw} (not built)"
+        out.append(f"pack {n}: {len(ids)} game{'s' if len(ids) != 1 else ''}" + (f", {kb(size)}" if size else "") + f": {where}")
+        out.append(f"  {', '.join(names) or '-'}")
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# The SID collection
+
+
+def member_ok(name: str) -> bool:
+    """An archive member's path that stays inside the folder it is unpacked into."""
+    if not name or "\0" in name or "\\" in name or name.startswith("/") or re.match(r"^[A-Za-z]:", name):
+        return False
+    return ".." not in PurePosixPath(name).parts
+
+
+def external_unpacker(archive: Path, into: Path) -> list[str] | None:
+    """bsdtar (libarchive; macOS's tar) or 7-Zip, for the methods py7zr does not read (BCJ2)."""
+    tar = shutil.which("bsdtar")
+    if not tar and shutil.which("tar"):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            if "bsdtar" in subprocess.run(["tar", "--version"], capture_output=True, text=True, timeout=10).stdout:
+                tar = shutil.which("tar")
+    if tar:
+        return [tar, "-x", "-f", str(archive), "-C", str(into)]
+    for exe in ("7zz", "7z", "7za"):
+        if shutil.which(exe):
+            return [shutil.which(exe), "x", "-y", "-bd", f"-o{into}", str(archive)]
+    return None
+
+
+def safe_extract_7z(archive: Path, dest: Path, max_bytes: int = UNPACK_MAX, external: bool = False) -> str:
+    """Unpacks an untrusted .7z into dest (replacing it), through a temporary folder beside it:
+    refuses the whole archive when a member's path is absolute or holds "..", a member is a
+    link, or it unpacks to more than max_bytes; then removes any link and checks every path
+    stays inside. py7zr reads the member list and unpacks; when the archive uses a method py7zr
+    does not read (the collection's archive does: BCJ2), or with external, bsdtar or 7-Zip
+    unpacks it. Nothing in it is run. Returns what unpacked it."""
+    import py7zr
+
+    tmp = dest.parent / f".{dest.name}.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    try:
+        with py7zr.SevenZipFile(archive, "r") as z:
+            infos = z.list()
+            for i in infos:
+                if not member_ok(i.filename):
+                    raise ValueError(f"refused {archive.name}: the member {i.filename!r} would land outside its folder")
+                if i.is_symlink:
+                    raise ValueError(f"refused {archive.name}: the member {i.filename!r} is a link")
+            total = sum(int(i.uncompressed or 0) for i in infos)
+            if total > max_bytes:
+                raise ValueError(f"refused {archive.name}: it unpacks to {total} bytes")
+            methods = list(z.archiveinfo().method_names)
+            if not external and not any(m.endswith("*") for m in methods):
+                z.extractall(path=tmp)
+                how = "py7zr"
+            else:
+                argv = external_unpacker(archive, tmp)
+                if argv is None:
+                    raise ValueError(f"{archive.name} uses {', '.join(m.rstrip('*') for m in methods)}, which py7zr does "
+                                     "not read: install 7-Zip (7zz) or bsdtar (libarchive) and try again")
+                r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+                if r.returncode != 0:
+                    raise ValueError(f"{Path(argv[0]).name} could not unpack {archive.name}: "
+                                     f"{(r.stderr or r.stdout).strip()[-300:]}")
+                how = Path(argv[0]).name
+        root = tmp.resolve()
+        for p in sorted(tmp.rglob("*"), reverse=True):
+            if p.is_symlink():
+                p.unlink()
+            elif not p.resolve().is_relative_to(root):
+                raise ValueError(f"refused {archive.name}: {p} is outside its folder")
+        shutil.rmtree(dest, ignore_errors=True)
+        tmp.replace(dest)
+        return how
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def find_collection(d: Path) -> Path | None:
+    """The folder holding DOCUMENTS/STIL.txt: d or up to three folders below it, the shallowest
+    (hidden folders skipped)."""
+    if not d.is_dir():
+        return None
+    for depth in range(4):
+        found = [p for p in sorted(d.glob("/".join(["*"] * depth + ["DOCUMENTS", "STIL.txt"])))
+                 if not any(part.startswith(".") for part in p.relative_to(d).parts)]
+        if found:
+            return found[0].parent.parent
+    return None
+
+
+def downloaded_collection(root: Path) -> Path | None:
+    """The newest collection under build/hvsc/<version>/."""
+    if not root.is_dir():
+        return None
+    versions = sorted((p for p in root.iterdir() if p.is_dir() and p.name.isdigit()), key=lambda p: -int(p.name))
+    for v in versions:
+        c = find_collection(v)
+        if c:
+            return c
+    return None
+
+
+def url_ok(url: str) -> bool:
+    u = urllib.parse.urlparse(url)
+    return u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost"))
+
+
+def fetch_hvsc(root: Path, progress: Callable[[str], None], log: Callable[[str], None], api: str | None = None) -> Path:
+    """Downloads and unpacks the collection into root/<version>/; returns the collection folder."""
+    api = api or os.environ.get("FMZX_HVSC_API") or HVSC_API
+    if not url_ok(api):
+        raise ValueError(f"not an https address: {api}")
+    headers = {"User-Agent": "pack-studio"}
+    with urllib.request.urlopen(urllib.request.Request(api, headers=headers), timeout=30) as r:
+        info = json.loads(r.read(1 << 20))
+    version = int(info["version"])
+    url = str(info["complete"]["url"])
+    if not url_ok(url):
+        raise ValueError(f"not an https address: {url}")
+    dest = root / str(version)
+    have = find_collection(dest)
+    if have:
+        return have
+    root.mkdir(parents=True, exist_ok=True)
+    archive = root / f"HVSC_{version}.7z"
+    if not archive.is_file():
+        part = root / f"HVSC_{version}.7z.part"
+        log(f"downloading {url}")
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r, part.open("wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            got = 0
+            last = 0.0
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                f.write(b)
+                got += len(b)
+                if time.monotonic() - last > 0.3:
+                    last = time.monotonic()
+                    progress(f"downloading the SID collection (HVSC {version}): {got / 1e6:.1f}"
+                             + (f" of {total / 1e6:.1f} MB" if total else " MB"))
+        if total and got != total:
+            raise ValueError(f"the download stopped at {got} of {total} bytes")
+        part.replace(archive)
+        log(f"downloaded {archive} ({got} bytes)")
+    progress(f"unpacking the SID collection (HVSC {version})")
+    log(f"unpacked with {safe_extract_7z(archive, dest)}")
+    archive.unlink()
+    c = find_collection(dest)
+    if c is None:
+        raise ValueError(f"no DOCUMENTS/STIL.txt in {dest}")
+    log(f"the SID collection: {c}")
+    return c
+
+
+# ---------------------------------------------------------------------------------------------
+# The AY collection (chris-y/AY on GitHub: Spectrum AY music, music/ay/games/ and music/ay/misc/)
+
+
+def find_ay_collection(d: Path) -> Path | None:
+    """The .ay collection in d: d/music/ay (a downloaded or cloned collection), else d itself
+    when it holds .ay files (in it or in folders below)."""
+    if not d.is_dir():
+        return None
+    if (d / "music" / "ay").is_dir():
+        return d / "music" / "ay"
+    return d if next(d.rglob("*.ay"), None) else None
+
+
+def downloaded_ay(root: Path) -> Path | None:
+    """The newest collection under build/ay/<commit>/."""
+    if not root.is_dir():
+        return None
+    for v in sorted((p for p in root.iterdir() if p.is_dir() and re.fullmatch(r"[0-9a-f]{12}", p.name)),
+                    key=lambda p: -p.stat().st_mtime):
+        if (v / "music" / "ay").is_dir():
+            return v / "music" / "ay"
+    return None
+
+
+def safe_extract_ay(archive: Path, dest: Path, max_bytes: int = UNPACK_MAX) -> int:
+    """Unpacks the music/ay folder of an untrusted .tar.gz of the collection (<top>/music/ay/...)
+    into dest/music/ay (replacing dest), through a temporary folder beside it, reading the
+    archive as a stream: a member whose path is absolute or holds "..", or one under music/ay
+    that is a link or a device, refuses the whole archive, as does more than max_bytes; other
+    members (screenshots, the rest of the repository) are skipped. Nothing in it is run. Returns
+    the files unpacked."""
+    import tarfile
+
+    tmp = dest.parent / f".{dest.name}.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    try:
+        total = files = 0
+        with tarfile.open(archive, "r|gz") as tf:
+            for m in tf:
+                if not member_ok(m.name):
+                    raise ValueError(f"refused {archive.name}: the member {m.name!r} would land outside its folder")
+                parts = PurePosixPath(m.name).parts
+                if len(parts) < 3 or parts[1:3] != ("music", "ay"):
+                    continue
+                if not (m.isfile() or m.isdir()):
+                    raise ValueError(f"refused {archive.name}: the member {m.name!r} is a link or a device")
+                out = tmp.joinpath(*parts[1:])
+                if m.isdir():
+                    out.mkdir(parents=True, exist_ok=True)
+                    continue
+                total += m.size
+                if total > max_bytes:
+                    raise ValueError(f"refused {archive.name}: it unpacks to more than {max_bytes} bytes")
+                out.parent.mkdir(parents=True, exist_ok=True)
+                src = tf.extractfile(m)
+                with out.open("wb") as f:
+                    shutil.copyfileobj(src, f)
+                files += 1
+        root = tmp.resolve()
+        for p in tmp.rglob("*"):
+            if p.is_symlink() or not p.resolve().is_relative_to(root):
+                raise ValueError(f"refused {archive.name}: {p} is outside its folder")
+        if not (tmp / "music" / "ay").is_dir():
+            raise ValueError(f"no music/ay folder in {archive.name}")
+        shutil.rmtree(dest, ignore_errors=True)
+        tmp.replace(dest)
+        return files
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def fetch_ay(root: Path, progress: Callable[[str], None], log: Callable[[str], None], api: str | None = None,
+             tarball: str | None = None) -> Path:
+    """Downloads the collection's newest commit and unpacks its music/ay into root/<commit, 12
+    digits>/; returns the collection folder (music/ay)."""
+    api = api or os.environ.get("FMZX_AY_API") or AY_API
+    tarball = tarball or os.environ.get("FMZX_AY_TARBALL") or AY_TARBALL
+    if not url_ok(api):
+        raise ValueError(f"not an https address: {api}")
+    headers = {"User-Agent": "pack-studio", "Accept": "application/vnd.github+json"}
+    with urllib.request.urlopen(urllib.request.Request(api, headers=headers), timeout=30) as r:
+        sha = str(json.loads(r.read(4 << 20)).get("sha", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError(f"{api}: no commit in the answer")
+    dest = root / sha[:12]
+    if (dest / "music" / "ay").is_dir():
+        return dest / "music" / "ay"
+    url = tarball.format(sha=sha)
+    if not url_ok(url):
+        raise ValueError(f"not an https address: {url}")
+    root.mkdir(parents=True, exist_ok=True)
+    archive = root / f"AY-{sha[:12]}.tar.gz"
+    part = root / f"AY-{sha[:12]}.tar.gz.part"
+    log(f"downloading {url}")
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "pack-studio"}), timeout=60) as r, \
+            part.open("wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        got = 0
+        last = 0.0
+        while True:
+            b = r.read(1 << 20)
+            if not b:
+                break
+            f.write(b)
+            got += len(b)
+            if time.monotonic() - last > 0.3:
+                last = time.monotonic()
+                progress(f"downloading the AY collection ({sha[:12]}): {got / 1e6:.1f}"
+                         + (f" of {total / 1e6:.1f} MB" if total else " MB"))
+    if total and got != total:
+        part.unlink(missing_ok=True)
+        raise ValueError(f"the download stopped at {got} of {total} bytes")
+    part.replace(archive)
+    log(f"downloaded {archive} ({got} bytes)")
+    progress(f"unpacking the AY collection ({sha[:12]})")
+    try:
+        n = safe_extract_ay(archive, dest)
+    finally:
+        archive.unlink(missing_ok=True)
+    c = dest / "music" / "ay"
+    log(f"the AY collection: {c} ({n} files)")
+    return c
+
+
+# ---------------------------------------------------------------------------------------------
+# Jobs: one at a time, in a thread (the screen) or in turn (--status, --build)
+
+
+@dataclass
+class Job:
+    title: str
+    argv: list[str] | None = None
+    fn: Callable[[Job], int] | None = None
+    cwd: Path | None = None
+    env: dict[str, str] | None = None
+    chain: str | None = None  # when it fails, the waiting jobs of its chain are dropped
+    on_done: Callable[[Job], None] | None = None
+    rc: int | None = None
+    progress: str = ""
+    tail: deque = field(default_factory=lambda: deque(maxlen=400))
+    runner: Runner | None = None
+
+    def out(self, line: str) -> None:
+        self.runner._line(self, line)
+
+    def text(self) -> str:
+        return "".join(self.tail)
+
+
+class Runner:
+    def __init__(self, log_path: Path, threaded: bool, echo: bool = False):
+        self.log_path = log_path
+        self.threaded = threaded
+        self.echo = echo
+        self.pending: deque[Job] = deque()
+        self.done: deque[Job] = deque()
+        self.current: Job | None = None
+        self.last_line = ""
+        self.lock = threading.Lock()
+        self.cond = threading.Condition(self.lock)
+        self.proc: subprocess.Popen | None = None
+        self.stopping = False
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log = log_path.open("a", encoding="utf-8", errors="replace")
+        if threaded:
+            threading.Thread(target=self._worker, daemon=True).start()
+
+    def submit(self, job: Job) -> Job:
+        job.runner = self
+        with self.cond:
+            self.pending.append(job)
+            self.cond.notify()
+        return job
+
+    def busy(self) -> bool:
+        return self.current is not None or bool(self.pending)
+
+    def waiting(self) -> int:
+        return len(self.pending)
+
+    def _line(self, job: Job, line: str) -> None:
+        if not line.endswith("\n"):
+            line += "\n"
+        job.tail.append(line)
+        with self.lock:
+            self.log.write(line)
+            self.log.flush()
+        if line.strip() and not line.startswith("== "):
+            self.last_line = line.strip()
+        if self.echo:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+
+    def _run(self, job: Job) -> None:
+        self.current = job
+        stamp = time.strftime("%H:%M:%S")
+        self._line(job, f"== {stamp} {job.title}" + (f": {shlex.join(job.argv)}" if job.argv else ""))
+        try:
+            if job.argv:
+                env = dict(os.environ, **(job.env or {}))
+                self.proc = subprocess.Popen(job.argv, cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
+                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                             errors="replace", bufsize=1, start_new_session=True)
+                for line in self.proc.stdout:
+                    self._line(job, line)
+                job.rc = self.proc.wait()
+            else:
+                job.rc = job.fn(job)
+        except Exception as e:  # noqa: BLE001 - a job's failure is reported, the studio goes on
+            for ln in traceback.format_exception_only(e):
+                self._line(job, ln)
+            job.rc = 1
+        finally:
+            self.proc = None
+        self._line(job, f"== {job.title}: " + ("done" if job.rc == 0 else f"failed (exit {job.rc})"))
+        self.current = None
+
+    def _worker(self) -> None:
+        while True:
+            with self.cond:
+                while not self.pending:
+                    self.cond.wait()
+                job = self.pending.popleft()
+            self._run(job)
+            with self.lock:
+                self.done.append(job)
+
+    def _finish(self, job: Job) -> None:
+        if job.rc != 0 and job.chain:
+            with self.lock:
+                dropped = [j for j in self.pending if j.chain == job.chain]
+                for j in dropped:
+                    self.pending.remove(j)
+            for j in dropped:
+                self._line(j, f"== skipped: {j.title} ({job.title} failed)")
+        if job.on_done:
+            job.on_done(job)
+
+    def pump(self) -> bool:
+        """Runs the finished jobs' on_done in this (the screen's) thread; True when any finished."""
+        any_ = False
+        while True:
+            with self.lock:
+                if not self.done:
+                    return any_
+                job = self.done.popleft()
+            any_ = True
+            self._finish(job)
+
+    def drain(self) -> None:
+        """Without a thread: runs every job, the ones their on_done adds included."""
+        while self.pending:
+            job = self.pending.popleft()
+            self._run(job)
+            self._finish(job)
+
+    def stop(self) -> None:
+        with self.lock:
+            self.pending.clear()
+        p = self.proc
+        if p and p.poll() is None:
+            with contextlib.suppress(OSError):
+                os.killpg(p.pid, signal.SIGTERM)
+
+
+# ---------------------------------------------------------------------------------------------
+# Playing
+
+
+def player_argv(path: Path) -> list[str] | None:
+    given = os.environ.get("FMZX_PLAYER")
+    if given:
+        return shlex.split(given) + [str(path)]
+    if sys.platform == "darwin" and shutil.which("afplay"):
+        return ["afplay", str(path)]
+    if shutil.which("ffplay"):
+        return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+    for p in ("paplay", "aplay"):
+        if shutil.which(p):
+            return [p, str(path)]
+    return None
+
+
+class Player:
+    def __init__(self):
+        self.proc: subprocess.Popen | None = None
+        self.what: str | None = None  # the playing candidate's id
+
+    def play(self, path: Path, what: str) -> str | None:
+        self.stop()
+        argv = player_argv(path)
+        if argv is None:
+            return "no player: install ffplay (ffmpeg), paplay or aplay, or set FMZX_PLAYER"
+        self.proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+        self.what = what
+        return None
+
+    def poll(self) -> None:
+        if self.proc and self.proc.poll() is not None:
+            self.proc, self.what = None, None
+
+    def stop(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            with contextlib.suppress(OSError):
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                self.proc.wait(timeout=2)
+        self.proc, self.what = None, None
+
+
+# ---------------------------------------------------------------------------------------------
+# The studio: everything the screen and the commands do
+
+
+@dataclass
+class BuildRun:
+    packs: list[list[str]] = field(default_factory=list)
+    text: str = ""
+    built: int = 0
+    too_big: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+class Studio:
+    def __init__(self, folder: Path, w: Path, args: argparse.Namespace, runner: Runner, tools: Tools | None = None):
+        self.folder = folder
+        self.w = w
+        self.all = w / "all"
+        self.args = args
+        self.runner = runner
+        self.tools = tools or Tools.from_env()
+        self.plan = load_plan(self.all / "plan.json")
+        self.methods = load_methods(w)
+        self.player = Player()
+        self.flash_msg = ""
+        self.flash_at = 0.0
+        self.version = 0  # counts finished jobs: the screen's caches follow it
+        self.rendering: set[str] = set()
+        self.failed: dict[str, str] = {}  # preview name -> why its render failed
+        self.want_play: str | None = None
+        self.choosing: set[str] = set()
+        self.waiters: dict[str, list[Callable[[Path], None]]] = {}  # per collection being downloaded
+        self.build_run: BuildRun | None = None
+        self.summary: list[str] | None = None
+        self.build_ok: bool | None = None
+        self._cands: dict[tuple, list[Candidate]] = {}
+        self._choices: tuple[int, dict] | None = None
+
+    # -- messages and data
+
+    def flash(self, msg: str) -> None:
+        self.flash_msg, self.flash_at = msg, time.monotonic()
+        if not self.runner.threaded:
+            print(f"{PROG}: {msg}", file=sys.stderr, flush=True)
+
+    def changed(self, _job: Job | None = None) -> None:
+        self.version += 1
+        self._cands.clear()
+        self._choices = None
+
+    def reload_plan(self) -> None:
+        self.plan = load_plan(self.all / "plan.json")
+        self.changed()
+
+    def choices(self) -> dict[str, int | str]:
+        if self._choices is None or self._choices[0] != self.version:
+            self._choices = (self.version, read_choices(self.all))
+        return self._choices[1]
+
+    def candidates(self, g: Game, sc: Score | None) -> list[Candidate]:
+        k = (g.id, sc.key if sc else WHOLE_GAME)
+        if k not in self._cands:
+            self._cands[k] = score_candidates(self.all, g.id, sc)
+        return self._cands[k]
+
+    def choice_summary(self, g: Game) -> str:
+        if g.left_out:
+            return f"left out: {g.reason or g.how}"
+        if not g.scores:
+            return g.plays()
+        ch = self.choices()
+        return " / ".join(choice_label(ch.get(f"{g.id}/{s.key}", 0)) for s in g.scores)
+
+    def marked(self, gid: str) -> set[str]:
+        return self.methods.get(gid, set())
+
+    def sid_dir(self) -> Path | None:
+        if self.args.sid_dir:
+            p = Path(self.args.sid_dir).expanduser()
+            return (find_collection(p) or p) if p.is_dir() else None
+        return downloaded_collection(hvsc_root())
+
+    def ay_dir(self) -> Path | None:
+        if self.args.ay_dir:
+            p = Path(self.args.ay_dir).expanduser()
+            return (find_ay_collection(p) or p) if p.is_dir() else None
+        return downloaded_ay(ay_root())
+
+    def uv_env(self) -> dict[str, str]:
+        return {"UV_OFFLINE": "1"} if self.args.offline else {}
+
+    # -- start and learning
+
+    def startup(self, learn: bool = True) -> None:
+        if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") != "1":
+            for preset in ("fm1", "fm1-preview"):
+                self.runner.submit(Job(f"device build {preset} (configure)",
+                                       [str(ROOT / "tools/fm1-docker"), "cmake", "--preset", preset], chain="start"))
+                self.runner.submit(Job(f"device build {preset}",
+                                       [str(ROOT / "tools/fm1-docker"), "cmake", "--build", "--preset", preset],
+                                       chain="start"))
+        if not self.tools.fmzx_pack_given:
+            self.runner.submit(Job("build fmzx-pack", ["cargo", "build", "--release", "-p", "fmzx-pack"],
+                                   cwd=ROOT / "host", chain="start"))
+        if not self.tools.preview_given:
+            def preview_built(j: Job) -> None:
+                self.changed()
+                if j.rc != 0:
+                    self.flash("music-preview did not build: playing the renders tools/arrange-music wrote")
+            self.runner.submit(Job("build music-preview", ["cargo", "build", "--release", "-p", "music", "--bin",
+                                                           "music-preview"], cwd=ROOT / "host", on_done=preview_built))
+        if learn:
+            self.runner.submit(self.plan_job("start"))
+
+    def plan_job(self, chain: str, then: Callable[[Job], None] | None = None) -> Job:
+        argv = [self.tools.fmzx_pack, "personal", str(self.folder), "-o", str(self.all)]
+        for a in APPS:
+            argv += ["--app", str(a)]
+        argv.append("--plan")
+
+        def done(j: Job) -> None:
+            self.reload_plan()
+            if j.rc != 0:
+                self.flash("learning failed (l: the log)")
+            elif self.plan is None:
+                j.rc = 1
+                self.flash(f"no plan in {self.all / 'plan.json'} (l: the log)")
+            elif then is None:
+                n = len(self.plan.packed())
+                self.flash(f"learned: {len(self.plan.games)} games, {n} packed, {kb(self.plan.used)} "
+                           f"for a room of {kb(self.plan.room)}")
+            if then:
+                then(j)
+        self.all.mkdir(parents=True, exist_ok=True)
+        return Job("learn the games (plan)", argv, chain=chain, on_done=done)
+
+    def relearn(self) -> None:
+        self.runner.submit(self.plan_job("plan"))
+        self.flash("learning again")
+
+    # -- methods
+
+    def toggle(self, gid: str, method: str) -> None:
+        g = self.plan.game(gid) if self.plan else None
+        if g is None:
+            return
+        if not g.can_arrange:
+            self.flash(f"{g.name}: " + (f"left out ({g.reason})" if g.left_out else
+                                        f"{g.plays()}: no score for AI, SID or AY"))
+            return
+        ms = self.methods.setdefault(gid, set())
+        ms.symmetric_difference_update({method})
+        save_methods(self.w, self.methods)
+
+    def toggle_all(self, method: str) -> None:
+        if not self.plan:
+            return
+        gs = [g for g in self.plan.games if g.can_arrange]
+        if not gs:
+            self.flash("no game has a score: nothing to arrange")
+            return
+        on = not all(method in self.marked(g.id) for g in gs)
+        for g in gs:
+            ms = self.methods.setdefault(g.id, set())
+            (ms.add if on else ms.discard)(method)
+        save_methods(self.w, self.methods)
+        self.flash(f"{method.upper()} {'marked' if on else 'unmarked'} for {len(gs)} games")
+
+    # -- generating
+
+    def generate(self, ids: list[str] | None = None) -> None:
+        if not self.plan:
+            self.flash("no plan yet: wait for the learning")
+            return
+        gs = [g for g in self.plan.games if g.can_arrange and (ids is None or g.id in ids)]
+        ai = [g for g in gs if "ai" in self.marked(g.id)]
+        sid = [g for g in gs if "sid" in self.marked(g.id)]
+        ay = [g for g in gs if "ay" in self.marked(g.id)]
+        if not ai and not sid and not ay:
+            self.flash("nothing marked: a marks AI, s marks SID, y marks AY (FM needs nothing)")
+            return
+        for g in ai:
+            argv = [self.tools.arrange, "generate", str(self.all), "--game", g.id]
+            if self.args.model:
+                argv += ["--model", self.args.model]
+            if self.args.offline:
+                argv += ["--offline"]
+            self.runner.submit(Job(f"AI takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed))
+        for gs_, kind, cmd, opt in ((sid, "SID", "chip", "--sid-dir"), (ay, "AY", "ay", "--ay-dir")):
+            if gs_:
+                def queue(d: Path, gs_=gs_, kind=kind, cmd=cmd, opt=opt) -> None:
+                    for g in gs_:
+                        self.runner.submit(Job(f"{kind} takes for {g.name}",
+                                               [self.tools.arrange, cmd, str(self.all), "--game", g.id, opt, str(d)],
+                                               env=self.uv_env(), on_done=self.changed))
+                self.with_collection(kind, queue)
+        self.flash(f"queued: {len(ai)} AI, {len(sid)} SID, {len(ay)} AY")
+
+    def with_collection(self, kind: str, then: Callable[[Path], None]) -> None:
+        """Runs then(the collection's folder) for "SID" or "AY": the one given (--sid-dir,
+        --ay-dir) or downloaded, else after a download job (none with --offline)."""
+        given, opt, find, root = ((self.args.sid_dir, "--sid-dir", self.sid_dir, hvsc_root()) if kind == "SID"
+                                  else (self.args.ay_dir, "--ay-dir", self.ay_dir, ay_root()))
+        d = find()
+        if given:
+            if d is None:
+                self.flash(f"{opt} {given}: no such folder")
+            else:
+                then(d)
+            return
+        if d:
+            then(d)
+            return
+        if self.args.offline:
+            self.flash(f"{kind}: --offline downloads nothing: give {opt} PATH, or put the collection in {root}")
+            return
+        if kind in self.waiters:
+            self.waiters[kind].append(then)
+            return
+        self.waiters[kind] = [then]
+
+        def fetch(j: Job) -> int:
+            def progress(s: str) -> None:
+                j.progress = s
+            (fetch_hvsc if kind == "SID" else fetch_ay)(root, progress, j.out)
+            return 0
+
+        def fetched(j: Job) -> None:
+            waiters = self.waiters.pop(kind, [])
+            d = find()
+            if j.rc != 0 or d is None:
+                self.flash(f"the {kind} collection did not download (l: the log)")
+                return
+            for t in waiters:
+                t(d)
+        self.runner.submit(Job(f"download the {kind} collection ({'HVSC' if kind == 'SID' else 'chris-y/AY'})", fn=fetch,
+                               on_done=fetched))
+
+    # -- listening and choosing
+
+    def route(self, g: Game, key: str, c: Candidate) -> tuple[str, Path | None, str]:
+        return play_route(self.w, g.id, key, c, self.tools.preview_ok())
+
+    @staticmethod
+    def cand_id(g: Game, key: str, c: Candidate) -> str:
+        return f"{g.id}__{key}__{c.take}"
+
+    def play(self, g: Game, key: str, c: Candidate) -> None:
+        cid = self.cand_id(g, key, c)
+        self.player.stop()
+        self.want_play = None
+        how, path, note = self.route(g, key, c)
+        if how == "file":
+            err = self.player.play(path, cid)
+            self.flash(err or f"playing {c.label} ({note})")
+        elif how == "none":
+            self.flash(f"{c.label}: {note}")
+        else:
+            self.want_play = cid
+            if cid in self.rendering:
+                return
+            self.rendering.add(cid)
+            self.failed.pop(cid, None)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.stem + ".tmp.wav")
+            argv = preview_argv(self.tools.music_preview, self.all, g.id, key, c.take, tmp)
+
+            def rendered(j: Job) -> None:
+                self.rendering.discard(cid)
+                ok = j.rc == 0 and tmp.is_file()
+                if ok:
+                    tmp.replace(path)
+                else:
+                    tmp.unlink(missing_ok=True)
+                    lines = [ln.strip() for ln in j.tail if ln.strip() and not ln.startswith("==")]
+                    self.failed[cid] = lines[-1] if lines else f"exit {j.rc}"
+                if self.want_play != cid:
+                    return
+                self.want_play = None
+                if ok:
+                    err = self.player.play(path, cid)
+                    self.flash(err or f"playing {c.label} (music-preview)")
+                elif c.file and c.file.is_file():
+                    err = self.player.play(c.file, cid)
+                    self.flash(err or f"render failed ({self.failed[cid]}): playing {c.file.name}")
+                else:
+                    self.flash(f"{c.label}: render failed: {self.failed[cid]}")
+            self.runner.submit(Job(f"render {g.name} {key} {c.take}", argv, on_done=rendered))
+            self.flash(f"rendering {c.label}...")
+
+    def stop(self) -> None:
+        self.want_play = None
+        self.player.stop()
+
+    def state_of(self, g: Game, key: str, c: Candidate) -> str:
+        cid = self.cand_id(g, key, c)
+        if self.player.what == cid:
+            return "playing"
+        if cid in self.rendering:
+            return "rendering..."
+        if f"{g.id}/{key}" in self.choosing and c.choice is not None:
+            return ""
+        if cid in self.failed:
+            return f"render failed: {self.failed[cid]}"
+        how, _, note = self.route(g, key, c)
+        return note if how == "none" else ""
+
+    def choose(self, g: Game, sc: Score, c: Candidate) -> None:
+        if c.choice is None:
+            self.flash(f"{c.label} is there to compare: not a choice")
+            return
+        sid = f"{g.id}/{sc.key}"
+        self.choosing.add(sid)
+
+        def chosen(j: Job) -> None:
+            self.choosing.discard(sid)
+            self.changed()
+            self.flash(f"{g.name}: {sc.key} plays {choice_label(c.choice)} (b builds with it)" if j.rc == 0
+                       else "choosing failed (l: the log)")
+        self.runner.submit(Job(f"choose {choice_label(c.choice)} for {sid}",
+                               [self.tools.arrange, "pick", str(self.all), "--set", f"{sid}={c.choice}"],
+                               env=self.uv_env(), on_done=chosen))
+
+    # -- building
+
+    def build(self) -> None:
+        if self.build_run:
+            self.flash("a build is running")
+            return
+        self.build_run = BuildRun()
+        self.summary = None
+        self.build_ok = None
+        self.runner.submit(self.plan_job("build", then=self._split))
+        self.flash("building: the plan, then the packs")
+
+    def _split(self, j: Job) -> None:
+        br = self.build_run
+        if j.rc != 0 or not self.plan:
+            return self._finish("the learning failed (see the log)")
+        packed = self.plan.packed()
+        if not packed:
+            return self._finish("no game to pack")
+        try:
+            br.text = (self.all / "personal-games.toml").read_text()
+            split_games_file(br.text)
+        except (OSError, ValueError) as e:
+            return self._finish(str(e))
+        br.packs = split_packs([(g.id, g.packed) for g in packed], self.plan.room, self.plan.overhead())
+        self._pack(0)
+
+    def _pack(self, i: int) -> None:
+        br = self.build_run
+        n = i + 1
+        try:
+            note = (f"Pack {n} of the games in ../all/personal-games.toml, made by tools/pack-studio on every build:\n"
+                    f"edit that file instead.")
+            text = subset_games_file(br.text, br.packs[i], self.all, note)
+            d = write_pack_folder(self.w, n, br.packs[i], text)
+        except (OSError, ValueError) as e:
+            return self._finish(str(e))
+        argv = [self.tools.make_pack, str(d / "personal-games.toml"), "-o", str(d)]
+        if self.args.offline:
+            argv.append("--offline")
+        self.runner.submit(Job(f"pack {n} ({len(br.packs[i])} games)", argv, env={"FMZX_SKIP_DEVICE_BUILD": "1"},
+                               chain="build", on_done=lambda j: self._packed(i, j)))
+
+    def _packed(self, i: int, j: Job) -> None:
+        br = self.build_run
+        if j.rc == 0:
+            br.built = i + 1
+            return self._pack(i + 1) if i + 1 < len(br.packs) else self._finish(None)
+        if NOT_FIT not in j.text():
+            return self._finish(f"pack {i + 1} failed (see the log)")
+        if len(br.packs[i]) == 1:
+            br.too_big.append(br.packs.pop(i)[0])
+            return self._pack(i) if i < len(br.packs) else self._finish(None)
+        last = br.packs[i].pop()
+        if i + 1 == len(br.packs):
+            br.packs.append([])
+        br.packs[i + 1].insert(0, last)
+        self.runner._line(j, f"== pack {i + 1} does not fit: {last} goes to pack {i + 2}")
+        self._pack(i)
+
+    def _finish(self, error: str | None) -> None:
+        br = self.build_run
+        br.error = error
+        lines = []
+        if error is None:
+            for d in remove_stale_packs(self.w, len(br.packs)):
+                lines.append(f"removed {d} (beyond the {len(br.packs)} packs)")
+        lines += pack_summary(self.w, self.plan)
+        names = lambda ids: ", ".join((self.plan.game(g).name if self.plan and self.plan.game(g) else g) for g in ids)  # noqa: E731
+        if br.too_big:
+            lines.append(f"in no pack (too big for a pack of its own): {names(br.too_big)}")
+        if self.plan:
+            out = [g for g in self.plan.games if g.left_out]
+            if out:
+                lines.append("left out: " + "; ".join(f"{g.name} ({g.reason or g.how})" for g in out))
+        if error:
+            lines.append(f"build failed: {error}")
+        else:
+            lines.append(f"built {len(br.packs)} pack{'s' if len(br.packs) != 1 else ''}: install a pack's fmzx.fwsc "
+                         "as docs/install.md describes")
+        self.summary = lines
+        self.build_ok = error is None and not br.too_big
+        self.build_run = None
+        self.changed()
+        self.flash("build done" if error is None else f"build failed: {error}")
+
+    # -- text for --status
+
+    def status_lines(self) -> list[str]:
+        p = self.plan
+        out = [f"workspace {self.w}"]
+        if p is None:
+            return out + ["no plan yet"]
+        packed = p.packed()
+        est = split_packs([(g.id, g.packed) for g in packed], p.room, p.overhead())
+        out.append(f"room {kb(p.room)}; all games {kb(p.used)}; a build makes {len(est)} pack{'s' if len(est) != 1 else ''}")
+        sd = self.sid_dir()
+        out.append("SID collection: " + (str(sd) if sd else "none: given with --sid-dir" if self.args.sid_dir
+                                         else "none (--offline)" if self.args.offline
+                                         else f"downloaded to {hvsc_root()} on the first SID job"))
+        ad = self.ay_dir()
+        out.append("AY collection: " + (str(ad) if ad else "none: given with --ay-dir" if self.args.ay_dir
+                                        else "none (--offline)" if self.args.offline
+                                        else f"downloaded to {ay_root()} on the first AY job"))
+        out.append("listening: " + ("music-preview" if self.tools.preview_ok()
+                                    else "tools/arrange-music's renders (music-preview is not built)"))
+        ch = self.choices()
+        for g in p.games:
+            out.append("")
+            if g.left_out:
+                out.append(f"{g.name} ({g.id})  left out: {g.reason or g.how}")
+                continue
+            ms = ["FM"] + [m.upper() for m in METHODS if m in self.marked(g.id)]
+            out.append(f"{g.name} ({g.id})  {g.how}  {kb(g.packed)}  methods: {' '.join(ms)}")
+            out.append(f"  {g.music}")
+            groups = [(s, s.key) for s in g.scores] or [(None, WHOLE_GAME)]
+            if not g.scores:
+                out.append(f"  {g.plays()}")
+            for s, key in groups:
+                if s:
+                    chosen = ch.get(f"{g.id}/{s.key}", 0)
+                    out.append(f"  score {s.key}  {s.seconds:.1f} s{'  shadow' if s.shadow else ''}  "
+                               f"plan: {s.status or '-'}  choice: {choice_label(chosen)}")
+                else:
+                    chosen = None
+                for c in self.candidates(g, s):
+                    how, path, note = self.route(g, key, c)
+                    if how == "file":
+                        play = f"plays {path.name if note != 'music-preview' else 'its preview'}"
+                    else:
+                        play = "plays a music-preview render" if how == "render" else note
+                    mark = "*" if s and c.choice is not None and c.choice == chosen else " "
+                    out.append(f"   {mark} {c.label:<26} {c.info}  [{play}]")
+        out.append("")
+        out.append("a build makes:")
+        names = {g.id: g.name for g in packed}
+        sizes = {g.id: g.packed for g in packed}
+        for n, ids in enumerate(est, 1):
+            out.append(f"  pack {n}: {', '.join(names[g] for g in ids)} ({kb(sum(sizes[g] for g in ids) + p.overhead())})")
+        built = pack_summary(self.w, p)
+        if built:
+            out.append("built:")
+            out += [f"  {ln}" for ln in built]
+        return out
+
+
+# ---------------------------------------------------------------------------------------------
+# The screen (curses): a thin layer over Studio
+
+
+HELP_GAMES = "jk move  Enter open  a/s/y AI/SID/AY  A/S/Y all  g generate  r re-learn  b build  l log  ? help  q quit"
+HELP_GAME = "jk move  Enter play  space/Esc stop  c choose  a/s/y mark AI/SID/AY  g generate  h/Left back  l log"
+HELP_TEXT = "jk/PgUp/PgDn scroll  Home/End  q/Esc back"
+
+
+def run_ui(st: Studio) -> None:
+    import curses
+    import locale
+
+    locale.setlocale(locale.LC_ALL, "")
+    os.environ.setdefault("ESCDELAY", "25")  # a lone Esc (stop, back) without a second's wait
+    curses.wrapper(lambda scr: UI(scr, st, curses).loop())
+
+
+class UI:
+    def __init__(self, scr, st: Studio, curses):
+        self.c = curses
+        self.scr = scr
+        self.st = st
+        self.screen = "games"
+        self.gi = 0  # games screen cursor
+        self.gtop = 0
+        self.game: Game | None = None
+        self.ci = 0  # game screen cursor (index into its candidate rows)
+        self.ctop = 0
+        self.text_lines: list[str] = []
+        self.text_from = "games"
+        self.text_off = 0  # lines up from the end (log) or down from the top (others)
+        self.text_kind = ""
+        self.confirm_quit = False
+        self.quit = False
+        with contextlib.suppress(curses.error):
+            curses.curs_set(0)
+        scr.timeout(200)
+        scr.keypad(True)
+        self.attr = {"dim": curses.A_DIM, "bold": curses.A_BOLD, "rev": curses.A_REVERSE, "mark": curses.A_BOLD,
+                     "warn": curses.A_BOLD}
+        if curses.has_colors():
+            with contextlib.suppress(curses.error):
+                curses.use_default_colors()
+                curses.init_pair(1, curses.COLOR_GREEN, -1)
+                curses.init_pair(2, curses.COLOR_YELLOW, -1)
+                self.attr["mark"] = curses.color_pair(1) | curses.A_BOLD
+                self.attr["warn"] = curses.color_pair(2) | curses.A_BOLD
+
+    # -- drawing
+
+    def put(self, y: int, x: int, s: str, attr: int = 0) -> None:
+        h, w = self.scr.getmaxyx()
+        if y < 0 or y >= h or x >= w or x < 0:
+            return
+        room = w - x - (1 if y == h - 1 else 0)
+        if room <= 0:
+            return
+        with contextlib.suppress(self.c.error):
+            self.scr.addstr(y, x, s.replace("\t", " ")[:room], attr)
+
+    def draw(self) -> None:
+        self.scr.erase()
+        h, w = self.scr.getmaxyx()
+        if h < 4 or w < 16:
+            self.put(0, 0, "too small")
+            self.scr.refresh()
+            return
+        getattr(self, f"draw_{'text' if self.screen == 'text' else self.screen}")(h, w)
+        self.draw_status(h, w)
+        self.scr.refresh()
+
+    def draw_status(self, h: int, w: int) -> None:
+        r = self.st.runner
+        if self.confirm_quit:
+            msg = "jobs are running: quit and stop them? (y/n)"
+        elif r.current is not None:
+            j = r.current
+            msg = f"[{j.title}] " + (f"+{r.waiting()} waiting  " if r.waiting() else "") + (j.progress or r.last_line)
+        elif time.monotonic() - self.st.flash_at < 8 and self.st.flash_msg:
+            msg = self.st.flash_msg
+        else:
+            msg = "idle" + (f"  {self.st.flash_msg}" if self.st.flash_msg else "")
+        self.put(h - 1, 0, msg.ljust(w), self.attr["rev"])
+
+    def draw_games(self, h: int, w: int) -> None:
+        st, p = self.st, self.st.plan
+        head = f"pack-studio  {st.folder.name}"
+        if p:
+            n = len(split_packs([(g.id, g.packed) for g in p.packed()], p.room, p.overhead()))
+            head += f"  {len(p.games)} games, {kb(p.used)}, room {kb(p.room)}: {n} pack{'s' if n != 1 else ''}"
+        head += f"  ->  {st.w}"
+        self.put(0, 0, head, self.attr["bold"])
+        self.put(1, 0, "methods: F FM (always)  A AI  S SID  Y AY; a capital: marked", self.attr["dim"])
+        self.put(h - 2, 0, HELP_GAMES, self.attr["dim"])
+        if not p:
+            self.put(3, 2, "learning the games... (the list appears when the plan is ready; l shows the log)")
+            return
+        rows = h - 5
+        if rows <= 0:
+            return
+        self.gi = max(0, min(self.gi, len(p.games) - 1))
+        self.gtop = min(max(self.gtop, self.gi - rows + 1), self.gi)
+        self.gtop = max(0, self.gtop)
+        for k, g in enumerate(p.games[self.gtop:self.gtop + rows]):
+            i = self.gtop + k
+            y = 3 + k
+            sel = i == self.gi
+            base = self.attr["dim"] if g.left_out else 0
+            if sel:
+                base |= self.attr["rev"]
+            line = f"{'>' if sel else ' '} {g.name[:28]:<28} {g.how[:12]:<12} {kb(g.packed):>9}  "
+            self.put(y, 0, line.ljust(w), base)
+            x = len(line)
+            ms = st.marked(g.id)
+            for letter, on, can in (("F", True, not g.left_out), ("A", "ai" in ms, g.can_arrange),
+                                    ("S", "sid" in ms, g.can_arrange), ("Y", "ay" in ms, g.can_arrange)):
+                a = (self.attr["mark"] if on and can else self.attr["dim"]) | (self.attr["rev"] if sel else 0)
+                self.put(y, x, letter if on and can else letter.lower(), a)
+                x += 2
+            self.put(y, x + 1, st.choice_summary(g) + ("" if g.left_out or not g.scores else f"   {g.music}"), base)
+
+    def game_rows(self) -> list[tuple[str, Score | None, str, Candidate | None]]:
+        """("head", score, key, None) and ("cand", score, key, candidate) rows."""
+        g = self.game
+        rows = []
+        for s in g.scores or [None]:
+            key = s.key if s else WHOLE_GAME
+            rows.append(("head", s, key, None))
+            rows += [("cand", s, key, c) for c in self.st.candidates(g, s)]
+        return rows
+
+    def draw_game(self, h: int, w: int) -> None:
+        st = self.st
+        if st.plan and st.plan.game(self.game.id):
+            self.game = st.plan.game(self.game.id)  # the plan read again
+        g = self.game
+        self.put(0, 0, f"{g.name}  ({g.id})  {g.how}  {kb(g.packed)}", self.attr["bold"])
+        self.put(1, 0, g.music)
+        ms = st.marked(g.id)
+        if g.can_arrange:
+            ml = (f"methods: F FM (always)   A AI {'[x]' if 'ai' in ms else '[ ]'}   "
+                  f"S SID {'[x]' if 'sid' in ms else '[ ]'}   Y AY {'[x]' if 'ay' in ms else '[ ]'}")
+        else:
+            ml = f"{g.plays()}: no score, so no AI, SID or AY; listen to the whole game below"
+        self.put(2, 0, ml, self.attr["dim"] if not g.can_arrange else 0)
+        self.put(h - 2, 0, HELP_GAME, self.attr["dim"])
+        rows = self.game_rows()
+        cands = [i for i, r in enumerate(rows) if r[0] == "cand"]
+        if not cands:
+            return
+        self.ci = max(0, min(self.ci, len(cands) - 1))
+        sel_row = cands[self.ci]
+        avail = h - 6
+        if avail <= 0:
+            return
+        if sel_row - 1 < self.ctop:
+            self.ctop = max(0, sel_row - 1)
+        if sel_row >= self.ctop + avail:
+            self.ctop = sel_row - avail + 1
+        ch = st.choices()
+        for k, (kind, s, key, c) in enumerate(rows[self.ctop:self.ctop + avail]):
+            y = 4 + k
+            if kind == "head":
+                if s is None:
+                    self.put(y, 0, "the whole game (nothing to choose; to listen)", self.attr["bold"])
+                else:
+                    self.put(y, 0, f"score {s.key}  {s.seconds:.1f} s{'  shadow: replaces the live version when chosen' if s.shadow else ''}"
+                             f"   plan: {s.status or '-'}", self.attr["bold"])
+                continue
+            sel = self.ctop + k == sel_row
+            chosen = s is not None and c.choice is not None and ch.get(f"{g.id}/{s.key}", 0) == c.choice
+            state = st.state_of(g, key, c)
+            if s is not None and f"{g.id}/{s.key}" in st.choosing and c.choice is not None:
+                state = "choosing..."
+            a = self.attr["rev"] if sel else 0
+            self.put(y, 0, (f"{'>' if sel else ' '} {'*' if chosen else ' '} {c.label[:26]:<26} ").ljust(w), a)
+            x = 32
+            if state:
+                st_attr = self.attr["warn"] if state in ("playing", "rendering...", "choosing...") else self.attr["dim"]
+                self.put(y, x, f"[{state}] ", st_attr | a)
+                x += len(state) + 3
+            self.put(y, x, c.info, (self.attr["dim"] if not sel else 0) | a)
+            if chosen:
+                self.put(y, 2, "*", self.attr["mark"] | a)
+
+    def open_text(self, kind: str) -> None:
+        self.text_from = self.screen if self.screen != "text" else self.text_from
+        self.screen = "text"
+        self.text_kind = kind
+        self.text_off = 0
+
+    def text_content(self) -> list[str]:
+        if self.text_kind == "log":
+            try:
+                with self.st.runner.log_path.open("rb") as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - (256 << 10)))
+                    return f.read().decode("utf-8", "replace").splitlines()
+            except OSError:
+                return ["(no log yet)"]
+        if self.text_kind == "summary":
+            return self.st.summary or ["(no build yet)"]
+        return (__doc__ or "").splitlines()
+
+    def draw_text(self, h: int, w: int) -> None:
+        lines = self.text_content()
+        title = {"log": f"log: {self.st.runner.log_path}", "summary": "the build", "help": "help"}[self.text_kind]
+        self.put(0, 0, title, self.attr["bold"])
+        self.put(h - 2, 0, HELP_TEXT, self.attr["dim"])
+        rows = h - 3
+        if rows <= 0:
+            return
+        span = max(0, len(lines) - rows)
+        self.text_off = max(0, min(self.text_off, span))
+        top = span - self.text_off if self.text_kind == "log" else self.text_off
+        for k, ln in enumerate(lines[top:top + rows]):
+            self.put(1 + k, 0, ln)
+
+    # -- keys
+
+    def key(self, ch: int) -> None:
+        c = self.c
+        if ch == c.KEY_RESIZE:
+            with contextlib.suppress(Exception):
+                c.update_lines_cols()
+            return
+        if self.confirm_quit:
+            if ch in (ord("y"), ord("Y")):
+                self.quit = True
+            self.confirm_quit = False
+            return
+        getattr(self, f"key_{self.screen}")(ch)
+
+    def ask_quit(self) -> None:
+        if self.st.runner.busy():
+            self.confirm_quit = True
+        else:
+            self.quit = True
+
+    def move(self, ch: int, i: int, n: int, page: int) -> int:
+        c = self.c
+        if ch in (c.KEY_DOWN, ord("j")):
+            i += 1
+        elif ch in (c.KEY_UP, ord("k")):
+            i -= 1
+        elif ch == c.KEY_NPAGE:
+            i += page
+        elif ch == c.KEY_PPAGE:
+            i -= page
+        elif ch == c.KEY_HOME:
+            i = 0
+        elif ch == c.KEY_END:
+            i = n - 1
+        return max(0, min(i, n - 1))
+
+    def key_games(self, ch: int) -> None:
+        st, p, c = self.st, self.st.plan, self.c
+        h, _ = self.scr.getmaxyx()
+        g = p.games[self.gi] if p and p.games and self.gi < len(p.games) else None
+        if ch in (ord("q"), ord("Q")):
+            self.ask_quit()
+        elif ch == ord("l"):
+            self.open_text("log")
+        elif ch == ord("?"):
+            self.open_text("help")
+        elif ch == ord("r"):
+            st.relearn()
+        elif ch == ord("b"):
+            st.build()
+        elif ch == ord("A"):
+            st.toggle_all("ai")
+        elif ch == ord("S"):
+            st.toggle_all("sid")
+        elif ch == ord("Y"):
+            st.toggle_all("ay")
+        elif ch == ord("g"):
+            st.generate()
+        elif not g:
+            return
+        elif ch in (c.KEY_DOWN, c.KEY_UP, c.KEY_NPAGE, c.KEY_PPAGE, c.KEY_HOME, c.KEY_END, ord("j"), ord("k")):
+            self.gi = self.move(ch, self.gi, len(p.games), max(1, h - 6))
+        elif ch == ord("a"):
+            st.toggle(g.id, "ai")
+        elif ch == ord("s"):
+            st.toggle(g.id, "sid")
+        elif ch == ord("y"):
+            st.toggle(g.id, "ay")
+        elif ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
+            if g.left_out:
+                st.flash(f"{g.name}: left out ({g.reason or g.how})")
+            else:
+                self.game, self.ci, self.ctop, self.screen = g, 0, 0, "game"
+
+    def key_game(self, ch: int) -> None:
+        st, c, g = self.st, self.c, self.game
+        rows = self.game_rows()
+        cands = [r for r in rows if r[0] == "cand"]
+        h, _ = self.scr.getmaxyx()
+        cur = cands[self.ci] if cands and self.ci < len(cands) else None
+        if ch in (c.KEY_LEFT, ord("h"), c.KEY_BACKSPACE, 127, 8) or (ch == 27 and st.player.what is None and not st.want_play):
+            self.screen = "games"
+        elif ch in (27, ord(" ")):
+            st.stop()
+        elif ch in (ord("q"), ord("Q")):
+            self.ask_quit()
+        elif ch == ord("l"):
+            self.open_text("log")
+        elif ch == ord("?"):
+            self.open_text("help")
+        elif ch == ord("a"):
+            st.toggle(g.id, "ai")
+        elif ch == ord("s"):
+            st.toggle(g.id, "sid")
+        elif ch == ord("y"):
+            st.toggle(g.id, "ay")
+        elif ch == ord("Y"):
+            st.toggle_all("ay")
+        elif ch == ord("g"):
+            st.generate([g.id])
+        elif ch == ord("b"):
+            st.build()
+        elif ch in (c.KEY_DOWN, c.KEY_UP, c.KEY_NPAGE, c.KEY_PPAGE, c.KEY_HOME, c.KEY_END, ord("j"), ord("k")):
+            self.ci = self.move(ch, self.ci, len(cands), max(1, h - 8))
+        elif cur and ch in (10, 13, c.KEY_ENTER):
+            st.play(g, cur[2], cur[3])
+        elif cur and ch == ord("c"):
+            if cur[1] is None:
+                st.flash("the whole game: nothing to choose")
+            else:
+                st.choose(g, cur[1], cur[3])
+
+    def key_text(self, ch: int) -> None:
+        c = self.c
+        h, _ = self.scr.getmaxyx()
+        page = max(1, h - 4)
+        sign = 1 if self.text_kind == "log" else -1  # the log counts from its end
+        if ch in (ord("q"), ord("Q"), 27, ord("l"), ord("?"), c.KEY_LEFT, ord("h")):
+            self.screen = self.text_from
+        elif ch in (c.KEY_UP, ord("k")):
+            self.text_off += sign
+        elif ch in (c.KEY_DOWN, ord("j")):
+            self.text_off -= sign
+        elif ch == c.KEY_PPAGE:
+            self.text_off += sign * page
+        elif ch in (c.KEY_NPAGE, ord(" ")):
+            self.text_off -= sign * page
+        elif ch == c.KEY_HOME:
+            self.text_off = 1 << 30 if sign > 0 else 0
+        elif ch == c.KEY_END:
+            self.text_off = 0 if sign > 0 else 1 << 30
+        self.text_off = max(0, self.text_off)
+
+    def loop(self) -> None:
+        st = self.st
+        shown = None
+        while not self.quit:
+            if st.runner.pump() and st.summary is not None and st.summary is not shown:
+                shown = st.summary
+                self.open_text("summary")
+            st.player.poll()
+            self.draw()
+            try:
+                ch = self.scr.getch()
+            except KeyboardInterrupt:
+                self.ask_quit()
+                continue
+            if ch != -1:
+                self.key(ch)
+        st.player.stop()
+        st.runner.stop()
+
+
+# ---------------------------------------------------------------------------------------------
+# Commands
+
+
+def workspace(folder: Path, out: str | None) -> Path:
+    if out:
+        return Path(out).expanduser().resolve()
+    name = folder.stem if folder.is_file() else folder.name
+    return ROOT / "build" / "studio" / name
+
+
+def cmd_studio(a: argparse.Namespace) -> int:
+    folder = Path(a.folder).expanduser().resolve()
+    if not folder.exists():
+        die(f"no {folder}")
+    w = workspace(folder, a.out)
+    w.mkdir(parents=True, exist_ok=True)
+    headless = a.status or a.build
+    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build))
+    st = Studio(folder, w, a, runner)
+    if a.status:
+        if st.plan is None:
+            st.startup(learn=True)
+            runner.drain()
+        if st.plan is None:
+            die(f"no plan ({w / 'studio.log'} says why)")
+        print("\n".join(st.status_lines()))
+        return 0
+    if a.build:
+        st.startup(learn=False)
+        runner.drain()
+        if not st.tools.fmzx_pack_given and not os.access(st.tools.fmzx_pack, os.X_OK):
+            die("fmzx-pack did not build (see the output above)")
+        st.build()
+        runner.drain()
+        print("\n".join(st.summary or ["no build"]))
+        return 0 if st.build_ok else 1
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        die("the studio needs a terminal (or --status, --build)")
+    st.startup(learn=True)
+    try:
+        run_ui(st)
+    finally:
+        st.player.stop()
+        runner.stop()
+    lines = st.summary or pack_summary(w, st.plan)
+    if lines:
+        print("\n".join(lines))
+    print(f"{PROG}: workspace {w}; log {w / 'studio.log'}")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# selftest
+
+
+FAKE_FMZX_PACK = r'''
+import json, sys
+from pathlib import Path
+a = sys.argv[1:]
+assert a[0] == "personal" and "--plan" in a, a
+out = Path(a[a.index("-o") + 1])
+out.mkdir(parents=True, exist_ok=True)
+gf = out / "personal-games.toml"
+if not gf.exists():
+    gf.write_text(HEADER + ENTRIES)
+d = out / "arrange" / "alpha" / "8951-1a2b3c4d"
+d.mkdir(parents=True, exist_ok=True)
+(d / "score.toml").write_text('game = "alpha"\nkey = "8951-1a2b3c4d"\n')
+(out / "sound-cache").mkdir(exist_ok=True)
+plan = {"room": 100000, "used": 132000, "games": [
+  {"id": "alpha", "name": "Alpha", "file": "/x/Alpha.tzx", "how": "tape", "packed": 30000, "reason": None,
+   "music": "music recorded (1 score, 3 voices)",
+   "scores": [{"key": "8951-1a2b3c4d", "shadow": False, "seconds": 12.5, "status": "original"}]},
+  {"id": "bravo", "name": "bravo", "file": "/x/bravo.sna", "how": "as is", "packed": 40000, "reason": None,
+   "music": "music learned (1 routine, heard, 1 channel)", "scores": []},
+  {"id": "charlie", "name": "Charlie", "file": "/x/Charlie.tzx", "how": "loaded", "packed": 60000, "reason": None,
+   "music": "no music learned (OUTs that do not always flip the speaker)"},
+  {"id": "delta", "name": "Delta", "file": "/x/Delta.z80", "how": "left out", "packed": None, "reason": "128K",
+   "music": "", "scores": []}]}
+(out / "plan.json").write_text(json.dumps(plan, indent=1))
+print("planned 4 games")
+'''
+
+FAKE_ARRANGE = r'''
+import json, sys
+from pathlib import Path
+a = sys.argv[1:]
+with open(LOG, "a") as f:
+    f.write(json.dumps(a) + "\n")
+d = Path(a[1])
+cmd = a[0]
+if cmd == "pick":
+    sets = a[a.index("--set") + 1:]
+    p = d / "arrange" / "choices.toml"
+    lines = p.read_text().splitlines()[1:] if p.exists() else []
+    for s in sets:
+        k, v = s.rsplit("=", 1)
+        lines = [ln for ln in lines if not ln.startswith(json.dumps(k))]
+        lines.append(f"{json.dumps(k)} = {v if v.isdigit() else json.dumps(v)}")
+    p.write_text("[choices]\n" + "\n".join(lines) + "\n")
+    print("set", sets)
+elif cmd in ("generate", "chip", "ay"):
+    game = a[a.index("--game") + 1]
+    for sd in sorted((d / "arrange" / game).glob("*/score.toml")):
+        if cmd == "generate":
+            t = sd.parent / "take-1"
+            t.mkdir(exist_ok=True)
+            (t / "arranged.toml").write_text('take = 1\ngenerator = "rules seed=1"\n[metrics]\nkey = "C major"\n'
+                                             'bass_consonance = 0.71\npad_consonance = 0.66\nlead_nps = 2.0\n'
+                                             'bass_nps = 1.5\npad_nps = 3.0\ndrums_nps = 4.0\n')
+            (t / "fm1.wav").write_bytes(b"RIFF")
+        elif cmd == "chip":
+            assert Path(a[a.index("--sid-dir") + 1]).is_dir()
+            t = sd.parent / "chip-1"
+            t.mkdir(exist_ok=True)
+            (t / "arranged.toml").write_text('take = "chip-1"\nsource = "C64: Alpha by Someone (1987), subtune 1, '
+                                             'MUSICIANS/S/Someone/Alpha.sid"\n[metrics]\nmelody_match = 0.42\n')
+            (t / "chip.wav").write_bytes(b"RIFF")
+        if cmd == "ay":
+            assert Path(a[a.index("--ay-dir") + 1]).is_dir()
+            t = sd.parent / "ay-1"
+            t.mkdir(exist_ok=True)
+            (t / "arranged.toml").write_text('take = "ay-1"\ngenerator = "chip ay"\nsource = "Spectrum 128: Alpha by Someone, '
+                                             'song 2, games/Alpha.ay"\n[metrics]\nmelody_match = 0.37\n')
+            (t / "ay.wav").write_bytes(b"RIFF")
+    print(cmd, "done for", game)
+else:
+    sys.exit(2)
+'''
+
+FAKE_MAKE_PACK = r'''
+import os, sys, tomllib
+from pathlib import Path
+a = sys.argv[1:]
+assert os.environ.get("FMZX_SKIP_DEVICE_BUILD") == "1"
+games_file = Path(a[0])
+out = Path(a[a.index("-o") + 1])
+assert (out / "sound-cache").is_symlink() and (out / "arrange").is_dir()
+for f in ("fmzx.fwsc", "fmzx-preview.fwsc"):
+    (out / f).unlink(missing_ok=True)
+ids = [g["id"] for g in tomllib.loads(games_file.read_text())["game"]]
+total = sum(SIZES[g] for g in ids) + 2000
+room = int(os.environ["FAKE_ROOM"])
+if total > room:
+    print(f"tools/make-personal-pack: fmzx-pack: the pack does not fit: it needs {total}, room {room}", file=sys.stderr)
+    sys.exit(1)
+for f in ("fmzx.fwsc", "fmzx-preview.fwsc"):
+    (out / f).write_bytes(b"FWSC" + ",".join(ids).encode())
+print("packed", ids)
+'''
+
+FAKE_PREVIEW = r'''
+import struct, sys
+from pathlib import Path
+a = sys.argv[1:]
+out = Path(a[a.index("-o") + 1])
+if a[a.index("--game") + 1] not in ("alpha", "bravo", "charlie"):
+    print("music-preview: no game", file=sys.stderr)
+    sys.exit(1)
+data = b"\0\0" * 800
+out.write_bytes(b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
+                + b"data" + struct.pack("<I", len(data)) + data)
+'''
+
+SELFTEST_HEADER = """\
+# Your games for tools/make-personal-pack (BUILDING.md, "Your own games"), in the syntax of
+# games/games.toml (docs/controls.md).
+
+"""
+
+SELFTEST_ENTRIES = """\
+[[game]]
+id = "alpha"
+name = "Alpha"
+file = "/x/Alpha.tzx"
+[game.keys]
+"Q" = "up"
+"A" = "down"   # the owner's note
+# "O" = "left"
+
+# missing: /x/Gone.tzx
+[[game]]
+id = "gone"
+name = "Gone"
+file = "/x/Gone.tzx"
+
+[[game]]
+id = "bravo"
+name = "bravo"
+file = "bravo.sna"
+[game.instruments]
+"C694" = ["lead"]
+
+# [[game]]
+# id = "echo"
+# name = "Echo"
+# file = "/x/Echo.tzx"
+
+[[game]]
+id = "charlie"
+name = "Charlie"
+file = "/x/Charlie.tzx"
+crop = true
+"""
+
+
+def _script(path: Path, body: str, consts: dict) -> str:
+    pre = "".join(f"{k} = {v!r}\n" for k, v in consts.items())
+    path.write_text(f"#!{sys.executable}\n{pre}{body}")
+    path.chmod(0o755)
+    return str(path)
+
+
+def _wait_pty(fd: int, pid: int, seconds: float) -> tuple[bytes, int | None]:
+    import select
+
+    out = b""
+    end = time.monotonic() + seconds
+    status = None
+    while time.monotonic() < end:
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try:
+                b = os.read(fd, 65536)
+            except OSError:
+                b = b""
+            out += b
+        done, st_ = os.waitpid(pid, os.WNOHANG)
+        if done:
+            status = st_
+            break
+    return out, status
+
+
+def cmd_selftest(_a: argparse.Namespace) -> int:
+    failures = []
+
+    def check(cond: bool, what: str) -> None:
+        print(("ok    " if cond else "FAIL  ") + what, flush=True)
+        if not cond:
+            failures.append(what)
+
+    with tempfile.TemporaryDirectory(prefix="pack-studio-") as t:
+        t = Path(t)
+        fakes = t / "fakes"
+        fakes.mkdir()
+        calls = t / "arrange-calls.jsonl"
+        sizes = {"alpha": 30000, "bravo": 40000, "charlie": 60000}
+        env = {
+            "FMZX_PACK": _script(fakes / "fmzx-pack", FAKE_FMZX_PACK, {"HEADER": SELFTEST_HEADER, "ENTRIES": SELFTEST_ENTRIES}),
+            "FMZX_ARRANGE_MUSIC": _script(fakes / "arrange-music", FAKE_ARRANGE, {"LOG": str(calls)}),
+            "FMZX_MAKE_PERSONAL_PACK": _script(fakes / "make-personal-pack", FAKE_MAKE_PACK, {"SIZES": sizes}),
+            "FMZX_MUSIC_PREVIEW": _script(fakes / "music-preview", FAKE_PREVIEW, {}),
+            "FMZX_SKIP_DEVICE_BUILD": "1",
+            "FMZX_PLAYER": "true",
+            "FMZX_HVSC_DIR": str(t / "hvsc"),
+            "FMZX_AY_DIR": str(t / "ay"),
+            "FAKE_ROOM": "100000",
+        }
+        os.environ.update(env)
+
+        # -- the split
+        check(split_packs([("a", 30), ("b", 40), ("c", 60)], 100, 2) == [["a", "b"], ["c"]], "split: fill while within room - 2% - overhead")
+        check(split_packs([("a", 30), ("b", 40), ("c", 25)], 100, 0) == [["a", "b", "c"]], "split: 95 of 98 shares one pack")
+        check(split_packs([("a", 30), ("b", 40), ("c", 29)], 100, 0) == [["a", "b"], ["c"]], "split: 99 of 98 does not")
+        check(split_packs([("big", 500), ("a", 10)], 100) == [["big"], ["a"]], "split: a game bigger than the room gets a pack of its own")
+        check(split_packs([], 100) == [], "split: no games, no packs")
+
+        # -- the games file
+        text = SELFTEST_HEADER + SELFTEST_ENTRIES
+        header, entries = split_games_file(text)
+        check(header == SELFTEST_HEADER.rstrip("\n") + "\n", "games file: the header comment")
+        check([g for g, _ in entries] == ["alpha", "gone", "bravo", "charlie"], "games file: the entries, commented-out ones not")
+        alpha = dict(entries)["alpha"]
+        check('[game.keys]\n"Q" = "up"\n"A" = "down"   # the owner\'s note\n# "O" = "left"\n' in alpha
+              and "missing" not in alpha, "games file: [game.keys] kept byte for byte, the next entry's comment not")
+        check("echo" not in dict(entries)["bravo"] and '"C694" = ["lead"]' in dict(entries)["bravo"],
+              "games file: [game.instruments] kept, the commented-out game after it not")
+        sub = subset_games_file(text, ["alpha", "bravo"], Path("/base"), "Pack 1 of the games")
+        doc = tomllib.loads(sub)
+        check([g["id"] for g in doc["game"]] == ["alpha", "bravo"] and doc["game"][0]["keys"] == {"Q": "up", "A": "down"},
+              "subset: the two games, their tables read back")
+        check(doc["game"][1]["file"] == "/base/bravo.sna" and doc["game"][1]["instruments"] == {"C694": ["lead"]},
+              "subset: a relative file made absolute")
+        check(sub.startswith(SELFTEST_HEADER.rstrip("\n") + "\n# Pack 1 of the games\n") and alpha in sub,
+              "subset: the header, the note, the entry verbatim")
+        try:
+            subset_games_file(text, ["nobody"], Path("/"), "")
+            check(False, "subset: an unknown id fails")
+        except ValueError:
+            check(True, "subset: an unknown id fails")
+
+        # -- the methods file
+        w0 = t / "w0"
+        save_methods(w0, {"alpha": {"sid", "ai"}, "bravo": set()})
+        check(load_methods(w0) == {"alpha": {"ai", "sid"}}, "studio.toml: methods round trip")
+
+        # -- --status, which learns first (the stand-in fmzx-pack)
+        games = t / "My Games"
+        games.mkdir()
+        for f in ("Alpha.tzx", "bravo.sna", "Charlie.tzx", "Delta.z80"):
+            (games / f).write_bytes(b"x")
+        w = t / "studio"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([str(games), "-o", str(w), "--status"])
+        s = buf.getvalue()
+        check(rc == 0 and (w / "all" / "plan.json").is_file(), "--status: learned (plan.json)")
+        check("Alpha (alpha)" in s and "score 8951-1a2b3c4d" in s and "FM (from code/memory)" in s
+              and "choice: original" in s, "--status: the scored game, its score, FM, its choice")
+        check("bravo (bravo)" in s and "nothing to arrange: FM from code" in s, "--status: FM from code without scores")
+        check("Charlie (charlie)" in s and "\n  beeper\n" in s, "--status: beeper without a score or a routine")
+        check("Delta (delta)  left out: 128K" in s, "--status: the game left out, with why")
+        check("a build makes 2 packs" in s and "pack 1: Alpha, bravo" in s and "pack 2: Charlie" in s,
+              "--status: the packs a build makes")
+
+        # -- generate, choose, listen (a Studio without the screen)
+        args = parse_args([str(games), "-o", str(w), "--sid-dir", str(t / "sids"), "--ay-dir", str(t / "ays")])
+        (t / "sids" / "C64Music" / "DOCUMENTS").mkdir(parents=True)
+        (t / "sids" / "C64Music" / "DOCUMENTS" / "STIL.txt").write_text("")
+        (t / "ays" / "music" / "ay" / "games").mkdir(parents=True)
+        runner = Runner(w / "studio.log", threaded=False)
+        st = Studio(games.resolve(), w, args, runner)
+        st.toggle("bravo", "ai")
+        check("bravo" not in st.methods or not st.methods["bravo"], "methods: no AI for a game without scores")
+        st.toggle_all("ai")
+        st.toggle("alpha", "sid")
+        check(load_methods(w) == {"alpha": {"ai", "sid"}}, "methods: A then s, saved")
+        st.toggle_all("ay")
+        check(load_methods(w) == {"alpha": {"ai", "sid", "ay"}}, "methods: Y marks AY for every game with scores, saved")
+        st.generate()
+        runner.drain()
+        log = [json.loads(ln) for ln in calls.read_text().splitlines()]
+        check(["generate", str(w / "all"), "--game", "alpha"] in log, "generate: an AI job for the game")
+        check(["chip", str(w / "all"), "--game", "alpha", "--sid-dir", str(t / "sids" / "C64Music")] in log,
+              "generate: a SID job, on the collection holding DOCUMENTS/STIL.txt")
+        check(["ay", str(w / "all"), "--game", "alpha", "--ay-dir", str(t / "ays" / "music" / "ay")] in log,
+              "generate: an AY job, on the collection's music/ay")
+        g = st.plan.game("alpha")
+        sc = g.scores[0]
+        labels = [c.label for c in st.candidates(g, sc)]
+        check(labels == ["beeper", "FM (from code/memory)", "AI take-1 (rules)", "SID chip-1", "C64 original (chip-1)", "AY ay-1",
+                         "Spectrum 128 original (ay-1)"], f"candidates: {labels}")
+        cands = {c.take: c for c in st.candidates(g, sc)}
+        check("consonance bass 0.71 pad 0.66" in cands["1"].info and "melody match 0.42; C64: Alpha" in cands["chip-1"].info,
+              "candidates: the take's metrics, the chip take's source and match")
+        check("melody match 0.37; Spectrum 128: Alpha by Someone, song 2" in cands["ay-1"].info and cands["ay-1"].choice == "ay-1"
+              and cands["zx128-1"].choice is None and cands["zx128-1"].direct, "candidates: the AY take's source and match, its own sound")
+        st.choose(g, sc, cands["ay-1"])
+        runner.drain()
+        check(["pick", str(w / "all"), "--set", "alpha/8951-1a2b3c4d=ay-1"] in [json.loads(ln) for ln in calls.read_text().splitlines()]
+              and read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "ay-1"} and st.choice_summary(g) == "ay-1",
+              "choose: pick --set GAME/KEY=ay-1, read back")
+        check(preview_argv("mp", w / "all", "alpha", sc.key, "ay-1", Path("o.wav"))[-4:] == ["--take", "ay-1", "-o", "o.wav"],
+              "listen: an AY take through music-preview --take ay-<n>")
+        st.choose(g, sc, cands["chip-1"])
+        runner.drain()
+        check(["pick", str(w / "all"), "--set", "alpha/8951-1a2b3c4d=chip-1"] in
+              [json.loads(ln) for ln in calls.read_text().splitlines()], "choose: pick --set GAME/KEY=chip-1")
+        check(read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "chip-1"} and st.choice_summary(g) == "chip-1",
+              "choose: the choice read back")
+        st.choose(g, sc, cands["beeper"])
+        check(not runner.pending, "choose: the beeper is not a choice")
+        st.play(g, sc.key, cands["1"])
+        runner.drain()
+        prev = preview_path(w, "alpha", sc.key, "1")
+        check(prev.is_file() and prev.read_bytes()[:4] == b"RIFF" and not prev.with_name(prev.stem + ".tmp.wav").exists(),
+              "listen: a music-preview render, cached by name")
+        check(st.route(g, sc.key, cands["1"])[0] == "file", "listen: the cached render plays at once")
+        os.utime(cands["1"].source, (time.time() + 5, time.time() + 5))
+        check(st.route(g, sc.key, cands["1"])[0] == "render", "listen: a changed take is rendered again")
+        os.environ["FMZX_MUSIC_PREVIEW"] = str(t / "none")
+        st.tools = Tools.from_env()
+        r = [play_route(w, "alpha", sc.key, c, False)[0] for c in st.candidates(g, sc)]
+        check(r == ["none", "none", "file", "none", "file", "none", "file"], f"listen without music-preview: arrange-music's files ({r})")
+        os.environ["FMZX_MUSIC_PREVIEW"] = env["FMZX_MUSIC_PREVIEW"]
+        st.tools = Tools.from_env()
+        bg = st.plan.game("bravo")
+        st.play(bg, WHOLE_GAME, st.candidates(bg, None)[1])
+        runner.drain()
+        check(preview_path(w, "bravo", WHOLE_GAME, "fm").is_file(), "listen: the whole game of a game without scores")
+
+        # -- the build: a pack that does not fit gives its last game to the next
+        (w / "pack-4").mkdir()
+        (w / "pack-4" / MARKER).write_text("{}")
+        (w / "pack-9").mkdir()
+        (w / "pack-9" / "mine.txt").write_text("not the studio's")
+        os.environ["FAKE_ROOM"] = "71000"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([str(games), "-o", str(w), "--build"])
+        s = buf.getvalue()
+        packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w) if is_studio_pack(d)}
+        check(rc == 0 and packs == {1: ["alpha"], 2: ["bravo"], 3: ["charlie"]}, f"build: retries move games on ({packs})")
+        check(not (w / "pack-4").exists() and (w / "pack-9" / "mine.txt").is_file(),
+              "build: the studio's stale pack-4 removed, a folder not its own kept")
+        p1 = w / "pack-1"
+        check(os.readlink(p1 / "sound-cache") == "../all/sound-cache" and os.readlink(p1 / "arrange") == "../all/arrange"
+              and (p1 / "arrange" / "choices.toml").is_file(), "build: the links into W/all")
+        g1 = (p1 / "personal-games.toml").read_text()
+        check(g1.startswith(SELFTEST_HEADER.rstrip("\n")) and alpha in g1 and "bravo" not in g1,
+              "build: the pack's games file, alpha's entry verbatim")
+        check((w / "pack-3" / "fmzx.fwsc").read_bytes() == b"FWSCcharlie" and str(w / "pack-3" / "fmzx.fwsc") in s,
+              "build: the packages, and the summary names them")
+        os.environ["FAKE_ROOM"] = "100000"
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--build"])
+        packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w) if is_studio_pack(d)}
+        check(rc == 0 and packs == {1: ["alpha", "bravo"], 2: ["charlie"]} and not (w / "pack-3").exists(),
+              f"build: fewer packs, pack-3 removed ({packs})")
+        check((w / "all" / "sound-cache").is_dir() and (w / "all" / "arrange" / "choices.toml").is_file(),
+              "build: the shared folders survive the removal")
+        os.environ["FAKE_ROOM"] = "50000"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([str(games), "-o", str(w), "--build"])
+        check(rc == 1 and "in no pack (too big for a pack of its own): Charlie" in buf.getvalue(),
+              "build: a game too big for any pack is named, exit 1")
+        os.environ["FAKE_ROOM"] = "100000"
+
+        # -- the SID collection: safe unpacking, and the download from 127.0.0.1
+        import py7zr
+
+        src = t / "web"
+        src.mkdir()
+        with py7zr.SevenZipFile(src / "HVSC_85-all-of-them.7z", "w") as z:
+            z.writestr(b"STIL\n", "C64Music/DOCUMENTS/STIL.txt")
+            z.writestr(b"PSID", "C64Music/MUSICIANS/S/Someone/Alpha.sid")
+        with py7zr.SevenZipFile(t / "evil.7z", "w") as z:
+            z.writestr(b"ok", "C64Music/ok.txt")
+            z._writestr(b"x", "../escaped.txt")  # the writer refuses such a path; the test needs one
+        try:
+            safe_extract_7z(t / "evil.7z", t / "evil-out")
+            check(False, "unpack: a member escaping its folder refuses the archive")
+        except ValueError:
+            check(not (t / "escaped.txt").exists() and not (t / "evil-out").exists()
+                  and not (t / ".evil-out.tmp").exists(), "unpack: a member escaping its folder refuses the archive")
+        if external_unpacker(src / "HVSC_85-all-of-them.7z", t) is None:
+            print("skip  unpack with bsdtar or 7-Zip: neither is installed")
+        else:
+            how = safe_extract_7z(src / "HVSC_85-all-of-them.7z", t / "ext" / "85", external=True)
+            check(find_collection(t / "ext") == t / "ext" / "85" / "C64Music"
+                  and (t / "ext/85/C64Music/MUSICIANS/S/Someone/Alpha.sid").read_bytes() == b"PSID",
+                  f"unpack with {how} (for methods py7zr does not read)")
+        check(not member_ok("/abs") and not member_ok("a/../../b") and not member_ok("C:x") and member_ok("C64Music/a b.sid"),
+              "unpack: the path checks")
+        import http.server
+
+        class Quiet(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **k):
+                super().__init__(*a, directory=str(src), **k)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        (src / "api.json").write_text(json.dumps({"version": 85, "complete": {"url": f"{base}/HVSC_85-all-of-them.7z"}}))
+        seen = []
+        try:
+            coll = fetch_hvsc(t / "hvsc", seen.append, lambda s: None, api=f"{base}/api.json")
+        finally:
+            srv.shutdown()
+        check(coll == t / "hvsc" / "85" / "C64Music" and (coll / "MUSICIANS/S/Someone/Alpha.sid").is_file(),
+              "download: unpacked into build/hvsc/<version>/, the collection found")
+        check(not list((t / "hvsc").glob("*.7z*")) and any("unpacking" in x for x in seen),
+              "download: the archive removed after unpacking, progress shown")
+        check(downloaded_collection(t / "hvsc") == coll and find_collection(t / "hvsc") == coll,
+              "download: found again on the next start")
+        check(not url_ok("http://example.org/x.7z") and url_ok("https://example.org/x.7z"), "download: https only (or 127.0.0.1)")
+
+        # -- the AY collection: the download from 127.0.0.1, only music/ay unpacked, a bad archive refused
+        import tarfile
+
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        top = f"AY-{sha}"
+
+        def tgz(path: Path, members: list[tuple[str, bytes | None, str]]) -> None:
+            with tarfile.open(path, "w:gz") as tf:
+                for name, data, kind in members:
+                    ti = tarfile.TarInfo(name)
+                    if kind == "dir":
+                        ti.type = tarfile.DIRTYPE
+                        tf.addfile(ti)
+                    elif kind == "link":
+                        ti.type, ti.linkname = tarfile.SYMTYPE, "/etc/passwd"
+                        tf.addfile(ti)
+                    else:
+                        ti.size = len(data)
+                        tf.addfile(ti, io.BytesIO(data))
+
+        (src / "tar").mkdir()
+        tgz(src / "tar" / sha, [(top, None, "dir"), (f"{top}/README.md", b"readme", "file"),
+                                (f"{top}/screenshots/a.png", b"png", "file"), (f"{top}/music/ay/games", None, "dir"),
+                                (f"{top}/music/ay/games/Alpha.ay", b"ZXAYEMUL", "file"),
+                                (f"{top}/music/ay/misc/Other.ay", b"ZXAYEMUL", "file")])
+        (src / "commits.json").write_text(json.dumps({"sha": sha, "commit": {"message": "x"}}))
+        tgz(t / "evil-ay.tar.gz", [(f"{top}/music/ay/games/ok.ay", b"ok", "file"), (f"{top}/music/ay/../../../escaped.txt", b"x", "file")])
+        tgz(t / "link-ay.tar.gz", [(f"{top}/music/ay/games/ok.ay", b"ok", "file"), (f"{top}/music/ay/games/l.ay", None, "link")])
+        for bad, why in (("evil-ay.tar.gz", "a path escaping its folder"), ("link-ay.tar.gz", "a link")):
+            try:
+                safe_extract_ay(t / bad, t / "ay-out")
+                check(False, f"AY unpack: {why} refuses the archive")
+            except ValueError:
+                check(not (t / "escaped.txt").exists() and not (t / "ay-out").exists() and not (t / ".ay-out.tmp").exists(),
+                      f"AY unpack: {why} refuses the archive")
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        seen = []
+        try:
+            acoll = fetch_ay(t / "ay", seen.append, lambda s: None, api=f"{base}/commits.json", tarball=f"{base}/tar/{{sha}}")
+            again = fetch_ay(t / "ay", seen.append, lambda s: None, api=f"{base}/commits.json", tarball=f"{base}/nowhere/{{sha}}")
+        finally:
+            srv.shutdown()
+        dest = t / "ay" / sha[:12]
+        check(acoll == dest / "music" / "ay" and (acoll / "games" / "Alpha.ay").read_bytes() == b"ZXAYEMUL"
+              and (acoll / "misc" / "Other.ay").is_file(), "AY download: music/ay unpacked into build/ay/<commit>/")
+        check(not (dest / "screenshots").exists() and not (dest / "README.md").exists() and not list((t / "ay").glob("*.tar.gz*"))
+              and any("unpacking" in x for x in seen), "AY download: the rest of the repository skipped, the archive removed, progress shown")
+        check(again == acoll and downloaded_ay(t / "ay") == acoll and find_ay_collection(dest) == acoll,
+              "AY download: the commit there already is not downloaded again; found on the next start")
+
+        # -- --status on the workspace the steps above left
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main([str(games), "-o", str(w), "--status"])
+        s = buf.getvalue()
+        check("methods: FM AI SID AY" in s and "* SID chip-1" in s and "  AY ay-1  " in s and "choice: chip-1" in s and "built:" in s
+              and "pack 2: 1 game," in s and f"AY collection: {t / 'ay' / sha[:12] / 'music' / 'ay'}" in s
+              and "not available" not in s, "--status: methods (AY among them), the chosen candidate, the built packs, the AY collection")
+        print("\n".join("      " + ln for ln in s.splitlines()[:14]))
+
+        # -- the screen, in a pseudo-terminal: keys, a resize down to 3x10, quit
+        import fcntl
+        import pty
+        import struct
+        import termios
+
+        def size(fd: int, rows: int, cols: int) -> None:
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.environ["TERM"] = "xterm-256color"
+            try:
+                os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), str(games), "-o", str(w)])
+            finally:
+                os._exit(127)
+        size(fd, 24, 100)
+        os.kill(pid, signal.SIGWINCH)
+        out, status = _wait_pty(fd, pid, 2.0)
+        keys = [b"j", b"k", b"y", b"y", b"\r", b"j", b"j", b"j", b"\r", b" ", b"c", b"y", b"y", b"l", b"k", b"q", b"h", b"?", b"q"]
+        for k in keys:
+            os.write(fd, k)
+            o, status = _wait_pty(fd, pid, 0.15)
+            out += o
+        for rows, cols in ((10, 30), (3, 10), (1, 1), (30, 120)):
+            size(fd, rows, cols)
+            os.kill(pid, signal.SIGWINCH)
+            o, status = _wait_pty(fd, pid, 0.4)
+            out += o
+        os.write(fd, b"\x1b[B\x1b[B\r")
+        out += _wait_pty(fd, pid, 0.5)[0]
+        os.write(fd, b"h")
+        os.write(fd, b"q")
+        o, status = _wait_pty(fd, pid, 1.0)
+        out += o
+        if status is None:
+            os.write(fd, b"y")
+            o, status = _wait_pty(fd, pid, 5.0)
+            out += o
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        os.close(fd)
+        text_out = out.decode("utf-8", "replace")
+        check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in text_out,
+              "screen: keys, resizes down to 1x1, quit; exit 0" + ("" if status is not None else " (it hung)")
+              + ("" if "Traceback" not in text_out else ": " + text_out[text_out.find("Traceback"):][:600]))
+        check("pack-studio" in text_out and "Alpha" in text_out and "workspace" in text_out,
+              "screen: drew the games, printed the workspace when it closed")
+        check(choice_label(read_choices(w / "all").get("alpha/8951-1a2b3c4d")) in ("take-1", "chip-1", "ay-1", "original"),
+              "screen: c chose through pick --set")
+
+    if failures:
+        print(f"{PROG} selftest: {len(failures)} failed: " + "; ".join(failures))
+        return 1
+    print(f"{PROG} selftest: all passed")
+    return 0
+
+
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(prog=PROG, description="A terminal studio for your own games: music per game, then the packs.",
+                                 epilog="tools/pack-studio selftest checks the tool. Details: the docstring at the top of tools/pack-studio.")
+    ap.add_argument("folder", help="the folder of your games (.sna, .z80, .tap, .tzx)")
+    ap.add_argument("-o", dest="out", metavar="W", help="the workspace (default build/studio/<folder name>)")
+    ap.add_argument("--sid-dir", metavar="PATH", help="the SID collection to use instead of downloading one")
+    ap.add_argument("--ay-dir", metavar="PATH", help="the AY collection (.ay files) to use instead of downloading one")
+    ap.add_argument("--offline", action="store_true", help="download nothing")
+    ap.add_argument("--model", metavar="NAME", help="the generator for AI takes (tools/arrange-music generate --model)")
+    m = ap.add_mutually_exclusive_group()
+    m.add_argument("--status", action="store_true", help="print the games, methods, scores, candidates and choices")
+    m.add_argument("--build", action="store_true", help="build the packs without the screen")
+    return ap.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["selftest"]:
+        return cmd_selftest(argparse.Namespace())
+    return cmd_studio(parse_args(argv))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

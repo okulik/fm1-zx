@@ -161,6 +161,51 @@ first (in Docker, a no-op when they are up to date), so it works from a clean `b
 `FMZX_SKIP_DEVICE_BUILD=1` skips them. `--offline` and `--cache DIR` work as for
 `tools/make-packages`.
 
+**The studio.** To choose each game's music by ear and get as many packs as the games need:
+
+    tools/pack-studio ~/games                   # the studio, a terminal screen
+    tools/pack-studio ~/games --status          # the games, their music and choices, as text
+    tools/pack-studio ~/games --build           # the packs, without the screen
+
+It learns the folder's games as `tools/make-personal-pack` does (the device builds, then
+`fmzx-pack personal ... --plan`, which measures every game even when they are too many for one
+pack) and lists each game with how it went in, its packed size and its music. Per game, mark one
+or more ways to make the music of its scores: **FM**, the FM-1 playing the music learned from the
+game's code and memory (always there: the original); **AI**, takes
+[arranged](#arranged-music) by `tools/arrange-music generate`; **SID**, the game's C64 tune, and
+**AY**, its Spectrum 128 tune ([music from other versions](#music-from-other-versions)). A game
+with no score plays FM from its code, or the beeper, and has nothing to arrange. Open a game to
+hear each score's candidates (the beeper, FM, each AI take with its figures, each C64 or
+Spectrum 128 take with its source and melody match) and choose one. What plays is `music-preview`'s render of what the
+FM-1 plays or, when that is not built, the renders `tools/arrange-music` wrote, through `afplay`
+(macOS), `ffplay`, `paplay` or `aplay`.
+
+Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `a`/`s`/`y` mark
+AI/SID/AY for it, `A`/`S`/`Y` for every game, `g` generates what is marked, `r` learns again, `b`
+builds, `l` shows the log, `?` the full help, `q` quits. On a game: Enter plays, space or Esc
+stops, `c` chooses, `a`/`s`/`y`/`g` as before, Left, `h` or Backspace goes back. Long steps run one at a time in the
+background; the bottom line shows the step, how many wait and its last output line.
+
+Everything goes under `build/studio/<folder name>/` (`-o W` for another folder): `all/` the
+learning (`personal-games.toml`, which keeps your edits, the scores, their takes and
+`choices.toml`, the cache), `studio.toml` the methods marked, `studio.log` every step's output,
+`previews/` the renders. `b` learns again (choices change the sizes), splits the games in name
+order into packs filled to the room less 2%, and builds each with `tools/make-personal-pack`
+from its own games file, those games' entries from `all/personal-games.toml` as written there:
+`pack-<n>/fmzx.fwsc` and `pack-<n>/fmzx-preview.fwsc`. A pack that does not fit gives its last
+game to the next one. The summary lists each pack's games and its package. The first SID job
+downloads the High Voltage SID Collection (about 85 MB; its address from hvsc.c64.org) into
+`build/hvsc/<version>/`; py7zr checks its member list first, and bsdtar (macOS's `tar`) or 7-Zip
+unpacks it. The first AY job downloads the chris-y/AY collection on GitHub (Spectrum AY music;
+about 30 MB, its newest commit from api.github.com) and unpacks only its `music/ay` folder into
+`build/ay/<commit>/`, every member's path checked first (one that would land outside, or a link,
+refuses the archive). The tunes belong to their authors: keep the collections and the packs made
+with them to yourself. `--sid-dir PATH` and `--ay-dir PATH` use collections you have instead, and
+`--offline` downloads nothing.
+The studio runs under [uv](https://docs.astral.sh/uv/), as `tools/arrange-music` does;
+`tools/pack-studio selftest` checks it with stand-ins for every tool, and the docstring at the top
+of `tools/pack-studio` is the full reference.
+
 The picker lists your games by name, A to Z (case does not count), whatever their order in the
 games file.
 
@@ -359,6 +404,20 @@ The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--
 those steps. `emu-gate`'s `tests/fw_personal.rs` runs the script on a folder of our own generated
 test programs and boots the result in fm1-emu.
 
+With `--plan` the command goes as far as measuring the pack: the games converted, their music
+learned and the chosen takes applied, `sound-report.txt` and the scores written, but no
+`games.bin` or `keymaps.json` (those of an earlier run are removed), and a pack over the room is
+no error. It writes `DIR/plan.json` instead: `room` and `used` (the room and the pack's size, in
+bytes), and `games`, the packed games in pack order and then those left out, each with its `id`,
+`name`, `file`, `how`, `packed` (its bytes in the pack with its music; `null` when left out),
+`reason` (why left out, else `null`), `music` (its line in the table) and `scores`: each score
+and shadow score with its `key`, `shadow`, `seconds` (intro and one loop pass) and `status`
+(`original`, `take 2 (<generator>)`, `chip-1 (<source>)`, `ay-1 (<source>)` or `refused: <why>`).
+Any run removes the
+`plan.json` of an earlier one. Packs built from games files into folders whose `sound-cache` and
+`arrange` are symlinks to one shared pair use that pair: each run writes its own games' scores and
+leaves the others' as they are.
+
 ### Arranged music
 
 A recorded score can play with a band: a bass, a pad (chords, one note at a time) and a drum,
@@ -414,13 +473,33 @@ made, so takes generated in a run go into the packages of the next one.
   installed the packages, no network).
 
 The renders play General MIDI instruments through FluidSynth: they show the parts, not the FM-1's
-sound. To hear a take as the FM-1 plays it, choose it, build the packages and try them (`--try`,
-or on the FM-1).
+sound. To hear a take as the FM-1 plays it, render it with `music-preview` (below), or choose it,
+build the packages and try them (`--try`, or on the FM-1).
+
+**Hearing a take as the FM-1 plays it.** `music-preview` renders a game of a learning workspace
+(the output folder of `fmzx-pack personal` or `tools/make-personal-pack`, `DIR` here) to a 16-bit
+WAV through the firmware's sound code, as `music-corpus` renders `_fm_l.wav`:
+
+    cd host && cargo build --release -p music --bin music-preview
+    target/release/music-preview DIR --game ID [--score KEY [--take T]] [--seconds N] [--beeper] -o OUT.wav
+
+It runs the game as the learner ran it and plays FM: engines with the game's music as the pack
+would hold it, the takes `choices.toml` chooses in, each checked as a run checks it. Without
+`--score`: the learner's run from its start, 40 s. With `--score KEY`: the run that recorded the
+score, from 1 s before it starts, for 1 s, the score (its intro and one pass of its loop) and 2 s
+(at most 40 s), with the score playing take T in place of its choice: `0` or `original` (a shadow
+score: the routine, live), `<n>` (`take-<n>`), `chip-<n>` or `ay-<n>`; without `--take`, what `choices.toml`
+chooses. `--seconds N` sets the length (up to 600), `--beeper` renders the beeper alone over the
+same frames. The game's music comes from `DIR/sound-cache/` (a game not there is learned and cached
+first, which takes a while); from the cache a render takes about a second. It prints one line
+when the WAV is written; an unknown game, score or take, or no workspace, is one line on stderr and
+exit 1, a take the pack would refuse `refused: <why>` and exit 3.
 
 **The files**, in `DIR/arrange/` (under `build/personal/` by default, which git ignores):
 
     choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original;
-                                     "chip-<n>": a C64 take, see "Music from other versions")
+                                     "chip-<n>": a C64 take, "ay-<n>": a Spectrum 128 take,
+                                     see "Music from other versions")
     <game>/<key>/score.toml          the score's notes (tools/make-personal-pack)
                  original.mid, original.wav   the score alone
                  takes.toml          the takes made, for which score.toml, by what, how long each took
@@ -428,6 +507,7 @@ or on the FM-1).
                  take-<n>/fm1.mid, fm1.wav    the same, to listen to (the drum's level picks a drum)
                  take-<n>/full.mid, full.wav  the original with everything the model wrote
                  chip-<n>/...        a C64 take (see "Music from other versions")
+                 ay-<n>/...          a Spectrum 128 take (the same)
 
 `arranged.toml` has `score.toml`'s header, `take`, `generator` (the model and its settings), a
 `[metrics]` table and notes on 4 voices: 0 the lead (the score's voice with the role lead, else its
@@ -493,20 +573,25 @@ offline, and `UV_OFFLINE=1` keeps uv offline too.
 
 ### Music from other versions
 
-Many games also came out on the Commodore 64, often with a tune of their own on its SID chip. A
-recorded score (or a shadow score) can take its game's C64 tune as a take, next to the AI takes:
-the FM-1 then plays the C64 tune's notes from the moment the Spectrum tune starts, on the C64
+Many games also came out on the Commodore 64, often with a tune of their own on its SID chip, and
+many have a Spectrum 128 version, or a rip of its music, playing the 128K's AY chip. A recorded
+score (or a shadow score) can take its game's C64 or Spectrum 128 tune as a take, next to the AI
+takes: the FM-1 then plays that tune's notes from the moment the Spectrum tune starts, on the
 tune's own timeline (its own intro and loop), and stops when the beeper stops matching the
 Spectrum tune (the game has moved on), as any score does.
 
-    cd host && cargo build --release -p fmzx-pack && cd ..          # the SID converter
+    cd host && cargo build --release -p fmzx-pack && cd ..          # the converter (SID and AY)
     tools/arrange-music chip build/personal --sid-dir ~/C64Music      # candidates, as chip-<n> takes
-    tools/arrange-music pick build/personal                           # listen, choose chip-1, or --set
-    tools/make-personal-pack ~/games                                  # the packages, with the C64 take
+    tools/arrange-music ay build/personal --ay-dir ~/AY/music/ay      # candidates, as ay-<n> takes
+    tools/arrange-music pick build/personal                           # listen, choose chip-1 or ay-1, or --set
+    tools/make-personal-pack ~/games                                  # the packages, with the chosen take
 
-**What it needs.** A SID collection that you download yourself, such as the High Voltage SID
-Collection (its `C64Music` folder; any folder of `.sid` files works, and its
-`DOCUMENTS/STIL.txt`, when there is one, helps to find the tunes). The tool never downloads one.
+**What it needs.** A SID collection, such as the High Voltage SID Collection (its `C64Music`
+folder; any folder of `.sid` files works, and its `DOCUMENTS/STIL.txt`, when there is one, helps to
+find the tunes), or a collection of `.ay` files (ZXAYEMUL, the Project AY format), such as the
+chris-y/AY repository on GitHub (its `music/ay` folder: `games/` holds the games' tunes, `misc/`
+more). `tools/arrange-music` never downloads a collection: give it one you have, or let
+[`tools/pack-studio`](#your-own-games) download both into `build/hvsc/` and `build/ay/`.
 The converter is `fmzx-pack chip-notes` (`cd host && cargo build --release -p fmzx-pack`): it
 plays a SID file's tune in a 6502 and C64 model of its own and writes the notes. `tools/arrange-music`
 runs under uv as for the AI takes, and FluidSynth renders the takes; `chip.wav` (the C64's own
@@ -525,10 +610,23 @@ and `chip.wav` when it can be made). Most C64 versions play a different piece th
 game, so many scores find nothing that matches; the melody match says which candidates are worth
 a listen.
 
+**From a Spectrum 128 tune.** `tools/arrange-music ay DIR --ay-dir PATH [--game ID]... [--max N]
+[--force]` does the same with the `.ay` files at PATH: candidates are the files whose file name or
+misc string is the game's name, or one of whose songs' names is (a file under `games/` before one
+under `misc/` at a tie), each song checked and ranked as above, and the best written as
+`DIR/arrange/<game>/<key>/ay-<n>/` (`generator = "chip ay"`, `ay_file`, `subtune` the song,
+1-based, and the source `Spectrum 128: <title> by <author>, song N, <file>`). The converter runs
+an `.ay` song's Z80 player in the Spectrum machine core, captures the AY registers it writes and
+writes the notes in the same form. Many `.ay` files in such collections hold a 48K game's beeper tune, or
+an Amstrad CPC or SAM Coupé song; the converter refuses those, and the tool skips them without a
+line each and counts them. `ay.wav` (the Spectrum 128's own sound) is written only when `ffmpeg`
+reads `.ay` files (its libgme demuxer).
+
 **Choosing.** The `pick` page lists each chip take with its source (`C64: <title> by <author>
-(<released>), subtune N, <file>`) and melody match; choosing one saves `"<game>/<key>" = "chip-1"`
-in `choices.toml`, and `tools/arrange-music pick DIR --set GAME/KEY=chip-1` does the same without
-the page (`--list` prints the chip takes too). The next `tools/make-personal-pack` run packs the
+(<released>), subtune N, <file>`) and each ay take with its own, with their melody match;
+choosing one saves `"<game>/<key>" = "chip-1"` (or `"ay-1"`) in `choices.toml`, and
+`tools/arrange-music pick DIR --set GAME/KEY=chip-1` does the same without the page (`--list`
+prints the chip and ay takes too). The next `tools/make-personal-pack` run packs the
 chosen take as a replacement score: the score's trigger and recorded edges are kept, so it starts
 with the Spectrum tune and follows the beeper as before, and its notes play on their own timeline
 (docs/pack-format.md, "replacement"). The take is checked as an AI take is, against its own
@@ -538,6 +636,7 @@ frame (counted on its own sections), 128 KB and replay checks follow. `sound-rep
 
       arranged: C64 take chip-1 (C64: <title> by <author> (<released>), subtune 2, <file>)
       arranged: C64 take chip-2 refused: note 6: it ends at 630000064 T, past the take's own end at 630000000 T
+      arranged: Spectrum 128 take ay-1 (Spectrum 128: <title> by <author>, song 2, <file>)
 
 and the table ends with `<name>: score <key> plays C64 take chip-1 (...)`.
 
@@ -552,11 +651,17 @@ modulation never repeat exactly, and loops longer than 90 s are not found. Witho
 plays its notes once (up to 180 s) and then rests while the score still follows the beeper. Either
 way the C64 tune plays only as long as the Spectrum tune does: a score whose recording has no loop
 ends where its recording ends, however long the C64 tune is, and the pack keeps only the C64
-notes up to that end.
+notes up to that end. An AY song carries over the same way: its three channels' tones (by
+average pitch: lead, bass, pad), their volumes as levels (a channel on the envelope at full
+level), a repeating envelope with the tone off as a buzzer note at its pitch, and noise as drum
+hits; the envelope's shape within a note is not carried over. Its loops are found where the AY's
+registers, as heard, repeat exactly, as for a SID, and a Spectrum 128 take ends with its score
+the same way.
 
-**Rights.** The tunes belong to their authors. A chip take is for your own personal pack: keep the
-collection, the takes and the packs made with them to yourself. Nothing from a SID collection is
-part of the repository or its packages (the tests build their own made-up SID files).
+**Rights.** The tunes belong to their authors. A chip or ay take is for your own personal pack:
+keep the collections, the takes and the packs made with them to yourself. Nothing from a SID or AY
+collection is part of the repository or its packages (the tests build their own made-up SID and
+`.ay` files).
 
 ## Music corpus
 

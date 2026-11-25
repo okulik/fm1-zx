@@ -1,26 +1,36 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Chip tunes to notes for the FM-1: a SID tune (PSID or RSID) played in a 6502 and C64 model
-//! ([`cpu`], [`c64`]), its SID registers captured once per play call, and turned into notes on
-//! the Spectrum's clock ([`notes`]), written as TOML for `tools/arrange-music`
-//! (`fmzx-pack chip-notes`). No audio is made.
+//! Chip tunes to notes for the FM-1, written as TOML for `tools/arrange-music`
+//! (`fmzx-pack chip-notes`). No audio is made. Two kinds of tune, told apart by their magic:
+//!
+//! - A C64 SID tune (PSID or RSID, [`sidfile`]) played in a 6502 and C64 model ([`cpu`],
+//!   [`c64`]), its SID registers captured once per play call.
+//! - A ZX Spectrum 128 AY song (a ZXAYEMUL `.ay` file, [`ayfile`]) played in the Spectrum
+//!   machine core ([`ay`]), its AY registers captured once per frame.
+//!
+//! Either capture is turned into notes on the Spectrum's clock ([`notes`]).
 //!
 //! # The notes file
 //!
-//! Top-level keys: `file` (the SID file as named), `subtune` (1-based), `title`, `author` and
-//! `released` (the header's), `clock_hz` (the C64's clock: 985,248 PAL or 1,022,727 NTSC),
-//! `seconds` (the time played), `intro_t` and `loop_t` (T-states at 3.5 MHz; `loop_t` 0: no
-//! loop, the notes end at `intro_t`). Then each `[[note]]`, by start and voice: `voice` (0-2
-//! tonal: 0 the lead, 1 the bass, 2 the pad; 3 the drum), `start_t` and `end_t` (T since the
-//! start; a loop's notes are the intro's and then one pass's, from `intro_t`), `period_t` (the
-//! pitch's period in T, 0 for the drum) and `level` (1-255).
+//! Top-level keys: `file` (the tune's file as named), `format` (`PSID`, `RSID` or `AY`),
+//! `subtune` (1-based), `title`, `author` and `released` (a SID's header's; an `.ay`'s song name
+//! (else its misc string), its author, and its misc string when that is not the title),
+//! `clock_hz` (the chip's clock: the C64's 985,248 PAL or 1,022,727 NTSC, the 128K's AY
+//! 1,773,400), `seconds` (the time played), `intro_t` and `loop_t` (T-states at 3.5 MHz;
+//! `loop_t` 0: no loop, the notes end at `intro_t`). Then each `[[note]]`, by start and voice:
+//! `voice` (0-2 tonal: 0 the lead, 1 the bass, 2 the pad; 3 the drum), `start_t` and `end_t` (T
+//! since the start; a loop's notes are the intro's and then one pass's, from `intro_t`),
+//! `period_t` (the pitch's period in T, 0 for the drum) and `level` (1-255).
 
+pub mod ay;
+pub mod ayfile;
 pub mod c64;
 pub mod cpu;
 pub mod notes;
 pub mod sidfile;
 
+pub use ayfile::AyFile;
 pub use notes::{Note, Notes};
 pub use sidfile::SidFile;
 
@@ -41,46 +51,144 @@ fn quoted(s: &str) -> String {
     out + "\""
 }
 
+/// The file a tune comes from.
+#[derive(Clone, Debug)]
+pub enum Source {
+    Sid(SidFile),
+    Ay(AyFile),
+}
+
+impl Source {
+    /// Parses a SID or `.ay` file, by its magic. Err: why it is neither.
+    pub fn parse(data: &[u8]) -> Result<Source, String> {
+        if AyFile::is_ay(data) {
+            return AyFile::parse(data).map(Source::Ay);
+        }
+        SidFile::parse(data).map(Source::Sid).map_err(|e| match e.strip_prefix("not a SID file: no ") {
+            Some(rest) => format!("not a SID or AY file: no {rest}, nor ZXAY"),
+            None => e,
+        })
+    }
+
+    /// `PSID`, `RSID` or `AY`.
+    pub fn format(&self) -> &'static str {
+        match self {
+            Source::Sid(s) => s.format(),
+            Source::Ay(_) => "AY",
+        }
+    }
+
+    /// The number of subtunes.
+    pub fn songs(&self) -> u16 {
+        match self {
+            Source::Sid(s) => s.songs,
+            Source::Ay(a) => a.count(),
+        }
+    }
+
+    /// The subtune played when none is asked for (1-based).
+    pub fn start_song(&self) -> u16 {
+        match self {
+            Source::Sid(s) => s.start_song,
+            Source::Ay(a) => a.start_song(),
+        }
+    }
+
+    /// Subtune `song`'s (1-based) title.
+    pub fn title(&self, song: u16) -> String {
+        match self {
+            Source::Sid(s) => s.title.clone(),
+            Source::Ay(a) => a.title(song),
+        }
+    }
+
+    pub fn author(&self) -> String {
+        match self {
+            Source::Sid(s) => s.author.clone(),
+            Source::Ay(a) => a.author.clone(),
+        }
+    }
+
+    /// A SID's released string; an `.ay`'s misc string unless it is subtune `song`'s title.
+    pub fn released(&self, song: u16) -> String {
+        match self {
+            Source::Sid(s) => s.released.clone(),
+            Source::Ay(a) if a.title(song) == a.misc => String::new(),
+            Source::Ay(a) => a.misc.clone(),
+        }
+    }
+
+    /// The chip's clock in Hz.
+    pub fn clock_hz(&self) -> u32 {
+        match self {
+            Source::Sid(s) => s.clock_hz(),
+            Source::Ay(_) => ay::AY_HZ,
+        }
+    }
+
+    /// The header as text, for `fmzx-pack chip-notes --info`.
+    pub fn info(&self) -> String {
+        match self {
+            Source::Sid(s) => s.info(),
+            Source::Ay(a) => a.info(),
+        }
+    }
+}
+
+/// The header of the SID or `.ay` file `data` as text, for `fmzx-pack chip-notes --info`.
+/// Err: why it is neither.
+pub fn info(data: &[u8]) -> Result<String, String> {
+    Source::parse(data).map(|s| s.info())
+}
+
 /// A tune's notes and what they came from.
 #[derive(Clone, Debug)]
 pub struct ChipNotes {
-    pub sid: SidFile,
+    pub source: Source,
     pub subtune: u16,
     pub seconds: f64,
     pub clock_hz: u32,
     pub notes: Notes,
 }
 
-/// Plays `subtune` (1-based; the file's start song if `None`) of the SID file `data` for
-/// `seconds` and makes its notes. Err: why it cannot be played.
+/// Plays `subtune` (1-based; the file's start song if `None`) of the SID or `.ay` file `data`
+/// for `seconds` and makes its notes. Err: why it cannot be played.
 pub fn chip_notes(data: &[u8], subtune: Option<u16>, seconds: f64) -> Result<ChipNotes, String> {
-    let sid = SidFile::parse(data)?;
-    let subtune = subtune.unwrap_or(sid.start_song);
-    let cap = c64::capture(&sid, subtune, seconds)?;
-    let notes = notes::convert(&cap);
-    Ok(ChipNotes { clock_hz: cap.clock_hz, sid, subtune, seconds, notes })
+    let source = Source::parse(data)?;
+    let subtune = subtune.unwrap_or(source.start_song());
+    let notes = match &source {
+        Source::Sid(sid) => notes::convert(&c64::capture(sid, subtune, seconds)?),
+        Source::Ay(file) => notes::convert_ay(&ay::capture(file, subtune, seconds)?),
+    };
+    Ok(ChipNotes { clock_hz: source.clock_hz(), source, subtune, seconds, notes })
 }
 
 impl ChipNotes {
-    /// The notes file's text (see the crate docs); `file` the SID file's name as given.
+    /// The notes file's text (see the crate docs); `file` the tune file's name as given.
     pub fn toml(&self, file: &str) -> String {
         let n = &self.notes;
+        let (chip, voice, names): (&str, &str, [&str; 3]) = match self.source {
+            Source::Sid(_) => ("A SID", "SID voice", ["1", "2", "3"]),
+            Source::Ay(_) => ("An AY", "AY channel", ["A", "B", "C"]),
+        };
         let from: Vec<String> = ["lead", "bass", "pad"]
             .iter()
-            .zip(n.sid_voice)
-            .filter_map(|(role, v)| v.map(|v| format!("{role} SID voice {}", v + 1)))
+            .zip(n.chip_voice)
+            .filter_map(|(role, v)| v.map(|v| format!("{role} {voice} {}", names[usize::from(v)])))
             .collect();
+        let src = &self.source;
         let mut s = format!(
-            "# A SID tune's notes for the FM-1, made by fmzx-pack chip-notes.\n\
+            "# {chip} tune's notes for the FM-1, made by fmzx-pack chip-notes.\n\
              # Voices: {}; 3 the drum (noise).\n\
-             file = {}\nsubtune = {}\ntitle = {}\nauthor = {}\nreleased = {}\nclock_hz = {}\nseconds = {}\n\
+             file = {}\nformat = {}\nsubtune = {}\ntitle = {}\nauthor = {}\nreleased = {}\nclock_hz = {}\nseconds = {}\n\
              intro_t = {}\nloop_t = {}\n",
             if from.is_empty() { "none".to_string() } else { from.join(", ") },
             quoted(file),
+            quoted(src.format()),
             self.subtune,
-            quoted(&self.sid.title),
-            quoted(&self.sid.author),
-            quoted(&self.sid.released),
+            quoted(&src.title(self.subtune)),
+            quoted(&src.author()),
+            quoted(&src.released(self.subtune)),
             self.clock_hz,
             self.seconds,
             n.intro_t,
@@ -104,7 +212,7 @@ impl ChipNotes {
         let mut s = format!(
             "subtune {} of {}, {} notes over {secs:.1} s ({:.1}/s; lead {}, bass {}, pad {}), {} drum hits",
             self.subtune,
-            self.sid.songs,
+            self.source.songs(),
             tonal,
             if secs > 0.0 { tonal as f64 / secs } else { 0.0 },
             per[0],

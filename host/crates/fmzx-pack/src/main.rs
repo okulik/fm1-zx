@@ -8,13 +8,14 @@
 //! `fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
 //!     [--product FM-1_048] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_048]`
-//! `fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...` (the
-//!     personal pack, `tools/make-personal-pack`; `--app`: the images it goes with, at least one,
-//!     which set the room for it)
-//! `fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S] -o <notes.toml>` (a SID tune's
-//!     notes for `tools/arrange-music`: the `chipmusic` crate; `--subtune` defaults to the file's
-//!     start song, `--seconds` to 180)
-//! `fmzx-pack chip-notes --info <file.sid>` (the SID file's header)
+//! `fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]... [--plan]`
+//!     (the personal pack, `tools/make-personal-pack`; `--app`: the images it goes with, at least
+//!     one, which set the room for it; `--plan`: `<dir>/plan.json` instead of the pack, which may
+//!     then be over the room)
+//! `fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S] -o <notes.toml>` (a C64
+//!     SID tune's or a Spectrum 128 `.ay` song's notes for `tools/arrange-music`: the `chipmusic`
+//!     crate; `--subtune` (1-based) defaults to the file's start song, `--seconds` to 180)
+//! `fmzx-pack chip-notes --info <file.sid | file.ay>` (the file's header)
 
 use fmzx_pack::inputs::{check_loader, default_cache, load_sdk, sha256_hex, Pins};
 use fmzx_pack::keymaps::keymaps_json;
@@ -33,9 +34,9 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack fwsc --app <app.bin> --pack <pack.bin> --loader <loader.bin> -o <out.fwsc>
                       [--product FM-1_048] [--cache DIR] [--offline]
        fmzx-pack verify <pkg.fwsc> [--product FM-1_048]
-       fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]...
-       fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S (default 180)] -o <notes.toml>
-       fmzx-pack chip-notes --info <file.sid>";
+       fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]... [--plan]
+       fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S (default 180)] -o <notes.toml>
+       fmzx-pack chip-notes --info <file.sid | file.ay>";
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -125,7 +126,7 @@ fn verify(args: &[String]) -> Result<(), String> {
 }
 
 fn personal(args: &[String]) -> Result<(), String> {
-    let o = opts(args, &["-o", "--app"], &[])?;
+    let o = opts(args, &["-o", "--app"], &["--plan"])?;
     let [input] = &o.free[..] else { return Err(USAGE.to_string()) };
     let out = o.need("-o")?;
     if !o.values.iter().any(|(k, _)| k == "--app") {
@@ -140,10 +141,16 @@ fn personal(args: &[String]) -> Result<(), String> {
         let room = fmzx_pack::layout::pack_room(usize::try_from(len).unwrap_or(usize::MAX));
         limit = Some(limit.map_or(room, |l: u32| l.min(room)));
     }
-    let r = personal::run_with_limit(Path::new(input), Path::new(out), limit)?;
+    let plan = o.flags.iter().any(|f| f == "--plan");
+    let r = if plan { personal::run_plan } else { personal::run_with_limit }(Path::new(input), Path::new(out), limit)?;
     print!("{}", personal::table(&r));
     let games = r.rows.iter().filter(|w| w.packed.is_some()).count();
-    println!("{}: {} bytes, {games} games", Path::new(out).join("games.bin").display(), r.used);
+    if plan {
+        let fits = if r.used > r.room { "does not fit" } else { "fits" };
+        println!("{}: a pack of {games} games, {} bytes of {}: it {fits}", Path::new(out).join(personal::PLAN).display(), r.used, r.room);
+    } else {
+        println!("{}: {} bytes, {games} games", Path::new(out).join("games.bin").display(), r.used);
+    }
     println!("{}: the learned music's details", Path::new(out).join(personal::SOUND_REPORT).display());
     Ok(())
 }
@@ -152,8 +159,8 @@ fn chip_notes(args: &[String]) -> Result<(), String> {
     let o = opts(args, &["--subtune", "--seconds", "-o"], &["--info"])?;
     let [path] = &o.free[..] else { return Err(USAGE.to_string()) };
     if o.flags.iter().any(|f| f == "--info") {
-        let sid = chipmusic::SidFile::parse(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
-        print!("{path}: {}", sid.info());
+        let info = chipmusic::info(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
+        print!("{path}: {info}");
         return Ok(());
     }
     let subtune = match o.get("--subtune") {

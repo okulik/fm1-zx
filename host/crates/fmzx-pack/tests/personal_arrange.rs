@@ -9,7 +9,8 @@
 //! note past the score's end) leave the original with the reason; a C64 take (`chip-1`, on its
 //! own timeline with another loop than the score's) goes in as a replacement record, which the
 //! replay verifies, and C64 takes that do not fit or are not there leave the original with the
-//! reason; a choice naming no score is a note, and a choices file that does not read, or a
+//! reason; a Spectrum 128 take (`ay-1`, the same on its own timeline) goes in the same way, and
+//! one that does not fit leaves the original with the reason; a choice naming no score is a note, and a choices file that does not read, or a
 //! choice that names no take, fails the run. The music of a routine the learner
 //! learned (`games/test/tune.sna`) is a shadow score: written out with `shadow = true`, packed
 //! only once a take is chosen for it, and then with precedence, so that the replay verifies it
@@ -440,19 +441,45 @@ fn chosen_takes_go_into_the_pack() {
     assert_eq!(list(&out.0), original);
     assert!(report(&out.0).contains("\n      arranged: C64 take chip-9 refused: chip-9/arranged.toml: "), "{}", report(&out.0));
 
+    // a Spectrum 128 take chosen: the same replacement, from its ay-<n> folder
+    let ay_text = c_text
+        .replace("take = \"chip-1\"", "take = \"ay-1\"")
+        .replace("generator = \"chip sid\"", "generator = \"chip ay\"")
+        .replace(CHIP_SOURCE, AY_SOURCE)
+        .replace("sid_file = \"M/Made_Up.sid\"", "ay_file = \"games/Made_Up.ay\"");
+    write(&folder.join("ay-1/arranged.toml"), &ay_text);
+    write(&choices, &format!("[choices]\n\"looper/{key}\" = \"ay-1\"\n"));
+    let r = run(&games.0, &out.0);
+    assert_eq!(list(&out.0), chipped, "the same notes make the same record");
+    assert!(report(&out.0).contains(&format!("\n      arranged: Spectrum 128 take ay-1 ({AY_SOURCE})\n")), "{}", report(&out.0));
+    assert!(table(&r).contains(&format!("looper: score {key} plays Spectrum 128 take ay-1 ({AY_SOURCE})\n")), "{}", table(&r));
+    // one that does not fit (a chip take's file in its folder, no own timeline): the original
+    write(&folder.join("ay-2/arranged.toml"), &c_text);
+    write(&folder.join("ay-3/arranged.toml"), &ay_text.replace("take = \"ay-1\"", "take = \"ay-3\"").replace("timeline = \"own\"\n", ""));
+    for (n, why) in [(2, "it says take \"chip-1\", in ay-2"), (3, "its timeline is not given: a Spectrum 128 take's is \"own\"")] {
+        write(&choices, &format!("[choices]\n\"looper/{key}\" = \"ay-{n}\"\n"));
+        let r = run(&games.0, &out.0);
+        assert_eq!(list(&out.0), original, "ay-{n}");
+        assert!(report(&out.0).contains(&format!("\n      arranged: Spectrum 128 take ay-{n} refused: {why}")), "{}", report(&out.0));
+        assert!(table(&r).contains(&format!("looper: score {key}: Spectrum 128 take ay-{n} refused, the original plays: {why}")), "{}", table(&r));
+    }
+
     // a choices file that does not read fails the run, naming it (and the key)
     write(&choices, "[choices]\n\"looper/x\" = \n");
     let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad choices file");
     assert!(e.contains("choices.toml: line 2: ") && e.contains(&choices.canonicalize().unwrap().display().to_string()), "{e}");
-    for v in ["-1", "\"two\"", "\"chip-0\"", "2.5"] {
+    for v in ["-1", "\"two\"", "\"chip-0\"", "\"ay-0\"", "2.5"] {
         write(&choices, &format!("[choices]\n\"looper/x\" = {v}\n"));
         let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad choice");
-        assert!(e.contains(&format!("choices.toml: \"looper/x\" = {v}: a choice is a take's number (1 or more, 0 the original) or \"chip-<n>\"")), "{e}");
+        assert!(e.contains(&format!("choices.toml: \"looper/x\" = {v}: a choice is a take's number (1 or more, 0 the original), \"chip-<n>\" (a C64 take) or \"ay-<n>\"")), "{e}");
     }
 }
 
 /// The source line of [`chip`]'s take.
 const CHIP_SOURCE: &str = "C64: A Made-up Tune by Nobody (1985 Nowhere), subtune 2, M/Made_Up.sid";
+
+/// The source line of the Spectrum 128 take made from [`chip`]'s.
+const AY_SOURCE: &str = "Spectrum 128: A Made-up Tune by Nobody, song 2, games/Made_Up.ay";
 
 /// A C64 take of the score (`chip-1`) on its own timeline, its intro 30 frames and 1,000 T, its
 /// loop 45 frames and 777 T: a lead note, a bass note across the intro's end (restated at the

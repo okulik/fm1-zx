@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A SID capture's notes, on the Spectrum's clock.
+//! A SID or AY capture's notes, on the Spectrum's clock.
+//!
+//! # SID
 //!
 //! - The timeline starts at the first row where a voice sounds (gate on, a waveform, volume).
 //! - Pitch: f = register * clock / 2^24; a note's `period_t` is 3,500,000 / f T-states.
@@ -14,18 +16,55 @@
 //!   noise does or after 0.06 s, at least 2,048 T before the next hit; hits of several voices
 //!   within a quarter frame are one. For 0.16 s after a hit, the voice is tonal again only once
 //!   its pitch holds for two rows (a drum's falling tail is part of the drum).
+//! - Level (1-255): 255 * sqrt(volume / 15 * (0.35 + 0.65 * sustain / 15)); a drum's with the
+//!   sustain at least half.
+//! - Loop: the rows (registers and the calls' gate and noise flags) repeating exactly.
+//!
+//! # AY
+//!
+//! - The AY's clock is 1,773,400 Hz; rows are a frame apart. A channel's level is up when its
+//!   volume is above 0 or it uses the envelope (level bit 4), whose level counts as full, except
+//!   that a shape that runs once and ends at 0 (0-7, 9, 15) is up only for one cycle (256 *
+//!   the envelope period AY cycles) from its last restart (a write to register 13).
+//! - Pitch: the tone's, f = clock / (16 * period) (a 12-bit period, 0 as 1), when the tone is
+//!   enabled in the mixer (register 7, active low); else, with the envelope, the noise off and a
+//!   repeating shape, a buzzer's: f = clock / (256 * envelope period) for the sawtooths 8 and
+//!   12, clock / (512 * envelope period) for the triangles 10 and 14.
+//! - The timeline starts at the first row where a channel's level is up with a pitch or noise.
+//! - A tonal note starts when the channel starts to sound (its level up from 0, or its tone or
+//!   buzzer starting), is retriggered (the level to 0 and up again within a frame, the volume up
+//!   by 3 or more steps, or, with the envelope, the envelope restarted), its tone is enabled in
+//!   the mixer, or, sounding, its pitch moves more than 0.6 semitone (legato); it ends when it
+//!   stops sounding (a once-only envelope's end between rows ends it there) or the pitch leaves
+//!   16-8000 Hz.
+//! - Noise: a channel with noise enabled and its level up is a drum hit on voice 3 when the
+//!   noise starts fresh (the level up from 0 or retriggered) or is enabled after the last hit's
+//!   tail (noise alternating with tone within it is that hit's sound); the hit ends when the
+//!   channel falls silent, after 0.06 s, at a new hit, or when a tonal note starts on it; the
+//!   gap and merging as for the SID. For 0.16 s after a hit (until a fresh tone) the channel is
+//!   tonal only with the noise off and its pitch held for two rows; tone and noise together
+//!   longer than that are tonal.
+//! - Level (1-255): 255 for the envelope; else 255 * sqrt(10^((volume - 15) * 3 / 20)) (the
+//!   AY's volume steps are about 3 dB, the square root as the SID's levels take of a linear
+//!   volume), at least 32 (see `ay_level`).
+//! - Loop: the rows repeating as heard: registers a channel does not use are taken as 0 (a
+//!   silent channel's, a disabled tone's period, the noise period without noise, the envelope
+//!   without a channel on it, the mixer's I/O bits), with each row's envelope restart and
+//!   retriggers.
+//!
+//! # Both
+//!
 //! - Arpeggios: on a voice, a run of at least 3 back-to-back notes each at most 2.5 PAL frames
 //!   long, cycling 2-4 pitches (one recurring), is its root: one note at the run's lowest
 //!   pitch, the run's length.
-//! - Level (1-255): 255 * sqrt(volume / 15 * (0.35 + 0.65 * sustain / 15)); a drum's with the
-//!   sustain at least half.
-//! - Voices: the tonal SID voices in order of their duration-weighted mean pitch: 0 the highest
-//!   (the lead), 1 the lowest (the bass), 2 the other (the pad); 3 the drum.
-//! - Loop: the rows (registers and the calls' gate and noise flags) repeating exactly from a row
-//!   to the end, at least twice, a pass at least a second long with a note or hit starting in
-//!   it (of those, the one starting first, then the shortest): `intro_t` is that row's time and
-//!   `loop_t` the pass's, and the notes are those of the intro and one pass. Else `loop_t` is 0
-//!   and `intro_t` the end of the last note (the capture's end, unless the tune falls silent).
+//! - Voices: the tonal SID voices or AY channels in order of their duration-weighted mean
+//!   pitch: 0 the highest (the lead), 1 the lowest (the bass), 2 the other (the pad); 3 the
+//!   drum.
+//! - Loop: the rows repeating from a row to the end, at least twice, a pass at least a second
+//!   long with a note or hit starting in it (of those, the one starting first, then the
+//!   shortest): `intro_t` is that row's time and `loop_t` the pass's, and the notes are those of
+//!   the intro and one pass. Else `loop_t` is 0 and `intro_t` the end of the last note (the
+//!   capture's end, unless the tune falls silent).
 //! - Times are rounded to 64 T. A frame (69,888 T on its section's grid: the intro's from 0, the
 //!   loop's from `intro_t`) holds at most [`EVENTS_PER_FRAME`] events, counted as the pack
 //!   counts a take's (a note on per note; a note off at its end unless the voice's next note
@@ -33,6 +72,7 @@
 //!   latest drum note with an event in the frame is dropped, then the latest pad, bass and
 //!   lead note.
 
+use crate::ay::{AyCapture, AyRow, AY_HZ, AY_REGS};
 use crate::c64::{Capture, Row, SID_REGS};
 use std::collections::{BTreeMap, HashSet};
 
@@ -69,8 +109,8 @@ pub struct Notes {
     pub intro_t: u64,
     /// 0: no loop.
     pub loop_t: u64,
-    /// The SID voice (0-2) each tonal voice comes from.
-    pub sid_voice: [Option<u8>; 3],
+    /// The chip's voice each tonal voice comes from: the SID voice or AY channel (0-2).
+    pub chip_voice: [Option<u8>; 3],
     /// Tonal notes before the arpeggio folding.
     pub raw_notes: usize,
     /// Arpeggio runs folded.
@@ -112,11 +152,11 @@ fn key(r: &Row) -> Key {
     (r.regs, r.rise, r.noise_on)
 }
 
-/// The loop in `rows`: the row `i` and length `l` (rows) of a period the rows keep from `i` to
-/// the end, at least twice, at least a second long and with a gate rising or a noise starting
-/// in it: of those, the one starting first, and the shortest of those.
-fn find_loop(rows: &[Row], clock: f64) -> Option<(usize, usize)> {
-    let k: Vec<Key> = rows.iter().map(key).collect();
+/// The loop in rows with keys `k`, times `t` and note starts `starts`: the row `i` and length `l`
+/// (rows) of a period the keys keep from `i` to the end, at least twice, at least a second
+/// (`clock` time units) long and with a start in it: of those, the one starting first, and the
+/// shortest of those. Returns its start and end times.
+fn find_loop<K: PartialEq>(k: &[K], t: &[u64], starts: &[bool], clock: f64) -> Option<(u64, u64)> {
     let n = k.len();
     let mut best: Option<(usize, usize)> = None;
     for l in 1..=n / 2 {
@@ -124,19 +164,18 @@ fn find_loop(rows: &[Row], clock: f64) -> Option<(usize, usize)> {
         while i > 0 && k[i - 1] == k[i - 1 + l] {
             i -= 1;
         }
-        if n - i < 2 * l || best.is_some_and(|b| i >= b.0) || ((rows[i + l].t - rows[i].t) as f64) < clock {
+        if n - i < 2 * l || best.is_some_and(|b| i >= b.0) || ((t[i + l] - t[i]) as f64) < clock {
             continue;
         }
-        if rows[i..i + l].iter().any(|r| r.rise != 0 || r.noise_on != 0) {
+        if starts[i..i + l].iter().any(|&s| s) {
             best = Some((i, l));
         }
     }
-    best
+    best.map(|(i, l)| (t[i], t[i + l]))
 }
 
 /// The tonal notes and drum hits of `rows` (times in cycles); `end` the capture's end.
 fn extract(rows: &[Row], end: u64, clock: f64) -> (Vec<Raw>, Vec<Raw>) {
-    let frame = clock / 50.125;
     let (tail, hit_len) = ((0.16 * clock) as u64, (0.06 * clock) as u64);
     let mut notes = Vec::new();
     let mut hits: Vec<Raw> = Vec::new();
@@ -214,7 +253,12 @@ fn extract(rows: &[Row], end: u64, clock: f64) -> (Vec<Raw>, Vec<Raw>) {
             hits[k].end = hits[k].end.min(end);
         }
     }
-    // hits of several voices at once are one
+    (notes, merge_hits(hits, clock))
+}
+
+/// Hits of several voices within a quarter frame are one.
+fn merge_hits(mut hits: Vec<Raw>, clock: f64) -> Vec<Raw> {
+    let frame = clock / 50.125;
     hits.sort_by_key(|h| h.start);
     let mut merged: Vec<Raw> = Vec::new();
     for h in hits {
@@ -226,7 +270,7 @@ fn extract(rows: &[Row], end: u64, clock: f64) -> (Vec<Raw>, Vec<Raw>) {
             _ => merged.push(h),
         }
     }
-    (notes, merged)
+    merged
 }
 
 /// Folds each voice's arpeggio runs into their roots (see the module docs). Returns the runs.
@@ -351,20 +395,31 @@ fn fit_frames(notes: &mut Vec<Note>, intro_t: u64, loop_t: u64) -> (usize, usize
     }
 }
 
-/// The notes of a capture (see the module docs).
+/// The notes of a SID capture (see the module docs).
 pub fn convert(cap: &Capture) -> Notes {
     let clock = f64::from(cap.clock_hz);
     let Some(first) = cap.rows.iter().position(audible) else { return Notes::default() };
     let t0 = cap.rows[first].t;
     let rows: Vec<Row> = cap.rows[first..].iter().map(|r| Row { t: r.t - t0, ..r.clone() }).collect();
     let end = cap.end.saturating_sub(t0).max(rows.last().map_or(0, |r| r.t + 1));
-    let (mut raw, hits) = extract(&rows, end, clock);
+    let (raw, hits) = extract(&rows, end, clock);
+    let keys: Vec<Key> = rows.iter().map(key).collect();
+    let t: Vec<u64> = rows.iter().map(|r| r.t).collect();
+    let starts: Vec<bool> = rows.iter().map(|r| r.rise != 0 || r.noise_on != 0).collect();
+    let looped = find_loop(&keys, &t, &starts, clock);
+    settle(raw, hits, looped, end, clock)
+}
+
+/// The notes from a capture's tonal notes and drum hits (times in `clock` units a second, from
+/// the timeline's start), a loop the rows keep (`a`..`b`) and the capture's end: arpeggios
+/// folded, the timeline, the voices ordered, the times on the Spectrum's clock, the drums'
+/// gaps and the frames' events (see the module docs).
+fn settle(mut raw: Vec<Raw>, hits: Vec<Raw>, rows_loop: Option<(u64, u64)>, end: u64, clock: f64) -> Notes {
     let raw_notes = raw.len();
     let arp_runs = fold(&mut raw, clock);
     // the timeline: a loop, or the capture, or up to a silent end
     let (mut cut, mut looped) = (end, None);
-    if let Some((i, l)) = find_loop(&rows, clock) {
-        let (a, b) = (rows[i].t, rows[i + l].t);
+    if let Some((a, b)) = rows_loop {
         if raw.iter().chain(&hits).any(|n| n.start >= a && n.start < b) {
             looped = Some((a, b));
             cut = b;
@@ -389,9 +444,9 @@ pub fn convert(cap: &Capture) -> Notes {
         2 => vec![stats[0].0, stats[1].0],
         _ => vec![stats[0].0, stats[2].0, stats[1].0],
     };
-    let mut sid_voice = [None; 3];
+    let mut chip_voice = [None; 3];
     for (o, &v) in order.iter().enumerate() {
-        sid_voice[o] = Some(v);
+        chip_voice[o] = Some(v);
     }
     let cut_t = to_t(cut);
     let mut notes: Vec<Note> = raw
@@ -426,5 +481,227 @@ pub fn convert(cap: &Capture) -> Notes {
         None => (cut_t, 0),
     };
     let dropped = fit_frames(&mut notes, intro_t, loop_t);
-    Notes { notes, intro_t, loop_t, sid_voice, raw_notes, arp_runs, dropped }
+    Notes { notes, intro_t, loop_t, chip_voice, raw_notes, arp_runs, dropped }
+}
+
+/// The lowest level of an AY note (see [`ay_level`]).
+const AY_LEVEL_FLOOR: f64 = 32.0;
+
+/// An AY channel's level (1-255) from its 4-bit volume (1-15). The AY's volume steps are about
+/// 3 dB apart (15 full, each step down to 0.708 of the amplitude), so the amplitude is
+/// 10^((v - 15) * 3 / 20); the level is 255 * its square root, the compression the SID levels
+/// apply to the SID's linear volume, so an AY tune and a SID tune of the same loudness get the
+/// same levels. The floor of 32 keeps the quietest volumes (1-3: echoes and fade tails at 23-32)
+/// as audible as the quietest SID notes rather than lost under the louder voices.
+fn ay_level(vol: u8) -> u8 {
+    let amp = 10f64.powf(f64::from(i32::from(vol.min(15)) - 15) * 3.0 / 20.0);
+    (255.0 * amp.sqrt()).round().clamp(AY_LEVEL_FLOOR, 255.0) as u8
+}
+
+/// An envelope shape that runs once and ends at 0 (0-7, 9 and 15).
+fn env_once(shape: u8) -> bool {
+    shape < 8 || shape == 9 || shape == 15
+}
+
+/// An envelope shape that repeats (8, 10, 12 and 14).
+fn env_repeats(shape: u8) -> bool {
+    shape >= 8 && shape & 1 == 0
+}
+
+/// What an AY channel does in a row.
+struct AyChan {
+    /// Its level is up: a volume above 0, or the envelope, while it lasts.
+    audible: bool,
+    level: u8,
+    /// Its pitch: the tone's if enabled in the mixer, else a buzzer's, else 0.
+    hz: f64,
+    tone: bool,
+    noise: bool,
+    env: bool,
+    vol: u8,
+    /// When a once-only envelope it uses ends (time units since the timeline's start).
+    env_end: Option<i64>,
+}
+
+/// Channel `c` in row `r`; `since` the time of the envelope's last restart (time units since
+/// the timeline's start), `clock` time units a second.
+fn ay_chan(r: &AyRow, c: usize, since: Option<i64>, clock: f64) -> AyChan {
+    let g = &r.regs;
+    let (tone, noise) = (g[7] >> c & 1 == 0, g[7] >> (c + 3) & 1 == 0);
+    let (env, vol) = (g[8 + c] & 0x10 != 0, g[8 + c] & 0x0F);
+    let shape = g[13];
+    let ep = f64::from((u16::from(g[11]) | u16::from(g[12]) << 8).max(1));
+    let env_end = (env && env_once(shape)).then(|| since.map_or(i64::MIN, |s| s + (256.0 * ep * clock / f64::from(AY_HZ)) as i64));
+    let audible = if env { env_end.is_none_or(|e| (r.t as i64) < e) } else { vol > 0 };
+    let period = f64::from((u16::from(g[2 * c]) | u16::from(g[2 * c + 1]) << 8).max(1));
+    let hz = if tone {
+        f64::from(AY_HZ) / (16.0 * period)
+    } else if env && !noise && env_repeats(shape) {
+        f64::from(AY_HZ) / (if shape & 2 != 0 { 512.0 } else { 256.0 } * ep)
+    } else {
+        0.0
+    };
+    AyChan { audible, level: if env { 255 } else { ay_level(vol) }, hz, tone, noise, env, vol, env_end }
+}
+
+/// The tonal notes and drum hits of AY `rows` (times in `clock` units a second); `since` each
+/// row's envelope restart (see [`ay_chan`]), `end` the capture's end.
+fn extract_ay(rows: &[AyRow], since: &[Option<i64>], end: u64, clock: f64) -> (Vec<Raw>, Vec<Raw>) {
+    let (tail, hit_len) = ((0.16 * clock) as u64, (0.06 * clock) as u64);
+    let mut notes = Vec::new();
+    let mut hits: Vec<Raw> = Vec::new();
+    for c in 0..3 {
+        let mut cur: Option<(u64, f64, f64, u8)> = None; // start, hz, midi, level
+        let mut prev_mf = 0.0;
+        let mut last_hit: Option<u64> = None;
+        let mut open_hit: Option<usize> = None;
+        let mut stable_rows = 0;
+        let (mut prev_on, mut prev_noisy, mut prev_tone, mut prev_env, mut prev_vol) = (false, false, false, false, 0u8);
+        let mut prev_env_end: Option<i64> = None;
+        for (r, &s) in rows.iter().zip(since) {
+            let t = r.t;
+            let ch = ay_chan(r, c, s, clock);
+            // where a sound that stopped between the rows ended: a once-only envelope's end
+            let stop = |start: u64| match prev_env_end {
+                Some(e) if !ch.audible => (e.max(start as i64 + 1) as u64).min(t),
+                _ => t,
+            };
+            let on = ch.audible && (ch.hz > 0.0 || ch.noise);
+            let noisy = ch.audible && ch.noise;
+            let retrig = r.rise >> c & 1 != 0
+                || (ch.env && r.env_restart)
+                || (!ch.env && prev_on && !prev_env && ch.vol >= prev_vol + 3);
+            // a fresh sound (its level up from 0, or retriggered), or the tone switched on
+            let fresh = on && (!prev_on || retrig);
+            let onset = fresh || (on && ch.tone && !prev_tone);
+            let mf = if ch.hz > 0.0 { midi(ch.hz) } else { 0.0 };
+            // the drum: a fresh noise, or noise switched on after the last hit's tail (noise
+            // alternating with tone within it is that hit's)
+            let after_tail = last_hit.is_none_or(|h| t - h >= tail);
+            let new_hit = noisy && (fresh || (!prev_noisy && after_tail));
+            if let Some(k) = open_hit {
+                if !on || t - hits[k].start >= hit_len || new_hit {
+                    hits[k].end = stop(hits[k].start).min(hits[k].end);
+                    open_hit = None;
+                }
+            }
+            if new_hit {
+                last_hit = Some(t);
+                hits.push(Raw { voice: DRUM, start: t, end: t + hit_len, hz: 0.0, level: ch.level });
+                open_hit = Some(hits.len() - 1);
+            }
+            // the tones
+            stable_rows = if (mf - prev_mf).abs() <= 0.6 { stable_rows + 1 } else { 0 };
+            if onset {
+                stable_rows = 0;
+            }
+            let in_tail = last_hit.is_some_and(|h| t - h < tail) && !(fresh && !noisy);
+            if fresh && !noisy {
+                last_hit = None;
+            }
+            let tonal = ch.audible && (16.0..=8000.0).contains(&ch.hz) && (!in_tail || (stable_rows >= 1 && !noisy));
+            if let Some(k) = open_hit.filter(|_| tonal && !noisy) {
+                hits[k].end = t;
+                open_hit = None;
+            }
+            match cur {
+                Some((start, nhz, nmf, nlvl)) if !tonal || onset || (mf - nmf).abs() > 0.6 => {
+                    notes.push(Raw { voice: c as u8, start, end: stop(start), hz: nhz, level: nlvl });
+                    cur = tonal.then_some((t, ch.hz, mf, ch.level));
+                }
+                None if tonal => cur = Some((t, ch.hz, mf, ch.level)),
+                _ => {}
+            }
+            prev_mf = mf;
+            (prev_on, prev_noisy, prev_tone, prev_env, prev_vol) = (on, noisy, ch.tone, ch.env, ch.vol);
+            prev_env_end = ch.env_end;
+        }
+        if let Some((start, hz, _, level)) = cur {
+            notes.push(Raw { voice: c as u8, start, end, hz, level });
+        }
+        if let Some(k) = open_hit {
+            hits[k].end = hits[k].end.min(end);
+        }
+    }
+    (notes, merge_hits(hits, clock))
+}
+
+type AyKey = ([u8; AY_REGS], bool, u8);
+
+/// A row as heard, for the loop: registers a channel does not use are 0 (a silent channel's
+/// level, mixer bits and tone period, a period whose tone is off, the noise period when no
+/// channel has noise, the envelope's registers and restart when no channel uses it, the
+/// mixer's I/O bits), as players leave them as they were, which differs between passes.
+fn ay_key(r: &AyRow) -> AyKey {
+    let mut g = r.regs;
+    let (mut mixer, mut noise, mut env, mut rise) = (0x3Fu8, false, false, 0u8);
+    for c in 0..3 {
+        let (tone_on, noise_on) = (g[7] >> c & 1 == 0, g[7] >> (c + 3) & 1 == 0);
+        let (uses_env, vol) = (g[8 + c] & 0x10 != 0, g[8 + c] & 0x0F);
+        let buzzer = uses_env && env_repeats(g[13]);
+        if (vol == 0 && !uses_env) || !(tone_on || noise_on || buzzer) {
+            g[8 + c] = 0;
+            g[2 * c] = 0;
+            g[2 * c + 1] = 0;
+            continue;
+        }
+        if tone_on {
+            mixer &= !(1 << c);
+        } else {
+            g[2 * c] = 0;
+            g[2 * c + 1] = 0;
+        }
+        if noise_on {
+            mixer &= !(8 << c);
+            noise = true;
+        }
+        if uses_env {
+            g[8 + c] = 0x10;
+            env = true;
+        }
+        rise |= r.rise & 1 << c;
+    }
+    g[7] = mixer;
+    if !noise {
+        g[6] = 0;
+    }
+    if !env {
+        g[11..14].fill(0);
+    }
+    (g, env && r.env_restart, rise)
+}
+
+/// The notes of an AY capture (see the module docs).
+pub fn convert_ay(cap: &AyCapture) -> Notes {
+    let clock = SPECTRUM_HZ as f64;
+    // each row's envelope restart, then the timeline from the first row where a channel sounds
+    let mut last = None;
+    let since_abs: Vec<Option<i64>> = cap
+        .rows
+        .iter()
+        .map(|r| {
+            if r.env_restart {
+                last = Some(r.t as i64);
+            }
+            last
+        })
+        .collect();
+    let sounds = |(r, s): (&AyRow, &Option<i64>)| {
+        (0..3).any(|c| {
+            let ch = ay_chan(r, c, *s, clock);
+            ch.audible && (ch.hz > 0.0 || ch.noise)
+        })
+    };
+    let Some(first) = cap.rows.iter().zip(&since_abs).position(sounds) else { return Notes::default() };
+    let t0 = cap.rows[first].t;
+    let rows: Vec<AyRow> = cap.rows[first..].iter().map(|r| AyRow { t: r.t - t0, ..r.clone() }).collect();
+    let since: Vec<Option<i64>> = since_abs[first..].iter().map(|s| s.map(|s| s - t0 as i64)).collect();
+    let end = cap.end.saturating_sub(t0).max(rows.last().map_or(0, |r| r.t + 1));
+    let (raw, hits) = extract_ay(&rows, &since, end, clock);
+    let keys: Vec<AyKey> = rows.iter().map(ay_key).collect();
+    let t: Vec<u64> = rows.iter().map(|r| r.t).collect();
+    let onsets: HashSet<u64> = raw.iter().chain(&hits).map(|n| n.start).collect();
+    let starts: Vec<bool> = t.iter().map(|x| onsets.contains(x)).collect();
+    let looped = find_loop(&keys, &t, &starts, clock);
+    settle(raw, hits, looped, end, clock)
 }

@@ -10,9 +10,10 @@ other settings or another way to reduce a band to the FM-1's voices. It is writt
 person or an AI agent can start from it with no other context: the pipeline and where each step
 lives, the files between the steps, what the FM-1 can play, how to add and evaluate a generator,
 what is known so far, and the rules for working on it. A score can also take its game's tune
-from the game's C64 version, from a SID collection the owner has ([BUILDING.md, "Music from
-other versions"](../BUILDING.md#music-from-other-versions)); that path shares the files, the
-choice and the pack step, and is described here alongside.
+from the game's C64 version, from a SID collection the owner has, or from its Spectrum 128
+version, from a collection of `.ay` files ([BUILDING.md, "Music from other
+versions"](../BUILDING.md#music-from-other-versions)); those paths share the files, the choice
+and the pack step, and are described here alongside.
 
 ## Rules for working on it
 
@@ -23,9 +24,9 @@ choice and the pack step, and is described here alongside.
 - **Never name commercial games in repository files**, including the tunes of the owner's games:
   describe a tune by its shape (its length, its loop, its voices, the kind of routine that plays
   it) or by its score key. Do not name the composers of their tunes either.
-- **Nothing from a SID collection enters the repository**: no `.sid` file, no notes converted from
-  one, no chip take. The tunes belong to their authors and go only into the owner's personal packs.
-  Tests build their own made-up SID files.
+- **Nothing from a SID or AY collection enters the repository**: no `.sid` or `.ay` file, no notes
+  converted from one, no chip or ay take. The tunes belong to their authors and go only into the
+  owner's personal packs. Tests build their own made-up SID and `.ay` files.
 - **Repository text describes the current state only**: no history, no dates, no "new" or
   "added". An experiment's story belongs in its report outside the repository; what ships is
   described as it is.
@@ -45,9 +46,9 @@ choice and the pack step, and is described here alongside.
 | 3. Recorded scores | Every heard routine whose `OUT` sounded in 100 frames or more (learned, built in or neither) has its music recorded: each stretch of at least 100 frames (2 s) from a trigger edge; a run per key for a menu of tunes; the same tune kept once; the loop found on the speaker edges (an intro and one pass of the loop); the notes transcribed from the speaker's sound (up to 3 voices, at least 8 notes over 3 pitches); encoded as a kind-2 record and verified by replaying the run through method B. A stretch the table (learned and built-in entries) claims at most a tenth of the sounding frames of is a *score*, packed; one it claims more of is a *shadow score*: verified with the precedence bit set, kept in the learner's result and cache, not packed. | `scores.rs`, `learn.rs`, `transcribe.rs`, `entry.rs` |
 | 4. `score.toml` | Every `tools/make-personal-pack` run writes each recorded score's notes, decoded from the learned list, and each shadow score's (with `shadow = true`) to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
 | 5. Generator | `tools/arrange-music generate DIR` runs a generator per take, reduces what it wrote to the FM-1's four voices, measures it and writes `take-<n>/` with MIDI and renders. | `tools/arrange-music` (`GENERATORS`, `arrange`, `metrics`) |
-| 5b. C64 takes | `tools/arrange-music chip DIR --sid-dir PATH` finds the game's SID files in the owner's collection (file names, header titles, STIL), converts each candidate subtune with `fmzx-pack chip-notes` (a 6502 and C64 model capturing the SID registers once per play call, turned into notes), ranks them by a melody check against the score, and writes the best as `chip-<n>/` takes on their own timeline. | `tools/arrange-music` (`cmd_chip`), `host/crates/chipmusic`, `fmzx-pack chip-notes` |
-| 6. Choice | The owner listens on `tools/arrange-music pick DIR` and chooses a take, a C64 take or the original. | `tools/arrange-music` (`cmd_pick`), `DIR/arrange/choices.toml` |
-| 7. Pack | The next `tools/make-personal-pack` run checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A chosen C64 take becomes a replacement record instead: the score's trigger and fingerprints, precedence set, and the take's events on its own sections. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
+| 5b. C64 takes | `tools/arrange-music chip DIR --sid-dir PATH` finds the game's SID files in the owner's collection (file names, header titles, STIL), converts each candidate subtune with `fmzx-pack chip-notes` (a 6502 and C64 model capturing the SID registers once per play call, turned into notes), ranks them by a melody check against the score, and writes the best as `chip-<n>/` takes on their own timeline. `tools/arrange-music ay DIR --ay-dir PATH` does the same with the owner's `.ay` files (file names, misc strings, song names), each song's Z80 player run in the Spectrum machine core (its AY registers captured once per frame), as `ay-<n>/` takes. | `tools/arrange-music` (`cmd_chip`, `cmd_ay`, `own_score`), `host/crates/chipmusic`, `fmzx-pack chip-notes` |
+| 6. Choice | The owner listens on `tools/arrange-music pick DIR` and chooses a take, a C64 or Spectrum 128 take, or the original. | `tools/arrange-music` (`cmd_pick`), `DIR/arrange/choices.toml` |
+| 7. Pack | The next `tools/make-personal-pack` run checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A chosen C64 or Spectrum 128 take becomes a replacement record instead: the score's trigger and fingerprints, precedence set, and the take's events on its own sections. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
 | 8. Device | FM: engines arms the score at its trigger edge, follows the beeper's edges against the recorded fingerprint, and plays the events on the FM synth with each voice's stored role (lead, bass, pad) and the FM drum. A score yields the frames a table entry claims; a score with precedence keeps them, the entry's voices unused there. | `core/sound/learned.c` (`snd_b_scores`), `core/sound/fm.c` |
 
 The learner's results, each score's run among them, are cached (`DIR/sound-cache/`), so after the first build a run that only
@@ -133,17 +134,19 @@ start, then voice. The file holds no timings, so the same take is the same bytes
 `takes.toml`. fmzx-pack reads `key`, `intro_t`, `loop_t`, `take` (if present) and the notes; it
 ignores the other header fields.
 
-### Notes from a SID file (written by fmzx-pack chip-notes)
+### Notes from a SID or AY file (written by fmzx-pack chip-notes)
 
-`fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S] -o <notes.toml>` (S default 180;
-`fmzx-pack chip-notes --info <file.sid>` prints the header) plays a PSID or RSID tune and writes:
+`fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S] -o <notes.toml>` (S default
+180; `fmzx-pack chip-notes --info <file>` prints the header) plays a PSID or RSID tune, or a song
+of a ZXAYEMUL `.ay` file, told apart by the file's magic, and writes:
 
     file = "SOME/Some_Tune.sid"   # the file as named on the command line
+    format = "PSID"               # PSID, RSID or AY
     subtune = 1                   # 1-based (the header's start song by default)
-    title = "Some Tune"           # the header's
+    title = "Some Tune"           # the header's (an .ay's: the song's name, else its misc string)
     author = "Someone"
-    released = "1985 Somebody"
-    clock_hz = 985248             # the C64's: 985,248 PAL, 1,022,727 NTSC
+    released = "1985 Somebody"    # an .ay's: its misc string when that is not the title
+    clock_hz = 985248             # the chip's: 985,248 PAL or 1,022,727 NTSC; the 128K's AY 1,773,400
     seconds = 180
     intro_t = 1234560             # T-states at 3.5 MHz, from the first sounding row
     loop_t = 4567808              # one pass of a loop found; 0: none, the notes end at intro_t
@@ -169,9 +172,21 @@ rounded to 64 T, and at most 8 events a frame are kept with the pack's counting 
 first, then the pad, the bass, the lead). Filter, pulse width, ring modulation and sync are not
 read; multi-SID tunes, BASIC RSIDs and tunes that call the KERNAL are refused with the reason.
 
-### A C64 take's arranged.toml (written by tools/arrange-music chip)
+An `.ay` song runs its Z80 player in the Spectrum machine core (the song's blocks in memory as
+the format lays them out, its init, then its interrupt routine once a frame; the AY's ports
+decoded as a 128K decodes them), its AY registers captured once a frame. A channel's tone period
+gives its pitch (clock / (16 x period)); with the tone off, a repeating envelope plays as a buzzer
+at the envelope's pitch. A level rising from 0, a retrigger, an envelope restart or a pitch move of
+more than 0.6 semitone starts a note; noise is a drum hit as for a SID. Level: 255 for the
+envelope, else 255 x sqrt(10^((volume - 15) x 3 / 20)) (the AY's steps are about 3 dB), at least
+32. Arpeggios, roles, loops (the registers as heard: those a channel does not use count as 0),
+rounding and the frame cap are as for a SID. A song is refused, with the reason, when it plays the
+speaker and not the AY (a 48K beeper tune), drives an Amstrad CPC's or a SAM Coupé's ports, needs
+a special player, or stays silent. `host/crates/chipmusic/src/notes.rs` holds the full rules.
 
-The same file as an AI take's, in `chip-<n>/`, with the score's header (its `key`, `intro_t` and
+### A C64 or Spectrum 128 take's arranged.toml (written by tools/arrange-music chip or ay)
+
+The same file as an AI take's, in `chip-<n>/` (or `ay-<n>/`), with the score's header (its `key`, `intro_t` and
 `loop_t`: the fingerprint's), voices 0-3 as an AI take's, and these fields:
 
     take = "chip-1"               # or the number 1
@@ -192,6 +207,11 @@ The same file as an AI take's, in `chip-<n>/`, with the score's header (its `key
     stil_spectrum = false
     lead_nps = 4.1                # notes a second per voice, as an AI take's
 
+A Spectrum 128 take (`ay-<n>/`) differs only in `take = "ay-1"`, `generator = "chip ay"`,
+`source = "Spectrum 128: <title> by <author>, song N, <file>"` (the song's name, else the file's
+misc string), `ay_file` in place of `sid_file`, `subtune` the song (1-based), and no `stil` or
+`stil_spectrum`.
+
 The notes lie in `[0, own_intro_t + own_loop_t)`: the intro, then
 one pass of the loop. Without a loop the converter's `intro_t` is the end (or 180 s). When the
 score itself has no loop and the take's intro reaches past the score's end, fmzx-pack packs the
@@ -210,15 +230,16 @@ the digest matches and takes 1 to N are done; a changed `score.toml` gets new ta
     [choices]
     "some-game/8951-1a2b3c4d" = 2           # the take; 0 or absent: the original
     "some-game/9A00-0b1c2d3e" = "chip-1"    # a C64 take, by its folder
+    "other-game/3B10-1c2d3e4f" = "ay-1"     # a Spectrum 128 take, by its folder
 
-Any other value (a negative number, `"chip-0"`, `"take-1"`, a float) fails the pack's run with the
+Any other value (a negative number, `"chip-0"`, `"ay-0"`, `"take-1"`, a float) fails the pack's run with the
 file and the key named.
 
 ### The record
 
 A chosen take becomes a kind-2 record's events: [pack-format.md, "Entry list"](pack-format.md#entry-list)
-gives the record byte by byte, with the drum events and the player's rules. A chosen C64 take
-becomes a *replacement* record (bit 6 of the voices byte, with bit 7, the precedence): the score's
+gives the record byte by byte, with the drum events and the player's rules. A chosen C64 or
+Spectrum 128 take becomes a *replacement* record (bit 6 of the voices byte, with bit 7, the precedence): the score's
 trigger, code, quiet and fingerprints (its key stays the score's), and its events on sections of
 their own, `ev_intro_t = own_intro_t` and `ev_loop_t = own_loop_t` (`soundlearn::ScoreRecord`'s
 `replacement`; `event_lengths()` gives the sections a record's events are timed in, a
@@ -266,7 +287,7 @@ frames, the size counted with them.
   the tempo, the intro's length or the loop's would drift from the game, and fmzx-pack refuses a
   take whose key, `intro_t` or `loop_t` differs from the score's. The replay at pack time confirms
   that the decoder takes the list and the score still plays where it did; it cannot judge what the
-  notes sound like. A C64 take is the one exception, by design: it is another arrangement with its
+  notes sound like. A C64 or Spectrum 128 take is the one exception, by design: it is another arrangement with its
   own tempo and loop, so it plays on its own timeline (a replacement record) from the score's
   trigger, for as long as the beeper keeps to the recorded tune; it is not meant to line up with
   the beeper beat for beat.
@@ -347,9 +368,9 @@ The two generators to compare against:
   resuming, `pick --set`, `--list`, the page's save). It needs no network and no model; keep it
   passing and add checks for what a change guarantees.
 - **The pack side**: `cd host && cargo test -p fmzx-pack` runs `arrange.rs`'s unit tests and
-  `tests/personal_arrange.rs` (a synthetic game whose take, and a C64 take on its own timeline, go
-  into the pack and pass the replay, with the refusals); `cargo test -p chipmusic` runs the
-  converter on SID files its tests assemble.
+  `tests/personal_arrange.rs` (a synthetic game whose take, and a C64 and a Spectrum 128 take on
+  their own timeline, go into the pack and pass the replay, with the refusals); `cargo test -p
+  chipmusic` runs the converter on SID and `.ay` files its tests assemble.
 - **Listening**: `tools/arrange-music pick DIR` plays the original, each take on the FM-1's voices
   (`fm1.wav`) and everything the model wrote (`full.wav`), rendered with General MIDI instruments.
   The FM-1's own sound comes only from the packages: choose a take, run `tools/make-personal-pack`
@@ -431,7 +452,7 @@ generating with the original as controls:
   (3 a note): 0.25-0.4 s a note on Apple M4 Max MPS. With the cached `add_token`, 0.11-0.15 s. The
   model download is about 1.4 GB.
 
-### C64 versions of the games' music
+### C64 and Spectrum 128 versions of the games' music
 
 From a survey of 27 Spectrum games against the High Voltage SID Collection and chip music for the
 AY chip (Spectrum 128K rips, Amstrad CPC register dumps):
@@ -448,10 +469,16 @@ AY chip (Spectrum 128K rips, Amstrad CPC register dumps):
   match there does not mean another tune: listen. `tools/arrange-music chip` uses this measure,
   with a floor of 24 four-interval runs so a short jingle cannot match by chance; on real pairs the
   same tune scored up to 0.98, other pieces 0.00-0.17.
-- **SID first, by the owner's choice.** AY sources exist for about half of the games (4 with a
-  128K AY rip, 13 with a CPC register dump, often closer to the Spectrum tune than the SID), but
-  only SID is wired: there is no AY take path. An AY path would need a converter from AY
-  registers (or Spectrum 128K `.ay` code run on the Z80 model) to the same notes file.
+- **AY sources.** AY sources exist for about half of the games (4 with a 128K AY rip, 13 with a
+  CPC register dump, often closer to the Spectrum tune than the SID). The `.ay` path runs a
+  Spectrum 128K rip's Z80 code in the Spectrum machine core and writes the same notes file
+  (`fmzx-pack chip-notes`, `tools/arrange-music ay`); CPC register dumps are not read.
+- **Most `.ay` files of the games are not 128K tunes.** Of the 799 game files of the chris-y/AY
+  collection (`music/ay/games/`), 483 convert at their start song, 158 of those with a loop; 307
+  are refused as 48K beeper tunes (their player drives the speaker, not the AY), and the rest are
+  Amstrad CPC songs, speech or silent. None crashed the converter, and none took more than 0.82 s.
+  A 48K game whose collection files are all beeper rips gets no ay take: its own beeper tune is
+  what the score already holds.
 - **The conversion holds up.** Against another SID emulator's register captures of 8 tunes, the
   converter's registers matched 100% in the median 2 s window, and its notes a second agreed
   mostly within a few percent; all 164 subtunes of 38 real files played, in 0.01-1.2 s per 180 s
@@ -471,8 +498,8 @@ AY chip (Spectrum 128K rips, Amstrad CPC register dumps):
   many windows were cut). Below that cap there is no density control: a dense take can hold over 14 pad notes
   a second, which the frame cap then thins.
 - Voice 0 keeps only the score's lead voice; an original bass or pad voice is replaced.
-- A C64 take's voices take their roles by mean pitch over the whole tune; a SID voice that swaps
-  between melody and accompaniment keeps one role. The 8-events cap is counted per section, so
+- A C64 or Spectrum 128 take's voices take their roles by mean pitch over the whole tune; a SID
+  voice or AY channel that swaps between melody and accompaniment keeps one role. The 8-events cap is counted per section, so
   where a pass of the take's own loop ends and the next begins within one frame, the player can
   still drop an event.
 
