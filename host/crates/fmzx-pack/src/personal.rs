@@ -108,10 +108,13 @@
 //! learners' lines never mix): from a folder, each new file's tape load, `loading: <file name>`
 //! then `loaded 3/45: <file name> (<how it went in>)` or `(left out: <why>)`; then each game of
 //! the games file, `converting: <name>` (only when its file is loaded then) and
-//! `converted 3/45: <name> (<how>)` or `(left out: <why>)`; then `learning 45 games: 27 from the
-//! cache, 18 to learn, 8 at a time`, and per game `learning: <name>` when the cache does not hold
-//! it and `learned 13/45: <name> (21.4 s)` or `(cached)` as each finishes. `tools/pack-studio`
-//! shows them on its games list while the run goes on.
+//! `converted 3/45: <name> (<how>)` or `(left out: <why>)` (the tape loads and conversions run as
+//! many at a time as the machine has cores); then `learning 45 games: 27 from the cache, 18 to
+//! learn, 8 at a time`, and per game `learning: <name>` when the cache does not hold it and
+//! `learned 13/45: <name> (21.4 s)` or `(cached)` as each finishes; then, when takes are chosen,
+//! `checking the chosen takes of 17 games` and `checked 3/17: <name> (1.4 s)` as each game's
+//! takes are checked (a replay of its run per take, the games in parallel). `tools/pack-studio`
+//! shows them on its games list and its progress bar while the run goes on.
 
 use crate::arrange::{self, Choice, Of, Status, ARRANGE, CHOICES, CLOCK_HZ};
 use crate::keymaps::keymaps_json;
@@ -780,19 +783,52 @@ fn arrange_all(dir: &Path, jobs: &[Job], sounds: &mut [Sound]) -> Result<Arrange
     let mut known: HashSet<String> = HashSet::new();
     let mut lines = Vec::new();
     let mut plan: Vec<Vec<PlanScore>> = vec![Vec::new(); jobs.len()];
-    for ((j, s), planned) in jobs.iter().zip(sounds.iter_mut()).zip(plan.iter_mut()) {
+    // each game's scores written out and its chosen takes checked (a replay of its run per take,
+    // the slow part), the games in parallel; then their lines, details and lists in order
+    let chose = |id: &str| choices.keys().any(|k| k.split_once('/').is_some_and(|(g, _)| g == id));
+    let checking = jobs.iter().filter(|j| chose(&j.id)).count();
+    if checking > 0 {
+        say(&format!("checking the chosen takes of {checking} game{}", if checking == 1 { "" } else { "s" }));
+    }
+    let checked = Progress::new("checked", checking);
+    type Got = Result<Option<(Vec<u8>, Vec<ScoreRecord>, arrange::Applied)>, String>;
+    let arrange_one = |j: &Job, s: &Sound| -> Got {
         // a game with shadow scores alone: an empty list, kept only if a take goes in
-        let Some(list) = s.list.clone().or_else(|| (!s.shadows.is_empty()).then(|| encode_list_scores(&[], &[], &[]))) else { continue };
+        let Some(list) = s.list.clone().or_else(|| (!s.shadows.is_empty()).then(|| encode_list_scores(&[], &[], &[]))) else { return Ok(None) };
         // the list went through method B's decoder: its scores read back
-        let Ok(scores) = decode_scores(&list) else { continue };
+        let Ok(scores) = decode_scores(&list) else { return Ok(None) };
         if scores.is_empty() && s.shadows.is_empty() {
-            continue;
+            return Ok(None);
         }
         arrange::export(dir, &j.id, &j.name, &scores)?;
         arrange::export(dir, &j.id, &j.name, &s.shadows)?;
-        known.extend(scores.iter().chain(&s.shadows).map(|r| format!("{}/{}", j.id, score_key(r))));
         let runs = s.runs.clone();
         let got = arrange::apply(dir, &j.id, &list, &scores, &s.shadows, &choices, &|l, i, of| verify_take(j, runs.as_ref(), l, i, of));
+        Ok(Some((list, scores, got)))
+    };
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<Got>>> = jobs.iter().map(|_| Mutex::new(None)).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len()).max(1);
+    {
+        let shared: &[Sound] = sounds;
+        std::thread::scope(|sc| {
+            for _ in 0..threads {
+                sc.spawn(|| loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let (Some(j), Some(s), Some(slot)) = (jobs.get(i), shared.get(i), slots.get(i)) else { break };
+                    let start = std::time::Instant::now();
+                    let got = arrange_one(j, s);
+                    if chose(&j.id) {
+                        checked.done(&j.name, &format!("{:.1} s", start.elapsed().as_secs_f64()));
+                    }
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(got);
+                });
+            }
+        });
+    }
+    for (((j, s), planned), slot) in jobs.iter().zip(sounds.iter_mut()).zip(plan.iter_mut()).zip(slots) {
+        let Some((list, scores, got)) = slot.into_inner().unwrap_or_else(|e| e.into_inner()).transpose()?.flatten() else { continue };
+        known.extend(scores.iter().chain(&s.shadows).map(|r| format!("{}/{}", j.id, score_key(r))));
         let all = scores.iter().zip(&got.status).map(|(r, st)| (r, st, false)).chain(s.shadows.iter().zip(&got.shadow_status).map(|(r, st)| (r, st, true)));
         for (rec, st, shadow) in all {
             let seconds = (f64::from(rec.intro_t) + f64::from(rec.loop_t)) / f64::from(CLOCK_HZ);

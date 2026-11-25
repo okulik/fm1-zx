@@ -34,7 +34,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       music line and its scores). It reports each game on stderr as it goes (fmzx-pack's
       "loaded 3/45: <file> (<how>)", "converted 3/45: <name> (<how>)", "learning 45 games: 27
       from the cache, 18 to learn, 8 at a time", "learning: <name>", "learned 13/45: <name>
-      (21.4 s)" or "(cached)"); until the plan is there the games screen lists the games
+      (21.4 s)" or "(cached)", "checking the chosen takes of 17 games", "checked 3/17: <name>
+      (1.4 s)": the bar's phases); until the plan is there the games screen lists the games
       (W/all/personal-games.toml's, or the folder's game files before it is written), each with
       a glyph for its state, explained on the line above the list: · waiting, ▸ converting or
       learning (yellow), ✓ learned (green; dim green from the cache), ✗ left out (with why;
@@ -899,15 +900,18 @@ def progress_line(p: Progress, queue: str, width: int, utf8: bool, now: float = 
 
 
 PROGRESS_PLAN_RE = re.compile(r"^learning (\d+) games: (\d+) from the cache, (\d+) to learn, (\d+) at a time$")
-PROGRESS_DONE_RE = re.compile(r"^(loaded|converted|learned) (\d+)/(\d+): (.+)$")
+PROGRESS_DONE_RE = re.compile(r"^(loaded|converted|learned|checked) (\d+)/(\d+): (.+)$")
+PROGRESS_CHECK_RE = re.compile(r"^checking the chosen takes of (\d+) games?$")
 PROGRESS_START_RE = re.compile(r"^(loading|converting|learning): (.+)$")
 GAME_EXTS = (".sna", ".z80", ".tap", ".tzx")
 
 
 def parse_progress(line: str) -> tuple | None:
-    """A progress line as ("plan", games, from cache, to learn, at a time), ("done", verb, k, n,
-    rest) or ("start", verb, name); None for any other line."""
+    """A progress line as ("plan", games, from cache, to learn, at a time), ("check", games),
+    ("done", verb, k, n, rest) or ("start", verb, name); None for any other line."""
     s = line.strip()
+    if m := PROGRESS_CHECK_RE.match(s):
+        return ("check", int(m[1]))
     if m := PROGRESS_PLAN_RE.match(s):
         return ("plan",) + tuple(int(x) for x in m.groups())
     if m := PROGRESS_DONE_RE.match(s):
@@ -962,7 +966,7 @@ class Live:
     def __init__(self, rows: list[LiveRow]):
         self.lock = threading.Lock()
         self.rows = rows
-        self.phase = "start"  # start, loading, converting, learning, done, failed
+        self.phase = "start"  # start, loading, converting, learning, checking, done, failed
         self.k = 0
         self.n = 0
         self.to_learn: int | None = None
@@ -1008,6 +1012,10 @@ class Live:
         with self.lock:
             if p[0] == "plan":
                 self.phase, self.n, self.k, self.to_learn, self.threads = "learning", p[1], 0, p[3], max(1, p[4])
+            elif p[0] == "check":
+                self.phase, self.n, self.k = "checking", p[1], 0
+            elif p[0] == "done" and p[1] == "checked":
+                self.phase, self.k, self.n = "checking", p[2], p[3]  # the games' rows stay as they are
             elif p[0] == "start":
                 r, _ = self._find(p[2], False)
                 if p[1] == "learning":
@@ -1064,6 +1072,8 @@ class Live:
                 if self.to_learn:
                     return head + f" {dash} {self.to_learn} not learned before: timing the first"
                 return head
+            if self.phase == "checking":
+                return f"checking the chosen takes: {self.k} of {self.n} games"
             if self.phase == "failed":
                 return "the learning failed (l: the log)"
             return ""
@@ -1080,6 +1090,8 @@ class Live:
                 return Progress("loading game files", frac, figs)
             if self.phase == "converting":
                 return Progress("converting games", frac, figs)
+            if self.phase == "checking":
+                return Progress("checking chosen takes", frac, figs)
             if self.phase in ("learning", "done"):
                 if self.phase == "done":
                     return Progress("learning games", 1.0, figs)
@@ -4641,6 +4653,13 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         check(pl(Progress("x", 0.5), "", 20, False) == "x " + "#" * 9 + "." * 9, "bar line: ASCII")
         live.apply("learned 5/5: Newcomer (1.0 s)", 700)
         check(any(r.name == "Newcomer" and r.state == "learned" for r in live.rows), "live: a game no row has gets one")
+        states = [(r.name, r.state) for r in live.rows]
+        live.apply("checking the chosen takes of 2 games", 701)
+        live.apply("checked 1/2: Newcomer (1.4 s)", 702)
+        cp = live.progress(702)
+        check(cp.label == "checking chosen takes" and cp.frac == 0.5 and cp.figures == "1/2"
+              and [(r.name, r.state) for r in live.rows] == states,
+              f"live: the chosen takes' check a phase of its own on the bar, the rows kept ({cp})")
 
         # -- earlier learning: other packs' sound caches copied in, never over what is there
         e = t / "reuse"
