@@ -171,10 +171,10 @@ nothing else of its own: `tools/pack-studio` runs it through [uv](https://docs.a
 It learns every game (`fmzx-pack personal <folder> -o W/all ... --plan`, which measures every
 game even when they are too many for one pack) and lists each game with how it went in, its
 packed size and its music. A first learning takes minutes (three minutes of play per game,
-emulated, several games at a time): the games list is there from the start, each game waiting,
-converting, learning, learned (with its time, or from the cache) or left out, as
-`fmzx-pack personal` reports them on stderr, under a line such as `learning 12 of 45 games — about
-4 min left`; the games open when the learning is done (`--status` and `--build` print the same
+emulated, several games at a time): the games list is there from the start, each game with a
+glyph for its state as `fmzx-pack personal` reports them on stderr (`·` waiting, `▸` converting or
+learning, `✓` learned, `✗` left out, with why), and the progress bar (below) shows how far the
+learning is and the time left; the games open when the learning is done (`--status` and `--build` print the same
 lines as they come). Before a workspace's first learning, the learned music of other personal packs
 under `build/` (each `sound-cache/` beside a `personal-games.toml` or `converted/manifest.toml`) is
 copied into `W/all/sound-cache/` where that lacks it: a cache file names its game by content (the
@@ -185,7 +185,8 @@ original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music gen
 the game's C64 tune, and **AY**, its Spectrum 128 tune ([music from other
 versions](#music-from-other-versions)). A game with no score plays FM from its code, or the
 beeper, and has nothing to arrange. Open a game to hear each score's candidates (the beeper, FM,
-each AI take with its figures, each C64 or Spectrum 128 take with its source and melody match)
+each AI take with its figures, each C64 or Spectrum 128 take with its match to the original as a
+percentage, `73% match`, green from 50%, yellow from 20%, then its source)
 and choose one. What plays is `music-preview`'s render of what the FM-1 plays or, when that is
 not built, the renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay`
 or `aplay`.
@@ -204,12 +205,16 @@ Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `1`-`9`/
 fills, `p` the packs, `a`/`s`/`y` mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g`
 generates what is marked, `J` lists the jobs, `r` learns again, `b` builds, `l` shows the log, `?`
 the full help, `q` quits. On a game: Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c` chooses it (at once; the chosen one is marked `*`), `a`/`s`/`y`/`g`
-as before, Left, `h` or Backspace goes back. Long steps run one at a time in the background; the
-bottom line shows the step (yellow while it runs, then green when done or red when it failed), how
-many wait and what it is doing. `J`, on every screen, lists every job of the session: the one
+as before, Left, `h` or Backspace goes back. Long steps run one at a time in the background, and
+the bottom line of every screen is the one place their progress shows: a bar for the running job,
+`learning games ███████████▍░░░░░░░░░ 12/45  ~4 min  · job 1 of 4` (the games learned, the MB
+downloaded, an AI job's takes and passes, a SID or AY job's candidates checked, a build's packs;
+a segment moving to and fro when there is nothing to count), yellow while it runs, green when the
+last job is done, red when one failed (`#` and `-` without UTF-8; on a narrow terminal the queue
+and then the figures go first). Messages take the key line above it for 3 s. `J`, on every screen, lists every job of the session: the one
 running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
 MB), those waiting in the order they run, and those finished with their result, read from
-`tools/arrange-music`'s summary line (`3 takes, best melody match 0.73 (C64: …)`, `no C64 tune
+`tools/arrange-music`'s summary line (`3 takes, best 73% match to the original (C64: …)`, `no C64 tune
 found by that name`, `0 takes, 4 songs skipped (48K beeper or CPC tunes)`); Enter shows a job's
 own output, `o` opens its game to listen, `x` takes a waiting job off the queue or, after `y`,
 stops the running one. `g` says how many jobs it queued, and the games list marks a game whose

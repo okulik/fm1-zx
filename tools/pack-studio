@@ -33,11 +33,12 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       "loaded 3/45: <file> (<how>)", "converted 3/45: <name> (<how>)", "learning 45 games: 27
       from the cache, 18 to learn, 8 at a time", "learning: <name>", "learned 13/45: <name>
       (21.4 s)" or "(cached)"); until the plan is there the games screen lists the games
-      (W/all/personal-games.toml's, or the folder's game files before it is written), each
-      waiting, converting, learning (for how long), learned (its time, or cached) or left out
-      (why), with its converted file's size (~, before packing), under "learning 12 of 45 games
-      — about 4 min left" (the games still to learn at the average time of those learned, so
-      many at a time). Before a workspace's first learning (no W/all/plan.json), a job copies
+      (W/all/personal-games.toml's, or the folder's game files before it is written), each with
+      a glyph for its state, explained on the line above the list: · waiting, ▸ converting or
+      learning (yellow), ✓ learned (green; dim green from the cache), ✗ left out (with why;
+      . > + x without UTF-8), and its converted file's size (~, before packing); the header says
+      "learning…", and the bar on the bottom line (below) shows how far it is. Before a
+      workspace's first learning (no W/all/plan.json), a job copies
       the cache files W/all/sound-cache lacks from the sound-cache/ folders (not links) of other
       personal packs under build/ (at most four folders down, beside a personal-games.toml or a
       converted/manifest.toml, none inside W): fmzx-pack names a cache file
@@ -50,10 +51,25 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       from it. Its workspace is the one it lies in when it is a workspace's
       all/personal-games.toml (after you deleted or commented out some entries there), else
       build/studio/<file name without .toml>.
-      Long steps run one at a time in the background; their output goes to W/studio.log. The
-      bottom line shows the step running, how many wait, and what it is doing (a takes job's
-      take and pass, else its last output line; a message of the last 5 s first); J lists every
-      job (the jobs view, below).
+      Long steps run one at a time in the background; their output goes to W/studio.log.
+      The bottom line, on every screen, is the one place progress shows: the running job's
+      label, a bar (█ with the last cell in eighths, ▏ to ▉, on ░; # on - without UTF-8) as wide
+      as the line leaves, its figures, the time left, and "job 2 of 6" when more wait (those
+      started since the queue was empty, and those waiting), e.g.
+          learning games ███████████▍░░░░░░░░░ 12/45  ~4 min  · job 1 of 4
+          AI takes: <game> ████▌░░░░░░░ take 2/4 bass 38%  ~6 min
+      The learning: loading and converting each a bar of their own (files done of all), then the
+      games learned of all (a game being learned counted by its time so far against the
+      average), the time left the games still to learn at that average, so many at a time; a
+      download its MB; an AI job (take - 1 + the take's share done) / takes; a SID or AY job the
+      candidates checked of those found; a build "building pack 2 of 3" by the packs done. With
+      nothing to count (a render, the device builds, the model's download) a short segment moves
+      to and fro. On a narrow screen the queue goes first, then the time left, then the figures;
+      the bar keeps at least 4 cells. The bar is yellow while the job runs; after the last job
+      of the queue it stays 3 s, full and green when done, red where it stopped when it failed.
+      Messages (what g queued, a finished takes job's result, a refusal) take the key line above
+      it for 3 s, in a coloured band; with nothing running the bottom line says "idle" and the
+      last message. J lists every job (the jobs view, below).
       --sid-dir PATH   the SID collection to use (HVSC's C64Music, or any folder of .sid files)
                        instead of the one the studio downloads (below)
       --ay-dir PATH    the AY collection to use (a folder holding music/ay, or any folder of
@@ -114,18 +130,21 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       l              the log (W/studio.log); ? this text; q quit (asks when jobs are running)
   Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
   titles bold, the chosen candidate green, marked methods AI magenta, SID cyan, AY yellow (dim
-  when not), errors and refusals red, the bottom line yellow while a step runs, green when one
-  is done, red when one failed; while learning, learning yellow, learned green, cached dim green;
-  on the jobs view, running yellow, done green, failed red, waiting dim.
+  when not), errors and refusals red, the bar yellow while a step runs, green when the last one
+  is done, red when one failed; while learning, ▸ yellow, ✓ green, ✓ from the cache dim green;
+  on the jobs view, running yellow, done green, failed red, waiting dim; on the game screen a
+  take's match to the original green from 50%, yellow from 20%, dim under 20%.
 
   The game screen: the game's scores (key, seconds, shadow or not, what the last plan says
   plays), and per score its candidates:
       beeper                  the game's own sound (to compare; not a choice)
       FM (from code/memory)   take 0
       AI take-<n>             with its key, consonance and notes a second (arranged.toml [metrics])
-      SID chip-<n>            with its source and melody match
+      SID chip-<n>            its melody match to the original as a whole percentage, first
+                              ("73% match", "<1%" under half a percent; unrelated tunes score
+                              about 0-10%, the same tune arranged again 20-90%), then its source
       C64 original (chip-<n>) the C64's own sound, when tools/arrange-music wrote chip.wav
-      AY ay-<n>               with its source and melody match
+      AY ay-<n>               the same: its match to the original, then its source
       Spectrum 128 original (ay-<n>)  the Spectrum 128's own sound, when tools/arrange-music
                               wrote ay.wav
   A game with no scores lists the whole game's beeper and FM, to listen to.
@@ -151,17 +170,18 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   job its state (running m:ss yellow, waiting dim, done in N s green, failed red, cancelled, or
   skipped when a job before it in its chain failed or its collection did not download), what it
   is (AI, SID or AY takes, the method in its colour; a collection's download, the learning, a
-  render, a choice, a pack's build), its game, and a line: while an AI job runs, "take 2 of 4,
+  render, a choice, a pack's build), its game, and a line: while a job runs, a small bar as on
+  the bottom line, then, for an AI job, "take 2 of 4,
   pass 'bass', 38% (about 24 min left)" (from tools/arrange-music generate's progress lines: the
   passes drums, bass, chords; the time left from the takes done, else its estimate), a SID or AY
   job "checking candidates: 3 of 12", a download its MB, the learning its header; when it is
   done, its result from tools/arrange-music's summary line (its docstring, "The summary line"):
-  "3 takes, best melody match 0.73 (C64: <title> by <author> (<released>))" (with "weak: maybe
-  another tune, listen" under 0.15), "no C64 tune found by that name", "0 takes, 4 songs skipped
+  "3 takes, best 73% match to the original (C64: <title> by <author> (<released>))" (with
+  "weak: maybe another tune, listen" under 15%), "no C64 tune found by that name", "0 takes, 4 songs skipped
   (48K beeper or CPC tunes)", "4 takes written, 3 min 12 s", "had its SID takes already:
   nothing to do"; a failed job its exit code and last output line. A finished takes job also
-  says its result on the bottom line ("SID takes for <game>: 3 (best match 0.73); Enter on the
-  game to listen"). The jobs are the session's (their output is in W/studio.log too).
+  says its result on the key line ("SID takes for <game>: 3 (best 73% match to the original);
+  Enter on the game to listen"). The jobs are the session's (their output is in W/studio.log too).
       Up/Down, j/k   move (PgUp/PgDn, Home/End)
       Enter          the job's own output, scrollable (l: the whole log)
       o              open the job's game, to listen to its takes
@@ -196,7 +216,7 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
 
   The SID collection: with no --sid-dir, the studio uses build/hvsc/<version>/ (repo root),
   downloading it on the first SID job: the High Voltage SID Collection, version and address from
-  https://hvsc.c64.org/api/v1/version/7z (about 85 MB, progress on the bottom line), streamed to
+  https://hvsc.c64.org/api/v1/version/7z (about 85 MB, its MB on the bar), streamed to
   a .part file and renamed when complete, then unpacked into build/hvsc/<version>/ (about 380 MB,
   half a minute), the archive then deleted. bsdtar (libarchive: macOS's tar), else 7-Zip (7zz, 7z
   or 7za), lists the members first (tar -tf and tar -tvf, or 7z l -slt): a member whose path is
@@ -210,8 +230,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   downloading it on the first AY job: the chris-y/AY repository on GitHub (Spectrum AY music;
   music/ay/games/ holds the games' tunes, music/ay/misc/ more), its newest commit from
   https://api.github.com/repos/chris-y/AY/commits/main, its archive from
-  https://codeload.github.com/chris-y/AY/tar.gz/<commit> (about 30 MB, progress on the bottom
-  line), streamed to a .part file and renamed when complete, then read as a stream: only the
+  https://codeload.github.com/chris-y/AY/tar.gz/<commit> (about 30 MB, its MB on the bar),
+  streamed to a .part file and renamed when complete, then read as a stream: only the
   members under music/ay are unpacked, into build/ay/<first 12 digits of the commit>/; a member
   whose path is absolute or holds "..", or one under music/ay that is a link or a device,
   refuses the whole archive; every path unpacked is checked to stay inside, the archive is then
@@ -243,7 +263,11 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       unless given), after the build when --build is given too, else on the packs built before.
   tools/pack-studio selftest
       Checks the progress lines and the list while learning (states, the switch to the games
-      file, the estimate), the reuse of earlier learning (only missing files copied, never over
+      file, the estimate), the progress bar (fractions to cells with eighths, ASCII, widths 20 to
+      200, the moving segment; each kind of job's fraction from sample output; the line on a
+      narrow screen; the screen drawn in memory at 80, 120, 40 and 16 columns: the bar at the
+      bottom, a message above it, no progress text in the header or the rows), the match as a
+      percentage and its colour, the reuse of earlier learning (only missing files copied, never over
       one, the workspace and links not read), the colours (NO_COLOR), the packs filled (kept in
       studio.toml, refused over the room, f, --assign and --auto-fill, the build of exactly
       those, one over its room refused), the split, the games-file subsets ([game.keys] tables kept), the pack folders and
@@ -537,6 +561,35 @@ class Candidate:
     file: Path | None = None  # tools/arrange-music's render, played without music-preview
     source: Path | None = None  # a preview older than this is made again
     direct: bool = False  # always the file (the C64's or the Spectrum 128's own sound)
+    match: float | None = None  # a SID or AY take's melody match to the original (0 to 1)
+
+    def text(self) -> str:
+        """Its info as --status prints it: the match first, as a percentage."""
+        return f"{match_pct(self.match)} match to the original; {self.info}" if self.match is not None else self.info
+
+
+MATCH_STRONG, MATCH_FAIR = 0.5, 0.2  # unrelated tunes score about 0-10%, the same tune arranged again 20-90%
+
+
+def match_pct(x: float | str | None) -> str:
+    """A melody match (0 to 1) as a whole percentage: "73%", "<1%" under half a percent, "0%"."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return "-"
+    if v <= 0:
+        return "0%"
+    return "<1%" if v < 0.005 else f"{whole_pct(v)}%"
+
+
+def whole_pct(v: float) -> int:
+    return int(v * 100 + 0.5 + 1e-9)  # half up: 0.005 is 1%
+
+
+def match_band(x: float) -> str:
+    """A match's colour on the game screen: ok (50% and up), warn (20-49%), dim (under 20%)."""
+    pct = whole_pct(x)  # as shown
+    return "ok" if pct >= MATCH_STRONG * 100 else "warn" if pct >= MATCH_FAIR * 100 else "dim"
 
 
 WHOLE_GAME = "game"  # the preview key of a game without scores
@@ -559,16 +612,16 @@ def score_candidates(all_dir: Path, gid: str, sc: Score | None) -> list[Candidat
     for n, p in numbered(d, "chip-"):
         doc = read_toml(p / "arranged.toml")
         mm = float(doc.get("metrics", {}).get("melody_match", 0.0) or 0.0)
-        out.append(Candidate(f"SID chip-{n}", f"chip-{n}", f"chip-{n}",
-                             f"melody match {mm:.2f}; {doc.get('source', '?')}", p / "fm1.wav", p / "arranged.toml"))
+        out.append(Candidate(f"SID chip-{n}", f"chip-{n}", f"chip-{n}", str(doc.get("source", "?")), p / "fm1.wav",
+                             p / "arranged.toml", match=mm))
         if (p / "chip.wav").is_file():
             out.append(Candidate(f"C64 original (chip-{n})", f"c64-{n}", None, "the C64's own sound (sidplayfp)",
                                  p / "chip.wav", direct=True))
     for n, p in numbered(d, "ay-"):
         doc = read_toml(p / "arranged.toml")
         mm = float(doc.get("metrics", {}).get("melody_match", 0.0) or 0.0)
-        out.append(Candidate(f"AY ay-{n}", f"ay-{n}", f"ay-{n}",
-                             f"melody match {mm:.2f}; {doc.get('source', '?')}", p / "fm1.wav", p / "arranged.toml"))
+        out.append(Candidate(f"AY ay-{n}", f"ay-{n}", f"ay-{n}", str(doc.get("source", "?")), p / "fm1.wav",
+                             p / "arranged.toml", match=mm))
         if (p / "ay.wav").is_file():
             out.append(Candidate(f"Spectrum 128 original (ay-{n})", f"zx128-{n}", None, "the Spectrum 128's own sound (ffmpeg)",
                                  p / "ay.wav", direct=True))
@@ -740,6 +793,91 @@ def pack_lines(plan: Plan, packs: dict[str, int], width: int = 12, utf8: bool = 
     else:
         out.append((0, f"in no pack: {len(un)} game{'s' if len(un) != 1 else ''}, {kb(pack_total(un))}", False))
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# The progress bar: the running job's, on the screen's bottom line
+
+
+EIGHTHS = " ▏▎▍▌▋▊▉"  # a cell filled by 0 to 7 eighths, from the left
+
+
+@dataclass
+class Progress:
+    """What the bar shows for a job: its label, how far it is (0 to 1; None: not known, a moving
+    segment then), its figures ("12/45", "take 2/4 bass 38%") and the time left ("~4 min")."""
+    label: str
+    frac: float | None = None
+    figures: str = ""
+    left: str = ""
+
+
+def short_left(seconds: float) -> str:
+    if seconds < 60:
+        return "<1 min"
+    if seconds < 90 * 60:
+        return f"~{round(seconds / 60)} min"
+    return f"~{seconds / 3600:.1f} h"
+
+
+def render_bar(frac: float | None, width: int, utf8: bool, now: float = 0.0) -> list[tuple[str, bool]]:
+    """The bar's cells as (text, filled) runs: frac of width filled (with UTF-8 the last cell in
+    eighths, ▏ to ▉, the rest ░; else # and -); frac None, a segment a fifth of the width that
+    moves to and fro with now (8 cells a second)."""
+    width = max(0, width)
+    full_ch, empty_ch = ("█", "░") if utf8 else ("#", "-")
+    if frac is None:
+        seg = max(1, min(width, max(2, width // 5)))
+        span = width - seg
+        pos = 0
+        if span > 0:
+            step = int(now * 8) % (2 * span)
+            pos = step if step <= span else 2 * span - step
+        runs = [(empty_ch * pos, False), (full_ch * seg, True), (empty_ch * (width - pos - seg), False)]
+        return [r for r in runs if r[0]]
+    frac = max(0.0, min(1.0, frac))
+    if utf8:
+        eighths = int(frac * width * 8 + 1e-9)
+        full, part = divmod(eighths, 8)
+        filled = full_ch * full + (EIGHTHS[part] if part and full < width else "")
+    else:
+        filled = full_ch * int(frac * width + 1e-9)
+    runs = [(filled, True), (empty_ch * (width - len(filled)), False)]
+    return [r for r in runs if r[0]]
+
+
+def bar_text(frac: float | None, width: int, utf8: bool, now: float = 0.0) -> str:
+    return "".join(t for t, _ in render_bar(frac, width, utf8, now))
+
+
+BAR_MIN, BAR_SHORT = 10, 4  # the bar's cells before the figures go, and at the least
+
+
+def progress_line(p: Progress, queue: str, width: int, utf8: bool, now: float = 0.0) -> list[tuple[str, str]]:
+    """The bottom line for a job as (text, part) runs, part one of label, fill, track, figures,
+    queue, gap; at most width columns: "learning games ███▍░░░ 12/45  ~4 min  · job 2 of 6". On a
+    narrow line the queue goes first, then the time left, then the figures; the bar keeps at
+    least 4 cells, the label cut to make room."""
+    dot = "·" if utf8 else "-"
+    figs = "  ".join(x for x in (p.figures, p.left) if x)
+    label = p.label
+    tries = [(figs, queue), (figs, ""), (p.figures, ""), ("", "")]
+    need = lambda f, q: len(label) + 1 + (1 + len(f) if f else 0) + (4 + len(q) if q else 0)  # noqa: E731
+    fig, q = next(((f, q) for f, q in tries if width - need(f, q) >= BAR_MIN), ("", ""))
+    bar_w = width - need(fig, q)
+    if bar_w < BAR_SHORT:
+        room = max(0, width - 1 - BAR_SHORT)
+        label = label if len(label) <= room else label[:room - 1] + ("…" if utf8 else "~") if room >= 3 else ""
+        bar_w = max(1, width - (len(label) + 1 if label else 0))
+    runs: list[tuple[str, str]] = []
+    if label:
+        runs += [(label, "label"), (" ", "gap")]
+    runs += [(t, "fill" if on else "track") for t, on in render_bar(p.frac, bar_w, utf8, now)]
+    if fig:
+        runs += [(" ", "gap"), (fig, "figures")]
+    if q:
+        runs += [("  ", "gap"), (f"{dot} {q}", "queue")]
+    return runs
 
 
 # ---------------------------------------------------------------------------------------------
@@ -916,25 +1054,50 @@ class Live:
                 return "the learning failed (l: the log)"
             return ""
 
+    def progress(self, now: float | None = None) -> Progress:
+        """The bar: loading and converting each a phase of its own (files done of all), then
+        the games learned (from the cache or not) of all, a game being learned counted by its
+        time so far against the average (at most 95%), and the time left."""
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            frac = self.k / self.n if self.n else None
+            figs = f"{self.k}/{self.n}" if self.n else ""
+            if self.phase == "loading":
+                return Progress("loading game files", frac, figs)
+            if self.phase == "converting":
+                return Progress("converting games", frac, figs)
+            if self.phase in ("learning", "done"):
+                if self.phase == "done":
+                    return Progress("learning games", 1.0, figs)
+                secs = [r.seconds for r in self.rows if r.state == "learned" and r.seconds is not None]
+                part = 0.0
+                if secs:
+                    avg = sum(secs) / len(secs)
+                    part = sum(min(0.95, (now - r.since) / avg) for r in self.rows if r.state == "learning" and avg > 0)
+                if self.n:
+                    frac = min(1.0, (self.k + part) / self.n)
+                est = self.estimate(now)
+                left = short_left(est) if est else ""
+                return Progress("learning games", frac, figs, left)
+            if self.phase == "failed":
+                return Progress("learning games", frac, "failed")
+            return Progress("learning games", None, "starting")
+
     def snapshot(self) -> list[LiveRow]:
         with self.lock:
             return [LiveRow(**vars(r)) for r in self.rows]
 
 
-def live_state(r: LiveRow, now: float) -> tuple[str, str]:
-    """A live row's state text and its kind (for its colour): waiting, run, ok, cached, out."""
-    if r.state == "converting":
-        return "converting...", "run"
-    if r.state == "learning":
-        t = int(now - r.since) if r.since else 0
-        return f"learning... {t // 60}:{t % 60:02d}", "run"
-    if r.state == "learned":
-        return (f"learned ({r.seconds:.1f} s)" if r.seconds is not None else "learned"), "ok"
-    if r.state == "cached":
-        return "learned (cached)", "cached"
-    if r.state == "left out":
-        return f"left out: {r.how}", "out"
-    return "waiting", "waiting"
+LIVE_GLYPHS = {"waiting": ("·", "."), "run": ("▸", ">"), "ok": ("✓", "+"), "cached": ("✓", "+"), "out": ("✗", "x")}
+LIVE_LEGEND = (("waiting", "waiting"), ("run", "converting or learning"), ("ok", "learned"), ("cached", "from the cache"),
+               ("out", "left out"))
+
+
+def live_glyph(r: LiveRow, utf8: bool) -> tuple[str, str]:
+    """A live row's state as a glyph and its kind (for its colour): waiting (· or ., a converted
+    game too), run (▸ or >: converting, learning), ok (✓ or +), cached (✓ or +, dim) and out (✗ or x)."""
+    kind = {"converting": "run", "learning": "run", "learned": "ok", "cached": "cached", "left out": "out"}.get(r.state, "waiting")
+    return LIVE_GLYPHS[kind][0 if utf8 else 1], kind
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1538,7 +1701,7 @@ def fetch_ay(root: Path, progress: Callable[[str], None], log: Callable[[str], N
 TAKES_LABEL = {"ai": "AI", "sid": "SID", "ay": "AY"}
 AMT_PASSES = ("drums", "bass", "chords")  # tools/arrange-music's amt passes, in order
 ORIGIN = {"sid": "C64", "ay": "Spectrum 128"}
-WEAK_MATCH = 0.15  # a best melody match under this is probably another tune
+WEAK_MATCH = 0.15  # a best melody match under this (15%) is probably another tune
 RE_AI_HEAD = re.compile(r"(\d+) scores, (\d+) to arrange \((\d+) takes each")
 RE_OWN_HEAD = re.compile(r"(\d+) scores, (\d+) to search for")
 RE_SCORE = re.compile(r"^\[[^\]]+\] .*: [\d.]+ s of music, \d+ notes; (\d+) takes with \w+(?:, roughly (.+) a take)?$")
@@ -1616,7 +1779,7 @@ def summary_text(kind: str, s: dict[str, str]) -> str:
         except ValueError:
             pass
         src = short_source(s.get("source", ""))
-        return f"{plural(takes, 'take')}, best melody match {best}" + (f" ({src})" if src else "") + weak + skipped
+        return f"{plural(takes, 'take')}, best {match_pct(best)} match to the original" + (f" ({src})" if src else "") + weak + skipped
     if num("candidates") == 0:
         return f"no {ORIGIN.get(kind, kind)} tune found by that name"
     return f"0 takes{skipped}" + ("" if refused >= num("candidates") else f" ({plural(num('candidates'), 'candidate')}, none converted)")
@@ -1700,17 +1863,50 @@ class TakesWatch:
         if not self.score_i:
             return "starting"
         pre = f"score {self.score_i} of {self.pending}, " if self.pending > 1 else ""
-        n = self.takes_each or self.todo
-        take = self.take or (n - self.todo + self.done_in_score + 1)
+        n, take = self.take_of()
         text = f"{pre}take {take} of {n}"
         if self.pass_:
             text += f", pass '{self.pass_}', {self.pct * 100:.0f}%"
-        avg = sum(self.take_times) / len(self.take_times) if self.take_times else self.take_est
-        if avg is not None:
-            here = max(0.0, self.take_left - (now - self.at)) if self.take_left is not None else avg * (1 - self.pct)
-            later = max(0, self.todo - self.done_in_score - 1)
-            text += f" ({fmt_left(here + later * avg)} left)"
+        left = self.left(now)
+        if left is not None:
+            text += f" ({fmt_left(left)} left)"
         return text
+
+    def take_of(self) -> tuple[int, int]:
+        """An AI job's takes for the current score, and the one being made."""
+        n = self.takes_each or self.todo
+        return n, self.take or (n - self.todo + self.done_in_score + 1)
+
+    def left(self, now: float) -> float | None:
+        """An AI job's seconds left for the current score: the take being made, then the others
+        at the average of those done (else the estimate); None with neither."""
+        avg = sum(self.take_times) / len(self.take_times) if self.take_times else self.take_est
+        if avg is None:
+            return None
+        here = max(0.0, self.take_left - (now - self.at)) if self.take_left is not None else avg * (1 - self.pct)
+        return here + max(0, self.todo - self.done_in_score - 1) * avg
+
+    def progress(self, label: str, now: float | None = None) -> Progress:
+        """The bar: an AI job (take - 1 + the take's share done) / takes, per score of those to
+        arrange; a SID or AY job the candidates checked of those found; a phase without figures
+        (the model's download, indexing) a moving segment."""
+        now = time.monotonic() if now is None else now
+        if self.phase:
+            return Progress(label, None, self.phase.split(" (")[0])
+        if self.kind != "ai":
+            if not self.cands:
+                return Progress(label, None, "looking for the tune")
+            return Progress(label, min(1.0, self.checked / self.cands), f"{self.checked}/{self.cands} candidates")
+        if not self.score_i:
+            return Progress(label, None, "starting")
+        n, take = self.take_of()
+        within = min(1.0, (take - 1 + self.pct) / n) if n else 0.0
+        frac = (self.score_i - 1 + within) / max(1, self.pending)
+        figs = (f"score {self.score_i}/{self.pending} " if self.pending > 1 else "") + f"take {take}/{n}"
+        if self.pass_:
+            figs += f" {self.pass_} {self.pct * 100:.0f}%"
+        left = self.left(now)
+        return Progress(label, frac, figs, short_left(left) if left is not None else "")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1753,6 +1949,8 @@ class Job:
     ended: float | None = None
     cancelled: bool = False
     watch: TakesWatch | None = None
+    live: Live | None = None  # the learning's games list (a learn job)
+    stage: tuple[int, int, int] | None = None  # a build's job: (its pack, of packs, 0 the pack or 1 its packages)
 
     def __post_init__(self):
         if self.kind in TAKES_LABEL:
@@ -1815,6 +2013,37 @@ def job_detail(j: Job, now: float) -> str:
     return last
 
 
+RE_DL = re.compile(r"^downloading the (\w+) collection .*: ([\d.]+)(?: of ([\d.]+))? MB$")
+
+
+def job_progress(j: Job, now: float | None = None) -> Progress:
+    """The bar for a running job, by its kind: the learning from its games list, a download
+    from its bytes, a takes job from its progress lines, a build's pack from the packs done; any
+    other (a render, the device builds) a moving segment."""
+    now = time.monotonic() if now is None else now
+    if j.kind == "learn" and j.live is not None:
+        return j.live.progress(now)
+    if j.kind in TAKES_LABEL and j.watch is not None:
+        return j.watch.progress(f"{TAKES_LABEL[j.kind]} takes: {j.game}", now)
+    if j.kind.startswith("dl-"):
+        what = j.kind[3:].upper()
+        if m := RE_DL.match(j.progress):
+            got, total = float(m[2]), float(m[3]) if m[3] else 0.0
+            return Progress(f"downloading {what} collection", got / total if total else None,
+                            f"{got:.0f}/{total:.0f} MB" if total else f"{got:.0f} MB")
+        if j.progress.startswith("unpacking"):
+            return Progress(f"unpacking {what} collection", None)
+        return Progress(f"downloading {what} collection", None)
+    if j.kind == "pack" and j.stage:
+        k, n, sub = j.stage
+        return Progress(f"building pack {k} of {n}", (k - 1 + sub * 0.5) / max(1, n), "packages" if sub else "packing")
+    if j.kind == "render":
+        return Progress(f"rendering {j.game}" if j.game else "rendering", None)
+    if j.kind == "reuse":
+        return Progress("reusing earlier learning", None)
+    return Progress(j.what or j.title, None)
+
+
 class Runner:
     def __init__(self, log_path: Path, threaded: bool, echo: bool = False, progress: bool = False):
         self.log_path = log_path
@@ -1832,6 +2061,7 @@ class Runner:
         self.failed: list[Job] = []  # the jobs that failed, in turn
         self.jobs: list[Job] = []  # every job of the session, in the order submitted
         self.after: Callable[[Job], None] | None = None  # each finished job, after its on_done
+        self.batch = 0  # the jobs started since the queue was last empty (none waiting, held ones too)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = log_path.open("a", encoding="utf-8", errors="replace")
         if threaded:
@@ -1904,6 +2134,14 @@ class Runner:
     def waiting(self) -> int:
         return len(self.pending)
 
+    def queue_text(self) -> str:
+        """The running job's place among those started since the queue was empty and those
+        waiting: "job 2 of 6"; "" for a job on its own."""
+        with self.lock:
+            waiting = sum(1 for j in self.jobs if j.state == "waiting")
+        k = self.batch
+        return f"job {k} of {k + waiting}" if self.current is not None and k and waiting + k > 1 else ""
+
     def _line(self, job: Job, line: str) -> None:
         if not line.endswith("\n"):
             line += "\n"
@@ -1931,6 +2169,7 @@ class Runner:
         job = self.pending.popleft()
         self.current = job
         job.state, job.started = "running", time.monotonic()
+        self.batch += 1
         return job
 
     def _run(self, job: Job) -> None:
@@ -1974,6 +2213,8 @@ class Runner:
             self._run(job)
             with self.lock:
                 self.done.append(job)
+                if not any(j.state == "waiting" for j in self.jobs):
+                    self.batch = 0
 
     def _finish(self, job: Job) -> None:
         if job.rc != 0:
@@ -2243,7 +2484,7 @@ class Studio:
             if then:
                 then(j)
         return Job("learn the games (plan)", argv, chain=chain, on_done=done, on_line=live.apply, kind="learn",
-                   what="learn the games", detail=lambda: live.header())
+                   what="learn the games", detail=lambda: live.header(), live=live)
 
     def live_rows(self) -> list[LiveRow]:
         """The rows of the list while learning: the games file's entries when it is there,
@@ -2530,7 +2771,8 @@ class Studio:
             return
         n = int(sm["takes"]) if sm.get("takes", "").isdigit() else 0
         if n:
-            best = f" (best match {sm['best']})" if sm.get("best", "-") != "-" else " written" if j.kind == "ai" else ""
+            best = (f" (best {match_pct(sm['best'])} match to the original)" if sm.get("best", "-") != "-"
+                    else " written" if j.kind == "ai" else "")
             self.flash(f"{label} takes for {j.game}: {n}{best}{hint}", "ok")
         else:
             self.flash(f"{label} takes for {j.game}: {summary_text(j.kind, sm)}")
@@ -2710,7 +2952,7 @@ class Studio:
             argv += ["--app", str(a)]
         self.runner.submit(Job(f"pack {n} ({len(br.packs[i])} games)", argv, chain="build",
                                on_done=lambda j: self._packed(i, j), kind="pack", what=f"build pack {n}",
-                               game=plural(len(br.packs[i]), "game")))
+                               game=plural(len(br.packs[i]), "game"), stage=(i + 1, len(br.packs), 0)))
 
     def _packages(self, i: int) -> None:
         n = self.build_run.numbers[i]
@@ -2728,7 +2970,8 @@ class Studio:
             self.build_run.built = i + 1
             return self._pack(i + 1) if i + 1 < len(self.build_run.packs) else self._finish(None)
         self.runner.submit(Job(f"pack {n}: the packages and their verify", argv, env=env, chain="build", on_done=done,
-                               kind="pack", what=f"pack {n}'s packages", game="fmzx.fwsc, fmzx-preview.fwsc"))
+                               kind="pack", what=f"pack {n}'s packages", game="fmzx.fwsc, fmzx-preview.fwsc",
+                               stage=(i + 1, len(self.build_run.packs), 1)))
 
     def _packed(self, i: int, j: Job) -> None:
         br = self.build_run
@@ -2833,7 +3076,7 @@ class Studio:
                     else:
                         play = "plays a music-preview render" if how == "render" else note
                     mark = "*" if s and c.choice is not None and c.choice == chosen else " "
-                    out.append(f"   {mark} {c.label:<26} {c.info}  [{play}]")
+                    out.append(f"   {mark} {c.label:<26} {c.text()}  [{play}]")
         out.append("")
         out.append("packs:" + (f" ({self.sizes_note()})" if self.sizes_note() else ""))
         out += [f"  {ln}" for _, ln, _ in pack_lines(p, self.packs)]
@@ -2857,6 +3100,9 @@ class Studio:
 # The screen (curses): a thin layer over Studio
 
 
+FLASH_SECS = 3.0  # a message's time on the key line
+JOB_BAR = 10  # the cells of a running job's bar on the jobs view
+DONE_SECS = 3.0  # the last job's bar, green or red, after it ends
 HELP_GAMES = ("Enter open  a/s/y mark  g make-takes  J jobs  1-9/0 pack  f fill  p packs  b build-firmware  r re-learn  "
               "l log  ? help  q quit")
 HELP_LIVE = "1-9/0 pack  J jobs  l log  ? help  q quit"
@@ -2866,7 +3112,7 @@ HELP_TEXT = "j/k PgUp/PgDn scroll  Home/End  J jobs  q/Esc back"
 HELP_JOBS = "Enter output  o open-game  x cancel/stop  Esc back  l log  ? help  q quit"
 HELP_JOB_TEXT = "j/k PgUp/PgDn scroll  Home/End  o open-game  x cancel/stop  Esc back"
 # the methods to mark: key, label on a row, what it is
-METHOD_KEYS = (("a", "AI", "ai", "AI arrangement"), ("s", "SID", "sid", "C64 version"),
+METHOD_KEYS = (("a", "AI", "ai", "arrangement"), ("s", "SID", "sid", "C64 version"),
                ("y", "AY", "ay", "Spectrum 128 version"))
 
 
@@ -2927,7 +3173,7 @@ class UI:
         self.game_from = "games"
         self.quit = False
         self.utf8 = "UTF-8" in locale.getpreferredencoding(False).upper().replace("UTF8", "UTF-8")
-        self.dash = "—" if self.utf8 else "-"
+        self.last_prog: tuple[Job, Progress] | None = None  # the bar last drawn for a job: shown at its end
         with contextlib.suppress(curses.error):
             curses.curs_set(0)
         scr.timeout(200)
@@ -2939,7 +3185,8 @@ class UI:
         B, D, R = curses.A_BOLD, curses.A_DIM, curses.A_REVERSE
         a = {"dim": D, "bold": B, "rev": R, "sel": R | B, "title": B, "name": B, "head": B, "key": B,
              "chosen": B, "ai": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
-             "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B, "keycap": R | B}
+             "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B, "keycap": R | B,
+             "prog_run": B, "prog_ok": B, "prog_err": R | B, "prog_off": D, "track": D}
         a.update({f"p{n}": B for n in range(1, PACKS_MAX + 1)})
         if not colors:
             return a
@@ -2958,7 +3205,8 @@ class UI:
         except curses.error:
             return a
         a.update({"chosen": g | B, "ai": m | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
-                  "cached": g | D, "warn": y | B, "bar_run": y | R, "bar_ok": g | R, "bar_err": r | R})
+                  "cached": g | D, "warn": y | B, "bar_run": y | R, "bar_ok": g | R, "bar_err": r | R,
+                  "prog_run": y | B, "prog_ok": g | B, "prog_err": r | B})
         cycle = (c, m, y, g, b)
         a.update({f"p{n}": cycle[(n - 1) % len(cycle)] | B for n in range(1, PACKS_MAX + 1)})
         return a
@@ -2998,26 +3246,67 @@ class UI:
             self.scr.refresh()
             return
         getattr(self, f"draw_{self.screen}")(h, w)
+        self.draw_message(h, w)
         self.draw_status(h, w)
         self.scr.refresh()
 
-    def draw_status(self, h: int, w: int) -> None:
-        r, st = self.st.runner, self.st
-        j = r.current
-        flash_age = time.monotonic() - st.flash_at
+    def draw_message(self, h: int, w: int) -> None:
+        """A question (y/n), else a message of the last 3 s, on the key line (above the bar), in
+        place of the keys."""
+        st = self.st
         if self.confirm_stop is not None:
             msg, a = f"stop {self.confirm_stop.title}? It is running (y/n)", self.attr["bar_err"]
         elif self.confirm_quit:
             msg, a = "jobs are running: quit and stop them? (y/n)", self.attr["bar_err"]
-        elif j is not None and not (flash_age < 5 and st.flash_msg):
-            msg = f"[{j.title}] " + (f"+{r.waiting()} waiting  " if r.waiting() else "") + (job_detail(j, time.monotonic()) or r.last_line)
-            a = self.attr["bar_run"]
-        elif flash_age < 8 and st.flash_msg:
-            msg = st.flash_msg
-            a = self.attr[{"ok": "bar_ok", "err": "bar_err"}.get(st.flash_kind, "bar")]
+        elif st.flash_msg and time.monotonic() - st.flash_at < FLASH_SECS:
+            msg, a = st.flash_msg, self.attr[{"ok": "bar_ok", "err": "bar_err"}.get(st.flash_kind, "bar")]
         else:
-            msg, a = "idle" + (f"  {st.flash_msg}" if st.flash_msg else ""), self.attr["bar"]
-        self.put(h - 1, 0, msg.ljust(w), a)
+            return
+        self.put(h - 2, 0, f" {msg}".ljust(w), a)
+
+    def status_runs(self, w: int, now: float) -> tuple[list[tuple[str, str]], str]:
+        """The bottom line's runs (progress_line's) and its colour (run, ok, err, off; idle):
+        the running job's bar; for 3 s after the last job of the queue ends, its bar full and
+        green when done, red where it stopped when it failed; else "idle" and the last message."""
+        r, st = self.st.runner, self.st
+        j = r.current
+        if j is not None:
+            try:
+                p = job_progress(j, now)
+            except Exception:  # noqa: BLE001 - a bar that cannot be worked out moves
+                p = Progress(j.what or j.title)
+            self.last_prog = (j, p)
+            return progress_line(p, r.queue_text(), w, self.utf8, now), "run"
+        with r.lock:
+            ended = [x for x in r.jobs if x.state in FINISHED and x.started and x.ended]
+        j = max(ended, key=lambda x: x.ended, default=None)
+        if j is not None and now - j.ended < DONE_SECS:
+            if self.last_prog and self.last_prog[0] is j:
+                p = self.last_prog[1]
+            else:
+                try:
+                    p = job_progress(j, now)
+                except Exception:  # noqa: BLE001
+                    p = Progress(j.what or j.title)
+            if j.state == "done":
+                return progress_line(Progress(p.label, 1.0, "done"), "", w, self.utf8, now), "ok"
+            frac = p.frac if p.frac is not None else 1.0
+            if j.state == "failed":
+                return progress_line(Progress(p.label, frac, "failed (J: its output)"), "", w, self.utf8, now), "err"
+            return progress_line(Progress(p.label, frac, j.state), "", w, self.utf8, now), "off"
+        msg = st.flash_msg if st.flash_msg and now - st.flash_at >= FLASH_SECS else ""
+        return [("idle", "label")] + ([("  " + msg, "queue")] if msg else []), "idle"
+
+    def draw_status(self, h: int, w: int) -> None:
+        """The bottom line: the progress bar (status_runs)."""
+        runs, kind = self.status_runs(w - 1, time.monotonic())
+        bright = self.attr.get(f"prog_{kind}", self.attr["dim"])
+        attr = {"label": bright, "fill": bright, "track": self.attr["track"], "figures": 0, "queue": self.attr["dim"], "gap": 0}
+        if kind == "idle":
+            attr["label"] = self.attr["dim"]
+        x = 0
+        for text, part in runs:
+            x = self.put(h - 1, x, text, attr[part])
 
     def pack_tag(self, gid: str | None) -> tuple[str, int]:
         n = self.st.packs.get(gid) if gid else None
@@ -3059,15 +3348,18 @@ class UI:
             fill = st.assigned()
             n = len(fill) if fill else len(split_packs([(g.id, g.packed) for g in p.packed()], p.room, p.overhead()))
             head += f"  {len(p.games)} games, {kb(p.used)}, room {kb(p.room)}: {n} pack{'s' if n != 1 else ''}"
+        elif st.live:
+            head += "  learning" + ("…" if self.utf8 else "...")
         head += f"  ->  {st.w}"
         self.put(0, x, head, self.attr["bold"])
         live = st.live
-        lh = live.header(dash=self.dash) if live else ""
-        if live and not lh and live.phase == "start":
-            cur = st.runner.current
-            lh = f"waiting for {cur.title}, then the learning" if cur and cur.on_line is None else "learning the games: starting"
-        if lh:
-            self.put(1, 0, lh, self.attr["err"] if live.phase == "failed" else self.attr["warn"])
+        if live and live.phase == "failed":
+            self.put(1, 0, "the learning failed (l: the log)", self.attr["err"])
+        elif not p:
+            x = 0
+            for kind, what in LIVE_LEGEND:
+                x = self.put(1, x, LIVE_GLYPHS[kind][0 if self.utf8 else 1], self.live_attr(kind))
+                x = self.put(1, x, f" {what}   ", self.attr["dim"])
         else:
             x = self.put(1, 0, "music to try (FM from the code is always there): ", self.attr["dim"])
             for key, label, k, what in METHOD_KEYS:
@@ -3120,11 +3412,15 @@ class UI:
             if not g.left_out and g.scores:
                 self.put(y, x + 3, g.music, self.attr["dim"] | rv)
 
+    def live_attr(self, kind: str) -> int:
+        return {"run": self.attr["run"], "ok": self.attr["ok"], "cached": self.attr["cached"], "out": self.attr["dim"],
+                "waiting": self.attr["dim"]}[kind]
+
     def draw_live(self, h: int, w: int) -> None:
-        """The list while the learning runs: each game's state."""
+        """The list while the learning runs: each game's state as a glyph."""
         rows = self.st.refresh_live()
         if not rows:
-            self.put(3, 2, "learning the games... (the list appears when the games file is written; l shows the log)")
+            self.put(3, 2, "the list appears when the games file is written (l: the log)", self.attr["dim"])
             return
         avail = h - 5
         if avail <= 0:
@@ -3132,24 +3428,23 @@ class UI:
         self.gi = max(0, min(self.gi, len(rows) - 1))
         self.gtop = max(0, min(max(self.gtop, self.gi - avail + 1), self.gi))
         nw, hw = self.columns(w)
-        now = time.monotonic()
         for k, r in enumerate(rows[self.gtop:self.gtop + avail]):
             y = 3 + k
             sel = self.gtop + k == self.gi
             rv = self.attr["sel"] if sel else 0
-            text, kind = live_state(r, now)
+            glyph, kind = live_glyph(r, self.utf8)
             out = kind == "out"
             self.put(y, 0, " " * w, rv)
             x = self.put(y, 0, "> " if sel else "  ", rv)
+            x = self.put(y, x, f"{glyph} ", self.live_attr(kind) | rv)
             x = self.put(y, x, f"{r.name[:nw]:<{nw}}", (self.attr["dim"] if out else self.attr["name"]) | rv)
             if hw:
                 x = self.put(y, x, f" {('' if out else r.how)[:hw]:<{hw}}", (self.attr["dim"] if out else 0) | rv)
             x = self.put(y, x, f" {('~' + kb(r.size)) if r.size else '':>10} ", self.attr["dim"] | rv)
             tag, ta = self.pack_tag(r.gid) if self.st.packs.get(r.gid or "") else ("", 0)
             x = self.put(y, x, f"{tag:<2} ", ta | rv)
-            a = {"run": self.attr["run"], "ok": self.attr["ok"], "cached": self.attr["cached"],
-                 "out": self.attr["dim"], "waiting": self.attr["dim"]}[kind]
-            self.put(y, x + 1, text, a | rv)
+            if out and r.how:
+                self.put(y, x + 1, r.how, self.attr["dim"] | rv)
 
     def game_rows(self) -> list[tuple[str, Score | None, str, Candidate | None]]:
         """("head", score, key, None) and ("cand", score, key, candidate) rows."""
@@ -3224,6 +3519,8 @@ class UI:
                       else self.attr["err"] if state.startswith("render failed") else self.attr["dim"])
                 self.put(y, x, f"[{state}] ", sa | rv)
                 x += len(state) + 3
+            if c.match is not None:
+                x = self.put(y, x, f"{match_pct(c.match):>4} match", self.attr[match_band(c.match)] | rv) + 2
             self.put(y, x, c.info, (self.attr["dim"] if not sel else 0) | rv)
 
     def pack_rows(self) -> list[tuple[str, int, Game | None]]:
@@ -3335,7 +3632,7 @@ class UI:
             rows.append(("head", f"{key} ({len(js)})" if key != "running" else key, ""))
             for j in js:
                 d = job_detail(j, now)
-                if len(d) <= w - x_detail - 1:
+                if len(d) <= w - x_detail - 1 - (JOB_BAR + 1 if j.state == "running" else 0):
                     rows.append(("job", j, d))
                     continue
                 rows.append(("job", j, ""))
@@ -3376,8 +3673,17 @@ class UI:
             x = self.put(y, x, f"{state:<14} ", sa | rv)
             x = self.put_what(y, x, j.what or j.title, ww, rv)
             x = self.put(y, x + 2, f"{j.game[:gw]:<{gw}}", self.attr["name"] | rv) if gw else x
+            xd = x_detail
+            if j.state == "running" and xd + JOB_BAR < w:
+                try:
+                    frac = job_progress(j, now).frac
+                except Exception:  # noqa: BLE001
+                    frac = None
+                for t, on in render_bar(frac, JOB_BAR, self.utf8, now):
+                    xd = self.put(y, xd, t, (self.attr["prog_run"] if on else self.attr["track"]) | rv)
+                xd += 1
             if d:
-                self.put(y, x_detail, d, (da if not sel else 0) | rv)
+                self.put(y, xd, d, (da if not sel else 0) | rv)
 
     def open_jobs(self) -> None:
         if self.screen == "text":
@@ -4232,11 +4538,13 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         check([(r.name, r.base) for r in live.rows] == [("bee", "bee.sna"), ("Zed (1984)", "Zed (1984).tzx")],
               "live: the folder's game files before the games file is written (hidden and other files not)")
         live.apply("loading: Zed (1984).tzx", 0)
-        check(live.rows[1].state == "converting" and live.header(0) == "loading the new game files", "live: a file loading")
+        check(live.rows[1].state == "converting" and live.header(0) == "loading the new game files"
+              and live.progress(0) == Progress("loading game files", None, ""), "live: a file loading (the bar moving: no count yet)")
         live.apply("loaded 1/2: Zed (1984).tzx (loaded (own loader))", 1)
         live.apply("loaded 2/2: bee.sna (left out: 128K)", 1)
         check((live.rows[1].state, live.rows[1].how) == ("converted", "loaded (own loader)") and (live.rows[0].state, live.rows[0].how)
-              == ("left out", "128K") and live.header(1) == "loading the new game files: 2 of 2", "live: loaded and left out, by file name")
+              == ("left out", "128K") and live.header(1) == "loading the new game files: 2 of 2"
+              and live.progress(1) == Progress("loading game files", 1.0, "2/2"), "live: loaded and left out, by file name")
         gtext = "".join(f'[[game]]\nid = "{i}"\nname = "{n}"\nfile = "/g/{f}"\n\n' for i, n, f in
                         (("zed", "Zed", "Zed (1984).tzx"), ("cat", "Cat", "cat.z80"), ("cat-2", "Cat (2)", "cat2.z80"), ("dog", "Dog", "dog.tap")))
         live.set_rows(rows_from_games_file(gtext))
@@ -4247,6 +4555,8 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
                    "learning 4 games: 1 from the cache, 3 to learn, 2 at a time", "learned 1/4: Zed (cached)", "learning: Cat", "learning: Dog"):
             live.apply(ln, 0)
         check(live.header(5) == "learning 1 of 4 games - 3 not learned before: timing the first", f"live: no estimate before one is learned ({live.header(5)})")
+        check(live.progress(5) == Progress("learning games", 0.25, "1/4"),
+              f"live: the bar from the games learned, the cached one counted ({live.progress(5)})")
         live.apply("learned 2/4: Cat (20.0 s)", 20)
         live.apply("learning: Cat (2)", 20)
         by = {r.name: r for r in live.rows}
@@ -4255,11 +4565,45 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         est = live.estimate(30)
         check(est is not None and abs(est - 6.0) < 1e-9, f"live: the estimate from the learned games' average, two at a time ({est})")
         check(live.header(30, "-") == "learning 2 of 4 games - under a minute left", f"live: the header ({live.header(30)})")
+        lp = live.progress(30)
+        check((lp.label, lp.figures, lp.left) == ("learning games", "2/4", "<1 min") and abs(lp.frac - (2 + 0.95 + 0.5) / 4) < 1e-9,
+              f"live: the bar counts the games being learned by their time against the average, at most 95% ({lp})")
         live.apply("learned 3/4: Dog (600.0 s)", 25)
         check("about 5 min left" in live.header(25), f"live: minutes left, the one learning counted from its start ({live.header(25)})")
-        check(live_state(by["Cat"], 30) == ("learned (20.0 s)", "ok") and live_state(by["Zed"], 30) == ("learned (cached)", "cached")
-              and live_state(by["bee"], 30) == ("left out: 128K", "out") and live_state(by["Cat (2)"], 95) == ("learning... 1:15", "run"),
-              "live: each row's state and its colour")
+        check(live_glyph(by["Cat"], True) == ("✓", "ok") and live_glyph(by["Zed"], True) == ("✓", "cached")
+              and live_glyph(by["bee"], True) == ("✗", "out") and live_glyph(by["Cat (2)"], True) == ("▸", "run")
+              and live_glyph(by["Cat (2)"], False) == (">", "run") and live_glyph(by["Zed"], False) == ("+", "cached")
+              and live_glyph(by["bee"], False) == ("x", "out") and live_glyph(LiveRow("w", "w"), False) == (".", "waiting")
+              and live_glyph(LiveRow("w", "w"), True) == ("·", "waiting"), "live: each row's state as a glyph (ASCII without UTF-8) and its colour")
+
+        # -- the progress bar: cells, eighths, ASCII, widths, the moving segment, the line on a narrow screen
+        check(bar_text(0.5, 20, True) == "█" * 10 + "░" * 10 and bar_text(0.5, 20, False) == "#" * 10 + "-" * 10
+              and bar_text(0, 20, True) == "░" * 20 and bar_text(1, 20, True) == "█" * 20 and bar_text(1.7, 20, False) == "#" * 20,
+              "bar: half, empty, full, beyond full")
+        eighths = [bar_text(k / 80, 10, True)[0] for k in range(1, 8)]
+        check(eighths == list("▏▎▍▌▋▊▉") and bar_text(0.43, 20, True) == "█" * 8 + "▌" + "░" * 11
+              and bar_text(0.43, 20, False) == "#" * 8 + "-" * 12, f"bar: the last cell in eighths with UTF-8, whole cells in ASCII ({eighths})")
+        widths_ok = all(len(bar_text(f, wd, u, 1.3)) == wd for wd in range(20, 201) for f in (None, 0, 0.001, 0.37, 0.999, 1)
+                        for u in (True, False))
+        check(widths_ok, "bar: exactly its width, 20 to 200 cells, every fraction, moving or not, UTF-8 or not")
+        moves = [bar_text(None, 20, False, t / 8) for t in range(0, 40)]
+        starts = [m.index("#") for m in moves]
+        check(all(m.count("#") == 4 for m in moves) and starts[:3] == [0, 1, 2] and max(starts) == 16 and starts[16] == 16
+              and starts[17] == 15 and starts[32] == 0 and len(set(moves)) == 17,
+              f"bar: unknown progress, a segment a fifth wide moving to and fro, 8 cells a second ({starts[:20]})")
+        pl = lambda p, q, wd, u=True: "".join(t for t, _ in progress_line(p, q, wd, u, 0.0))  # noqa: E731
+        lp = Progress("learning games", 12 / 45, "12/45", "~4 min")
+        line = pl(lp, "job 2 of 6", 79)
+        check(len(line) == 79 and line.startswith("learning games █") and line.endswith(" 12/45  ~4 min  · job 2 of 6"),
+              f"bar line: label, bar, figures, time left, the queue, 79 columns ({line!r})")
+        check(len(pl(lp, "job 2 of 6", 199)) == 199 and len(pl(lp, "job 2 of 6", 19)) == 19, "bar line: the bar takes the width left")
+        narrow = {wd: pl(lp, "job 2 of 6", wd) for wd in (50, 40, 31, 24, 20, 12, 6)}
+        check("job 2" in pl(lp, "job 2 of 6", 60) and "job" not in narrow[50] and "~4 min" in narrow[40]
+              and "~4 min" not in narrow[31] and "12/45" in narrow[31] and "12/45" not in narrow[24]
+              and narrow[24].startswith("learning games █") and all(len(v) == k for k, v in narrow.items())
+              and len(narrow[12].split(" ")[-1]) == BAR_SHORT and narrow[12].startswith("learni… █") and narrow[6] == bar_text(12 / 45, 6, True),
+              f"bar line: narrower, the queue goes first, then the time left, then the figures; at least 4 cells ({narrow})")
+        check(pl(Progress("x", 0.5), "", 20, False) == "x " + "#" * 9 + "-" * 9, "bar line: ASCII")
         live.apply("learned 5/5: Newcomer (1.0 s)", 700)
         check(any(r.name == "Newcomer" and r.state == "learned" for r in live.rows), "live: a game no row has gets one")
 
@@ -4370,9 +4714,10 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         check(labels == ["beeper", "FM (from code/memory)", "AI take-1 (rules)", "SID chip-1", "C64 original (chip-1)", "AY ay-1",
                          "Spectrum 128 original (ay-1)"], f"candidates: {labels}")
         cands = {c.take: c for c in st.candidates(g, sc)}
-        check("consonance bass 0.71 pad 0.66" in cands["1"].info and "melody match 0.42; C64: Alpha" in cands["chip-1"].info,
+        check("consonance bass 0.71 pad 0.66" in cands["1"].info and cands["chip-1"].info.startswith("C64: Alpha")
+              and cands["chip-1"].match == 0.42 and cands["chip-1"].text().startswith("42% match to the original; C64: Alpha"),
               "candidates: the take's metrics, the chip take's source and match")
-        check("melody match 0.37; Spectrum 128: Alpha by Someone, song 2" in cands["ay-1"].info and cands["ay-1"].choice == "ay-1"
+        check(cands["ay-1"].text().startswith("37% match to the original; Spectrum 128: Alpha by Someone, song 2") and cands["ay-1"].choice == "ay-1"
               and cands["zx128-1"].choice is None and cands["zx128-1"].direct, "candidates: the AY take's source and match, its own sound")
         st.choose(g, sc, cands["ay-1"])
         check(read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "ay-1"} and st.choice_summary(g) == "ay-1"
@@ -4800,7 +5145,7 @@ Attributes = A_ prw-r--r--
         wt = watched("sid", SAMPLE_SID, 2)
         check(wt.running_text() == "checking candidates: 2 of 4", f"jobs: a SID job's candidates ({wt.running_text()})")
         wt = watched("sid", SAMPLE_SID)
-        check(summary_text("sid", wt.summary) == "3 takes, best melody match 0.73 (C64: Alpha by Ann Example (1985 Nobody Soft)), "
+        check(summary_text("sid", wt.summary) == "3 takes, best 73% match to the original (C64: Alpha by Ann Example (1985 Nobody Soft)), "
               "1 tune skipped (the converter refuses it)", f"jobs: a SID job's result ({summary_text('sid', wt.summary)})")
         check(summary_text("sid", watched("sid", SAMPLE_SID_NONE).summary) == "no C64 tune found by that name",
               "jobs: a SID job that found no tune by the game's name")
@@ -4814,6 +5159,10 @@ Attributes = A_ prw-r--r--
         check(parse_summary("summary: kind=sid game=a takes=1 best=0.5 source=C64: X by Y, subtune 1, A/B C.sid")
               == {"kind": "sid", "game": "a", "takes": "1", "best": "0.5", "source": "C64: X by Y, subtune 1, A/B C.sid"}
               and parse_summary("tools/arrange-music: done") is None, "jobs: the summary line read, source to the line's end")
+        check(match_pct(0.73) == "73%" and match_pct("0.734") == "73%" and match_pct(0.004) == "<1%" and match_pct(0) == "0%"
+              and match_pct(0.005) == "1%" and match_pct(1) == "100%" and match_pct("-") == "-"
+              and [match_band(x) for x in (0.9, 0.497, 0.49, 0.2, 0.195, 0.19, 0.0)] == ["ok", "ok", "warn", "warn", "warn", "dim", "dim"],
+              "match: a whole percentage (<1% under half a percent), green from 50%, yellow from 20%, dim under, as shown")
         check(parse_dur("40 s") == 40 and parse_dur("12 min") == 720 and parse_dur("1.5 h") == 5400 and parse_dur("?") is None
               and fmt_secs(192) == "3 min 12 s" and fmt_secs(7) == "7 s", "jobs: durations read and written")
 
@@ -4896,9 +5245,131 @@ Attributes = A_ prw-r--r--
             none.watch.feed(ln)
         none.rc, none.state = 0, "done"
         sg.job_finished(none)
-        check(msg1 == "SID takes for Alpha: 3 (best match 0.73); Enter on the game to listen"
+        check(msg1 == "SID takes for Alpha: 3 (best 73% match to the original); Enter on the game to listen"
               and sg.flash_msg == "SID takes for Bravo: no C64 tune found by that name",
               f"jobs: a finished takes job says its result ({msg1}; {sg.flash_msg})")
+
+        # -- the bar per kind of job, from sample progress
+        def running(j: Job) -> Job:
+            j.state, j.started = "running", time.monotonic()
+            return j
+        ai = running(Job("AI takes for Alpha", kind="ai", game="Alpha"))
+        for ln in SAMPLE_AI.split("@@\n")[0].splitlines():
+            ai.watch.feed(ln, 100.0)
+        pa = job_progress(ai, 100.0)
+        check((pa.label, pa.figures, pa.left) == ("AI takes: Alpha", "take 2/4 bass 38%", "~24 min")
+              and abs(pa.frac - (1 + (1 + 6.8 / 45) / 3) / 4) < 1e-9, f"bar: an AI job, (take - 1 + the take's share) / takes ({pa})")
+        ai0 = running(Job("AI takes for Alpha", kind="ai", game="Alpha"))
+        ai0.watch.feed("downloading the model (about 1.4 GB, once)")
+        sj = running(Job("SID takes for Alpha", kind="sid", game="Alpha"))
+        for ln in SAMPLE_SID.split("@@\n")[0].splitlines():
+            sj.watch.feed(ln)
+        p_idx = job_progress(sj)
+        for ln in SAMPLE_SID.split("@@\n")[1].splitlines():
+            sj.watch.feed(ln)
+        check(job_progress(ai0) == Progress("AI takes: Alpha", None, "downloading the model")
+              and p_idx == Progress("SID takes: Alpha", None, "indexing the collection")
+              and job_progress(sj) == Progress("SID takes: Alpha", 0.5, "2/4 candidates"),
+              f"bar: a phase without figures moves; a SID job's candidates checked of found ({job_progress(sj)})")
+        dj = running(Job("download", kind="dl-sid"))
+        d0 = job_progress(dj)
+        dj.progress = "downloading the SID collection (HVSC 84): 61.2 of 85.0 MB"
+        d1 = job_progress(dj)
+        dj.progress = "unpacking the SID collection (HVSC 84)"
+        check(d0 == Progress("downloading SID collection", None) and d1.figures == "61/85 MB" and abs(d1.frac - 61.2 / 85) < 1e-9
+              and job_progress(dj) == Progress("unpacking SID collection", None), f"bar: a download from its bytes, then unpacking ({d1})")
+        pk = running(Job("pack 2", kind="pack", stage=(2, 3, 1)))
+        check(job_progress(pk) == Progress("building pack 2 of 3", 0.5, "packages")
+              and job_progress(running(Job("render", kind="render", game="Alpha: FM"))) == Progress("rendering Alpha: FM", None)
+              and job_progress(running(Job("device build fm1", kind="setup"))) == Progress("device build fm1", None),
+              "bar: a build's pack from the packs done; a render and the device builds move")
+
+        # -- the screen drawn in memory: the bar on the bottom line, nothing else showing progress
+        class Scr:
+            def __init__(self, h: int, w: int):
+                self.h, self.w = h, w
+                self.erase()
+
+            def getmaxyx(self):
+                return self.h, self.w
+
+            def erase(self):
+                self.grid = [[" "] * self.w for _ in range(self.h)]
+
+            def addstr(self, y, x, text, attr=0):
+                for i, ch in enumerate(text):
+                    if 0 <= x + i < self.w:
+                        self.grid[y][x + i] = ch
+
+            def refresh(self):
+                pass
+
+            def timeout(self, _n):
+                pass
+
+            def keypad(self, _on):
+                pass
+
+            def lines(self) -> list[str]:
+                return ["".join(r).rstrip() for r in self.grid]
+
+        class ScrCurses(FakeCurses):
+            def has_colors(self):
+                return True
+
+            def curs_set(self, _n):
+                pass
+        rv = Runner(t / "view.log", threaded=False)
+        sv = Studio(games.resolve(), t / "w-view", parse_args([str(games), "-o", str(t / "w-view")]), rv)
+        sv.plan = None
+        lv = sv.live = Live(sv.live_rows())
+        t0 = time.monotonic()
+        for ln in ("converted 1/4: Alpha (tape)", "converted 2/4: bravo (tape)", "converted 3/4: Charlie (tape)",
+                   "converted 4/4: Delta (left out: 128K)", "learning 3 games: 1 from the cache, 2 to learn, 2 at a time",
+                   "learned 1/3: Alpha (cached)", "learning: bravo"):
+            lv.apply(ln, t0)
+        rv.submit(Job("learn the games (plan)", kind="learn", live=lv))
+        rv.submit(Job("AI takes for Alpha", kind="ai", game="Alpha"))
+        rv.submit(Job("SID takes for Alpha", kind="sid", game="Alpha"), hold=True)
+        with rv.lock:
+            rv._start()
+        ui = UI(Scr(24, 80), sv, ScrCurses())
+        ui.utf8 = True
+
+        def screen(h: int, w: int) -> list[str]:
+            ui.scr = Scr(h, w)
+            ui.draw()
+            return ui.scr.lines()
+        sc = screen(24, 80)
+        rows = [ln for ln in sc[3:22] if ln.strip()]
+        check(sc[0].startswith("pack-studio  My Games  learning…  ->") and sc[1].startswith("· waiting   ▸ converting or learning")
+              and [r[:12] for r in rows] == ["> ✓ Alpha   ", "  ▸ bravo   ", "  · Charlie ", "  ✗ Delta   "]
+              and "128K" in rows[3], f"screen: the header without figures, the glyphs' legend, a glyph per game ({sc[:7]})")
+        noise = re.compile(r"\d+ of \d+|\d+/\d+|min left|learning\.\.\.|learned \(|waiting for|timing|%")
+        check(not any(noise.search(ln) for ln in sc[:22]), f"screen: no progress text above the bar ({[ln for ln in sc[:22] if noise.search(ln)]})")
+        bot = sc[23]
+        check(bot.startswith("learning games █") and bot.endswith("1/3  · job 1 of 3") and len(bot) <= 79,
+              f"screen: the bar on the bottom line, 80 columns: label, bar, figures, the queue ({bot!r})")
+        check(screen(24, 120)[23].endswith("1/3  · job 1 of 3") and len(screen(24, 120)[23]) == 119
+              and screen(12, 40)[11].startswith("learning games █") and "job" not in screen(12, 40)[11]
+              and len(screen(12, 40)[11]) <= 39 and "█" in screen(6, 16)[5], "screen: the bar at 120 and 40 columns and at 16, the queue gone")
+        sv.flash("SID takes for Alpha: 3 (best 73% match to the original)", "ok")
+        sc = screen(24, 80)
+        check(sc[22].startswith(" SID takes for Alpha: 3") and sc[23].startswith("learning games █"),
+              "screen: a message on the key line, the bar kept below it")
+        sv.flash_at -= FLASH_SECS
+        rv.current.state, rv.current.ended, rv.current.rc, rv.current = "done", time.monotonic(), 0, None
+        lv.phase = "done"
+        sc = screen(24, 80)
+        check(sc[23].startswith("learning games ████") and sc[23].endswith("█ done") and "jobs" in sc[22],
+              f"screen: the last job's bar full, done, for a few seconds; the keys back ({sc[23]!r})")
+        with rv.lock:
+            rv._start()
+        for ln in SAMPLE_AI.split("@@\n")[0].splitlines():
+            rv.current.watch.feed(ln)
+        bot = screen(24, 80)[23]
+        check(bot.startswith("AI takes: Alpha █") and "take 2/4 bass 38%" in bot and bot.endswith("· job 2 of 3"),
+              f"screen: an AI job's bar, with the queue (a held job counted) ({bot!r})")
 
         # -- the screen, in a pseudo-terminal: keys, a resize down to 3x10, quit
         import fcntl
@@ -4990,12 +5461,14 @@ Attributes = A_ prw-r--r--
         check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in jt,
               "jobs view: exit 0" + ("" if "Traceback" not in jt else ": " + jt[jt.find("Traceback"):][:600]))
         check("queued 3 jobs (1 AI, 1 SID, 1 AY): J shows them" in steps["g"], "jobs view: g says what it queued and that J shows it")
-        check("takes for Alpha: 1 (best match" in steps["g"] + steps["wait"], "jobs view: a finished takes job's result on the bottom line")
+        check(re.search(r"takes for Alpha: 1 \(best \d+% match to the original\)", steps["g"] + steps["wait"]) is not None,
+              "jobs view: a finished takes job's result on the message line")
         jv = steps["jobs"]
         plain = re.sub(r"\x1b(\[[0-9;?]*[A-Za-z]|\([AB0])", "", jv)  # the colours out
         missing = [x for x in ("finished (5)", "done in", "SID takes", "AI takes", "AY takes", "learn the games",
-                               "reuse earlier learning", "best melody match 0.42 (C64: Alpha by Someone (1987))",
-                               "1 take written", "1 song skipped (48K beeper or CPC tunes)", "cancel/stop") if x not in plain]
+                               "reuse earlier learning", "best 42% match to the original", "Someone",
+                               "1 take written", "1 song skipped (48K beeper or CPC tunes)") if x not in plain]
+        missing += [x for x in ("cancel/stop",) if x not in re.sub(r"\x1b(\[[0-9;?]*[A-Za-z]|\([AB0])", "", jt)]
         check(not missing and re.search(r"\x1b\[3[1-6]m", jv) is not None,
               f"jobs view: each job, its state, what and game, its result, in colour; its keys (missing: {missing})")
         check("chip done for alpha" in steps["output"] and "summary: kind=sid" in steps["output"],
@@ -5028,15 +5501,18 @@ Attributes = A_ prw-r--r--
                 os.waitpid(pid, 0)
             os.close(fd)
             return mid.decode("utf-8", "replace"), status, out.decode("utf-8", "replace")
-        mid, status, after = learn_screen(t / "w-live", {})
+        mid, status, after = learn_screen(t / "w-live", {"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
         check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in mid + after,
               "screen while learning: exit 0" + ("" if "Traceback" not in mid + after else ": " + (mid + after)[(mid + after).find("Traceback"):][:600]))
-        check("learning 1 of 3 games" in mid and "learned (cached)" in mid and "learning..." in mid and "left out: missing" in mid
-              and "~" in mid, "screen while learning: the list at once, each game's state, the header, approximate sizes")
+        check("learning games" in mid and "1/3" in mid and "█" in mid and "✓" in mid and "▸" in mid
+              and "missing: the file" in mid and "~" in mid,
+              "screen while learning: the list at once, each game's state as a glyph, the bar on the bottom line, approximate sizes")
+        check(not any(x in mid for x in ("of 3 games", "learning...", "learned (", "min left", "waiting for", "timing the first")),
+              "screen while learning: no progress text but the bar's")
         check(re.search(r"\x1b\[3[1-6]m", mid) is not None and "learned" in after and "P1" in after or "no game put in a pack" in after,
               "screen while learning: in colour; the games list when the plan is there")
         mid_nc, status, _ = learn_screen(t / "w-live-nc", {"NO_COLOR": "1"})
-        check(status is not None and "learned (cached)" in mid_nc and re.search(r"\x1b\[(3[0-7]|38;5;[0-9]+)m", mid_nc) is None,
+        check(status is not None and "learning games" in mid_nc and re.search(r"\x1b\[(3[0-7]|38;5;[0-9]+)m", mid_nc) is None,
               "screen with NO_COLOR: no colour, bold and reverse only")
 
     if failures:
