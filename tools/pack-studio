@@ -367,6 +367,14 @@ class Tools:
     def preview_ok(self) -> bool:
         return os.access(self.music_preview, os.X_OK)
 
+    def preview_mtime(self) -> float:
+        """music-preview's modification time (0 when there is none): a render older than the
+        renderer is made again."""
+        try:
+            return os.stat(self.music_preview).st_mtime
+        except (OSError, TypeError):
+            return 0.0
+
     def arrange_given(self) -> bool:
         return bool(os.environ.get("FMZX_ARRANGE_MUSIC"))
 
@@ -582,16 +590,19 @@ def preview_argv(tool: str, all_dir: Path, gid: str, key: str, take: str, out: P
     return a + ["-o", str(out)]
 
 
-def play_route(w: Path, gid: str, key: str, c: Candidate, preview_ok: bool) -> tuple[str, Path | None, str]:
+def play_route(w: Path, gid: str, key: str, c: Candidate, preview_ok: bool,
+               renderer_mtime: float = 0.0) -> tuple[str, Path | None, str]:
     """How a candidate plays: ("file", path, note), ("render", preview path, note) or
-    ("none", None, why)."""
+    ("none", None, why). A preview is rendered again when its take's (or score's) file, or the
+    renderer (music-preview, renderer_mtime), is newer than it."""
     if c.direct:
         return ("file", c.file, c.file.name) if c.file and c.file.is_file() else ("none", None, f"no {c.file.name if c.file else 'file'}")
     if preview_ok:
         out = preview_path(w, gid, key, c.take)
         try:
-            fresh = out.is_file() and (c.source is None or not c.source.exists()
-                                       or out.stat().st_mtime >= c.source.stat().st_mtime)
+            made = out.stat().st_mtime if out.is_file() else None
+            fresh = made is not None and made >= renderer_mtime and (
+                c.source is None or not c.source.exists() or made >= c.source.stat().st_mtime)
         except OSError:
             fresh = False
         return ("file", out, "music-preview") if fresh else ("render", out, "music-preview")
@@ -2543,7 +2554,7 @@ class Studio:
     # -- listening and choosing
 
     def route(self, g: Game, key: str, c: Candidate) -> tuple[str, Path | None, str]:
-        return play_route(self.w, g.id, key, c, self.tools.preview_ok())
+        return play_route(self.w, g.id, key, c, self.tools.preview_ok(), self.tools.preview_mtime())
 
     @staticmethod
     def cand_id(g: Game, key: str, c: Candidate) -> str:

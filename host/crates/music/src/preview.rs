@@ -13,12 +13,13 @@
 //! take asked for instead of its choice.
 //!
 //! The run is the learner's (its key script, or the run it chose) from its start; a score's is
-//! the run that recorded it ([`ScoreRuns`](fmzx_pack::personal::ScoreRuns)), from 1 s before the
-//! frame of the edge that starts it (its line in the learner's details: every take keeps its
+//! the run that recorded it ([`ScoreRuns`](fmzx_pack::personal::ScoreRuns)), from the frame of the
+//! edge that starts it (no earlier: what the run played before it, such as an earlier tune's FM
+//! notes ringing out, would sound the same in every take) (its line in the learner's details: every take keeps its
 //! trigger, so plays from there too). The FM render is FM: engines (the mixer from the run's
 //! start, 3 frames late, the effects follower on, as on the device), the beeper render the beeper
 //! alone over the same frames of the run. A preview of the default length is 40 s, or with a score
-//! 1 s, the score (its intro and one pass of its loop) and 2 s when that is shorter.
+//! the score (its intro and one pass of its loop) and 2 s when that is shorter.
 
 use crate::{sample_rate, RATE};
 use fmzx_pack::arrange::{self, Choice, Of, Status, ARRANGE, CLOCK_HZ, TAKE_FILE};
@@ -34,8 +35,8 @@ use zx_sys::{Beeper, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B, ZX_FRAME_TSTATES
 pub const DEFAULT_SECONDS: f64 = 40.0;
 /// The longest preview.
 pub const MAX_SECONDS: f64 = 600.0;
-/// Frames before a score's first frame.
-const LEAD_FRAMES: usize = 50;
+/// Frames before a score's first frame in its preview.
+const LEAD_FRAMES: usize = 0;
 /// Seconds after a score's end in a preview of the default length.
 const TAIL_SECONDS: f64 = 2.0;
 

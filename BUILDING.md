@@ -538,7 +538,7 @@ WAV through the firmware's sound code, as `music-corpus` renders `_fm_l.wav`:
 It runs the game as the learner ran it and plays FM: engines with the game's music as the pack
 would hold it, the takes `choices.toml` chooses in, each checked as a run checks it. Without
 `--score`: the learner's run from its start, 40 s. With `--score KEY`: the run that recorded the
-score, from 1 s before it starts, for 1 s, the score (its intro and one pass of its loop) and 2 s
+score, from where it starts (what the run played before it would sound the same in every take), for the score (its intro and one pass of its loop) and 2 s
 (at most 40 s), with the score playing take T in place of its choice: `0` or `original` (a shadow
 score: the routine, live), `<n>` (`take-<n>`), `chip-<n>` or `ay-<n>`; without `--take`, what `choices.toml`
 chooses. `--seconds N` sets the length (up to 600), `--beeper` renders the beeper alone over the

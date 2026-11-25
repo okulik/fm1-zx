@@ -3,8 +3,8 @@
 
 //! `music-preview` on a personal pack's learning workspace made by `fmzx-pack personal --plan`
 //! from `games/test/tune.sna` (a tune its learned entry plays, so it has a shadow score): the
-//! game's music for 40 s; its shadow score from 1 s before its start with the live version, an
-//! AI take, a C64 take and a Spectrum 128 take, each heard differently, for 1 s, the score and 2 s; the beeper over the
+//! game's music for 40 s; its shadow score from its start with the live version, an
+//! AI take, a C64 take and a Spectrum 128 take, each heard differently, for the score and 2 s; the beeper over the
 //! same frames; `--seconds`; and the errors: no workspace, an unknown game, score or take (exit 1)
 //! and a take the pack refuses (exit 3, `refused: <why>`). Every folder holds only generated
 //! test programs.
@@ -124,17 +124,16 @@ fn previews_of_a_workspace() {
     assert_eq!((r, music.len()), (rate, samples(40.0)));
     assert!(loud(&music), "the tune plays");
 
-    // the shadow score: from 1 s before the frame the learner says it starts in, for 1 s, its
-    // length and 2 s; the live version, each take and the beeper heard apart
+    // the shadow score: from the frame the learner says it starts in, for its length and 2 s; the live version, each take and the beeper heard apart
     let start = details.lines().find(|l| l.contains(&format!("(score {key}"))).expect("its line");
     let frame: usize = start.split(" from frame ").nth(1).unwrap().split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap();
-    let len = 50.0 * frame_s + (f64::from(rec.intro_t) + f64::from(rec.loop_t)) / f64::from(CLOCK_HZ) + 2.0;
+    let len = (f64::from(rec.intro_t) + f64::from(rec.loop_t)) / f64::from(CLOCK_HZ) + 2.0;
     let len = len.min(40.0);
     let req = |take: Take| Request { game: "tune".into(), score: Some((key.clone(), take)), seconds: None, beeper: false };
     let live = preview(&all, &req(Take::Original)).expect("the live version");
     assert_eq!(live.plays.as_deref(), Some("the live version"));
     assert!(live.cached, "the plan cached the game's music");
-    assert!((live.from - frame.saturating_sub(50) as f64 * frame_s).abs() < 1e-9, "{} for frame {frame}", live.from);
+    assert!((live.from - frame as f64 * frame_s).abs() < 1e-9, "{} for frame {frame}", live.from);
     let mut heard = vec![live.samples.clone()];
     for (take, plays) in [
         (Take::Of(fmzx_pack::arrange::Choice::Take(1)), "take 1 (octave down)"),
