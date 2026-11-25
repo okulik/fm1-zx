@@ -162,8 +162,9 @@ builds update packages with the games of a folder of yours instead of the built-
 packs as the games need, each a pair `pack-<n>/fmzx.fwsc` and `pack-<n>/fmzx-preview.fwsc`, with
 each game's music chosen by ear. They stay on your computer: everything goes under the workspace
 `build/studio/<folder name>/` (`-o W` for another folder; `W` below), which git ignores, and the
-folder of games is only read. It runs both device builds first (in Docker, a no-op when they are
-up to date), so it works from a clean `build/`; `FMZX_SKIP_DEVICE_BUILD=1` skips them.
+folder of games is only read. It runs both device builds (in Docker, a no-op when they are up
+to date, but a few seconds) before each build, and at start only when their app images are not
+there yet, so it works from a clean `build/`; `FMZX_SKIP_DEVICE_BUILD=1` skips them.
 `--offline` and `--cache DIR` work as for `tools/make-packages`. It needs Python 3.11 or later and
 nothing else of its own: `tools/pack-studio` runs it through [uv](https://docs.astral.sh/uv/),
 `python3 tools/pack-studio` with any Python 3.11 or later.
@@ -207,10 +208,10 @@ generates what is marked, `J` lists the jobs, `r` learns again, `b` builds, `l` 
 the full help, `q` quits. On a game: Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c` chooses it (at once; the chosen one is marked `*`), `a`/`s`/`y`/`g`
 as before, Left, `h` or Backspace goes back. Long steps run one at a time in the background, and
 the bottom line of every screen is the one place their progress shows: a bar for the running job,
-`learning games ███████████▍░░░░░░░░░ 12/45  ~4 min  · job 1 of 4` (the games learned, the MB
+`learning games ■■■■■■■■■■■□□□□□□□□□□□□□□□ 12/45  ~4 min  · job 1 of 4` (the games learned, the MB
 downloaded, an AI job's takes and passes, a SID or AY job's candidates checked, a build's packs;
-a segment moving to and fro when there is nothing to count), yellow while it runs, green when the
-last job is done, red when one failed (`#` and `-` without UTF-8; on a narrow terminal the queue
+with nothing to count, no bar: a spinner and the time the step has run), yellow while it runs, green when the
+last job is done, red when one failed (`#` and `.` without UTF-8; on a narrow terminal the queue
 and then the figures go first). Messages take the key line above it for 3 s. `J`, on every screen, lists every job of the session: the one
 running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
 MB), those waiting in the order they run, and those finished with their result, read from

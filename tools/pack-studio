@@ -19,12 +19,14 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
                     [--cache DIR] [--model NAME]
       Opens the studio (curses). The games are only read; everything goes under the workspace W,
       build/studio/<folder name> unless -o says otherwise (build/ is git-ignored).
-      At start, in the background: both device builds (tools/fm1-docker cmake --preset fm1 and
-      fm1-preview, then cmake --build with each, in Docker: a no-op when they are up to date;
-      FMZX_SKIP_DEVICE_BUILD=1 skips them, and build/fm1 and build/fm1-preview must then exist),
-      fmzx-pack and music-preview (cd host && cargo build --release; when music-preview does not
-      build, the studio plays the renders tools/arrange-music wrote instead), then the learning
-      run:
+      At start, in the background: fmzx-pack and music-preview (cd host && cargo build
+      --release; when music-preview does not build, the studio plays the renders
+      tools/arrange-music wrote instead), then the learning run (below). Both device builds
+      (tools/fm1-docker cmake --preset fm1 and fm1-preview, then cmake --build with each, in
+      Docker: a no-op when they are up to date, but a few seconds) run before each build (b,
+      --build), and at start only when their app images are not there yet (the learning needs
+      them for the room they leave); FMZX_SKIP_DEVICE_BUILD=1 skips them, and build/fm1 and
+      build/fm1-preview must then exist. The learning run:
           fmzx-pack personal <folder> -o W/all --app <fm1 app> --app <fm1-preview app> --plan
       which converts and learns every game and writes W/all/personal-games.toml (the folder's
       games file: a re-run keeps your edits to it), the scores in W/all/arrange/ and
@@ -53,18 +55,20 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       build/studio/<file name without .toml>.
       Long steps run one at a time in the background; their output goes to W/studio.log.
       The bottom line, on every screen, is the one place progress shows: the running job's
-      label, a bar (█ with the last cell in eighths, ▏ to ▉, on ░; # on - without UTF-8) as wide
-      as the line leaves, its figures, the time left, and "job 2 of 6" when more wait (those
-      started since the queue was empty, and those waiting), e.g.
-          learning games ███████████▍░░░░░░░░░ 12/45  ~4 min  · job 1 of 4
-          AI takes: <game> ████▌░░░░░░░ take 2/4 bass 38%  ~6 min
+      label, a bar of squares (■ done, □ to go; # and . without UTF-8) as wide as the line
+      leaves, its figures, the time left, and "job 2 of 6" when more wait (those started since
+      the queue was empty, and those waiting), e.g.
+          learning games ■■■■■■■■■■■□□□□□□□□□□□□□□□ 12/45  ~4 min  · job 1 of 4
+          AI takes: <game> ■■■■■□□□□□□□ take 2/4 bass 38%  ~6 min
+      A step whose progress is not known (the tools' builds, a render) has no bar: its label, a
+      spinner and the time it has run ("build fmzx-pack ⠹ 0:03  · job 2 of 5").
       The learning: loading and converting each a bar of their own (files done of all), then the
       games learned of all (a game being learned counted by its time so far against the
       average), the time left the games still to learn at that average, so many at a time; a
       download its MB; an AI job (take - 1 + the take's share done) / takes; a SID or AY job the
       candidates checked of those found; a build "building pack 2 of 3" by the packs done. With
-      nothing to count (a render, the device builds, the model's download) a short segment moves
-      to and fro. On a narrow screen the queue goes first, then the time left, then the figures;
+      nothing to count (a render, the device builds, the model's download) no bar: the spinner
+      and the time it has run. On a narrow screen the queue goes first, then the time left, then the figures;
       the bar keeps at least 4 cells. The bar is yellow while the job runs; after the last job
       of the queue it stays 3 s, full and green when done, red where it stopped when it failed.
       Messages (what g queued, a finished takes job's result, a refusal) take the key line above
@@ -263,8 +267,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       unless given), after the build when --build is given too, else on the packs built before.
   tools/pack-studio selftest
       Checks the progress lines and the list while learning (states, the switch to the games
-      file, the estimate), the progress bar (fractions to cells with eighths, ASCII, widths 20 to
-      200, the moving segment; each kind of job's fraction from sample output; the line on a
+      file, the estimate), the progress bar (fractions to squares, ASCII, widths 20 to
+      200, the spinner when not known; each kind of job's fraction from sample output; the line on a
       narrow screen; the screen drawn in memory at 80, 120, 40 and 16 columns: the bar at the
       bottom, a message above it, no progress text in the header or the rows), the match as a
       percentage and its colour, the reuse of earlier learning (only missing files copied, never over
@@ -772,7 +776,7 @@ def packs_over(plan: Plan, packs: dict[str, int]) -> list[tuple[int, float]]:
 
 def bar(frac: float, width: int, utf8: bool) -> str:
     full = max(0, min(width, round(frac * width)))
-    return ("█" * full + "░" * (width - full)) if utf8 else ("#" * full + "." * (width - full))
+    return ("■" * full + "□" * (width - full)) if utf8 else ("#" * full + "." * (width - full))
 
 
 def pack_lines(plan: Plan, packs: dict[str, int], width: int = 12, utf8: bool = False) -> list[tuple[int, str, bool]]:
@@ -799,7 +803,7 @@ def pack_lines(plan: Plan, packs: dict[str, int], width: int = 12, utf8: bool = 
 # The progress bar: the running job's, on the screen's bottom line
 
 
-EIGHTHS = " ▏▎▍▌▋▊▉"  # a cell filled by 0 to 7 eighths, from the left
+SPIN_UTF8, SPIN_ASCII = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", "|/-\\"  # a job whose progress is not known: a spinner
 
 
 @dataclass
@@ -820,29 +824,25 @@ def short_left(seconds: float) -> str:
     return f"~{seconds / 3600:.1f} h"
 
 
+def spinner(now: float, utf8: bool) -> str:
+    """The spinner's character at now (10 steps a second)."""
+    chars = SPIN_UTF8 if utf8 else SPIN_ASCII
+    return chars[int(now * 10) % len(chars)]
+
+
 def render_bar(frac: float | None, width: int, utf8: bool, now: float = 0.0) -> list[tuple[str, bool]]:
-    """The bar's cells as (text, filled) runs: frac of width filled (with UTF-8 the last cell in
-    eighths, ▏ to ▉, the rest ░; else # and -); frac None, a segment a fifth of the width that
-    moves to and fro with now (8 cells a second)."""
+    """The bar's cells as (text, filled) runs: frac of width filled, a square a cell (with UTF-8
+    ■ filled, □ empty; else # and .), rounded to the nearest cell; frac None (not known): the
+    spinner in the first cell, the rest blank."""
     width = max(0, width)
-    full_ch, empty_ch = ("█", "░") if utf8 else ("#", "-")
     if frac is None:
-        seg = max(1, min(width, max(2, width // 5)))
-        span = width - seg
-        pos = 0
-        if span > 0:
-            step = int(now * 8) % (2 * span)
-            pos = step if step <= span else 2 * span - step
-        runs = [(empty_ch * pos, False), (full_ch * seg, True), (empty_ch * (width - pos - seg), False)]
-        return [r for r in runs if r[0]]
+        return [r for r in ((spinner(now, utf8)[:width], True), (" " * max(0, width - 1), False)) if r[0]]
+    full_ch, empty_ch = ("■", "□") if utf8 else ("#", ".")
     frac = max(0.0, min(1.0, frac))
-    if utf8:
-        eighths = int(frac * width * 8 + 1e-9)
-        full, part = divmod(eighths, 8)
-        filled = full_ch * full + (EIGHTHS[part] if part and full < width else "")
-    else:
-        filled = full_ch * int(frac * width + 1e-9)
-    runs = [(filled, True), (empty_ch * (width - len(filled)), False)]
+    n = min(width, int(frac * width + 0.5))
+    if 0 < frac and n == 0 and width:
+        n = 1  # begun: one square
+    runs = [(full_ch * n, True), (empty_ch * (width - n), False)]
     return [r for r in runs if r[0]]
 
 
@@ -855,12 +855,26 @@ BAR_MIN, BAR_SHORT = 10, 4  # the bar's cells before the figures go, and at the 
 
 def progress_line(p: Progress, queue: str, width: int, utf8: bool, now: float = 0.0) -> list[tuple[str, str]]:
     """The bottom line for a job as (text, part) runs, part one of label, fill, track, figures,
-    queue, gap; at most width columns: "learning games ███▍░░░ 12/45  ~4 min  · job 2 of 6". On a
+    queue, gap; at most width columns: "learning games ■■■□□□□ 12/45  ~4 min  · job 2 of 6". On a
     narrow line the queue goes first, then the time left, then the figures; the bar keeps at
-    least 4 cells, the label cut to make room."""
+    least 4 cells, the label cut to make room. Progress not known: no bar, the label, the spinner
+    and the figures ("build fmzx-pack ⠹ 0:03  · job 2 of 5")."""
     dot = "·" if utf8 else "-"
     figs = "  ".join(x for x in (p.figures, p.left) if x)
     label = p.label
+    if p.frac is None:
+        runs = [(label, "label"), (" ", "gap"), (spinner(now, utf8), "fill")]
+        if figs:
+            runs += [(" ", "gap"), (figs, "figures")]
+        if queue:
+            runs += [("  ", "gap"), (f"{dot} {queue}", "queue")]
+        out, used = [], 0
+        for t, part in runs:  # cut at width
+            t = t[:max(0, width - used)]
+            if t:
+                out.append((t, part))
+                used += len(t)
+        return out
     tries = [(figs, queue), (figs, ""), (p.figures, ""), ("", "")]
     need = lambda f, q: len(label) + 1 + (1 + len(f) if f else 0) + (4 + len(q) if q else 0)  # noqa: E731
     fig, q = next(((f, q) for f, q in tries if width - need(f, q) >= BAR_MIN), ("", ""))
@@ -1889,7 +1903,7 @@ class TakesWatch:
     def progress(self, label: str, now: float | None = None) -> Progress:
         """The bar: an AI job (take - 1 + the take's share done) / takes, per score of those to
         arrange; a SID or AY job the candidates checked of those found; a phase without figures
-        (the model's download, indexing) a moving segment."""
+        (the model's download, indexing) not known (a spinner)."""
         now = time.monotonic() if now is None else now
         if self.phase:
             return Progress(label, None, self.phase.split(" (")[0])
@@ -2019,7 +2033,7 @@ RE_DL = re.compile(r"^downloading the (\w+) collection .*: ([\d.]+)(?: of ([\d.]
 def job_progress(j: Job, now: float | None = None) -> Progress:
     """The bar for a running job, by its kind: the learning from its games list, a download
     from its bytes, a takes job from its progress lines, a build's pack from the packs done; any
-    other (a render, the device builds) a moving segment."""
+    other (a render, the device builds) not known (a spinner)."""
     now = time.monotonic() if now is None else now
     if j.kind == "learn" and j.live is not None:
         return j.live.progress(now)
@@ -2421,15 +2435,24 @@ class Studio:
 
     # -- start and learning
 
+    def device_builds(self, chain: str) -> None:
+        """Both device builds (in Docker, a no-op when up to date, but a few seconds each),
+        unless FMZX_SKIP_DEVICE_BUILD=1."""
+        if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") == "1":
+            return
+        for preset in ("fm1", "fm1-preview"):
+            self.runner.submit(Job(f"device build {preset} (configure)",
+                                   [str(ROOT / "tools/fm1-docker"), "cmake", "--preset", preset], chain=chain,
+                                   kind="setup"))
+            self.runner.submit(Job(f"device build {preset}",
+                                   [str(ROOT / "tools/fm1-docker"), "cmake", "--build", "--preset", preset],
+                                   chain=chain, kind="setup"))
+
     def startup(self, learn: bool = True, preview: bool = True) -> None:
-        if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") != "1":
-            for preset in ("fm1", "fm1-preview"):
-                self.runner.submit(Job(f"device build {preset} (configure)",
-                                       [str(ROOT / "tools/fm1-docker"), "cmake", "--preset", preset], chain="start",
-                                       kind="setup"))
-                self.runner.submit(Job(f"device build {preset}",
-                                       [str(ROOT / "tools/fm1-docker"), "cmake", "--build", "--preset", preset],
-                                       chain="start", kind="setup"))
+        # the learning needs the app images only for the room they leave: the device builds run
+        # at start only when there are none yet, else before each build (b)
+        if any(not f.is_file() for f in device_files()):
+            self.device_builds("start")
         if not self.tools.fmzx_pack_given:
             self.runner.submit(Job("build fmzx-pack", ["cargo", "build", "--release", "-p", "fmzx-pack"],
                                    cwd=ROOT / "host", chain="start", kind="setup"))
@@ -2900,16 +2923,26 @@ class Studio:
         self.build_run = BuildRun()
         self.summary = None
         self.build_ok = None
+        over = packs_over(self.plan, self.packs) if self.plan else []
+        if over:  # refused at once, before the device builds
+            return self._finish(over_text(over))
+        self.device_builds("build")
+
+        def go(j: Job) -> int:
+            self._build_after_device()
+            return 0
+        self.runner.submit(Job("check the device builds", fn=go, chain="build", kind="setup"))
+        self.flash("building: the device builds, the plan, then the packs")
+
+    def _build_after_device(self) -> None:
+        """The build once the device builds are done: their files there, then the plan and the
+        packs."""
         missing = [f for f in device_files() if not f.is_file()]
         if missing:
             return self._finish(f"no {missing[0]}: the device builds make it (FMZX_SKIP_DEVICE_BUILD=1 skipped them)"
                                 if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") == "1"
                                 else f"no {missing[0]}: the device builds did not make it (see the log)")
-        over = packs_over(self.plan, self.packs) if self.plan else []
-        if over:
-            return self._finish(over_text(over))
         self.runner.submit(self.plan_job("build", then=self._split))
-        self.flash("building: the plan, then the packs")
 
     def _split(self, j: Job) -> None:
         br = self.build_run
@@ -3273,8 +3306,11 @@ class UI:
         if j is not None:
             try:
                 p = job_progress(j, now)
-            except Exception:  # noqa: BLE001 - a bar that cannot be worked out moves
+            except Exception:  # noqa: BLE001 - a bar that cannot be worked out spins
                 p = Progress(j.what or j.title)
+            if p.frac is None and not p.left and j.started:
+                el = int(now - j.started)
+                p = Progress(p.label, None, p.figures, f"{el // 60}:{el % 60:02d}")
             self.last_prog = (j, p)
             return progress_line(p, r.queue_text(), w, self.utf8, now), "run"
         with r.lock:
@@ -4576,34 +4612,33 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
               and live_glyph(by["bee"], False) == ("x", "out") and live_glyph(LiveRow("w", "w"), False) == (".", "waiting")
               and live_glyph(LiveRow("w", "w"), True) == ("·", "waiting"), "live: each row's state as a glyph (ASCII without UTF-8) and its colour")
 
-        # -- the progress bar: cells, eighths, ASCII, widths, the moving segment, the line on a narrow screen
-        check(bar_text(0.5, 20, True) == "█" * 10 + "░" * 10 and bar_text(0.5, 20, False) == "#" * 10 + "-" * 10
-              and bar_text(0, 20, True) == "░" * 20 and bar_text(1, 20, True) == "█" * 20 and bar_text(1.7, 20, False) == "#" * 20,
+        # -- the progress bar: squares, ASCII, widths, the spinner, the line on a narrow screen
+        check(bar_text(0.5, 20, True) == "■" * 10 + "□" * 10 and bar_text(0.5, 20, False) == "#" * 10 + "." * 10
+              and bar_text(0, 20, True) == "□" * 20 and bar_text(1, 20, True) == "■" * 20 and bar_text(1.7, 20, False) == "#" * 20,
               "bar: half, empty, full, beyond full")
-        eighths = [bar_text(k / 80, 10, True)[0] for k in range(1, 8)]
-        check(eighths == list("▏▎▍▌▋▊▉") and bar_text(0.43, 20, True) == "█" * 8 + "▌" + "░" * 11
-              and bar_text(0.43, 20, False) == "#" * 8 + "-" * 12, f"bar: the last cell in eighths with UTF-8, whole cells in ASCII ({eighths})")
+        check(bar_text(0.43, 20, True) == "■" * 9 + "□" * 11 and bar_text(0.001, 20, True) == "■" + "□" * 19,
+              "bar: rounded to the nearest square; begun, at least one")
         widths_ok = all(len(bar_text(f, wd, u, 1.3)) == wd for wd in range(20, 201) for f in (None, 0, 0.001, 0.37, 0.999, 1)
                         for u in (True, False))
         check(widths_ok, "bar: exactly its width, 20 to 200 cells, every fraction, moving or not, UTF-8 or not")
-        moves = [bar_text(None, 20, False, t / 8) for t in range(0, 40)]
-        starts = [m.index("#") for m in moves]
-        check(all(m.count("#") == 4 for m in moves) and starts[:3] == [0, 1, 2] and max(starts) == 16 and starts[16] == 16
-              and starts[17] == 15 and starts[32] == 0 and len(set(moves)) == 17,
-              f"bar: unknown progress, a segment a fifth wide moving to and fro, 8 cells a second ({starts[:20]})")
+        spins = {bar_text(None, 20, False, t / 10)[0] for t in range(8)}
+        check(spins == set("|/-\\") and bar_text(None, 20, True, 0.0) == "⠋" + " " * 19,
+              "bar: progress not known, a spinner and no bar")
+        unk = "".join(t for t, _ in progress_line(Progress("build fmzx-pack", None, "", "0:03"), "job 2 of 5", 79, True, 0.2))
+        check(unk == "build fmzx-pack ⠹ 0:03  · job 2 of 5", f"bar line: not known, the label, spinner, time, queue ({unk!r})")
         pl = lambda p, q, wd, u=True: "".join(t for t, _ in progress_line(p, q, wd, u, 0.0))  # noqa: E731
         lp = Progress("learning games", 12 / 45, "12/45", "~4 min")
         line = pl(lp, "job 2 of 6", 79)
-        check(len(line) == 79 and line.startswith("learning games █") and line.endswith(" 12/45  ~4 min  · job 2 of 6"),
+        check(len(line) == 79 and line.startswith("learning games ■") and line.endswith(" 12/45  ~4 min  · job 2 of 6"),
               f"bar line: label, bar, figures, time left, the queue, 79 columns ({line!r})")
         check(len(pl(lp, "job 2 of 6", 199)) == 199 and len(pl(lp, "job 2 of 6", 19)) == 19, "bar line: the bar takes the width left")
         narrow = {wd: pl(lp, "job 2 of 6", wd) for wd in (50, 40, 31, 24, 20, 12, 6)}
         check("job 2" in pl(lp, "job 2 of 6", 60) and "job" not in narrow[50] and "~4 min" in narrow[40]
               and "~4 min" not in narrow[31] and "12/45" in narrow[31] and "12/45" not in narrow[24]
-              and narrow[24].startswith("learning games █") and all(len(v) == k for k, v in narrow.items())
-              and len(narrow[12].split(" ")[-1]) == BAR_SHORT and narrow[12].startswith("learni… █") and narrow[6] == bar_text(12 / 45, 6, True),
+              and narrow[24].startswith("learning games ■") and all(len(v) == k for k, v in narrow.items())
+              and len(narrow[12].split(" ")[-1]) == BAR_SHORT and narrow[12].startswith("learni… ■") and narrow[6] == bar_text(12 / 45, 6, True),
               f"bar line: narrower, the queue goes first, then the time left, then the figures; at least 4 cells ({narrow})")
-        check(pl(Progress("x", 0.5), "", 20, False) == "x " + "#" * 9 + "-" * 9, "bar line: ASCII")
+        check(pl(Progress("x", 0.5), "", 20, False) == "x " + "#" * 9 + "." * 9, "bar line: ASCII")
         live.apply("learned 5/5: Newcomer (1.0 s)", 700)
         check(any(r.name == "Newcomer" and r.state == "learned" for r in live.rows), "live: a game no row has gets one")
 
@@ -5348,27 +5383,27 @@ Attributes = A_ prw-r--r--
         noise = re.compile(r"\d+ of \d+|\d+/\d+|min left|learning\.\.\.|learned \(|waiting for|timing|%")
         check(not any(noise.search(ln) for ln in sc[:22]), f"screen: no progress text above the bar ({[ln for ln in sc[:22] if noise.search(ln)]})")
         bot = sc[23]
-        check(bot.startswith("learning games █") and bot.endswith("1/3  · job 1 of 3") and len(bot) <= 79,
+        check(bot.startswith("learning games ■") and bot.endswith("1/3  · job 1 of 3") and len(bot) <= 79,
               f"screen: the bar on the bottom line, 80 columns: label, bar, figures, the queue ({bot!r})")
         check(screen(24, 120)[23].endswith("1/3  · job 1 of 3") and len(screen(24, 120)[23]) == 119
-              and screen(12, 40)[11].startswith("learning games █") and "job" not in screen(12, 40)[11]
-              and len(screen(12, 40)[11]) <= 39 and "█" in screen(6, 16)[5], "screen: the bar at 120 and 40 columns and at 16, the queue gone")
+              and screen(12, 40)[11].startswith("learning games ■") and "job" not in screen(12, 40)[11]
+              and len(screen(12, 40)[11]) <= 39 and "■" in screen(6, 16)[5], "screen: the bar at 120 and 40 columns and at 16, the queue gone")
         sv.flash("SID takes for Alpha: 3 (best 73% match to the original)", "ok")
         sc = screen(24, 80)
-        check(sc[22].startswith(" SID takes for Alpha: 3") and sc[23].startswith("learning games █"),
+        check(sc[22].startswith(" SID takes for Alpha: 3") and sc[23].startswith("learning games ■"),
               "screen: a message on the key line, the bar kept below it")
         sv.flash_at -= FLASH_SECS
         rv.current.state, rv.current.ended, rv.current.rc, rv.current = "done", time.monotonic(), 0, None
         lv.phase = "done"
         sc = screen(24, 80)
-        check(sc[23].startswith("learning games ████") and sc[23].endswith("█ done") and "jobs" in sc[22],
+        check(sc[23].startswith("learning games ■■■■") and sc[23].endswith("■ done") and "jobs" in sc[22],
               f"screen: the last job's bar full, done, for a few seconds; the keys back ({sc[23]!r})")
         with rv.lock:
             rv._start()
         for ln in SAMPLE_AI.split("@@\n")[0].splitlines():
             rv.current.watch.feed(ln)
         bot = screen(24, 80)[23]
-        check(bot.startswith("AI takes: Alpha █") and "take 2/4 bass 38%" in bot and bot.endswith("· job 2 of 3"),
+        check(bot.startswith("AI takes: Alpha ■") and "take 2/4 bass 38%" in bot and bot.endswith("· job 2 of 3"),
               f"screen: an AI job's bar, with the queue (a held job counted) ({bot!r})")
 
         # -- the screen, in a pseudo-terminal: keys, a resize down to 3x10, quit
@@ -5504,7 +5539,7 @@ Attributes = A_ prw-r--r--
         mid, status, after = learn_screen(t / "w-live", {"LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
         check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in mid + after,
               "screen while learning: exit 0" + ("" if "Traceback" not in mid + after else ": " + (mid + after)[(mid + after).find("Traceback"):][:600]))
-        check("learning games" in mid and "1/3" in mid and "█" in mid and "✓" in mid and "▸" in mid
+        check("learning games" in mid and "1/3" in mid and "■" in mid and "✓" in mid and "▸" in mid
               and "missing: the file" in mid and "~" in mid,
               "screen while learning: the list at once, each game's state as a glyph, the bar on the bottom line, approximate sizes")
         check(not any(x in mid for x in ("of 3 games", "learning...", "learned (", "min left", "waiting for", "timing the first")),

@@ -255,6 +255,25 @@ fn build(input: &Path, out: &Path, limit: Option<u32>, plan: bool) -> Result<Rep
     let mut packed: Vec<(Game, String, usize)> = Vec::new(); // game, converted file, row
     let mut jobs: Vec<Job> = Vec::new(); // the same games, for learning their music
     let converted = Progress::new("converted", games.len());
+    let convert_note = |got: &Result<Loaded, String>| match got {
+        Err(e) => format!("left out: {}", reason(e)),
+        Ok(l) if l.data.len() > PACK_MAX_RAW as usize => "left out: too big".into(),
+        Ok(l) => l.how.clone(),
+    };
+    // the games not loaded yet (when new files were added), prepared in parallel; the rest
+    // reported in the loop below
+    let fresh: HashSet<PathBuf> = games
+        .iter()
+        .map(|g| game_path(&games_dir, g))
+        .filter(|p| p.is_file() && !prepared.contains_key(p))
+        .collect();
+    let todo: Vec<(PathBuf, String)> = games
+        .iter()
+        .map(|g| (game_path(&games_dir, g), g.name.clone()))
+        .filter(|(p, _)| fresh.contains(p))
+        .collect();
+    prepare_all(&todo, &mut prepared, "converting", &converted, convert_note);
+    let mut reported: HashSet<PathBuf> = HashSet::new();
     for g in &games {
         let path = game_path(&games_dir, g);
         let mut row =
@@ -266,15 +285,11 @@ fn build(input: &Path, out: &Path, limit: Option<u32>, plan: bool) -> Result<Rep
             continue;
         }
         let key = path.clone();
-        let got = prepared.entry(key.clone()).or_insert_with(|| {
-            say(&format!("converting: {}", g.name));
-            tapeload::prepare(&key)
-        });
-        converted.done(&g.name, &match got {
-            Err(e) => format!("left out: {}", reason(e)),
-            Ok(l) if l.data.len() > PACK_MAX_RAW as usize => "left out: too big".into(),
-            Ok(l) => l.how.clone(),
-        });
+        let got = prepared.entry(key.clone()).or_insert_with(|| tapeload::prepare(&key));
+        // reported once: by prepare_all as it ended, else here
+        if !fresh.contains(&key) || !reported.insert(key.clone()) {
+            converted.done(&g.name, &convert_note(got));
+        }
         match got {
             Err(e) => row.reason = Some(reason(e)),
             Ok(l) if l.data.len() > PACK_MAX_RAW as usize => {
@@ -619,6 +634,41 @@ impl Progress {
         let mut k = self.done.lock().unwrap_or_else(|e| e.into_inner());
         *k += 1;
         say(&format!("{} {}/{}: {name} ({state})", self.what, *k, self.total));
+    }
+}
+
+/// [`tapeload::prepare`] for each `(file, name)` not in `prepared` yet, a file once, in parallel
+/// (as many at a time as the machine has cores: a tape loaded through its signal takes up to a
+/// second or so), into `prepared`; `verb` ("loading", "converting") on the line as each starts,
+/// `progress` with `note`'s state as each ends.
+fn prepare_all(
+    items: &[(PathBuf, String)],
+    prepared: &mut HashMap<PathBuf, Result<Loaded, String>>,
+    verb: &str,
+    progress: &Progress,
+    note: impl Fn(&Result<Loaded, String>) -> String + Sync,
+) {
+    let mut seen = HashSet::new();
+    let todo: Vec<&(PathBuf, String)> = items.iter().filter(|(f, _)| !prepared.contains_key(f) && seen.insert(f.clone())).collect();
+    let next = AtomicUsize::new(0);
+    let done: Vec<Mutex<Option<Result<Loaded, String>>>> = todo.iter().map(|_| Mutex::new(None)).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(todo.len()).max(1);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let (Some((file, name)), Some(slot)) = (todo.get(i), done.get(i)) else { break };
+                say(&format!("{verb}: {name}"));
+                let got = tapeload::prepare(file);
+                progress.done(name, &note(&got));
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(got);
+            });
+        }
+    });
+    for ((file, _), slot) in todo.into_iter().zip(done) {
+        if let Some(got) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            prepared.insert(file.clone(), got);
+        }
     }
 }
 
@@ -1258,18 +1308,16 @@ fn update_games_file(
     let listed = |f: &PathBuf| known.contains(f) || f.to_str().is_some_and(|s| text.contains(&quoted(s)));
     let new: Vec<&PathBuf> = files.iter().filter(|f| !listed(f)).collect();
     let loaded = Progress::new("loaded", new.len());
+    let base_of = |f: &PathBuf| f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let todo: Vec<(PathBuf, String)> = new.iter().map(|f| ((*f).clone(), base_of(f))).collect();
+    prepare_all(&todo, prepared, "loading", &loaded, |got| match got {
+        Err(e) => format!("left out: {}", reason(e)),
+        Ok(l) => l.how.clone(),
+    });
     for f in new {
         let file = f.display().to_string();
         let name = name_from_file(&f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
-        let base = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let got = prepared.entry(f.clone()).or_insert_with(|| {
-            say(&format!("loading: {base}"));
-            tapeload::prepare(f)
-        });
-        loaded.done(&base, &match got {
-            Err(e) => format!("left out: {}", reason(e)),
-            Ok(l) => l.how.clone(),
-        });
+        let got = prepared.entry(f.clone()).or_insert_with(|| tapeload::prepare(f));
         if let Err(e) = got {
             left_out.push(Row { name, file, how: "left out".into(), packed: None, reason: Some(reason(e)) });
             continue;
