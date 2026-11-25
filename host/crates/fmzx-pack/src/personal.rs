@@ -101,6 +101,17 @@
 //! plays (`original`, `take 2 (<generator>)`, `chip-1 (<source>)`, `ay-1 (<source>)` or
 //! `refused: <why>`). A run of
 //! either kind removes the plan of an earlier one.
+//!
+//! # Progress
+//!
+//! A run says on stderr how it gets on, a line per game, each written whole (the parallel
+//! learners' lines never mix): from a folder, each new file's tape load, `loading: <file name>`
+//! then `loaded 3/45: <file name> (<how it went in>)` or `(left out: <why>)`; then each game of
+//! the games file, `converting: <name>` (only when its file is loaded then) and
+//! `converted 3/45: <name> (<how>)` or `(left out: <why>)`; then `learning 45 games: 27 from the
+//! cache, 18 to learn, 8 at a time`, and per game `learning: <name>` when the cache does not hold
+//! it and `learned 13/45: <name> (21.4 s)` or `(cached)` as each finishes. `tools/pack-studio`
+//! shows them on its games list while the run goes on.
 
 use crate::arrange::{self, Choice, Of, Status, ARRANGE, CHOICES, CLOCK_HZ};
 use crate::keymaps::keymaps_json;
@@ -243,17 +254,27 @@ fn build(input: &Path, out: &Path, limit: Option<u32>, plan: bool) -> Result<Rep
     std::fs::create_dir_all(&conv).map_err(|e| format!("{}: {e}", shown(&conv)))?;
     let mut packed: Vec<(Game, String, usize)> = Vec::new(); // game, converted file, row
     let mut jobs: Vec<Job> = Vec::new(); // the same games, for learning their music
+    let converted = Progress::new("converted", games.len());
     for g in &games {
         let path = game_path(&games_dir, g);
         let mut row =
             Row { name: g.name.clone(), file: shown(&path), how: "left out".into(), packed: None, reason: None };
         if !path.is_file() {
             row.reason = Some(MISSING_REASON.into());
+            converted.done(&g.name, &format!("left out: {MISSING_REASON}"));
             rows.push(row);
             continue;
         }
         let key = path.clone();
-        let got = prepared.entry(key.clone()).or_insert_with(|| tapeload::prepare(&key));
+        let got = prepared.entry(key.clone()).or_insert_with(|| {
+            say(&format!("converting: {}", g.name));
+            tapeload::prepare(&key)
+        });
+        converted.done(&g.name, &match got {
+            Err(e) => format!("left out: {}", reason(e)),
+            Ok(l) if l.data.len() > PACK_MAX_RAW as usize => "left out: too big".into(),
+            Ok(l) => l.how.clone(),
+        });
         match got {
             Err(e) => row.reason = Some(reason(e)),
             Ok(l) if l.data.len() > PACK_MAX_RAW as usize => {
@@ -512,12 +533,28 @@ fn learn_all(jobs: &[Job], cache: &Path) -> Vec<Sound> {
     let next = AtomicUsize::new(0);
     let done: Vec<Mutex<Option<Sound>>> = jobs.iter().map(|_| Mutex::new(None)).collect();
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(jobs.len()).max(1);
+    let in_cache = jobs.iter().filter(|j| cache_path_of(j, cache).is_file()).count();
+    say(&format!(
+        "learning {} games: {in_cache} from the cache, {} to learn, {threads} at a time",
+        jobs.len(),
+        jobs.len() - in_cache
+    ));
+    let learned = Progress::new("learned", jobs.len());
     std::thread::scope(|s| {
         for _ in 0..threads {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let (Some(job), Some(slot)) = (jobs.get(i), done.get(i)) else { break };
-                let got = isolated(|| learn_cached(job, cache));
+                let start = std::time::Instant::now();
+                let mut cached = true;
+                let got = isolated(|| {
+                    learn_music_with(&job.file, &job.data, &job.keys, &job.instruments, cache, || {
+                        cached = false;
+                        say(&format!("learning: {}", job.name));
+                    })
+                });
+                let took = start.elapsed().as_secs_f64();
+                learned.done(&job.name, &if cached { "cached".to_string() } else { format!("{took:.1} s") });
                 *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(got);
             });
         }
@@ -552,9 +589,37 @@ const FRAME_MS: u64 = 20;
 /// The start of a cache file.
 const CACHE_MAGIC: &[u8; 8] = b"FMZXSND4";
 
-/// A game's music: from the cache, or learned and then cached.
-fn learn_cached(job: &Job, cache: &Path) -> Sound {
-    learn_music(&job.file, &job.data, &job.keys, &job.instruments, cache)
+/// The cache file a job's music is kept in ([`cache_path`]).
+fn cache_path_of(job: &Job, cache: &Path) -> PathBuf {
+    cache_path(&job.data, std::fs::read_to_string(&job.keys).ok().as_deref(), &job.instruments, cache)
+}
+
+/// A progress line on stderr, written whole and flushed (see the module docs).
+fn say(line: &str) {
+    use std::io::Write;
+    let mut e = std::io::stderr().lock();
+    let _ = writeln!(e, "{line}");
+    let _ = e.flush();
+}
+
+/// The `<what> k/N: <name> (<state>)` lines of a step over N games: k counts the games done, in
+/// the order they finish (the count and the line under one lock).
+struct Progress {
+    what: &'static str,
+    total: usize,
+    done: Mutex<usize>,
+}
+
+impl Progress {
+    fn new(what: &'static str, total: usize) -> Progress {
+        Progress { what, total, done: Mutex::new(0) }
+    }
+
+    fn done(&self, name: &str, state: &str) {
+        let mut k = self.done.lock().unwrap_or_else(|e| e.into_inner());
+        *k += 1;
+        say(&format!("{} {}/{}: {name} ({state})", self.what, *k, self.total));
+    }
 }
 
 /// The music of a game as the personal pack learns it: `file` and `data` its converted file
@@ -564,6 +629,18 @@ fn learn_cached(job: &Job, cache: &Path) -> Sound {
 /// the generic run, seeded by the converted data's CRC-32) and then cached (not with an override
 /// that does not fit). `music-corpus` learns through this too, so both learn the same.
 pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<u16, Vec<u8>>, cache: &Path) -> Sound {
+    learn_music_with(file, data, keys, instruments, cache, || {})
+}
+
+/// [`learn_music`], calling `learning` first when the cache does not hold the game.
+fn learn_music_with(
+    file: &str,
+    data: &[u8],
+    keys: &Path,
+    instruments: &BTreeMap<u16, Vec<u8>>,
+    cache: &Path,
+    learning: impl FnOnce(),
+) -> Sound {
     let script = std::fs::read_to_string(keys).ok();
     let (steps, keys_error) = match script.as_deref().map(parse_keys) {
         Some(Ok(steps)) => (Some(steps), None),
@@ -574,6 +651,7 @@ pub fn learn_music(file: &str, data: &[u8], keys: &Path, instruments: &BTreeMap<
     if let Some((list, runs, line, details, shadows)) = std::fs::read(&path).ok().as_deref().and_then(cache_decode) {
         return Sound { list, shadows, runs, line, details, keys_error, override_error: None };
     }
+    learning();
     let got = learn_converted(file, data, steps, instruments);
     // written whole, then renamed: a half-written file is never read
     let tmp = cache.join(format!("{file}.tmp"));
@@ -1179,10 +1257,19 @@ fn update_games_file(
     // comment lines included: the owner leaves a game out by commenting out its entry
     let listed = |f: &PathBuf| known.contains(f) || f.to_str().is_some_and(|s| text.contains(&quoted(s)));
     let new: Vec<&PathBuf> = files.iter().filter(|f| !listed(f)).collect();
+    let loaded = Progress::new("loaded", new.len());
     for f in new {
         let file = f.display().to_string();
         let name = name_from_file(&f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
-        let got = prepared.entry(f.clone()).or_insert_with(|| tapeload::prepare(f));
+        let base = f.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let got = prepared.entry(f.clone()).or_insert_with(|| {
+            say(&format!("loading: {base}"));
+            tapeload::prepare(f)
+        });
+        loaded.done(&base, &match got {
+            Err(e) => format!("left out: {}", reason(e)),
+            Ok(l) => l.how.clone(),
+        });
         if let Err(e) = got {
             left_out.push(Row { name, file, how: "left out".into(), packed: None, reason: Some(reason(e)) });
             continue;

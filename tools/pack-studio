@@ -29,7 +29,21 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       which converts and learns every game and writes W/all/personal-games.toml (the folder's
       games file: a re-run keeps your edits to it), the scores in W/all/arrange/ and
       W/all/plan.json (each game: how it went in, its packed size with its chosen music, its
-      music line and its scores).
+      music line and its scores). It reports each game on stderr as it goes (fmzx-pack's
+      "loaded 3/45: <file> (<how>)", "converted 3/45: <name> (<how>)", "learning 45 games: 27
+      from the cache, 18 to learn, 8 at a time", "learning: <name>", "learned 13/45: <name>
+      (21.4 s)" or "(cached)"); until the plan is there the games screen lists the games
+      (W/all/personal-games.toml's, or the folder's game files before it is written), each
+      waiting, converting, learning (for how long), learned (its time, or cached) or left out
+      (why), with its converted file's size (~, before packing), under "learning 12 of 45 games
+      — about 4 min left" (the games still to learn at the average time of those learned, so
+      many at a time). Before a workspace's first learning (no W/all/plan.json), a job copies
+      the cache files W/all/sound-cache lacks from the sound-cache/ folders (not links) of other
+      personal packs under build/ (at most four folders down, beside a personal-games.toml or a
+      converted/manifest.toml, none inside W): fmzx-pack names a cache file
+      <crc>-<learner version>.bin, the CRC over the converted game, its key script and its
+      overrides, so a copy is the same game's music. A file there is never overwritten; the log
+      says "reused 27 learned games from build/zx-tunes" per folder.
       A games file (.toml, the syntax of W/all/personal-games.toml) in place of the folder is
       used as written: the learning reads it (fmzx-pack personal <file> -o W/all ..., a relative
       file from the games file's folder), nothing rewrites it, and the packs take their entries
@@ -64,11 +78,23 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   tools/arrange-music runs through uv (https://docs.astral.sh/uv/); its first AI job downloads
   its packages and a 1.4 GB model.
 
-  The games screen: a row per game, its name, how it went in, its packed size, its methods (a
-  capital letter when marked), and per score the choice (original, take-2, chip-1, ay-1), else
-  "nothing to arrange: FM from code" or "beeper". Games left out are dimmed, with why.
+  The games screen: a row per game, its name, how it went in, its packed size (with its chosen
+  music, as of the last learning), its pack (P1 to P9, a colour per pack, or a dash), its methods
+  (a capital letter when marked), and per score the choice (original, take-2, chip-1, ay-1), else
+  "nothing to arrange: FM from code" or "beeper". Games left out are dimmed, with why. Above the
+  rows, the packs: per pack with games "P1  312.4/416.7 KB <bar> 4 games" (its games' bytes
+  against what a pack holds: the room less 2% less the pack's overhead, the plan's bytes beyond
+  its games, as the split counts), red with how much over when over; then the games in no pack
+  ("sizes as of the last learn" when a take was chosen after it). The packs are kept in
+  W/studio.toml [packs].
       Up/Down, j/k   move (PgUp/PgDn, Home/End)
       Enter          open the game
+      1-9            put the game in that pack; one it would take over its room refuses it (red)
+                     until the same key again puts it there anyway (then no build starts)
+      0, x           the game in no pack
+      f              every packed game in no pack into the first pack with room, in name order
+      p              the packs: each pack, its fill and its games (1-9, 0/x move the game chosen,
+                     Enter opens it, b builds, Left/h/Esc/p back)
       a / s / y      mark or unmark AI / SID / AY for the game
       A / S / Y      the same for every game with scores
       g              generate the marked methods: an AI job per game with A, a SID job per game
@@ -77,6 +103,10 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       r              learn again (the plan: sizes change with the choices)
       b              build the packs
       l              the log (W/studio.log); ? this text; q quit (asks when jobs are running)
+  Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
+  titles bold, the chosen candidate green, marked methods AI magenta, SID cyan, AY yellow (dim
+  when not), errors and refusals red, the bottom line yellow while a step runs, green when one
+  is done, red when one failed; while learning, learning yellow, learned green, cached dim green.
 
   The game screen: the game's scores (key, seconds, shadow or not, what the last plan says
   plays), and per score its candidates:
@@ -103,9 +133,12 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   play says why. The player is afplay on macOS, else ffplay, paplay or aplay; FMZX_PLAYER="cmd
   args" overrides (the file is added last).
 
-  The build (b, or --build): the plan again (choices change the packed sizes), then the packed
-  games in name order fill pack 1 while the total stays within the room minus 2% (and the pack's
-  own overhead, the plan's bytes beyond its games), then pack 2, and so on. Each pack is
+  The build (b, or --build): the plan again (choices change the packed sizes), then the packs
+  filled with 1-9 (or f), each as W/pack-<n>/ under its own number (packs with no game skipped);
+  a game in no pack is not built (the summary names them), and a pack over what it holds stops
+  the build before it starts, naming the pack and by how much. With no game in any pack, the
+  packed games in name order fill pack 1 while the total stays within the room minus 2% (and
+  the pack's own overhead), then pack 2, and so on. Each pack is
   W/pack-<n>/: personal-games.toml (the header and those games' entries from the games file,
   W/all/personal-games.toml or the one given, as written there, [game.keys] and
   [game.instruments] tables included; a relative file made absolute), the links
@@ -119,10 +152,10 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   size; the room used and free; the music learned) and verify both packages. The build needs
   build/fm1/platform/fm1/fmzx_app.bin, build/fm1-preview/platform/fm1/fmzx_app.bin and
   build/fm1/third_party/felucca-loader/loader.bin (the device builds at start make them).
-  A pack that fails with "the pack does not fit" gives its last game to the next pack and is
-  built again; a game that does not fit in a pack of its own is left out of every pack, and the
-  summary says so. Packs beyond that count that the studio made (a W/pack-<m>/.pack-studio
-  marker) are removed. The summary lists each pack, its games and its fmzx.fwsc; the studio prints
+  A pack of the name-order split that fails with "the pack does not fit" gives its last game to
+  the next pack and is built again; a game that does not fit in a pack of its own is left out of
+  every pack, and the summary says so (a pack you filled that does not fit fails the build).
+  The other packs the studio made (a W/pack-<m>/.pack-studio marker) are removed. The summary lists each pack, its games and its fmzx.fwsc; the studio prints
   it again when it closes. Install a pack's fmzx.fwsc as docs/install.md describes.
 
   The SID collection: with no --sid-dir, the studio uses build/hvsc/<version>/ (repo root),
@@ -149,8 +182,13 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   deleted, and nothing in it is ever run. The same holds for these tunes: keep them and the
   packs made with them to yourself.
 
-  Without the screen: any of --generate, --build, --status and --try (several run in that order;
-  a step that fails stops the command, exit 1). They take the options above.
+  Without the screen: any of --assign, --auto-fill, --generate, --build, --status and --try
+  (several run in that order; a step that fails stops the command, exit 1). They take the
+  options above, and print the learning's progress lines as they come.
+  tools/pack-studio <games> --assign GAME=N [--assign GAME=N]... [--auto-fill]
+      Puts each game given (its id) in pack N (1 to 9; 0: in none), refused when that takes the
+      pack over what it holds; --auto-fill then does what f does. Prints the packs. Learns first
+      when W/all/plan.json is missing.
   tools/pack-studio <games> --generate ai,sid,ay [--game ID]...
       Marks the methods named (one or more of ai, sid, ay, comma-separated) for every game with
       scores, or for each game given with --game (its id, as --status shows it), and runs the
@@ -161,14 +199,18 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       The start steps and the build, without the screen; prints the summary. Exit 1 when a step
       fails or a game fits in no pack.
   tools/pack-studio <games> --status
-      Prints the games, their methods, scores, candidates and choices, the packs a build would
-      make and the packs built; runs the start steps and the learning first when W/all/plan.json
+      Prints the games, their methods, packs, scores, candidates and choices, the packs' fill,
+      the packs a build would make and the packs built; runs the start steps and the learning first when W/all/plan.json
       is missing.
   tools/pack-studio <games> --try [N]
       The browser test bench on pack N's packages (tools/web-demo --packages W/pack-<N>; N is 1
       unless given), after the build when --build is given too, else on the packs built before.
   tools/pack-studio selftest
-      Checks the split, the games-file subsets ([game.keys] tables kept), the pack folders and
+      Checks the progress lines and the list while learning (states, the switch to the games
+      file, the estimate), the reuse of earlier learning (only missing files copied, never over
+      one, the workspace and links not read), the colours (NO_COLOR), the packs filled (kept in
+      studio.toml, refused over the room, f, --assign and --auto-fill, the build of exactly
+      those, one over its room refused), the split, the games-file subsets ([game.keys] tables kept), the pack folders and
       their links, each pack's fmzx-pack and tools/make-packages runs, the stale-pack removal, the
       retry when a pack does not fit, a games file as the input, the methods file, generate and
       choose through --set (AI, SID and AY, on the screen's path and through --generate), --try,
@@ -176,7 +218,7 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       unpacking (archive listings with a path escaping their folder, a link or a device; a
       made-up .7z, written and read by bsdtar when it is there, and .tar.gz, and ones with a
       path escaping their folder or a link), and the screen (in a pseudo-terminal, resized down
-      to 1x1), in a temporary folder with stand-ins for every tool: no network, no Docker, no
+      to 1x1; while learning, in colour and with NO_COLOR), in a temporary folder with stand-ins for every tool: no network, no Docker, no
       cargo.
 
 Stand-ins (the selftest's; the real tools are the default): FMZX_PACK (the fmzx-pack binary;
@@ -184,7 +226,8 @@ no cargo build of it then), FMZX_ARRANGE_MUSIC, FMZX_MAKE_PACKAGES, FMZX_WEB_DEM
 FMZX_MUSIC_PREVIEW (no cargo build of it then), FMZX_BUILD (the folder holding the device builds
 fm1/ and fm1-preview/, instead of build/), FMZX_HVSC_API (the version query's address),
 FMZX_HVSC_DIR (instead of build/hvsc), FMZX_AY_API (the commit query's address),
-FMZX_AY_TARBALL (the archive's address, {sha} the commit), FMZX_AY_DIR (instead of build/ay).
+FMZX_AY_TARBALL (the archive's address, {sha} the commit), FMZX_AY_DIR (instead of build/ay),
+FMZX_REUSE_FROM (the folder searched for earlier learning instead of build/; empty: none).
 """
 
 from __future__ import annotations
@@ -226,6 +269,7 @@ AY_TARBALL = "https://codeload.github.com/chris-y/AY/tar.gz/{sha}"
 UNPACK_MAX = 8 << 30  # bytes an archive may unpack to
 NOT_FIT = "the pack does not fit"
 METHODS = ("ai", "sid", "ay")
+PACKS_MAX = 9  # the packs a game can be put in, 1 to 9
 
 
 def build_root() -> Path:
@@ -518,16 +562,393 @@ def load_methods(w: Path) -> dict[str, set[str]]:
     return out
 
 
-def save_methods(w: Path, methods: dict[str, set[str]]) -> None:
+def load_packs(w: Path) -> dict[str, int]:
+    """The pack each game is put in (1 to 9; a game not listed is in none)."""
+    out = {}
+    for gid, n in read_toml(w / "studio.toml").get("packs", {}).items():
+        if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= PACKS_MAX:
+            out[str(gid)] = n
+    return out
+
+
+def save_studio(w: Path, methods: dict[str, set[str]], packs: dict[str, int]) -> None:
     lines = ["# tools/pack-studio: the music methods marked per game (FM is always there)", "[methods]"]
     for gid in sorted(methods):
         ms = [m for m in METHODS if m in methods[gid]]
         if ms:
             lines.append(f"{json.dumps(gid)} = [{', '.join(json.dumps(m) for m in ms)}]")
+    lines += ["", "# the pack each game goes in (1 to 9); a game not listed goes in none", "[packs]"]
+    lines += [f"{json.dumps(gid)} = {packs[gid]}" for gid in sorted(packs) if 1 <= packs[gid] <= PACKS_MAX]
     w.mkdir(parents=True, exist_ok=True)
     tmp = w / "studio.toml.tmp"
     tmp.write_text("\n".join(lines) + "\n")
     tmp.replace(w / "studio.toml")
+
+
+def save_methods(w: Path, methods: dict[str, set[str]]) -> None:
+    save_studio(w, methods, load_packs(w))
+
+
+def save_packs(w: Path, packs: dict[str, int]) -> None:
+    save_studio(w, load_methods(w), packs)
+
+
+# ---------------------------------------------------------------------------------------------
+# The packs the owner fills: each game in pack 1 to 9 or in none (W/studio.toml [packs])
+
+
+def fill_limit(plan: Plan) -> float:
+    """The bytes of games a pack holds: the room minus the margin minus the pack's overhead (the
+    split's limit)."""
+    return plan.room * (1 - MARGIN) - plan.overhead()
+
+
+def pack_fill(plan: Plan, packs: dict[str, int]) -> dict[int, list[Game]]:
+    """The packed games in each pack that has any, in name order."""
+    out: dict[int, list[Game]] = {}
+    for g in plan.packed():
+        n = packs.get(g.id)
+        if n:
+            out.setdefault(n, []).append(g)
+    return dict(sorted(out.items()))
+
+
+def unassigned(plan: Plan, packs: dict[str, int]) -> list[Game]:
+    return [g for g in plan.packed() if not packs.get(g.id)]
+
+
+def pack_total(games: list[Game]) -> int:
+    return sum(g.packed or 0 for g in games)
+
+
+def over_by(plan: Plan, packs: dict[str, int], gid: str, n: int) -> float:
+    """How many bytes pack n would be over its limit with the game put in it (0: it fits)."""
+    g = plan.game(gid)
+    if g is None or g.left_out or n < 1:
+        return 0
+    total = sum(x.packed or 0 for x in plan.packed() if packs.get(x.id) == n and x.id != gid) + (g.packed or 0)
+    return max(0.0, total - fill_limit(plan))
+
+
+def auto_fill(plan: Plan, packs: dict[str, int]) -> tuple[dict[str, int], list[str]]:
+    """Every packed game in no pack put in the first pack with room for it, in name order;
+    returns the packs and the games that fit in none of the nine."""
+    out = dict(packs)
+    limit = fill_limit(plan)
+    totals = {n: pack_total(gs) for n, gs in pack_fill(plan, out).items()}
+    left = []
+    for g in unassigned(plan, out):
+        n = next((n for n in range(1, PACKS_MAX + 1) if totals.get(n, 0) + (g.packed or 0) <= limit), None)
+        if n is None:
+            left.append(g.id)
+            continue
+        out[g.id] = n
+        totals[n] = totals.get(n, 0) + (g.packed or 0)
+    return out, left
+
+
+def packs_over(plan: Plan, packs: dict[str, int]) -> list[tuple[int, float]]:
+    limit = fill_limit(plan)
+    return [(n, pack_total(gs) - limit) for n, gs in pack_fill(plan, packs).items() if pack_total(gs) > limit]
+
+
+def bar(frac: float, width: int, utf8: bool) -> str:
+    full = max(0, min(width, round(frac * width)))
+    return ("█" * full + "░" * (width - full)) if utf8 else ("#" * full + "." * (width - full))
+
+
+def pack_lines(plan: Plan, packs: dict[str, int], width: int = 12, utf8: bool = False) -> list[tuple[int, str, bool]]:
+    """The packs panel: (pack number, line, over) per pack with games, then (0, the games in no
+    pack, False)."""
+    limit = fill_limit(plan)
+    out = []
+    for n, gs in pack_fill(plan, packs).items():
+        t = pack_total(gs)
+        over = t > limit
+        out.append((n, f"P{n} {t / 1024:6.1f}/{limit / 1024:.1f} KB {bar(t / limit if limit > 0 else 1, width, utf8)} "
+                       f"{len(gs)} game{'s' if len(gs) != 1 else ''}" + (f"  {kb(t - limit)} over" if over else ""), over))
+    un = unassigned(plan, packs)
+    if not out:
+        n = len(split_packs([(g.id, g.packed) for g in plan.packed()], plan.room, plan.overhead()))
+        out.append((0, f"no game put in a pack: b builds the automatic split ({n} pack{'s' if n != 1 else ''}); "
+                       "1-9 puts a game in a pack, f fills them", False))
+    else:
+        out.append((0, f"in no pack: {len(un)} game{'s' if len(un) != 1 else ''}, {kb(pack_total(un))}", False))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# The learning's progress (fmzx-pack personal's lines on stderr) and the games list while it runs
+
+
+PROGRESS_PLAN_RE = re.compile(r"^learning (\d+) games: (\d+) from the cache, (\d+) to learn, (\d+) at a time$")
+PROGRESS_DONE_RE = re.compile(r"^(loaded|converted|learned) (\d+)/(\d+): (.+)$")
+PROGRESS_START_RE = re.compile(r"^(loading|converting|learning): (.+)$")
+GAME_EXTS = (".sna", ".z80", ".tap", ".tzx")
+
+
+def parse_progress(line: str) -> tuple | None:
+    """A progress line as ("plan", games, from cache, to learn, at a time), ("done", verb, k, n,
+    rest) or ("start", verb, name); None for any other line."""
+    s = line.strip()
+    if m := PROGRESS_PLAN_RE.match(s):
+        return ("plan",) + tuple(int(x) for x in m.groups())
+    if m := PROGRESS_DONE_RE.match(s):
+        return ("done", m[1], int(m[2]), int(m[3]), m[4])
+    if m := PROGRESS_START_RE.match(s):
+        return ("start", m[1], m[2])
+    return None
+
+
+@dataclass
+class LiveRow:
+    name: str
+    base: str  # the game file's name
+    gid: str | None = None  # from the games file
+    state: str = "waiting"  # waiting, converting, converted, learning, learned, cached, left out
+    how: str = ""  # how it went in, or why it was left out
+    seconds: float | None = None
+    since: float = 0.0  # when its learning started
+    size: int | None = None  # its converted file's bytes (approximate: before packing)
+
+
+def rows_from_folder(folder: Path) -> list[LiveRow]:
+    try:
+        files = [p for p in folder.iterdir() if p.suffix.lower() in GAME_EXTS and not p.name.startswith(".") and p.is_file()]
+    except OSError:
+        files = []
+    return sorted((LiveRow(p.stem, p.name) for p in files), key=lambda r: (r.name.casefold(), r.base))
+
+
+def rows_from_games_file(text: str) -> list[LiveRow]:
+    try:
+        games = tomllib.loads(text).get("game", [])
+    except tomllib.TOMLDecodeError:
+        return []
+    rows = [LiveRow(str(g.get("name", g.get("id", "?"))), PurePosixPath(str(g.get("file", ""))).name, str(g.get("id", "")))
+            for g in games if isinstance(g, dict)]
+    return sorted(rows, key=lambda r: (r.name.casefold(), r.gid or ""))
+
+
+def fmt_left(seconds: float) -> str:
+    if seconds < 60:
+        return "under a minute"
+    if seconds < 90 * 60:
+        return f"about {round(seconds / 60)} min"
+    return f"about {seconds / 3600:.1f} h"
+
+
+class Live:
+    """The games list while fmzx-pack personal runs: a row per game, its state from the progress
+    lines (apply), the header (header). Fed from the job's thread, read by the screen's."""
+
+    def __init__(self, rows: list[LiveRow]):
+        self.lock = threading.Lock()
+        self.rows = rows
+        self.phase = "start"  # start, loading, converting, learning, done, failed
+        self.k = 0
+        self.n = 0
+        self.to_learn: int | None = None
+        self.threads = 1
+
+    def set_rows(self, rows: list[LiveRow]) -> None:
+        """New rows (the games file written), each keeping the state of the row of its file (or
+        of its name, a row a progress line made); an old row with no new one stays when left out."""
+        with self.lock:
+            old = list(self.rows)
+            for r in rows:
+                o = next((o for o in old if o.base == r.base), None) or next((o for o in old if o.name == r.name), None)
+                if o:
+                    old.remove(o)
+                    r.state, r.how, r.seconds, r.since, r.size = o.state, o.how, o.seconds, o.since, r.size or o.size
+            self.rows = rows + [o for o in old if o.state == "left out"]
+
+    def _find(self, rest: str, done: bool) -> tuple[LiveRow, str]:
+        best, state, best_len = None, "", -1
+        for r in self.rows:
+            for key in (r.name, r.base):
+                if not key:
+                    continue
+                hit = rest.startswith(key + " (") and rest.endswith(")") if done else rest == key
+                if hit and (len(key) > best_len or (len(key) == best_len and best.state in ("learned", "cached", "left out"))):
+                    best, best_len = r, len(key)
+                    state = rest[len(key) + 2:-1] if done else ""
+        if best is None:
+            if done and " (" in rest and rest.endswith(")"):
+                name, state = rest[:-1].rsplit(" (", 1)
+            else:
+                name = rest
+            best = LiveRow(name, name)
+            self.rows.append(best)
+        return best, state
+
+    def apply(self, line: str, now: float | None = None) -> bool:
+        """Takes a line of the job's output; True when it was a progress line."""
+        p = parse_progress(line)
+        if p is None:
+            return False
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if p[0] == "plan":
+                self.phase, self.n, self.k, self.to_learn, self.threads = "learning", p[1], 0, p[3], max(1, p[4])
+            elif p[0] == "start":
+                r, _ = self._find(p[2], False)
+                if p[1] == "learning":
+                    r.state, r.since = "learning", now
+                else:
+                    r.state = "converting"
+                    self.phase = "loading" if p[1] == "loading" else "converting"
+            else:
+                _, verb, k, n, rest = p
+                r, state = self._find(rest, True)
+                self.k, self.n = k, n
+                if verb == "learned":
+                    self.phase = "learning"
+                    if state == "cached":
+                        r.state = "cached"
+                    else:
+                        r.state = "learned"
+                        with contextlib.suppress(ValueError):
+                            r.seconds = float(state.split()[0])
+                else:
+                    self.phase = "loading" if verb == "loaded" else "converting"
+                    if state.startswith("left out: "):
+                        r.state, r.how = "left out", state[len("left out: "):]
+                    else:
+                        r.state, r.how = "converted", state
+        return True
+
+    def estimate(self, now: float) -> float | None:
+        """Seconds the learning has left: the games still to learn, at the average time of the
+        ones learned (not from the cache), so many at a time; None before one is learned."""
+        secs = [r.seconds for r in self.rows if r.state == "learned" and r.seconds is not None]
+        if self.to_learn is None or not secs:
+            return None
+        avg = sum(secs) / len(secs)
+        left = self.to_learn - len(secs)
+        if left <= 0:
+            return 0.0
+        busy = [r for r in self.rows if r.state == "learning"]
+        work = sum(max(avg * 0.1, avg - (now - r.since)) for r in busy) + max(0, left - len(busy)) * avg
+        return work / max(1, min(self.threads, left))
+
+    def header(self, now: float | None = None, dash: str = "-") -> str:
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if self.phase == "loading":
+                return "loading the new game files" + (f": {self.k} of {self.n}" if self.n else "")
+            if self.phase == "converting":
+                return f"converting {self.k} of {self.n} games" if self.n else "converting the games"
+            if self.phase == "learning":
+                head = f"learning {self.k} of {self.n} games"
+                est = self.estimate(now)
+                if est is not None:
+                    return head + (f" {dash} {fmt_left(est)} left" if est > 0 else f" {dash} finishing")
+                if self.to_learn:
+                    return head + f" {dash} {self.to_learn} not learned before: timing the first"
+                return head
+            if self.phase == "failed":
+                return "the learning failed (l: the log)"
+            return ""
+
+    def snapshot(self) -> list[LiveRow]:
+        with self.lock:
+            return [LiveRow(**vars(r)) for r in self.rows]
+
+
+def live_state(r: LiveRow, now: float) -> tuple[str, str]:
+    """A live row's state text and its kind (for its colour): waiting, run, ok, cached, out."""
+    if r.state == "converting":
+        return "converting...", "run"
+    if r.state == "learning":
+        t = int(now - r.since) if r.since else 0
+        return f"learning... {t // 60}:{t % 60:02d}", "run"
+    if r.state == "learned":
+        return (f"learned ({r.seconds:.1f} s)" if r.seconds is not None else "learned"), "ok"
+    if r.state == "cached":
+        return "learned (cached)", "cached"
+    if r.state == "left out":
+        return f"left out: {r.how}", "out"
+    return "waiting", "waiting"
+
+
+# ---------------------------------------------------------------------------------------------
+# Earlier learning: the sound caches of other personal packs under build/
+
+
+CACHE_FILE_RE = re.compile(r"^[0-9a-f]{8}-[A-Za-z0-9._-]+\.bin$")  # fmzx-pack's <crc>-<version>.bin
+REUSE_SKIP = {"sound-cache", "arrange", "converted", "previews", "hvsc", "ay", "node_modules", "CMakeFiles"}
+
+
+def reuse_root() -> Path | None:
+    v = os.environ.get("FMZX_REUSE_FROM")
+    if v is not None:
+        return Path(v) if v else None
+    return ROOT / "build"
+
+
+def earlier_caches(search: Path, exclude: Path, depth: int = 4) -> list[Path]:
+    """The sound-cache folders (not links) under search, at most depth folders down, of a personal
+    pack's folder (beside a personal-games.toml or a converted/manifest.toml), none inside exclude."""
+    out = []
+    try:
+        ex = exclude.resolve()
+    except OSError:
+        ex = exclude
+    base = len(search.parts)
+    for dp, dns, _ in os.walk(search):
+        d = Path(dp)
+        sc = d / "sound-cache"
+        if "sound-cache" in dns and not sc.is_symlink() and sc.is_dir() \
+                and ((d / "personal-games.toml").is_file() or (d / "converted" / "manifest.toml").is_file()):
+            r = sc.resolve()
+            if r != ex and ex not in r.parents:
+                out.append(sc)
+        dns[:] = sorted(x for x in dns if len(d.parts) - base < depth and not x.startswith(".") and x not in REUSE_SKIP
+                        and not (d / x).is_symlink())
+    return out
+
+
+def reuse_caches(search: Path, dest: Path, exclude: Path) -> list[tuple[Path, int]]:
+    """Copies the cache files dest lacks from earlier_caches(search, exclude) into dest (never
+    one dest has); returns (the folder, files copied) per folder that gave any. A cache file
+    names its game by content (fmzx-pack: the converted file's CRC, its key script and overrides,
+    and the learner's version), so a copy is the same game's music."""
+    dest.mkdir(parents=True, exist_ok=True)
+    have = {p.name for p in dest.iterdir()}
+    out = []
+    for sc in earlier_caches(search, exclude):
+        n = 0
+        for f in sorted(sc.iterdir()):
+            if not CACHE_FILE_RE.match(f.name) or f.name in have or f.is_symlink() or not f.is_file():
+                continue
+            tmp, target = dest / f".{f.name}.reuse", dest / f.name
+            try:
+                shutil.copyfile(f, tmp)
+                try:
+                    os.link(tmp, target)  # fails when it is there: never overwritten
+                except FileExistsError:
+                    continue
+                except OSError:  # no hard links there
+                    if target.exists():
+                        continue
+                    os.replace(tmp, target)
+            except OSError:
+                continue
+            finally:
+                tmp.unlink(missing_ok=True)
+            have.add(f.name)
+            n += 1
+        if n:
+            out.append((sc.parent, n))
+    return out
+
+
+def shown_path(p: Path) -> str:
+    try:
+        return str(p.relative_to(ROOT))
+    except ValueError:
+        return str(p)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -653,11 +1074,11 @@ def pack_folders(w: Path) -> list[tuple[int, Path]]:
     return sorted(out)
 
 
-def remove_stale_packs(w: Path, count: int) -> list[Path]:
-    """Removes W/pack-<m> for m > count that the studio made; returns them."""
+def remove_stale_packs(w: Path, keep: set[int]) -> list[Path]:
+    """Removes the W/pack-<m> the studio made that are not among keep; returns them."""
     gone = []
     for n, d in pack_folders(w):
-        if n > count and is_studio_pack(d):
+        if n not in keep and is_studio_pack(d):
             shutil.rmtree(d)  # the links inside are removed, not followed
             gone.append(d)
     return gone
@@ -1057,6 +1478,7 @@ class Job:
     env: dict[str, str] | None = None
     chain: str | None = None  # when it fails, the waiting jobs of its chain are dropped
     on_done: Callable[[Job], None] | None = None
+    on_line: Callable[[str], None] | None = None  # each output line, in the job's thread
     rc: int | None = None
     progress: str = ""
     tail: deque = field(default_factory=lambda: deque(maxlen=400))
@@ -1070,10 +1492,11 @@ class Job:
 
 
 class Runner:
-    def __init__(self, log_path: Path, threaded: bool, echo: bool = False):
+    def __init__(self, log_path: Path, threaded: bool, echo: bool = False, progress: bool = False):
         self.log_path = log_path
         self.threaded = threaded
-        self.echo = echo
+        self.echo = echo  # every line to stdout
+        self.progress = progress  # (without echo) the learning's progress lines to stderr
         self.pending: deque[Job] = deque()
         self.done: deque[Job] = deque()
         self.current: Job | None = None
@@ -1110,9 +1533,15 @@ class Runner:
             self.log.flush()
         if line.strip() and not line.startswith("== "):
             self.last_line = line.strip()
+        if job.on_line:
+            with contextlib.suppress(Exception):
+                job.on_line(line)
         if self.echo:
             sys.stdout.write(line)
             sys.stdout.flush()
+        elif self.progress and (parse_progress(line) or line.startswith("reused ")):
+            sys.stderr.write(line)
+            sys.stderr.flush()
 
     def _run(self, job: Job) -> None:
         self.current = job
@@ -1241,10 +1670,17 @@ class Player:
 @dataclass
 class BuildRun:
     packs: list[list[str]] = field(default_factory=list)
+    numbers: list[int] = field(default_factory=list)  # each pack's number (W/pack-<n>)
+    assigned: bool = False  # the packs the owner filled (else the automatic split)
+    unassigned: list[str] = field(default_factory=list)  # packed games in no pack: not built
     text: str = ""
     built: int = 0
     too_big: list[str] = field(default_factory=list)
     error: str | None = None
+
+
+def over_text(over: list[tuple[int, float]]) -> str:
+    return "; ".join(f"pack {n} is {kb(b)} over its room" for n, b in over) + ": take a game out (0 on the games screen)"
 
 
 class Studio:
@@ -1257,8 +1693,13 @@ class Studio:
         self.tools = tools or Tools.from_env()
         self.plan = load_plan(self.all / "plan.json")
         self.methods = load_methods(w)
+        self.packs = load_packs(w)
+        self.over_ok: tuple[str, int] | None = None  # the game and pack a second press puts it in over the room
+        self.live: Live | None = None  # the games list while the learning runs
+        self.live_src: tuple | None = None  # the games file the live rows come from, and its mtime
         self.player = Player()
         self.flash_msg = ""
+        self.flash_kind = "info"  # info, ok, err: the bottom line's colour
         self.flash_at = 0.0
         self.version = 0  # counts finished jobs: the screen's caches follow it
         self.rendering: set[str] = set()
@@ -1275,14 +1716,14 @@ class Studio:
 
     # -- messages and data
 
-    def flash(self, msg: str) -> None:
-        self.flash_msg, self.flash_at = msg, time.monotonic()
+    def flash(self, msg: str, kind: str = "info") -> None:
+        self.flash_msg, self.flash_kind, self.flash_at = msg, kind, time.monotonic()
         if not self.runner.threaded:
             print(f"{PROG}: {msg}", file=sys.stderr, flush=True)
 
     def fail(self, msg: str) -> None:
         self.errors.append(msg)
-        self.flash(msg)
+        self.flash(msg, "err")
 
     def games_file(self) -> Path:
         """The games file the packs take their entries from: the one given, else the folder's."""
@@ -1358,26 +1799,85 @@ class Studio:
             self.runner.submit(self.plan_job("start"))
 
     def plan_job(self, chain: str, then: Callable[[Job], None] | None = None) -> Job:
+        """The learning's job (to submit); before a workspace's first plan, a job that copies
+        the learning of other personal packs under build/ into W/all/sound-cache goes first."""
         argv = [self.tools.fmzx_pack, "personal", str(self.folder), "-o", str(self.all)]
         for a in apps():
             argv += ["--app", str(a)]
         argv.append("--plan")
+        self.all.mkdir(parents=True, exist_ok=True)
+        search = reuse_root()
+        if search is not None and search.is_dir() and not (self.all / "plan.json").exists():
+            def reuse(j: Job) -> int:
+                got = reuse_caches(search, self.all / "sound-cache", self.w)
+                for d, n in got:
+                    j.out(f"reused {n} learned game{'s' if n != 1 else ''} from {shown_path(d)}")
+                if not got:
+                    j.out(f"no earlier learning to reuse under {shown_path(search)}")
+                return 0
+            self.runner.submit(Job("reuse earlier learning", fn=reuse))
+        live = self.live = Live(self.live_rows())
 
         def done(j: Job) -> None:
             self.reload_plan()
             if j.rc != 0:
-                self.flash("learning failed (l: the log)")
+                live.phase = "failed"
+                self.flash("learning failed (l: the log)", "err")
             elif self.plan is None:
                 j.rc = 1
-                self.flash(f"no plan in {self.all / 'plan.json'} (l: the log)")
-            elif then is None:
-                n = len(self.plan.packed())
-                self.flash(f"learned: {len(self.plan.games)} games, {n} packed, {kb(self.plan.used)} "
-                           f"for a room of {kb(self.plan.room)}")
+                live.phase = "failed"
+                self.flash(f"no plan in {self.all / 'plan.json'} (l: the log)", "err")
+            else:
+                live.phase = "done"
+                if self.live is live:
+                    self.live = None
+                if then is None:
+                    n = len(self.plan.packed())
+                    self.flash(f"learned: {len(self.plan.games)} games, {n} packed, {kb(self.plan.used)} "
+                               f"for a room of {kb(self.plan.room)}", "ok")
             if then:
                 then(j)
-        self.all.mkdir(parents=True, exist_ok=True)
-        return Job("learn the games (plan)", argv, chain=chain, on_done=done)
+        return Job("learn the games (plan)", argv, chain=chain, on_done=done, on_line=live.apply)
+
+    def live_rows(self) -> list[LiveRow]:
+        """The rows of the list while learning: the games file's entries when it is there,
+        else the folder's game files."""
+        gf = self.games_file()
+        try:
+            st_ = gf.stat()
+            self.live_src = (gf, st_.st_mtime_ns)
+            rows = rows_from_games_file(gf.read_text())
+        except OSError:
+            self.live_src = None
+            rows = []
+        return rows or (rows_from_folder(self.folder) if self.folder.is_dir() else [])
+
+    def refresh_live(self) -> list[LiveRow]:
+        """The live rows, the games file read again when it changed, the converted files' sizes
+        added (the screen calls this as it draws)."""
+        live = self.live
+        if live is None:
+            return []
+        gf = self.games_file()
+        try:
+            m = gf.stat().st_mtime_ns
+        except OSError:
+            m = None
+        if m is not None and self.live_src != (gf, m):
+            live.set_rows(self.live_rows())
+        rows = live.snapshot()
+        conv = self.all / "converted"
+        for r in rows:
+            if r.gid and r.size is None and r.state not in ("waiting", "converting", "left out"):
+                for ext in ("sna", "z80", "tap"):
+                    with contextlib.suppress(OSError):
+                        r.size = (conv / f"{r.gid}.{ext}").stat().st_size
+                        break
+                with live.lock:
+                    for o in live.rows:
+                        if o.gid == r.gid:
+                            o.size = r.size
+        return rows
 
     def relearn(self) -> None:
         self.runner.submit(self.plan_job("plan"))
@@ -1410,6 +1910,62 @@ class Studio:
             (ms.add if on else ms.discard)(method)
         save_methods(self.w, self.methods)
         self.flash(f"{method.upper()} {'marked' if on else 'unmarked'} for {len(gs)} games")
+
+    # -- packs
+
+    def assigned(self) -> dict[int, list[Game]]:
+        """The packs the owner filled (none: the build splits by itself)."""
+        return pack_fill(self.plan, self.packs) if self.plan else {}
+
+    def assign(self, gid: str, n: int, force: bool = False) -> bool:
+        """Puts the game in pack n (0: in none). A pack it would take over its room refuses it,
+        until the same game goes to the same pack again (or force)."""
+        p = self.plan
+        g = p.game(gid) if p else None
+        name = g.name if g else gid
+        if g is not None and g.left_out:
+            self.flash(f"{g.name}: left out ({g.reason or g.how}), in no pack", "err")
+            return False
+        if n == 0:
+            self.over_ok = None
+            if self.packs.pop(gid, None) is not None:
+                save_packs(self.w, self.packs)
+            self.flash(f"{name}: in no pack")
+            return True
+        over = over_by(p, self.packs, gid, n) if p and g else 0
+        if over > 0 and not force and self.over_ok != (gid, n):
+            self.over_ok = (gid, n)
+            self.flash(f"{name} ({kb(g.packed)}) does not fit in pack {n}: {kb(over)} over; {n} again: put it there anyway", "err")
+            return False
+        self.over_ok = None
+        self.packs[gid] = n
+        save_packs(self.w, self.packs)
+        self.flash(f"{name}: pack {n}" + (f", {kb(over)} over its room: no build until a game goes" if over > 0 else ""),
+                   "err" if over > 0 else "info")
+        return True
+
+    def fill(self) -> list[str]:
+        """f: every packed game in no pack put in the first pack with room; returns the games
+        that fit in none."""
+        if not self.plan:
+            self.fail("no plan yet: wait for the learning")
+            return []
+        new, left = auto_fill(self.plan, self.packs)
+        added = sum(1 for g in new if g not in self.packs)
+        self.packs = new
+        save_packs(self.w, self.packs)
+        names = ", ".join(self.plan.game(g).name for g in left)
+        self.flash(f"filled: {added} game{'s' if added != 1 else ''} put in packs" + (f"; in none (no room in the {PACKS_MAX} packs): {names}" if left else ""),
+                   "err" if left else "ok")
+        return left
+
+    def sizes_note(self) -> str:
+        """Said when a take was chosen after the last plan (the sizes are the plan's)."""
+        try:
+            later = (self.all / "arrange" / "choices.toml").stat().st_mtime > (self.all / "plan.json").stat().st_mtime
+        except OSError:
+            later = False
+        return "sizes as of the last learn (a take chosen since: r learns again)" if later else ""
 
     # -- generating
 
@@ -1603,6 +2159,9 @@ class Studio:
             return self._finish(f"no {missing[0]}: the device builds make it (FMZX_SKIP_DEVICE_BUILD=1 skipped them)"
                                 if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") == "1"
                                 else f"no {missing[0]}: the device builds did not make it (see the log)")
+        over = packs_over(self.plan, self.packs) if self.plan else []
+        if over:
+            return self._finish(over_text(over))
         self.runner.submit(self.plan_job("build", then=self._split))
         self.flash("building: the plan, then the packs")
 
@@ -1618,12 +2177,23 @@ class Studio:
             split_games_file(br.text)
         except (OSError, ValueError) as e:
             return self._finish(str(e))
-        br.packs = split_packs([(g.id, g.packed) for g in packed], self.plan.room, self.plan.overhead())
+        fill = self.assigned()
+        if fill:
+            over = packs_over(self.plan, self.packs)
+            if over:
+                return self._finish(over_text(over) + " (the sizes of this plan)")
+            br.assigned = True
+            br.numbers = list(fill)
+            br.packs = [[g.id for g in gs] for gs in fill.values()]
+            br.unassigned = [g.id for g in unassigned(self.plan, self.packs)]
+        else:
+            br.packs = split_packs([(g.id, g.packed) for g in packed], self.plan.room, self.plan.overhead())
+            br.numbers = list(range(1, len(br.packs) + 1))
         self._pack(0)
 
     def _pack(self, i: int) -> None:
         br = self.build_run
-        n = i + 1
+        n = br.numbers[i]
         try:
             src = "../all/personal-games.toml" if not self.folder.is_file() else str(self.folder)
             note = f"Pack {n} of the games in {src}, made by tools/pack-studio on every build:\nedit that file instead."
@@ -1638,7 +2208,8 @@ class Studio:
                                on_done=lambda j: self._packed(i, j)))
 
     def _packages(self, i: int) -> None:
-        d = self.w / f"pack-{i + 1}"
+        n = self.build_run.numbers[i]
+        d = self.w / f"pack-{n}"
         argv = [self.tools.make_packages]
         if self.args.offline:
             argv.append("--offline")
@@ -1648,25 +2219,31 @@ class Studio:
 
         def done(j: Job) -> None:
             if j.rc != 0:
-                return self._finish(f"pack {i + 1}'s packages failed (see the log)")
+                return self._finish(f"pack {n}'s packages failed (see the log)")
             self.build_run.built = i + 1
             return self._pack(i + 1) if i + 1 < len(self.build_run.packs) else self._finish(None)
-        self.runner.submit(Job(f"pack {i + 1}: the packages and their verify", argv, env=env, chain="build", on_done=done))
+        self.runner.submit(Job(f"pack {n}: the packages and their verify", argv, env=env, chain="build", on_done=done))
 
     def _packed(self, i: int, j: Job) -> None:
         br = self.build_run
+        n = br.numbers[i]
         if j.rc == 0:
             return self._packages(i)
         if NOT_FIT not in j.text():
-            return self._finish(f"pack {i + 1} failed (see the log)")
+            return self._finish(f"pack {n} failed (see the log)")
+        if br.assigned:
+            return self._finish(f"pack {n} does not fit (the log says by how much): take a game out of it")
+        # the automatic split: the pack's last game goes to the next pack
         if len(br.packs[i]) == 1:
             br.too_big.append(br.packs.pop(i)[0])
+            br.numbers = list(range(1, len(br.packs) + 1))
             return self._pack(i) if i < len(br.packs) else self._finish(None)
         last = br.packs[i].pop()
         if i + 1 == len(br.packs):
             br.packs.append([])
+            br.numbers = list(range(1, len(br.packs) + 1))
         br.packs[i + 1].insert(0, last)
-        self.runner._line(j, f"== pack {i + 1} does not fit: {last} goes to pack {i + 2}")
+        self.runner._line(j, f"== pack {n} does not fit: {last} goes to pack {n + 1}")
         self._pack(i)
 
     def _finish(self, error: str | None) -> None:
@@ -1674,12 +2251,15 @@ class Studio:
         br.error = error
         lines = []
         if error is None:
-            for d in remove_stale_packs(self.w, len(br.packs)):
-                lines.append(f"removed {d} (beyond the {len(br.packs)} packs)")
+            for d in remove_stale_packs(self.w, set(br.numbers)):
+                lines.append(f"removed {d} (not one of the packs built)")
         lines += pack_summary(self.w, self.plan)
         names = lambda ids: ", ".join((self.plan.game(g).name if self.plan and self.plan.game(g) else g) for g in ids)  # noqa: E731
         if br.too_big:
             lines.append(f"in no pack (too big for a pack of its own): {names(br.too_big)}")
+        if br.unassigned and error is None:
+            k = len(br.unassigned)
+            lines.append(f"not built, in no pack: {k} game{'s' if k != 1 else ''}: {names(br.unassigned)}")
         if self.plan:
             out = [g for g in self.plan.games if g.left_out]
             if out:
@@ -1693,7 +2273,7 @@ class Studio:
         self.build_ok = error is None and not br.too_big
         self.build_run = None
         self.changed()
-        self.flash("build done" if error is None else f"build failed: {error}")
+        self.flash("build done" if error is None else f"build failed: {error}", "ok" if error is None else "err")
 
     # -- text for --status
 
@@ -1703,8 +2283,13 @@ class Studio:
         if p is None:
             return out + ["no plan yet"]
         packed = p.packed()
-        est = split_packs([(g.id, g.packed) for g in packed], p.room, p.overhead())
-        out.append(f"room {kb(p.room)}; all games {kb(p.used)}; a build makes {len(est)} pack{'s' if len(est) != 1 else ''}")
+        fill = self.assigned()
+        if fill:
+            est = [(n, [g.id for g in gs]) for n, gs in fill.items()]
+        else:
+            est = list(enumerate(split_packs([(g.id, g.packed) for g in packed], p.room, p.overhead()), 1))
+        out.append(f"room {kb(p.room)}; all games {kb(p.used)}; a build makes {len(est)} pack{'s' if len(est) != 1 else ''}"
+                   + (" (the packs filled)" if fill else " (the automatic split)"))
         sd = self.sid_dir()
         out.append("SID collection: " + (str(sd) if sd else "none: given with --sid-dir" if self.args.sid_dir
                                          else "none (--offline)" if self.args.offline
@@ -1722,7 +2307,8 @@ class Studio:
                 out.append(f"{g.name} ({g.id})  left out: {g.reason or g.how}")
                 continue
             ms = ["FM"] + [m.upper() for m in METHODS if m in self.marked(g.id)]
-            out.append(f"{g.name} ({g.id})  {g.how}  {kb(g.packed)}  methods: {' '.join(ms)}")
+            pk = self.packs.get(g.id)
+            out.append(f"{g.name} ({g.id})  {g.how}  {kb(g.packed)}  methods: {' '.join(ms)}  pack: {f'P{pk}' if pk else '-'}")
             out.append(f"  {g.music}")
             groups = [(s, s.key) for s in g.scores] or [(None, WHOLE_GAME)]
             if not g.scores:
@@ -1743,11 +2329,17 @@ class Studio:
                     mark = "*" if s and c.choice is not None and c.choice == chosen else " "
                     out.append(f"   {mark} {c.label:<26} {c.info}  [{play}]")
         out.append("")
+        out.append("packs:" + (f" ({self.sizes_note()})" if self.sizes_note() else ""))
+        out += [f"  {ln}" for _, ln, _ in pack_lines(p, self.packs)]
         out.append("a build makes:")
         names = {g.id: g.name for g in packed}
         sizes = {g.id: g.packed for g in packed}
-        for n, ids in enumerate(est, 1):
+        for n, ids in est:
             out.append(f"  pack {n}: {', '.join(names[g] for g in ids)} ({kb(sum(sizes[g] for g in ids) + p.overhead())})")
+        if fill:
+            un = unassigned(p, self.packs)
+            if un:
+                out.append(f"  not built, in no pack: {', '.join(g.name for g in un)}")
         built = pack_summary(self.w, p)
         if built:
             out.append("built:")
@@ -1759,9 +2351,17 @@ class Studio:
 # The screen (curses): a thin layer over Studio
 
 
-HELP_GAMES = "jk move  Enter open  a/s/y AI/SID/AY  A/S/Y all  g generate  r re-learn  b build  l log  ? help  q quit"
+HELP_GAMES = ("jk move  Enter open  1-9/0 pack  f fill  p packs  b build  g generate  a/s/y AI/SID/AY  A/S/Y all  "
+              "r re-learn  l log  ? help  q quit")
+HELP_LIVE = "jk move  1-9/0 pack  l log  ? help  q quit"
 HELP_GAME = "jk move  Enter play  space/Esc stop  c choose  a/s/y mark AI/SID/AY  g generate  h/Left back  l log"
+HELP_PACKS = "jk move  1-9 pack  0/x none  f fill  Enter open  b build  h/Esc back  l log  q quit"
 HELP_TEXT = "jk/PgUp/PgDn scroll  Home/End  q/Esc back"
+
+
+def color_wanted(env: dict, has_colors: bool) -> bool:
+    """Colours unless the terminal has none or NO_COLOR is set (and not empty; no-color.org)."""
+    return has_colors and not env.get("NO_COLOR")
 
 
 def run_ui(st: Studio) -> None:
@@ -1770,11 +2370,27 @@ def run_ui(st: Studio) -> None:
 
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")  # a lone Esc (stop, back) without a second's wait
-    curses.wrapper(lambda scr: UI(scr, st, curses).loop())
+    # curses.wrapper's own, but colours started only when wanted (NO_COLOR: not even the default pair)
+    scr = curses.initscr()
+    try:
+        curses.noecho()
+        curses.cbreak()
+        scr.keypad(True)
+        if color_wanted(os.environ, curses.has_colors()):
+            with contextlib.suppress(curses.error):
+                curses.start_color()
+        UI(scr, st, curses).loop()
+    finally:
+        scr.keypad(False)
+        curses.echo()
+        curses.nocbreak()
+        curses.endwin()
 
 
 class UI:
     def __init__(self, scr, st: Studio, curses):
+        import locale
+
         self.c = curses
         self.scr = scr
         self.st = st
@@ -1784,37 +2400,70 @@ class UI:
         self.game: Game | None = None
         self.ci = 0  # game screen cursor (index into its candidate rows)
         self.ctop = 0
+        self.pi = 0  # pack view cursor (index into its game rows)
+        self.ptop = 0
         self.text_lines: list[str] = []
         self.text_from = "games"
         self.text_off = 0  # lines up from the end (log) or down from the top (others)
         self.text_kind = ""
         self.confirm_quit = False
         self.quit = False
+        self.utf8 = "UTF-8" in locale.getpreferredencoding(False).upper().replace("UTF8", "UTF-8")
+        self.dash = "—" if self.utf8 else "-"
         with contextlib.suppress(curses.error):
             curses.curs_set(0)
         scr.timeout(200)
         scr.keypad(True)
-        self.attr = {"dim": curses.A_DIM, "bold": curses.A_BOLD, "rev": curses.A_REVERSE, "mark": curses.A_BOLD,
-                     "warn": curses.A_BOLD}
-        if curses.has_colors():
-            with contextlib.suppress(curses.error):
+        self.attr = self.attrs(curses, color_wanted(os.environ, curses.has_colors()))
+
+    @staticmethod
+    def attrs(curses, colors: bool) -> dict[str, int]:
+        B, D, R = curses.A_BOLD, curses.A_DIM, curses.A_REVERSE
+        a = {"dim": D, "bold": B, "rev": R, "sel": R | B, "title": B, "name": B, "head": B, "key": B,
+             "chosen": B, "ai": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
+             "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B}
+        a.update({f"p{n}": B for n in range(1, PACKS_MAX + 1)})
+        if not colors:
+            return a
+        try:
+            try:
                 curses.use_default_colors()
-                curses.init_pair(1, curses.COLOR_GREEN, -1)
-                curses.init_pair(2, curses.COLOR_YELLOW, -1)
-                self.attr["mark"] = curses.color_pair(1) | curses.A_BOLD
-                self.attr["warn"] = curses.color_pair(2) | curses.A_BOLD
+                bg = -1
+            except curses.error:
+                bg = curses.COLOR_BLACK
+            names = ("GREEN", "YELLOW", "RED", "MAGENTA", "CYAN", "BLUE")
+            for i, n in enumerate(names, 1):
+                curses.init_pair(i, getattr(curses, f"COLOR_{n}"), bg)
+            g, y, r, m, c, b = (curses.color_pair(i) for i in range(1, len(names) + 1))
+        except curses.error:
+            return a
+        a.update({"chosen": g | B, "ai": m | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
+                  "cached": g | D, "warn": y | B, "bar_run": y | R, "bar_ok": g | R, "bar_err": r | R})
+        cycle = (c, m, y, g, b)
+        a.update({f"p{n}": cycle[(n - 1) % len(cycle)] | B for n in range(1, PACKS_MAX + 1)})
+        return a
 
     # -- drawing
 
-    def put(self, y: int, x: int, s: str, attr: int = 0) -> None:
+    def put(self, y: int, x: int, s: str, attr: int = 0) -> int:
+        """Writes s at (y, x), cut at the edge; returns the column after it."""
         h, w = self.scr.getmaxyx()
         if y < 0 or y >= h or x >= w or x < 0:
-            return
+            return x + len(s)
         room = w - x - (1 if y == h - 1 else 0)
         if room <= 0:
-            return
+            return x + len(s)
         with contextlib.suppress(self.c.error):
             self.scr.addstr(y, x, s.replace("\t", " ")[:room], attr)
+        return x + len(s)
+
+    def put_help(self, y: int, text: str) -> None:
+        """A key line: each key bold, what it does dim."""
+        x = 0
+        for seg in text.split("  "):
+            key, _, what = seg.partition(" ")
+            x = self.put(y, x, key, self.attr["key"])
+            x = self.put(y, x, " " + what + "  " if what else "  ", self.attr["dim"])
 
     def draw(self) -> None:
         self.scr.erase()
@@ -1823,59 +2472,149 @@ class UI:
             self.put(0, 0, "too small")
             self.scr.refresh()
             return
-        getattr(self, f"draw_{'text' if self.screen == 'text' else self.screen}")(h, w)
+        getattr(self, f"draw_{self.screen}")(h, w)
         self.draw_status(h, w)
         self.scr.refresh()
 
     def draw_status(self, h: int, w: int) -> None:
-        r = self.st.runner
+        r, st = self.st.runner, self.st
         if self.confirm_quit:
-            msg = "jobs are running: quit and stop them? (y/n)"
+            msg, a = "jobs are running: quit and stop them? (y/n)", self.attr["bar_err"]
         elif r.current is not None:
             j = r.current
             msg = f"[{j.title}] " + (f"+{r.waiting()} waiting  " if r.waiting() else "") + (j.progress or r.last_line)
-        elif time.monotonic() - self.st.flash_at < 8 and self.st.flash_msg:
-            msg = self.st.flash_msg
+            a = self.attr["bar_run"]
+        elif time.monotonic() - st.flash_at < 8 and st.flash_msg:
+            msg = st.flash_msg
+            a = self.attr[{"ok": "bar_ok", "err": "bar_err"}.get(st.flash_kind, "bar")]
         else:
-            msg = "idle" + (f"  {self.st.flash_msg}" if self.st.flash_msg else "")
-        self.put(h - 1, 0, msg.ljust(w), self.attr["rev"])
+            msg, a = "idle" + (f"  {st.flash_msg}" if st.flash_msg else ""), self.attr["bar"]
+        self.put(h - 1, 0, msg.ljust(w), a)
+
+    def pack_tag(self, gid: str | None) -> tuple[str, int]:
+        n = self.st.packs.get(gid) if gid else None
+        return (f"P{n}", self.attr[f"p{n}"]) if n else ("-" if not self.utf8 else "—", self.attr["dim"])
+
+    def columns(self, w: int) -> tuple[int, int]:
+        """The name's and how's widths on the games list (how goes on a narrow screen)."""
+        how = 12 if w >= 72 else 0
+        return min(28, max(8, w - 40 - how)), how
+
+    def draw_panel(self, y: int, h: int, w: int) -> int:
+        """The packs panel from line y (at most a third of the screen); returns the next line."""
+        st, p = self.st, self.st.plan
+        lines = pack_lines(p, st.packs, width=max(4, min(20, w - 50)), utf8=self.utf8)
+        cap = max(1, (h - 6) // 3)
+        if len(lines) > cap:
+            more = len(lines) - cap
+            lines = lines[:cap - 1] + [(0, f"+{more} more (p: the packs)", False)]
+        note = st.sizes_note()
+        for n, ln, over in lines:
+            if over:
+                self.put(y, 0, ln, self.attr["err"])
+            elif n:
+                x = self.put(y, 0, f"P{n}", self.attr[f"p{n}"])
+                self.put(y, x, ln[len(f"P{n}"):])
+            else:
+                x = self.put(y, 0, ln, self.attr["dim"])
+                if note:
+                    self.put(y, x + 2, note, self.attr["warn"])
+                    note = ""
+            y += 1
+        return y
 
     def draw_games(self, h: int, w: int) -> None:
         st, p = self.st, self.st.plan
-        head = f"pack-studio  {st.folder.name}"
+        x = self.put(0, 0, "pack-studio", self.attr["title"])
+        head = f"  {st.folder.name}"
         if p:
-            n = len(split_packs([(g.id, g.packed) for g in p.packed()], p.room, p.overhead()))
+            fill = st.assigned()
+            n = len(fill) if fill else len(split_packs([(g.id, g.packed) for g in p.packed()], p.room, p.overhead()))
             head += f"  {len(p.games)} games, {kb(p.used)}, room {kb(p.room)}: {n} pack{'s' if n != 1 else ''}"
         head += f"  ->  {st.w}"
-        self.put(0, 0, head, self.attr["bold"])
-        self.put(1, 0, "methods: F FM (always)  A AI  S SID  Y AY; a capital: marked", self.attr["dim"])
-        self.put(h - 2, 0, HELP_GAMES, self.attr["dim"])
+        self.put(0, x, head, self.attr["bold"])
+        live = st.live
+        lh = live.header(dash=self.dash) if live else ""
+        if live and not lh and live.phase == "start":
+            cur = st.runner.current
+            lh = f"waiting for {cur.title}, then the learning" if cur and cur.on_line is None else "learning the games: starting"
+        if lh:
+            self.put(1, 0, lh, self.attr["err"] if live.phase == "failed" else self.attr["warn"])
+        else:
+            x = self.put(1, 0, "methods: F FM (always) ", self.attr["dim"])
+            for letter, what, k in (("A", "AI", "ai"), ("S", "SID", "sid"), ("Y", "AY", "ay")):
+                x = self.put(1, x + 1, letter, self.attr[k])
+                x = self.put(1, x, f" {what}", self.attr["dim"])
+            self.put(1, x, "; a capital: marked", self.attr["dim"])
         if not p:
-            self.put(3, 2, "learning the games... (the list appears when the plan is ready; l shows the log)")
-            return
-        rows = h - 5
+            self.put_help(h - 2, HELP_LIVE)
+            return self.draw_live(h, w)
+        self.put_help(h - 2, HELP_GAMES)
+        top = self.draw_panel(2, h, w) + 1 if h >= 12 else 3
+        rows = h - 2 - top
         if rows <= 0:
             return
         self.gi = max(0, min(self.gi, len(p.games) - 1))
         self.gtop = min(max(self.gtop, self.gi - rows + 1), self.gi)
         self.gtop = max(0, self.gtop)
+        nw, hw = self.columns(w)
+        over_packs = {n for n, _ in packs_over(p, st.packs)}
         for k, g in enumerate(p.games[self.gtop:self.gtop + rows]):
             i = self.gtop + k
-            y = 3 + k
+            y = top + k
             sel = i == self.gi
-            base = self.attr["dim"] if g.left_out else 0
-            if sel:
-                base |= self.attr["rev"]
-            line = f"{'>' if sel else ' '} {g.name[:28]:<28} {g.how[:12]:<12} {kb(g.packed):>9}  "
-            self.put(y, 0, line.ljust(w), base)
-            x = len(line)
+            rv = self.attr["sel"] if sel else 0
+            base = (self.attr["dim"] if g.left_out else 0) | rv
+            self.put(y, 0, " " * w, rv)
+            x = self.put(y, 0, "> " if sel else "  ", base)
+            x = self.put(y, x, f"{g.name[:nw]:<{nw}}", (self.attr["dim"] if g.left_out else self.attr["name"]) | rv)
+            if hw:
+                x = self.put(y, x, f" {g.how[:hw]:<{hw}}", base)
+            x = self.put(y, x, f" {kb(g.packed):>9} ", base)
+            tag, ta = self.pack_tag(None if g.left_out else g.id)
+            over = not g.left_out and st.packs.get(g.id) in over_packs
+            x = self.put(y, x, f"{tag:<2}", (self.attr["err"] if over else ta) | rv)
+            x += 1
             ms = st.marked(g.id)
-            for letter, on, can in (("F", True, not g.left_out), ("A", "ai" in ms, g.can_arrange),
-                                    ("S", "sid" in ms, g.can_arrange), ("Y", "ay" in ms, g.can_arrange)):
-                a = (self.attr["mark"] if on and can else self.attr["dim"]) | (self.attr["rev"] if sel else 0)
-                self.put(y, x, letter if on and can else letter.lower(), a)
-                x += 2
-            self.put(y, x + 1, st.choice_summary(g) + ("" if g.left_out or not g.scores else f"   {g.music}"), base)
+            for letter, m in (("F", None), ("A", "ai"), ("S", "sid"), ("Y", "ay")):
+                on = (not g.left_out) if m is None else (m in ms and g.can_arrange)
+                a = (self.attr[m] if m and on else 0 if on else self.attr["dim"]) | rv
+                x = self.put(y, x + 1, letter if on else letter.lower(), a)
+            summary = st.choice_summary(g)
+            x = self.put(y, x + 2, summary, base)
+            if not g.left_out and g.scores:
+                self.put(y, x + 3, g.music, self.attr["dim"] | rv)
+
+    def draw_live(self, h: int, w: int) -> None:
+        """The list while the learning runs: each game's state."""
+        rows = self.st.refresh_live()
+        if not rows:
+            self.put(3, 2, "learning the games... (the list appears when the games file is written; l shows the log)")
+            return
+        avail = h - 5
+        if avail <= 0:
+            return
+        self.gi = max(0, min(self.gi, len(rows) - 1))
+        self.gtop = max(0, min(max(self.gtop, self.gi - avail + 1), self.gi))
+        nw, hw = self.columns(w)
+        now = time.monotonic()
+        for k, r in enumerate(rows[self.gtop:self.gtop + avail]):
+            y = 3 + k
+            sel = self.gtop + k == self.gi
+            rv = self.attr["sel"] if sel else 0
+            text, kind = live_state(r, now)
+            out = kind == "out"
+            self.put(y, 0, " " * w, rv)
+            x = self.put(y, 0, "> " if sel else "  ", rv)
+            x = self.put(y, x, f"{r.name[:nw]:<{nw}}", (self.attr["dim"] if out else self.attr["name"]) | rv)
+            if hw:
+                x = self.put(y, x, f" {('' if out else r.how)[:hw]:<{hw}}", (self.attr["dim"] if out else 0) | rv)
+            x = self.put(y, x, f" {('~' + kb(r.size)) if r.size else '':>10} ", self.attr["dim"] | rv)
+            tag, ta = self.pack_tag(r.gid) if self.st.packs.get(r.gid or "") else ("", 0)
+            x = self.put(y, x, f"{tag:<2} ", ta | rv)
+            a = {"run": self.attr["run"], "ok": self.attr["ok"], "cached": self.attr["cached"],
+                 "out": self.attr["dim"], "waiting": self.attr["dim"]}[kind]
+            self.put(y, x + 1, text, a | rv)
 
     def game_rows(self) -> list[tuple[str, Score | None, str, Candidate | None]]:
         """("head", score, key, None) and ("cand", score, key, candidate) rows."""
@@ -1892,16 +2631,21 @@ class UI:
         if st.plan and st.plan.game(self.game.id):
             self.game = st.plan.game(self.game.id)  # the plan read again
         g = self.game
-        self.put(0, 0, f"{g.name}  ({g.id})  {g.how}  {kb(g.packed)}", self.attr["bold"])
-        self.put(1, 0, g.music)
+        x = self.put(0, 0, g.name, self.attr["title"])
+        x = self.put(0, x, f"  ({g.id})  {g.how}  {kb(g.packed)}  ")
+        tag, ta = self.pack_tag(g.id)
+        self.put(0, x, f"pack {tag}" if st.packs.get(g.id) else "in no pack", ta)
+        self.put(1, 0, g.music, self.attr["dim"])
         ms = st.marked(g.id)
         if g.can_arrange:
-            ml = (f"methods: F FM (always)   A AI {'[x]' if 'ai' in ms else '[ ]'}   "
-                  f"S SID {'[x]' if 'sid' in ms else '[ ]'}   Y AY {'[x]' if 'ay' in ms else '[ ]'}")
+            x = self.put(2, 0, "methods: F FM (always)", self.attr["dim"])
+            for letter, what, k in (("A", "AI", "ai"), ("S", "SID", "sid"), ("Y", "AY", "ay")):
+                on = k in ms
+                x = self.put(2, x + 3, f"{letter} {what} ", self.attr["dim"])
+                x = self.put(2, x, "[x]" if on else "[ ]", self.attr[k] if on else self.attr["dim"])
         else:
-            ml = f"{g.plays()}: no score, so no AI, SID or AY; listen to the whole game below"
-        self.put(2, 0, ml, self.attr["dim"] if not g.can_arrange else 0)
-        self.put(h - 2, 0, HELP_GAME, self.attr["dim"])
+            self.put(2, 0, f"{g.plays()}: no score, so no AI, SID or AY; listen to the whole game below", self.attr["dim"])
+        self.put_help(h - 2, HELP_GAME)
         rows = self.game_rows()
         cands = [i for i, r in enumerate(rows) if r[0] == "cand"]
         if not cands:
@@ -1920,26 +2664,84 @@ class UI:
             y = 4 + k
             if kind == "head":
                 if s is None:
-                    self.put(y, 0, "the whole game (nothing to choose; to listen)", self.attr["bold"])
+                    self.put(y, 0, "the whole game (nothing to choose; to listen)", self.attr["head"])
                 else:
-                    self.put(y, 0, f"score {s.key}  {s.seconds:.1f} s{'  shadow: replaces the live version when chosen' if s.shadow else ''}"
-                             f"   plan: {s.status or '-'}", self.attr["bold"])
+                    x = self.put(y, 0, f"score {s.key}  {s.seconds:.1f} s{'  shadow: replaces the live version when chosen' if s.shadow else ''}",
+                                 self.attr["head"])
+                    status = s.status or "-"
+                    x = self.put(y, x, "   plan: ", self.attr["dim"])
+                    self.put(y, x, status, self.attr["err"] if status.startswith("refused") else 0)
                 continue
             sel = self.ctop + k == sel_row
             chosen = s is not None and c.choice is not None and ch.get(f"{g.id}/{s.key}", 0) == c.choice
             state = st.state_of(g, key, c)
             if s is not None and f"{g.id}/{s.key}" in st.choosing and c.choice is not None:
                 state = "choosing..."
-            a = self.attr["rev"] if sel else 0
-            self.put(y, 0, (f"{'>' if sel else ' '} {'*' if chosen else ' '} {c.label[:26]:<26} ").ljust(w), a)
+            rv = self.attr["sel"] if sel else 0
+            unavailable = state.startswith(("nothing to play", "no "))
+            self.put(y, 0, " " * w, rv)
+            x = self.put(y, 0, "> " if sel else "  ", rv)
+            x = self.put(y, x, "* " if chosen else "  ", (self.attr["chosen"] if chosen else 0) | rv)
+            la = self.attr["chosen"] if chosen else self.attr["dim"] if unavailable else 0
+            self.put(y, x, f"{c.label[:26]:<26} ", la | rv)
             x = 32
             if state:
-                st_attr = self.attr["warn"] if state in ("playing", "rendering...", "choosing...") else self.attr["dim"]
-                self.put(y, x, f"[{state}] ", st_attr | a)
+                sa = (self.attr["warn"] if state in ("playing", "rendering...", "choosing...")
+                      else self.attr["err"] if state.startswith("render failed") else self.attr["dim"])
+                self.put(y, x, f"[{state}] ", sa | rv)
                 x += len(state) + 3
-            self.put(y, x, c.info, (self.attr["dim"] if not sel else 0) | a)
-            if chosen:
-                self.put(y, 2, "*", self.attr["mark"] | a)
+            self.put(y, x, c.info, (self.attr["dim"] if not sel else 0) | rv)
+
+    def pack_rows(self) -> list[tuple[str, int, Game | None]]:
+        """The pack view's rows: ("head", pack, None) and ("game", pack, game); pack 0: in none."""
+        p, st = self.st.plan, self.st
+        rows = []
+        for n, gs in pack_fill(p, st.packs).items():
+            rows.append(("head", n, None))
+            rows += [("game", n, g) for g in gs]
+        rows.append(("head", 0, None))
+        rows += [("game", 0, g) for g in unassigned(p, st.packs)]
+        return rows
+
+    def draw_packs(self, h: int, w: int) -> None:
+        st, p = self.st, self.st.plan
+        self.put(0, 0, "the packs", self.attr["title"])
+        self.put(0, 11, f"  room {kb(p.room)}, a pack holds {kb(fill_limit(p))} of games  {st.sizes_note()}", self.attr["dim"])
+        self.put_help(h - 2, HELP_PACKS)
+        rows = self.pack_rows()
+        games = [i for i, r in enumerate(rows) if r[0] == "game"]
+        avail = h - 4
+        if avail <= 0:
+            return
+        if not games:
+            self.put(2, 2, "no packed game", self.attr["dim"])
+            return
+        self.pi = max(0, min(self.pi, len(games) - 1))
+        sel_row = games[self.pi]
+        if sel_row - 1 < self.ptop:
+            self.ptop = max(0, sel_row - 1)
+        if sel_row >= self.ptop + avail:
+            self.ptop = sel_row - avail + 1
+        lines = {n: (ln, over) for n, ln, over in pack_lines(p, st.packs, width=max(4, min(20, w - 50)), utf8=self.utf8)}
+        nw = min(28, max(8, w - 20))
+        for k, (kind, n, g) in enumerate(rows[self.ptop:self.ptop + avail]):
+            y = 2 + k
+            if kind == "head":
+                ln, over = lines.get(n, (f"P{n}", False))
+                if over:
+                    self.put(y, 0, ln, self.attr["err"])
+                elif n:
+                    x = self.put(y, 0, f"P{n}", self.attr[f"p{n}"])
+                    self.put(y, x, ln[len(f"P{n}"):], self.attr["head"])
+                else:
+                    self.put(y, 0, ln if ln.startswith("in no pack") else "in no pack", self.attr["head"])
+                continue
+            sel = self.ptop + k == sel_row
+            rv = self.attr["sel"] if sel else 0
+            self.put(y, 0, " " * w, rv)
+            x = self.put(y, 0, "  > " if sel else "    ", rv)
+            x = self.put(y, x, f"{g.name[:nw]:<{nw}}", self.attr["name"] | rv)
+            self.put(y, x, f" {kb(g.packed):>9}", rv)
 
     def open_text(self, kind: str) -> None:
         self.text_from = self.screen if self.screen != "text" else self.text_from
@@ -1961,11 +2763,25 @@ class UI:
             return self.st.summary or ["(no build yet)"]
         return (__doc__ or "").splitlines()
 
+    def line_attr(self, ln: str) -> int:
+        if self.text_kind == "help":
+            return 0
+        low = ln.lower()
+        if "failed" in low or "error" in low or "refused" in low:
+            return self.attr["err"]
+        if ln.startswith("== "):
+            return self.attr["ok"] if ln.endswith(": done") else self.attr["bold"]
+        if ln.startswith(("built ", "reused ")):
+            return self.attr["ok"]
+        if ln.startswith(("not built", "in no pack", "left out")):
+            return self.attr["warn"]
+        return 0
+
     def draw_text(self, h: int, w: int) -> None:
         lines = self.text_content()
         title = {"log": f"log: {self.st.runner.log_path}", "summary": "the build", "help": "help"}[self.text_kind]
-        self.put(0, 0, title, self.attr["bold"])
-        self.put(h - 2, 0, HELP_TEXT, self.attr["dim"])
+        self.put(0, 0, title, self.attr["title"])
+        self.put_help(h - 2, HELP_TEXT)
         rows = h - 3
         if rows <= 0:
             return
@@ -1973,7 +2789,7 @@ class UI:
         self.text_off = max(0, min(self.text_off, span))
         top = span - self.text_off if self.text_kind == "log" else self.text_off
         for k, ln in enumerate(lines[top:top + rows]):
-            self.put(1 + k, 0, ln)
+            self.put(1 + k, 0, ln, self.line_attr(ln))
 
     # -- keys
 
@@ -2012,6 +2828,17 @@ class UI:
             i = n - 1
         return max(0, min(i, n - 1))
 
+    def moves(self, ch: int) -> bool:
+        c = self.c
+        return ch in (c.KEY_DOWN, c.KEY_UP, c.KEY_NPAGE, c.KEY_PPAGE, c.KEY_HOME, c.KEY_END, ord("j"), ord("k"))
+
+    @staticmethod
+    def pack_key(ch: int) -> int | None:
+        """1-9: that pack; 0 or x: none."""
+        if ord("1") <= ch <= ord("9"):
+            return ch - ord("0")
+        return 0 if ch in (ord("0"), ord("x")) else None
+
     def key_games(self, ch: int) -> None:
         st, p, c = self.st, self.st.plan, self.c
         h, _ = self.scr.getmaxyx()
@@ -2022,6 +2849,20 @@ class UI:
             self.open_text("log")
         elif ch == ord("?"):
             self.open_text("help")
+        elif not p:
+            rows = st.refresh_live()
+            if self.moves(ch) and rows:
+                self.gi = self.move(ch, self.gi, len(rows), max(1, h - 6))
+            elif self.pack_key(ch) is not None and rows and self.gi < len(rows):
+                r = rows[self.gi]
+                if r.gid:
+                    st.assign(r.gid, self.pack_key(ch))
+                else:
+                    st.flash(f"{r.name}: not in the games file yet", "err")
+            elif ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
+                st.flash("still learning: the games open when the plan is ready")
+            elif ch in (ord("r"), ord("b"), ord("g"), ord("f"), ord("p"), ord("A"), ord("S"), ord("Y"), ord("a"), ord("s"), ord("y")):
+                st.flash("still learning: wait for the plan", "err")
         elif ch == ord("r"):
             st.relearn()
         elif ch == ord("b"):
@@ -2034,10 +2875,16 @@ class UI:
             st.toggle_all("ay")
         elif ch == ord("g"):
             st.generate()
+        elif ch == ord("f"):
+            st.fill()
+        elif ch == ord("p"):
+            self.screen, self.pi, self.ptop = "packs", 0, 0
         elif not g:
             return
-        elif ch in (c.KEY_DOWN, c.KEY_UP, c.KEY_NPAGE, c.KEY_PPAGE, c.KEY_HOME, c.KEY_END, ord("j"), ord("k")):
+        elif self.moves(ch):
             self.gi = self.move(ch, self.gi, len(p.games), max(1, h - 6))
+        elif self.pack_key(ch) is not None:
+            st.assign(g.id, self.pack_key(ch))
         elif ch == ord("a"):
             st.toggle(g.id, "ai")
         elif ch == ord("s"):
@@ -2049,6 +2896,36 @@ class UI:
                 st.flash(f"{g.name}: left out ({g.reason or g.how})")
             else:
                 self.game, self.ci, self.ctop, self.screen = g, 0, 0, "game"
+
+    def key_packs(self, ch: int) -> None:
+        st, c = self.st, self.c
+        if not st.plan:
+            self.screen = "games"
+            return
+        h, _ = self.scr.getmaxyx()
+        rows = self.pack_rows()
+        games = [r[2] for r in rows if r[0] == "game"]
+        g = games[self.pi] if games and self.pi < len(games) else None
+        if ch in (c.KEY_LEFT, ord("h"), ord("p"), 27, c.KEY_BACKSPACE, 127, 8):
+            self.screen = "games"
+        elif ch in (ord("q"), ord("Q")):
+            self.ask_quit()
+        elif ch == ord("l"):
+            self.open_text("log")
+        elif ch == ord("?"):
+            self.open_text("help")
+        elif ch == ord("b"):
+            st.build()
+        elif ch == ord("f"):
+            st.fill()
+        elif self.moves(ch) and games:
+            self.pi = self.move(ch, self.pi, len(games), max(1, h - 6))
+        elif g and self.pack_key(ch) is not None:
+            if st.assign(g.id, self.pack_key(ch)):  # the cursor follows the game
+                moved = [r[2] for r in self.pack_rows() if r[0] == "game"]
+                self.pi = next((i for i, x in enumerate(moved) if x.id == g.id), self.pi)
+        elif g and ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
+            self.game, self.ci, self.ctop, self.screen = g, 0, 0, "game"
 
     def key_game(self, ch: int) -> None:
         st, c, g = self.st, self.c, self.game
@@ -2078,7 +2955,7 @@ class UI:
             st.generate([g.id])
         elif ch == ord("b"):
             st.build()
-        elif ch in (c.KEY_DOWN, c.KEY_UP, c.KEY_NPAGE, c.KEY_PPAGE, c.KEY_HOME, c.KEY_END, ord("j"), ord("k")):
+        elif self.moves(ch):
             self.ci = self.move(ch, self.ci, len(cands), max(1, h - 8))
         elif cur and ch in (10, 13, c.KEY_ENTER):
             st.play(g, cur[2], cur[3])
@@ -2116,6 +2993,8 @@ class UI:
             if st.runner.pump() and st.summary is not None and st.summary is not shown:
                 shown = st.summary
                 self.open_text("summary")
+            if self.screen == "packs" and not st.plan:
+                self.screen = "games"
             st.player.poll()
             self.draw()
             try:
@@ -2143,6 +3022,16 @@ def workspace(folder: Path, out: str | None) -> Path:
             return folder.parent.parent
         return ROOT / "build" / "studio" / folder.stem
     return ROOT / "build" / "studio" / folder.name
+
+
+def parse_assigns(items: list[str]) -> list[tuple[str, int]]:
+    out = []
+    for it in items:
+        gid, eq, n = it.rpartition("=")
+        if not eq or not gid or not n.isdigit() or int(n) > PACKS_MAX:
+            die(f"--assign {it}: give GAME=N, N a pack from 1 to {PACKS_MAX} (0: in none)")
+        out.append((gid, int(n)))
+    return out
 
 
 def parse_methods(text: str) -> list[str]:
@@ -2174,21 +3063,36 @@ def cmd_studio(a: argparse.Namespace) -> int:
     if a.game and not a.generate:
         die("--game goes with --generate")
     methods = parse_methods(a.generate) if a.generate else []
+    assigns = parse_assigns(a.assign or [])
     w = workspace(folder, a.out)
     w.mkdir(parents=True, exist_ok=True)
-    headless = a.status or a.build or bool(a.generate) or a.try_ is not None
-    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build or a.generate))
+    packing = bool(assigns) or a.auto_fill
+    headless = a.status or a.build or bool(a.generate) or a.try_ is not None or packing
+    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build or a.generate), progress=headless)
     st = Studio(folder, w, a, runner)
     if headless:
-        if a.generate or a.build or (a.status and st.plan is None):
+        if a.generate or a.build or packing or (a.status and st.plan is None):
             # the learning first only when a step needs the plan before the build makes it
-            st.startup(learn=st.plan is None and bool(a.generate or not a.build), preview=bool(a.status))
+            st.startup(learn=st.plan is None and bool(a.generate or packing or not a.build), preview=bool(a.status))
             runner.drain()
             start = [j for j in runner.failed if j.chain == "start"]
-            if start and (a.generate or a.build):
+            if start and (a.generate or a.build or packing):
                 die(f"{start[0].title} failed (see the output above; {w / 'studio.log'})")
             if not st.tools.fmzx_pack_given and not os.access(st.tools.fmzx_pack, os.X_OK):
                 die("fmzx-pack did not build (see the output above)")
+        if packing:
+            if st.plan is None:
+                die(f"no plan ({w / 'studio.log'} says why)")
+            for gid, n in assigns:
+                if st.plan.game(gid) is None:
+                    die(f"--assign {gid}={n}: no such game (--status lists the ids)")
+                st.over_ok = None
+                if not st.assign(gid, n):
+                    die(f"--assign {gid}={n}: {st.flash_msg.split('; ')[0]}")
+            if a.auto_fill and st.fill():
+                print(f"{PROG}: {st.flash_msg}", file=sys.stderr)
+            for _, ln, _ in pack_lines(st.plan, st.packs):
+                print(ln)
         if a.generate:
             n0 = len(runner.failed)
             st.generate_headless(methods, a.game or [])
@@ -2230,7 +3134,7 @@ def cmd_studio(a: argparse.Namespace) -> int:
 
 
 FAKE_FMZX_PACK = r'''
-import json, os, sys, tomllib
+import json, os, sys, time, tomllib
 from pathlib import Path
 a = sys.argv[1:]
 with open(LOG, "a") as f:
@@ -2257,6 +3161,26 @@ if "--plan" not in a:
 gf = out / "personal-games.toml"
 if Path(a[1]).is_dir() and not gf.exists():
     gf.write_text(HEADER + ENTRIES)
+# the progress lines, as fmzx-pack personal writes them on stderr (FAKE_SLOW: seconds between)
+slow = float(os.environ.get("FAKE_SLOW", "0"))
+conv = out / "converted"
+conv.mkdir(exist_ok=True)
+def say(s):
+    print(s, file=sys.stderr, flush=True)
+for k, (gid, name) in enumerate((("alpha", "Alpha"), ("gone", "Gone"), ("bravo", "bravo"), ("charlie", "Charlie")), 1):
+    if gid == "gone":
+        say(f"converted {k}/4: {name} (left out: missing: the file is not there)")
+        continue
+    (conv / f"{gid}.tap").write_bytes(bytes(SIZES[gid] + 9000))
+    say(f"converted {k}/4: {name} (tape)")
+say("learning 3 games: 1 from the cache, 2 to learn, 2 at a time")
+say("learned 1/3: Alpha (cached)")
+say("learning: bravo")
+say("learning: Charlie")
+time.sleep(slow)
+say(f"learned 2/3: bravo ({slow + 2:.1f} s)")
+time.sleep(slow)
+say(f"learned 3/3: Charlie ({slow + 3:.1f} s)")
 d = out / "arrange" / "alpha" / "8951-1a2b3c4d"
 d.mkdir(parents=True, exist_ok=True)
 (d / "score.toml").write_text('game = "alpha"\nkey = "8951-1a2b3c4d"\n')
@@ -2459,8 +3383,12 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
             "FMZX_PLAYER": "true",
             "FMZX_HVSC_DIR": str(t / "hvsc"),
             "FMZX_AY_DIR": str(t / "ay"),
+            "FMZX_REUSE_FROM": str(t / "earlier"),
             "FAKE_ROOM": "100000",
         }
+        (t / "earlier" / "old-pack" / "sound-cache").mkdir(parents=True)
+        (t / "earlier" / "old-pack" / "personal-games.toml").write_text("")
+        (t / "earlier" / "old-pack" / "sound-cache" / "0badcafe-9.bin").write_bytes(b"FMZXSND4 earlier")
         os.environ.update(env)
 
         # -- the split
@@ -2498,6 +3426,113 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         w0 = t / "w0"
         save_methods(w0, {"alpha": {"sid", "ai"}, "bravo": set()})
         check(load_methods(w0) == {"alpha": {"ai", "sid"}}, "studio.toml: methods round trip")
+        save_packs(w0, {"alpha": 2, "bravo": 0, "charlie": 9})
+        save_methods(w0, {"alpha": {"ay"}})
+        check(load_packs(w0) == {"alpha": 2, "charlie": 9} and load_methods(w0) == {"alpha": {"ay"}},
+              "studio.toml: the packs round trip, kept when the methods are saved (and the methods when the packs are)")
+
+        # -- the learning's progress: its lines, the list while it runs, the estimate
+        check(parse_progress("learned 13/45: Night Raid (21.4 s)\n") == ("done", "learned", 13, 45, "Night Raid (21.4 s)")
+              and parse_progress("learning 45 games: 27 from the cache, 18 to learn, 8 at a time") == ("plan", 45, 27, 18, 8)
+              and parse_progress("learning: Cat (2)") == ("start", "learning", "Cat (2)")
+              and parse_progress("loaded 2/9: Zed (1984).tzx (loaded (own loader))")[1:4] == ("loaded", 2, 9),
+              "progress: the lines read")
+        check(parse_progress("used 3.4 of 428.2 KB, 424.8 KB free") is None and parse_progress("== 12:00:00 learn") is None
+              and parse_progress("tune: music learned (1 routine)") is None, "progress: other lines are not progress")
+        pf = t / "progress-games"
+        pf.mkdir()
+        for f in ("Zed (1984).tzx", "bee.sna", ".hidden.tap", "notes.txt"):
+            (pf / f).write_bytes(b"x")
+        live = Live(rows_from_folder(pf))
+        check([(r.name, r.base) for r in live.rows] == [("bee", "bee.sna"), ("Zed (1984)", "Zed (1984).tzx")],
+              "live: the folder's game files before the games file is written (hidden and other files not)")
+        live.apply("loading: Zed (1984).tzx", 0)
+        check(live.rows[1].state == "converting" and live.header(0) == "loading the new game files", "live: a file loading")
+        live.apply("loaded 1/2: Zed (1984).tzx (loaded (own loader))", 1)
+        live.apply("loaded 2/2: bee.sna (left out: 128K)", 1)
+        check((live.rows[1].state, live.rows[1].how) == ("converted", "loaded (own loader)") and (live.rows[0].state, live.rows[0].how)
+              == ("left out", "128K") and live.header(1) == "loading the new game files: 2 of 2", "live: loaded and left out, by file name")
+        gtext = "".join(f'[[game]]\nid = "{i}"\nname = "{n}"\nfile = "/g/{f}"\n\n' for i, n, f in
+                        (("zed", "Zed", "Zed (1984).tzx"), ("cat", "Cat", "cat.z80"), ("cat-2", "Cat (2)", "cat2.z80"), ("dog", "Dog", "dog.tap")))
+        live.set_rows(rows_from_games_file(gtext))
+        names = [(r.name, r.state) for r in live.rows]
+        check(names == [("Cat", "waiting"), ("Cat (2)", "waiting"), ("Dog", "waiting"), ("Zed", "converted"), ("bee", "left out")],
+              f"live: the games file's rows, the states kept by file, a file left out kept ({names})")
+        for ln in ("converted 1/4: Cat (as is)", "converted 2/4: Cat (2) (as is)", "converted 3/4: Dog (tape)", "converted 4/4: Zed (loaded)",
+                   "learning 4 games: 1 from the cache, 3 to learn, 2 at a time", "learned 1/4: Zed (cached)", "learning: Cat", "learning: Dog"):
+            live.apply(ln, 0)
+        check(live.header(5) == "learning 1 of 4 games - 3 not learned before: timing the first", f"live: no estimate before one is learned ({live.header(5)})")
+        live.apply("learned 2/4: Cat (20.0 s)", 20)
+        live.apply("learning: Cat (2)", 20)
+        by = {r.name: r for r in live.rows}
+        check(by["Cat"].state == "learned" and by["Cat (2)"].state == "learning" and by["Zed"].state == "cached",
+              "live: the longest name that matches (Cat (2), not Cat)")
+        est = live.estimate(30)
+        check(est is not None and abs(est - 6.0) < 1e-9, f"live: the estimate from the learned games' average, two at a time ({est})")
+        check(live.header(30, "-") == "learning 2 of 4 games - under a minute left", f"live: the header ({live.header(30)})")
+        live.apply("learned 3/4: Dog (600.0 s)", 25)
+        check("about 5 min left" in live.header(25), f"live: minutes left, the one learning counted from its start ({live.header(25)})")
+        check(live_state(by["Cat"], 30) == ("learned (20.0 s)", "ok") and live_state(by["Zed"], 30) == ("learned (cached)", "cached")
+              and live_state(by["bee"], 30) == ("left out: 128K", "out") and live_state(by["Cat (2)"], 95) == ("learning... 1:15", "run"),
+              "live: each row's state and its colour")
+        live.apply("learned 5/5: Newcomer (1.0 s)", 700)
+        check(any(r.name == "Newcomer" and r.state == "learned" for r in live.rows), "live: a game no row has gets one")
+
+        # -- earlier learning: other packs' sound caches copied in, never over what is there
+        e = t / "reuse"
+        ws = e / "studio" / "mine"
+        for d, marker in ((e / "zx-tunes", "personal-games.toml"), (e / "deep" / "x" / "pack", "converted/manifest.toml"),
+                          (e / "stray", None), (ws / "all", "personal-games.toml"), (ws / "old", "personal-games.toml")):
+            (d / "sound-cache").mkdir(parents=True)
+            if marker:
+                (d / marker).parent.mkdir(parents=True, exist_ok=True)
+                (d / marker).write_text("")
+        (e / "zx-tunes" / "sound-cache" / "0000000a-9.bin").write_bytes(b"A")
+        (e / "zx-tunes" / "sound-cache" / "0000000b-9.bin").write_bytes(b"B from zx-tunes")
+        (e / "zx-tunes" / "sound-cache" / "x.tap.tmp").write_bytes(b"half")
+        (e / "zx-tunes" / "sound-cache" / "notes.txt").write_bytes(b"no")
+        (e / "deep" / "x" / "pack" / "sound-cache" / "0000000c-9.bin").write_bytes(b"C")
+        (e / "stray" / "sound-cache" / "0000000d-9.bin").write_bytes(b"D")
+        (ws / "old" / "sound-cache" / "0000000e-9.bin").write_bytes(b"E")
+        (ws / "all" / "sound-cache" / "0000000b-9.bin").write_bytes(b"B mine")
+        (ws / "pack-1").mkdir()
+        (ws / "pack-1" / "sound-cache").symlink_to("../all/sound-cache")
+        (ws / "pack-1" / "personal-games.toml").write_text("")
+        got = reuse_caches(e, ws / "all" / "sound-cache", ws)
+        dest = sorted(p.name for p in (ws / "all" / "sound-cache").iterdir())
+        check(dest == ["0000000a-9.bin", "0000000b-9.bin", "0000000c-9.bin"], f"reuse: the missing cache files copied, nothing else ({dest})")
+        check((ws / "all" / "sound-cache" / "0000000b-9.bin").read_bytes() == b"B mine"
+              and (ws / "all" / "sound-cache" / "0000000a-9.bin").read_bytes() == b"A"
+              and (e / "zx-tunes" / "sound-cache" / "0000000a-9.bin").is_file(), "reuse: never over a file there; copied, not moved")
+        check([(d.name, n) for d, n in got] == [("pack", 1), ("zx-tunes", 1)],
+              f"reuse: per folder, a personal pack's only, the workspace and links not ({[(str(d), n) for d, n in got]})")
+        check(reuse_caches(e, ws / "all" / "sound-cache", ws) == [], "reuse: a second time, nothing")
+
+        # -- colours: NO_COLOR, a terminal without colours
+        check(color_wanted({}, True) and not color_wanted({"NO_COLOR": "1"}, True) and color_wanted({"NO_COLOR": ""}, True)
+              and not color_wanted({}, False), "colours: on, off with NO_COLOR (not empty), off without colours")
+
+        class FakeCurses:
+            A_BOLD, A_DIM, A_REVERSE = 1, 2, 4
+            COLOR_BLACK, COLOR_GREEN, COLOR_YELLOW, COLOR_RED, COLOR_MAGENTA, COLOR_CYAN, COLOR_BLUE = range(7)
+            error = Exception
+
+            def __init__(self):
+                self.pairs = []
+
+            def use_default_colors(self):
+                pass
+
+            def init_pair(self, *a):
+                self.pairs.append(a)
+
+            def color_pair(self, i):
+                return i << 8
+        fc = FakeCurses()
+        plain, colored = UI.attrs(fc, False), UI.attrs(fc, True)
+        check(plain["chosen"] == 1 and plain["sel"] == 5 and plain["cached"] == 2 and colored["chosen"] == (1 << 8) | 1
+              and colored["ai"] != colored["sid"] != colored["ay"] and colored["err"] & 0xff00 == 3 << 8 and len(fc.pairs) == 6
+              and all(p[2] == -1 for p in fc.pairs), "colours: bold/dim/reverse without colour; green chosen, AI/SID/AY apart, red errors")
 
         # -- --status, which learns first (the stand-in fmzx-pack)
         games = t / "My Games"
@@ -2510,6 +3545,9 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
             rc = main([str(games), "-o", str(w), "--status"])
         s = buf.getvalue()
         check(rc == 0 and (w / "all" / "plan.json").is_file(), "--status: learned (plan.json)")
+        check((w / "all" / "sound-cache" / "0badcafe-9.bin").read_bytes() == b"FMZXSND4 earlier"
+              and "reused 1 learned game from" in (w / "studio.log").read_text(),
+              "--status: before the first learning, an earlier pack's learning copied into W/all/sound-cache")
         check("Alpha (alpha)" in s and "score 8951-1a2b3c4d" in s and "FM (from code/memory)" in s
               and "choice: original" in s, "--status: the scored game, its score, FM, its choice")
         check("bravo (bravo)" in s and "nothing to arrange: FM from code" in s, "--status: FM from code without scores")
@@ -2890,6 +3928,75 @@ Attributes = A_ prw-r--r--
               and "not available" not in s, "--status: methods (AY among them), the chosen candidate, the built packs, the AY collection")
         print("\n".join("      " + ln for ln in s.splitlines()[:14]))
 
+        # -- the packs the owner fills: 1-9 and 0, refused over the room unless again, f, the build
+        args = parse_args([str(games), "-o", str(w)])
+        runner = Runner(w / "studio.log", threaded=False)
+        st = Studio(games.resolve(), w, args, runner)
+        save_packs(w, {})
+        st.packs = {}
+        lim = fill_limit(st.plan)
+        check(lim == 100000 * 0.98 - 2000, f"packs: the split's limit, room - 2% - overhead ({lim})")
+        with contextlib.redirect_stderr(io.StringIO()):
+            ok1, ok2 = st.assign("alpha", 2), st.assign("charlie", 2)
+            refused = st.assign("bravo", 2)
+            why, kind = st.flash_msg, st.flash_kind
+            again = st.assign("bravo", 2)
+        check(ok1 and ok2 and not refused and "does not fit in pack 2" in why and kind == "err" and load_packs(w) == {"alpha": 2, "charlie": 2, "bravo": 2}
+              and again, f"packs: a game over the pack's room refused (red), put there when given again ({why})")
+        check(packs_over(st.plan, st.packs) == [(2, 130000 - lim)] and any(over for _, _, over in pack_lines(st.plan, st.packs)),
+              "packs: the pack over its room, the panel says so")
+        with contextlib.redirect_stderr(io.StringIO()):
+            st.build()
+        check(st.build_ok is False and "pack 2 is" in (st.summary or [""])[-1] and "over its room" in st.summary[-1] and not runner.pending,
+              f"build: refused at once with a pack over its room ({(st.summary or [''])[-1]})")
+        with contextlib.redirect_stderr(io.StringIO()):
+            st.assign("bravo", 0)
+        check(load_packs(w) == {"alpha": 2, "charlie": 2}, "packs: 0 takes a game out")
+        lines = [ln for _, ln, _ in pack_lines(st.plan, st.packs)]
+        check(lines[0].startswith("P2   87.9/93.8 KB") and "2 games" in lines[0] and lines[-1] == "in no pack: 1 game, 39.1 KB",
+              f"packs: the panel's lines ({lines})")
+        check(auto_fill(st.plan, {}) == ({"alpha": 1, "bravo": 1, "charlie": 2}, [])
+              and auto_fill(st.plan, st.packs) == ({"alpha": 2, "charlie": 2, "bravo": 1}, []),
+              "packs: f puts each game in no pack in the first pack with room, in name order")
+        os.environ["FAKE_ROOM"] = "100000"
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            st.build()
+            runner.drain()
+        packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w) if is_studio_pack(d)}
+        check(st.build_ok and packs == {2: ["alpha", "charlie"]} and not (w / "pack-1").exists()
+              and any("not built, in no pack: 1 game: bravo" in ln for ln in st.summary),
+              f"build: exactly the packs filled, numbered as filled; the game in no pack not built ({packs})")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--assign", "bravo=1", "--assign", "charlie=0", "--auto-fill"])
+        check(rc == 0 and load_packs(w) == {"alpha": 2, "bravo": 1, "charlie": 2} and "P1 " in buf.getvalue() and "P2 " in buf.getvalue(),
+              f"--assign GAME=N, 0 for none, then --auto-fill; the packs printed ({load_packs(w)})")
+        for bad, why in ((["--assign", "charlie=1"], "a pack over its room"), (["--assign", "nobody=1"], "an unknown game"),
+                         (["--assign", "alpha=10"], "a pack beyond 9"), (["--assign", "alpha"], "no =N")):
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = main([str(games), "-o", str(w)] + bad)
+            except SystemExit as e:
+                rc = e.code
+            check(rc not in (0, None) and load_packs(w) == {"alpha": 2, "bravo": 1, "charlie": 2}, f"--assign: {why} fails, nothing changed")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            main([str(games), "-o", str(w), "--status"])
+        s = buf.getvalue()
+        check("methods: FM AI SID AY  pack: P2" in s and "a build makes 2 packs (the packs filled)" in s and "  P1 " in s
+              and "  pack 1: bravo" in s and "  pack 2: Alpha, Charlie" in s, "--status: each game's pack, the packs' fill, what a build makes")
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--build"])
+        packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w) if is_studio_pack(d)}
+        check(rc == 0 and packs == {1: ["bravo"], 2: ["alpha", "charlie"]}, f"--build: the packs filled ({packs})")
+        os.environ["FAKE_ROOM"] = "50000"
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--build"])
+        os.environ["FAKE_ROOM"] = "100000"
+        packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w) if is_studio_pack(d)}
+        check(rc == 1 and packs == {1: ["bravo"], 2: ["alpha", "charlie"]},
+              "build: a pack filled that does not fit fails, no game moved to another pack")
+
         # -- the screen, in a pseudo-terminal: keys, a resize down to 3x10, quit
         import fcntl
         import pty
@@ -2941,6 +4048,44 @@ Attributes = A_ prw-r--r--
               "screen: drew the games, printed the workspace when it closed")
         check(choice_label(read_choices(w / "all").get("alpha/8951-1a2b3c4d")) in ("take-1", "chip-1", "ay-1", "original"),
               "screen: c chose through pick --set")
+        check("P1" in text_out and "P2" in text_out and "in no pack" in text_out or "no game put in a pack" in text_out,
+              "screen: the packs panel")
+
+        # -- the screen while learning (a slow stand-in), with colours and with NO_COLOR
+        def learn_screen(wd: Path, extra: dict) -> tuple[str, int | None, str]:
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.environ.update({"TERM": "xterm-256color", "FAKE_SLOW": "1.5", **extra})
+                try:
+                    os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), str(games), "-o", str(wd)])
+                finally:
+                    os._exit(127)
+            size(fd, 24, 80)
+            os.kill(pid, signal.SIGWINCH)
+            mid, status = _wait_pty(fd, pid, 1.0)
+            out, status = _wait_pty(fd, pid, 3.5)
+            os.write(fd, b"q")
+            o, status = _wait_pty(fd, pid, 1.0)
+            out += o
+            if status is None:
+                os.write(fd, b"y")
+                o, status = _wait_pty(fd, pid, 5.0)
+                out += o
+            if status is None:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            os.close(fd)
+            return mid.decode("utf-8", "replace"), status, out.decode("utf-8", "replace")
+        mid, status, after = learn_screen(t / "w-live", {})
+        check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in mid + after,
+              "screen while learning: exit 0" + ("" if "Traceback" not in mid + after else ": " + (mid + after)[(mid + after).find("Traceback"):][:600]))
+        check("learning 1 of 3 games" in mid and "learned (cached)" in mid and "learning..." in mid and "left out: missing" in mid
+              and "~" in mid, "screen while learning: the list at once, each game's state, the header, approximate sizes")
+        check(re.search(r"\x1b\[3[1-6]m", mid) is not None and "learned" in after and "P1" in after or "no game put in a pack" in after,
+              "screen while learning: in colour; the games list when the plan is there")
+        mid_nc, status, _ = learn_screen(t / "w-live-nc", {"NO_COLOR": "1"})
+        check(status is not None and "learned (cached)" in mid_nc and re.search(r"\x1b\[(3[0-7]|38;5;[0-9]+)m", mid_nc) is None,
+              "screen with NO_COLOR: no colour, bold and reverse only")
 
     if failures:
         print(f"{PROG} selftest: {len(failures)} failed: " + "; ".join(failures))
@@ -2961,6 +4106,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--model", metavar="NAME", help="the generator for AI takes (tools/arrange-music generate --model)")
     ap.add_argument("--generate", metavar="METHODS", help="without the screen: mark and generate ai, sid, ay (comma-separated)")
     ap.add_argument("--game", metavar="ID", action="append", help="with --generate: only this game (again for more)")
+    ap.add_argument("--assign", metavar="GAME=N", action="append",
+                    help="without the screen: put the game in pack N (1 to 9; 0: in none); again for more")
+    ap.add_argument("--auto-fill", action="store_true",
+                    help="without the screen: put every game in no pack in the first pack with room")
     ap.add_argument("--build", action="store_true", help="build the packs without the screen")
     ap.add_argument("--status", action="store_true", help="print the games, methods, scores, candidates and choices")
     ap.add_argument("--try", dest="try_", metavar="N", type=int, nargs="?", const=1,

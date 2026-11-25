@@ -155,6 +155,7 @@ own custom domain, `dev-gh.nisdom.com`, whose DNS name points at `okulik.github.
     tools/pack-studio ~/games --build --try      # then the browser test bench with pack 1 (--try 2: pack 2)
     tools/pack-studio ~/games --status           # the games, their music and choices, as text
     tools/pack-studio ~/games --generate ai,sid,ay [--game ID]...   # takes for the scores, without the screen
+    tools/pack-studio ~/games --assign ID=2 --auto-fill --build      # games put in packs, then the packs
     tools/pack-studio build/studio/games/all/personal-games.toml --build   # from the games file, as written
 
 builds update packages with the games of a folder of yours instead of the built-in pack: as many
@@ -169,7 +170,16 @@ nothing else of its own: `tools/pack-studio` runs it through [uv](https://docs.a
 
 It learns every game (`fmzx-pack personal <folder> -o W/all ... --plan`, which measures every
 game even when they are too many for one pack) and lists each game with how it went in, its
-packed size and its music. Per game, mark one or more ways to make the music of its scores:
+packed size and its music. A first learning takes minutes (three minutes of play per game,
+emulated, several games at a time): the games list is there from the start, each game waiting,
+converting, learning, learned (with its time, or from the cache) or left out, as
+`fmzx-pack personal` reports them on stderr, under a line such as `learning 12 of 45 games — about
+4 min left`; the games open when the learning is done (`--status` and `--build` print the same
+lines as they come). Before a workspace's first learning, the learned music of other personal packs
+under `build/` (each `sound-cache/` beside a `personal-games.toml` or `converted/manifest.toml`) is
+copied into `W/all/sound-cache/` where that lacks it: a cache file names its game by content (the
+converted file's CRC, its key script and overrides, the learner's version), so those games are not
+learned again (`reused 27 learned games from build/zx-tunes` in the log). Per game, mark one or more ways to make the music of its scores:
 **FM**, the FM-1 playing the music learned from the game's code and memory (always there: the
 original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music generate`; **SID**,
 the game's C64 tune, and **AY**, its Spectrum 128 tune ([music from other
@@ -180,27 +190,45 @@ and choose one. What plays is `music-preview`'s render of what the FM-1 plays or
 not built, the renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay`
 or `aplay`.
 
-Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `a`/`s`/`y` mark
-AI/SID/AY for it, `A`/`S`/`Y` for every game, `g` generates what is marked, `r` learns again, `b`
-builds, `l` shows the log, `?` the full help, `q` quits. On a game: Enter plays, space or Esc
-stops, `c` chooses, `a`/`s`/`y`/`g` as before, Left, `h` or Backspace goes back. Long steps run one at a time in the
-background; the bottom line shows the step, how many wait and its last output line.
+Which games go in which pack is yours to choose before a build: `1` to `9` put the game in that
+pack, `0` (or `x`) in none, `f` puts every game in no pack in the first pack with room for it (in
+name order). The games list shows each game's pack (`P1`, a colour per pack, `—` for none) and its
+packed size with its chosen music; a panel above it shows each pack's fill, `P1 312.4/416.7 KB`
+and a bar against what a pack holds (the room less 2% and the pack's own overhead, as the build
+splits), and the games in no pack. A game that would take its pack over is refused until you press
+the same key again; that pack then shows red and no build starts. `p` lists the packs and their
+games, where the same keys move a game. Sizes are the last learning's: after choosing a take the
+panel says so, and `r` measures again.
 
-Without the screen: `--generate` marks the methods named for every game with scores (or for the
-games `--game` names, by the ids `--status` shows) and runs the jobs `g` runs; choosing a take
-stays a choice by ear (the screen, or `tools/arrange-music pick W/all`). `--build` builds, `--status`
-prints, `--try [N]` serves pack N (1 unless given) in the browser test bench; given together they
-run in that order (generate, build, status, try), and a step that fails stops the command.
+Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `1`-`9`/`0` as above, `f`
+fills, `p` the packs, `a`/`s`/`y` mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g`
+generates what is marked, `r` learns again, `b` builds, `l` shows the log, `?` the full help, `q`
+quits. On a game: Enter plays, space or Esc stops, `c` chooses, `a`/`s`/`y`/`g` as before, Left,
+`h` or Backspace goes back. Long steps run one at a time in the background; the bottom line shows
+the step (yellow while it runs, then green when done or red when it failed), how many wait and its
+last output line. The screen is in colour (`NO_COLOR` set: bold and reverse only).
+
+Without the screen: `--assign ID=N` (again for more) puts a game in pack N (0: in none; a pack it
+would take over refuses it) and `--auto-fill` fills the packs as `f` does; `--generate` marks the
+methods named for every game with scores (or for the games `--game` names, by the ids `--status`
+shows) and runs the jobs `g` runs; choosing a take stays a choice by ear (the screen, or
+`tools/arrange-music pick W/all`). `--build` builds, `--status` prints (each game's pack and the
+packs' fill among the rest), `--try [N]` serves pack N (1 unless given) in the browser test bench;
+given together they run in that order (assign, auto-fill, generate, build, status, try), and a step
+that fails stops the command.
 
 The workspace: `all/` the learning (`personal-games.toml`, which keeps your edits, the scores,
-their takes and `choices.toml`, the cache), `studio.toml` the methods marked, `studio.log` every
-step's output, `previews/` the renders. A build (`b`, or `--build`) learns again (choices change
-the sizes), splits the games in name order into packs filled to the room less 2%, and builds each
-in `pack-<n>/` from its own games file, those games' entries from `all/personal-games.toml` as
-written there: `fmzx-pack personal` on that file (the pack and its table), then `tools/make-packages`'
-steps for its packages and their verify (`FMZX_PACKAGES_PACK`, `FMZX_PACKAGES_OUT`). A pack that
-does not fit gives its last game to the next one. The summary lists each pack's games and its
-package. The first SID job downloads the High Voltage SID Collection (about 85 MB; its address
+their takes and `choices.toml`, the cache), `studio.toml` the methods marked and each game's pack,
+`studio.log` every step's output, `previews/` the renders. A build (`b`, or `--build`) learns again
+(choices change the sizes) and builds exactly the packs you filled, each in `pack-<n>/` under its
+own number (a game in no pack is not built; a pack over its room stops the build before it
+starts). With no game in a pack, it splits the games in name order into packs filled to the room
+less 2% instead, and a pack of that split that does not fit gives its last game to the next one.
+Each pack is built from its own games file, those games' entries from `all/personal-games.toml` as
+written there: `fmzx-pack personal` on that file (the pack and its table), then
+`tools/make-packages`' steps for its packages and their verify (`FMZX_PACKAGES_PACK`,
+`FMZX_PACKAGES_OUT`). The summary lists each pack's games and its package, and the games in no
+pack. The first SID job downloads the High Voltage SID Collection (about 85 MB; its address
 from hvsc.c64.org) into `build/hvsc/<version>/`; bsdtar (macOS's `tar`) or 7-Zip lists its members
 first (one whose path would land outside, a link or a device refuses the archive) and unpacks it.
 The first AY job downloads the chris-y/AY collection on GitHub (Spectrum AY music; about 30 MB, its
