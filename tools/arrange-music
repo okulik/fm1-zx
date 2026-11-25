@@ -15,9 +15,11 @@
 # ///
 """Arranged takes for the scores a personal pack records (BUILDING.md, "Your own games").
 
-tools/make-personal-pack writes DIR/arrange/<game>/<key>/score.toml for every score it records.
+It is the engine tools/pack-studio runs for its AI, SID and AY takes (on its workspace's W/all);
+its commands below also work on their own, for experiments. fmzx-pack personal writes
+DIR/arrange/<game>/<key>/score.toml for every score it records (DIR: W/all for the studio).
 This tool adds a bass, a pad (chords, one note at a time) and a drum to each score, as several
-takes to choose from by ear; the next tools/make-personal-pack run packs the chosen takes. A
+takes to choose from by ear; the next build (tools/pack-studio --build) packs the chosen takes. A
 score.toml with `shadow = true` is a shadow score: music a learned or built-in routine already
 plays live. Its takes are made like any score's; it is packed only when a take is chosen for it,
 and the take then replaces the live version. A score can also take its game's tune from the
@@ -48,8 +50,8 @@ version, from a collection of .ay files the owner has (ay, below).
       The first amt run downloads the model (about 1.4 GB) to the Hugging Face cache.
       --offline fetches nothing: only the cached model (it stops when the model is not cached;
       run once without --offline to download it). The tool runs through uv, which fetches its
-      packages on the first run; UV_OFFLINE=1 keeps uv offline too (tools/make-personal-pack
-      --offline --arrange sets both).
+      packages on the first run; UV_OFFLINE=1 keeps uv offline too (tools/pack-studio
+      --offline sets both).
       A score has its takes when takes.toml next to it lists takes 1..N for its score.toml as it
       is now, whatever generator made them (--force replaces them; a changed score.toml gets new
       ones); a run interrupted with the same generator and seed resumes at the missing takes.
@@ -284,7 +286,22 @@ class Score:
         return max(dur, key=lambda v: pitch[v] / dur[v])
 
     def digest(self) -> str:
-        return hashlib.sha256(self.path.read_bytes()).hexdigest()[:16]
+        """The score's notes and header fields, its comment lines left out (so the comment can
+        change without making the takes stale)."""
+        lines = self.path.read_bytes().splitlines(keepends=True)
+        return hashlib.sha256(b"".join(ln for ln in lines if not ln.startswith(b"#"))).hexdigest()[:16]
+
+    def file_digests(self) -> set[str]:
+        """Whole-file digests a takes.toml may hold for this score: of the file as it is, and of
+        the file under the header line SCORE_HEADER_ALT names."""
+        data = self.path.read_bytes()
+        rest = data.split(b"\n", 1)[1] if data.startswith(b"#") and b"\n" in data else data
+        return {hashlib.sha256(d).hexdigest()[:16] for d in (data, SCORE_HEADER_ALT + rest)}
+
+
+# A score.toml header line whose takes.toml files hold the digest of the whole file: they match
+# the score as long as the rest of the file is the same (Score.file_digests).
+SCORE_HEADER_ALT = b"# A recorded score's notes, for tools/arrange-music (written by tools/make-personal-pack).\n"
 
 
 def load_score(path: Path) -> Score:
@@ -1089,7 +1106,7 @@ def takes_state(score: Score, settings: Settings, digest: str) -> tuple[bool, se
     """From takes.toml: whether the score has its takes (all of 1..N, for this score.toml, by
     any generator), and the takes done by this generator and seed (to resume)."""
     st = read_toml(score.dir / "takes.toml")
-    if st.get("score") != digest:
+    if st.get("score") != digest and st.get("score") not in score.file_digests():
         return False, set()
     done = {int(t) for t in st.get("done", {}) if (score.dir / f"take-{t}" / "arranged.toml").is_file()}
     complete = all(n in done for n in range(1, settings.takes + 1))
@@ -2088,7 +2105,7 @@ button{font:inherit;padding:7px 18px;border-radius:8px;border:1px solid var(--ac
 </style></head><body><main>
 <h1>Arranged takes</h1>
 <p class="note">Listen to each score's original and its takes, choose one, and save. The next
-<code>tools/make-personal-pack</code> run packs the chosen takes.</p>
+build (<code>tools/pack-studio --build</code>) packs the chosen takes.</p>
 <div id="list"></div>
 <div class="bar"><button id="save">Save</button><span id="status"></span></div>
 </main>
@@ -2253,7 +2270,7 @@ def serve(d: Path, port: int) -> http.server.ThreadingHTTPServer:
 def cmd_pick(a: argparse.Namespace) -> int:
     d = Path(a.dir)
     if not (d / "arrange").is_dir():
-        die(f"no {d / 'arrange'}: build the pack first (tools/make-personal-pack)")
+        die(f"no {d / 'arrange'}: learn the games first (tools/pack-studio; DIR is its W/all)")
     if a.set:
         apply_set(d, a.set)
     if a.list:
@@ -2717,7 +2734,7 @@ def main(argv: list[str] | None = None) -> int:
                                  epilog="Details: the docstring at the top of tools/arrange-music.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("generate", help="generate takes for the scores without them")
-    g.add_argument("dir", help="the personal pack's folder (tools/make-personal-pack -o DIR)")
+    g.add_argument("dir", help="the learning's folder (tools/pack-studio's W/all)")
     g.add_argument("--takes", type=int, default=4, help="takes per score (default 4)")
     g.add_argument("--game", action="append", help="only this game's scores (repeatable)")
     g.add_argument("--force", action="store_true", help="regenerate scores that have takes")

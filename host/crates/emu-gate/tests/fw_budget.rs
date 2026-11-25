@@ -29,7 +29,7 @@
 //! measured on its own) and the key-scan timer interrupt are not in it.
 //!
 //! Learned entries (`cpu_per_frame_with_learned_entries`), in FM: engines, Crop and Border: the
-//! personal pack of `tune.sna` (built as `tools/make-personal-pack` builds it, the tune's
+//! personal pack of `tune.sna` (built as `fmzx-pack personal` builds it, the tune's
 //! learned entry in its sound section) while the tune plays, its learned entry claiming it; and
 //! the decoder's worst legitimate list (8 entries matching `SND_LEARNED_WORK_MAX` site-signature
 //! bytes, each a relocated word every 2 bytes, never matching) on `sites.sna` and
@@ -301,7 +301,7 @@ const BORDER_SCROLL_WORST: u64 = 2_500_000;
 /// The audio out's rate: 750,000 / 17 frames a second.
 const RATE: (u32, u32) = (750_000, 17);
 
-/// The personal pack of `tune.sna` alone, as `tools/make-personal-pack` builds it (its learned
+/// The personal pack of `tune.sna` alone, as `fmzx-pack personal` builds it (its learned
 /// list in the sound section), in the build directory.
 fn tune_personal_pack() -> Vec<u8> {
     let dir = build_dir().join("learned-pack");

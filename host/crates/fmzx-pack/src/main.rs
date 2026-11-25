@@ -9,7 +9,7 @@
 //!     [--product FM-1_048] [--cache DIR] [--offline]`
 //! `fmzx-pack verify <pkg.fwsc> [--product FM-1_048]`
 //! `fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]... [--plan]`
-//!     (the personal pack, `tools/make-personal-pack`; `--app`: the images it goes with, at least
+//!     (the personal pack, `tools/pack-studio`; `--app`: the images it goes with, at least
 //!     one, which set the room for it; `--plan`: `<dir>/plan.json` instead of the pack, which may
 //!     then be over the room)
 //! `fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S] -o <notes.toml>` (a C64

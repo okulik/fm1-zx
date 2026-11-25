@@ -18,8 +18,8 @@ and the pack step, and are described here alongside.
 ## Rules for working on it
 
 - **Personal games never enter the repository.** Not the game files, not their `score.toml`, not
-  the takes, renders or reports made from them. Work under `build/` (git ignores it; the personal
-  pack's default folder is `build/personal/`) or in a scratch folder outside the repository. Tests
+  the takes, renders or reports made from them. Work under `build/` (git ignores it; `tools/pack-studio`'s
+  workspaces are `build/studio/<folder name>/`) or in a scratch folder outside the repository. Tests
   and fixtures are synthetic: invented tunes with invented names (the selftest's `test-game`).
 - **Never name commercial games in repository files**, including the tunes of the owner's games:
   describe a tune by its shape (its length, its loop, its voices, the kind of routine that plays
@@ -44,11 +44,11 @@ and the pack step, and are described here alongside.
 | 1. Listening run | The game runs on the host for 3 minutes of emulated time under fixed inputs (or the key script `<name>.keys`); a run per start key is compared and the one that hears the most music is kept. | `host/crates/soundlearn/src/listen.rs`, `learn.rs` |
 | 2. Routines | The learner reads a routine's code (`model/`, `gate.rs`), or observes a routine that mixes channels into the one speaker bit by testing the pitches its loop's values predict against the speaker's spectrum (`observe.rs`, `spectrum.rs`), or the routine is one of the FM-1's built-in entries (`core/sound/engines_builtin.c`). The FM-1 reads those notes live. | `host/crates/soundlearn/src/` |
 | 3. Recorded scores | Every heard routine whose `OUT` sounded in 100 frames or more (learned, built in or neither) has its music recorded: each stretch of at least 100 frames (2 s) from a trigger edge; a run per key for a menu of tunes; the same tune kept once; the loop found on the speaker edges (an intro and one pass of the loop); the notes transcribed from the speaker's sound (up to 3 voices, at least 8 notes over 3 pitches); encoded as a kind-2 record and verified by replaying the run through method B. A stretch the table (learned and built-in entries) claims at most a tenth of the sounding frames of is a *score*, packed; one it claims more of is a *shadow score*: verified with the precedence bit set, kept in the learner's result and cache, not packed. | `scores.rs`, `learn.rs`, `transcribe.rs`, `entry.rs` |
-| 4. `score.toml` | Every `tools/make-personal-pack` run writes each recorded score's notes, decoded from the learned list, and each shadow score's (with `shadow = true`) to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
+| 4. `score.toml` | Every `fmzx-pack personal` run (`tools/pack-studio`'s learning and each pack's build) writes each recorded score's notes, decoded from the learned list, and each shadow score's (with `shadow = true`) to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
 | 5. Generator | `tools/arrange-music generate DIR` runs a generator per take, reduces what it wrote to the FM-1's four voices, measures it and writes `take-<n>/` with MIDI and renders. | `tools/arrange-music` (`GENERATORS`, `arrange`, `metrics`) |
 | 5b. C64 takes | `tools/arrange-music chip DIR --sid-dir PATH` finds the game's SID files in the owner's collection (file names, header titles, STIL), converts each candidate subtune with `fmzx-pack chip-notes` (a 6502 and C64 model capturing the SID registers once per play call, turned into notes), ranks them by a melody check against the score, and writes the best as `chip-<n>/` takes on their own timeline. `tools/arrange-music ay DIR --ay-dir PATH` does the same with the owner's `.ay` files (file names, misc strings, song names), each song's Z80 player run in the Spectrum machine core (its AY registers captured once per frame), as `ay-<n>/` takes. | `tools/arrange-music` (`cmd_chip`, `cmd_ay`, `own_score`), `host/crates/chipmusic`, `fmzx-pack chip-notes` |
 | 6. Choice | The owner listens on `tools/arrange-music pick DIR` and chooses a take, a C64 or Spectrum 128 take, or the original. | `tools/arrange-music` (`cmd_pick`), `DIR/arrange/choices.toml` |
-| 7. Pack | The next `tools/make-personal-pack` run checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A chosen C64 or Spectrum 128 take becomes a replacement record instead: the score's trigger and fingerprints, precedence set, and the take's events on its own sections. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
+| 7. Pack | The next build (`tools/pack-studio`'s `fmzx-pack personal` runs) checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A chosen C64 or Spectrum 128 take becomes a replacement record instead: the score's trigger and fingerprints, precedence set, and the take's events on its own sections. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
 | 8. Device | FM: engines arms the score at its trigger edge, follows the beeper's edges against the recorded fingerprint, and plays the events on the FM synth with each voice's stored role (lead, bass, pad) and the FM drum. A score yields the frames a table entry claims; a score with precedence keeps them, the entry's voices unused there. | `core/sound/learned.c` (`snd_b_scores`), `core/sound/fm.c` |
 
 The learner's results, each score's run among them, are cached (`DIR/sound-cache/`), so after the first build a run that only
@@ -58,9 +58,9 @@ pack's own takes alone.
 
 ## The files
 
-### score.toml (written by tools/make-personal-pack)
+### score.toml (written by fmzx-pack personal)
 
-    # A recorded score's notes, for tools/arrange-music (written by tools/make-personal-pack).
+    # A recorded score's notes, for tools/arrange-music (written by fmzx-pack personal).
     game = "some-game"          # the game's id in personal-games.toml
     name = "Some game"
     key = "8951-1a2b3c4d"       # the score key, below
@@ -373,8 +373,9 @@ The two generators to compare against:
   chipmusic` runs the converter on SID and `.ay` files its tests assemble.
 - **Listening**: `tools/arrange-music pick DIR` plays the original, each take on the FM-1's voices
   (`fm1.wav`) and everything the model wrote (`full.wav`), rendered with General MIDI instruments.
-  The FM-1's own sound comes only from the packages: choose a take, run `tools/make-personal-pack`
-  again and `--try` it in the browser test bench, or the owner installs it.
+  The FM-1's own sound comes only from the packages: choose a take, build again
+  (`tools/pack-studio <folder> --build --try`) and hear it in the browser test bench, or the owner
+  installs it.
 - **The source material**: `music-corpus --wav` (BUILDING.md, "Music corpus") writes each game's
   beeper and FM renders, which show what the learner made of its music before any arranging;
   `DIR/sound-report.txt` shows each recorded score (length, intro, loop, voices, notes, bytes) and
@@ -383,15 +384,15 @@ The two generators to compare against:
 ### An experiment, step by step
 
 1. **Set up** a folder outside the repository's tracked files: build a personal pack into it
-   (`tools/make-personal-pack <folder> -o build/exp`), or copy an existing pack's `arrange/` tree
-   into a scratch folder. Note each score's key, length, loop and voices.
+   (`tools/pack-studio <folder> --build -o build/exp`; `DIR` is then `build/exp/all`), or copy an
+   existing pack's `arrange/` tree into a scratch folder. Note each score's key, length, loop and voices.
 2. **Change one thing**: a generator (a new `@generator`, or the settings of one), or the
    reduction. Keep everything else as it is, so the comparison means something.
 3. **Run** `tools/arrange-music selftest`, then on the same scores, with the same seed:
    `tools/arrange-music generate DIR --model rules --takes 4 --force`, the baseline you compare
    against (`amt`, or the generator before your change), and yours. `tools/arrange-music pick DIR
    --list` prints every take's figures.
-4. **Pack** a few takes (`pick DIR --set GAME/KEY=N`, then `tools/make-personal-pack ... -o DIR`)
+4. **Pack** a few takes (`pick DIR --set GAME/KEY=N`, then `tools/pack-studio <folder> --build -o build/exp`)
    and read `sound-report.txt`: takes refused, notes dropped for full frames.
 5. **Report**, outside the repository: what changed and why; the generator strings; the scores by
    key, length and shape (never by game); a table of the figures per take for each generator; the

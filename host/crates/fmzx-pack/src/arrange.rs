@@ -149,7 +149,7 @@ fn quoted(s: &str) -> String {
 pub fn score_toml(game: &str, name: &str, rec: &ScoreRecord) -> String {
     let roles: Vec<String> = rec.roles[..usize::from(rec.voices).min(SND_TONAL)].iter().map(|&r| quoted(role_name(r))).collect();
     let mut s = format!(
-        "# A recorded score's notes, for tools/arrange-music (written by tools/make-personal-pack).\n\
+        "# A recorded score's notes, for tools/arrange-music (written by fmzx-pack personal).\n\
          game = {}\nname = {}\nkey = {}\nclock_hz = {CLOCK_HZ}\nintro_t = {}\nloop_t = {}\nvoices = {}\nroles = [{}]\n",
         quoted(game),
         quoted(name),

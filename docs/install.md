@@ -70,10 +70,11 @@ By hand, the same steps:
 `FM-1_048`). The loader must be the pinned felucca-bsp loader that the `felucca_loader`
 target builds (15,060 bytes, `cmake/check_loader.cmake`).
 
-With your own games: `tools/make-personal-pack <folder>` builds the same two packages with the
-games of a folder of yours, as `build/personal/fmzx.fwsc` and `build/personal/fmzx-preview.fwsc`
-(BUILDING.md, "Your own games"). They install, and try in the browser, as the packages here do;
-`tools/web-demo --packages build/personal` runs them in the local browser demo.
+With your own games: `tools/pack-studio <folder> --build` builds the same two packages with the
+games of a folder of yours, as many pairs as the games need, `W/pack-<n>/fmzx.fwsc` and
+`W/pack-<n>/fmzx-preview.fwsc` in its workspace `W` (`build/studio/<folder name>`; BUILDING.md,
+"Your own games"). They install, and try in the browser, as the packages here do;
+`tools/web-demo --packages W/pack-1` runs pack 1 in the local browser demo.
 
 ## Trying it in the browser first
 

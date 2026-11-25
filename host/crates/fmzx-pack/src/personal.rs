@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The personal pack: the game pack built from a folder of the owner's own games (or a games
-//! file), for `tools/make-personal-pack` (BUILDING.md, "Your own games").
+//! file), for `tools/pack-studio` (BUILDING.md, "Your own games").
 //!
 //! # From a folder
 //!
@@ -133,12 +133,12 @@ const MISSING: &str = "# missing:";
 const GAME_HEADER: &str = "[[game]]";
 
 const HEADER: &str = "\
-# Your games for tools/make-personal-pack (BUILDING.md, \"Your own games\"), in the syntax of
+# Your games for tools/pack-studio (BUILDING.md, \"Your own games\"), in the syntax of
 # games/games.toml (docs/controls.md). Edit a game's name, or give it a [game.keys] table: a
 # re-run on the folder keeps your edits, adds new files at the end and marks a game whose file
 # is gone with a comment line above it. To leave a game out, comment out its lines with #: a
 # re-run on the folder leaves it out too. (Deleting an entry works when you build from this
-# file, tools/make-personal-pack <this file>; a re-run on the folder adds it back.)
+# file, tools/pack-studio <this file>; a re-run on the folder adds it back.)
 ";
 
 /// One game of the run.
@@ -436,7 +436,7 @@ fn json_string(s: &str) -> String {
 }
 
 const REPORT_HEAD: &str = "\
-# The music tools/make-personal-pack learned for each game (BUILDING.md, \"Your own games\"), and
+# The music fmzx-pack personal learned for each game (BUILDING.md, \"Your own games\"), and
 # per routine: the speaker OUT it was read from, the routine, each channel's half period in
 # T-states (an input in a product counts a loop: 0 counts 256, 65,536 for a word), the gates'
 # figures, whether it was learned or why not, and its channels' stored roles in the FM synth
@@ -941,7 +941,7 @@ pub fn cache_decode(b: &[u8]) -> Option<Cached> {
 }
 
 /// The first line of the converted files' manifest, which marks an output folder as ours.
-const MANIFEST_HEAD: &str = "# Written by tools/make-personal-pack from personal-games.toml; it is rewritten on each run.";
+const MANIFEST_HEAD: &str = "# Written by fmzx-pack personal from the games file; it is rewritten on each run.";
 
 /// Whether `out` is a personal pack's folder: it has the games file, or the converted files'
 /// manifest of an earlier run (from a games file, the games file lives elsewhere).
@@ -956,7 +956,7 @@ fn is_missing(w: &Row) -> bool {
     w.reason.as_deref() == Some(MISSING_REASON)
 }
 
-/// The table `tools/make-personal-pack` prints: each game, how it went in, its packed size and
+/// The table `fmzx-pack personal` prints: each game, how it went in, its packed size and
 /// its file; the space used and left; the games left out and why; then each packed game's
 /// learned music line.
 pub fn table(r: &Report) -> String {

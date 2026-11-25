@@ -3,31 +3,39 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # /// script
-# requires-python = ">=3.11,<3.13"
-# dependencies = [
-#     "py7zr==1.1.4",
-# ]
+# requires-python = ">=3.11"
+# dependencies = []
 # ///
-"""A terminal studio for your own games: music per game, by ear, then the packs
-(BUILDING.md, "Your own games").
+"""The packs of your own games: music per game, by ear, then the packs, on a terminal screen or
+without one (BUILDING.md, "Your own games").
 
 Point it at a folder of ZX Spectrum games (.sna, .z80, .tap, .tzx). Per game, mark one or more
 ways to make its music, listen to the results, choose one per score, and build: the studio splits
 the games into as many packs as they need, each a full pair of update packages (fmzx.fwsc and
-fmzx-preview.fwsc) with each game's chosen music.
+fmzx-preview.fwsc) with each game's chosen music. It needs Python 3.11 or later and nothing
+else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-studio.
 
-  tools/pack-studio <games folder> [-o W] [--sid-dir PATH] [--ay-dir PATH] [--offline] [--model NAME]
-      Opens the studio (curses). The folder is only read; everything goes under the workspace W,
+  tools/pack-studio <games folder | games file> [-o W] [--sid-dir PATH] [--ay-dir PATH] [--offline]
+                    [--cache DIR] [--model NAME]
+      Opens the studio (curses). The games are only read; everything goes under the workspace W,
       build/studio/<folder name> unless -o says otherwise (build/ is git-ignored).
-      At start, in the background: both device builds (as tools/make-personal-pack runs them, in
-      Docker; FMZX_SKIP_DEVICE_BUILD=1 skips them), fmzx-pack and music-preview
-      (cd host && cargo build --release; when music-preview does not build, the studio plays the
-      renders tools/arrange-music wrote instead), then the learning run:
+      At start, in the background: both device builds (tools/fm1-docker cmake --preset fm1 and
+      fm1-preview, then cmake --build with each, in Docker: a no-op when they are up to date;
+      FMZX_SKIP_DEVICE_BUILD=1 skips them, and build/fm1 and build/fm1-preview must then exist),
+      fmzx-pack and music-preview (cd host && cargo build --release; when music-preview does not
+      build, the studio plays the renders tools/arrange-music wrote instead), then the learning
+      run:
           fmzx-pack personal <folder> -o W/all --app <fm1 app> --app <fm1-preview app> --plan
-      which converts and learns every game and writes W/all/personal-games.toml (your edits to it
-      are kept, as for tools/make-personal-pack), the scores in W/all/arrange/ and W/all/plan.json
-      (each game: how it went in, its packed size with its chosen music, its music line and its
-      scores).
+      which converts and learns every game and writes W/all/personal-games.toml (the folder's
+      games file: a re-run keeps your edits to it), the scores in W/all/arrange/ and
+      W/all/plan.json (each game: how it went in, its packed size with its chosen music, its
+      music line and its scores).
+      A games file (.toml, the syntax of W/all/personal-games.toml) in place of the folder is
+      used as written: the learning reads it (fmzx-pack personal <file> -o W/all ..., a relative
+      file from the games file's folder), nothing rewrites it, and the packs take their entries
+      from it. Its workspace is the one it lies in when it is a workspace's
+      all/personal-games.toml (after you deleted or commented out some entries there), else
+      build/studio/<file name without .toml>.
       Long steps run one at a time in the background; their output goes to W/studio.log. The
       bottom line shows the step running, how many wait, and its last output line.
       --sid-dir PATH   the SID collection to use (HVSC's C64Music, or any folder of .sid files)
@@ -36,8 +44,9 @@ fmzx-preview.fwsc) with each game's chosen music.
                        .ay files) instead of the one the studio downloads (below)
       --offline        download nothing: SID takes need --sid-dir or a collection already in
                        build/hvsc/, AY takes --ay-dir or one in build/ay/; tools/arrange-music
-                       runs with UV_OFFLINE=1 and generate --offline; tools/make-personal-pack
-                       with --offline
+                       runs with UV_OFFLINE=1 and generate --offline; tools/make-packages with
+                       --offline (the SDK files from build/ac79/ only)
+      --cache DIR      tools/make-packages --cache DIR: another folder for the SDK files
       --model NAME     the generator for AI takes (tools/arrange-music generate --model: amt, the
                        default, or rules)
 
@@ -52,6 +61,8 @@ fmzx-preview.fwsc) with each game's chosen music.
               takes ay-<n>
   AI, SID and AY work on a game's scores (recorded or shadow scores, BUILDING.md "Arranged music"); a
   game with none has nothing to arrange: its music plays as FM from its code, or on the beeper.
+  tools/arrange-music runs through uv (https://docs.astral.sh/uv/); its first AI job downloads
+  its packages and a 1.4 GB model.
 
   The games screen: a row per game, its name, how it went in, its packed size, its methods (a
   capital letter when marked), and per score the choice (original, take-2, chip-1, ay-1), else
@@ -92,14 +103,22 @@ fmzx-preview.fwsc) with each game's chosen music.
   play says why. The player is afplay on macOS, else ffplay, paplay or aplay; FMZX_PLAYER="cmd
   args" overrides (the file is added last).
 
-  The build (b): the plan again (choices change the packed sizes), then the packed games in name
-  order fill pack 1 while the total stays within the room minus 2% (and the pack's own overhead,
-  the plan's bytes beyond its games), then pack 2, and so on. Each pack is W/pack-<n>/:
-  personal-games.toml (the header and those games' entries from W/all/personal-games.toml, as
-  written there, [game.keys] and [game.instruments] tables included; a relative file made
-  absolute), the links sound-cache -> ../all/sound-cache and arrange -> ../all/arrange (the
-  learned music and the choices are shared), and the packages, built by
-      FMZX_SKIP_DEVICE_BUILD=1 tools/make-personal-pack W/pack-<n>/personal-games.toml -o W/pack-<n>
+  The build (b, or --build): the plan again (choices change the packed sizes), then the packed
+  games in name order fill pack 1 while the total stays within the room minus 2% (and the pack's
+  own overhead, the plan's bytes beyond its games), then pack 2, and so on. Each pack is
+  W/pack-<n>/: personal-games.toml (the header and those games' entries from the games file,
+  W/all/personal-games.toml or the one given, as written there, [game.keys] and
+  [game.instruments] tables included; a relative file made absolute), the links
+  sound-cache -> ../all/sound-cache and arrange -> ../all/arrange (the learned music and the
+  choices are shared), and the pack and its packages:
+      fmzx-pack personal W/pack-<n>/personal-games.toml -o W/pack-<n> --app <fm1 app> --app <fm1-preview app>
+      FMZX_SKIP_DEVICE_BUILD=1 FMZX_PACKAGES_PACK=W/pack-<n>/games.bin FMZX_PACKAGES_OUT=W/pack-<n> \
+          tools/make-packages [--offline] [--cache DIR]
+  which write the pack's games.bin, keymaps.json, fmzx.fwsc and fmzx-preview.fwsc (and the SDK
+  files' licence text beside them), print the pack's table (each game, how it went in, its packed
+  size; the room used and free; the music learned) and verify both packages. The build needs
+  build/fm1/platform/fm1/fmzx_app.bin, build/fm1-preview/platform/fm1/fmzx_app.bin and
+  build/fm1/third_party/felucca-loader/loader.bin (the device builds at start make them).
   A pack that fails with "the pack does not fit" gives its last game to the next pack and is
   built again; a game that does not fit in a pack of its own is left out of every pack, and the
   summary says so. Packs beyond that count that the studio made (a W/pack-<m>/.pack-studio
@@ -110,13 +129,13 @@ fmzx-preview.fwsc) with each game's chosen music.
   downloading it on the first SID job: the High Voltage SID Collection, version and address from
   https://hvsc.c64.org/api/v1/version/7z (about 85 MB, progress on the bottom line), streamed to
   a .part file and renamed when complete, then unpacked into build/hvsc/<version>/ (about 380 MB,
-  half a minute), the archive then deleted. py7zr reads the member list: a member whose path is
-  absolute or holds "..", or that is a link, refuses the whole archive. The collection's archive
-  packs its SID files with BCJ2, which py7zr does not read, so bsdtar (libarchive: macOS's tar)
-  or 7-Zip (7zz, 7z or 7za) unpacks it; py7zr unpacks archives it reads. Every path unpacked is
-  checked to stay inside, and nothing in the archive is ever run. The collection is the folder
-  holding DOCUMENTS/STIL.txt (C64Music). The tunes belong to their authors: keep the collection and the
-  packs made with it to yourself (BUILDING.md, "Music from other versions").
+  half a minute), the archive then deleted. bsdtar (libarchive: macOS's tar), else 7-Zip (7zz, 7z
+  or 7za), lists the members first (tar -tf and tar -tvf, or 7z l -slt): a member whose path is
+  absolute or holds "..", or that is a link or a device, refuses the whole archive, as does more
+  than 8 GB unpacked; the same tool then unpacks it. Every path unpacked is checked to stay
+  inside, any link is removed, and nothing in the archive is ever run. The collection is the
+  folder holding DOCUMENTS/STIL.txt (C64Music). The tunes belong to their authors: keep the
+  collection and the packs made with it to yourself (BUILDING.md, "Music from other versions").
 
   The AY collection: with no --ay-dir, the studio uses build/ay/<commit>/music/ay (repo root),
   downloading it on the first AY job: the chris-y/AY repository on GitHub (Spectrum AY music;
@@ -130,29 +149,50 @@ fmzx-preview.fwsc) with each game's chosen music.
   deleted, and nothing in it is ever run. The same holds for these tunes: keep them and the
   packs made with them to yourself.
 
-  tools/pack-studio <games folder> --status [-o W] [--sid-dir PATH] [--ay-dir PATH]
+  Without the screen: any of --generate, --build, --status and --try (several run in that order;
+  a step that fails stops the command, exit 1). They take the options above.
+  tools/pack-studio <games> --generate ai,sid,ay [--game ID]...
+      Marks the methods named (one or more of ai, sid, ay, comma-separated) for every game with
+      scores, or for each game given with --game (its id, as --status shows it), and runs the
+      jobs g runs for them, one at a time (the SID or AY collection downloaded first when there
+      is none); learns first when W/all/plan.json is missing. Choosing a take stays a choice by
+      ear: the screen, or tools/arrange-music pick W/all.
+  tools/pack-studio <games> --build
+      The start steps and the build, without the screen; prints the summary. Exit 1 when a step
+      fails or a game fits in no pack.
+  tools/pack-studio <games> --status
       Prints the games, their methods, scores, candidates and choices, the packs a build would
       make and the packs built; runs the start steps and the learning first when W/all/plan.json
       is missing.
-  tools/pack-studio <games folder> --build [-o W] [--sid-dir PATH] [--ay-dir PATH] [--offline]
-      The start steps and the build, without the screen; prints the summary. Exit 1 when a step
-      fails or a game fits in no pack.
+  tools/pack-studio <games> --try [N]
+      The browser test bench on pack N's packages (tools/web-demo --packages W/pack-<N>; N is 1
+      unless given), after the build when --build is given too, else on the packs built before.
   tools/pack-studio selftest
       Checks the split, the games-file subsets ([game.keys] tables kept), the pack folders and
-      their links, the stale-pack removal, the retry when a pack does not fit, the methods file,
-      generate and choose through --set (AI, SID and AY), the previews, --status, the SID and AY
-      downloads (from a server on 127.0.0.1) and the safe unpacking (a made-up .7z and .tar.gz,
-      and ones with a path escaping their folder or a link), and the screen (in a pseudo-terminal, resized down to 3x10), in a temporary folder
-      with stand-ins for every tool: no network, no Docker, no cargo.
+      their links, each pack's fmzx-pack and tools/make-packages runs, the stale-pack removal, the
+      retry when a pack does not fit, a games file as the input, the methods file, generate and
+      choose through --set (AI, SID and AY, on the screen's path and through --generate), --try,
+      the previews, --status, the SID and AY downloads (from a server on 127.0.0.1) and the safe
+      unpacking (archive listings with a path escaping their folder, a link or a device; a
+      made-up .7z, written and read by bsdtar when it is there, and .tar.gz, and ones with a
+      path escaping their folder or a link), and the screen (in a pseudo-terminal, resized down
+      to 1x1), in a temporary folder with stand-ins for every tool: no network, no Docker, no
+      cargo.
 
 Stand-ins (the selftest's; the real tools are the default): FMZX_PACK (the fmzx-pack binary;
-no cargo build of it then), FMZX_ARRANGE_MUSIC, FMZX_MAKE_PERSONAL_PACK, FMZX_MUSIC_PREVIEW (no
-cargo build of it then), FMZX_HVSC_API (the version query's address), FMZX_HVSC_DIR (instead of
-build/hvsc), FMZX_AY_API (the commit query's address), FMZX_AY_TARBALL (the archive's address,
-{sha} the commit), FMZX_AY_DIR (instead of build/ay).
+no cargo build of it then), FMZX_ARRANGE_MUSIC, FMZX_MAKE_PACKAGES, FMZX_WEB_DEMO,
+FMZX_MUSIC_PREVIEW (no cargo build of it then), FMZX_BUILD (the folder holding the device builds
+fm1/ and fm1-preview/, instead of build/), FMZX_HVSC_API (the version query's address),
+FMZX_HVSC_DIR (instead of build/hvsc), FMZX_AY_API (the commit query's address),
+FMZX_AY_TARBALL (the archive's address, {sha} the commit), FMZX_AY_DIR (instead of build/ay).
 """
 
 from __future__ import annotations
+
+import sys
+
+if sys.version_info < (3, 11):
+    sys.exit("tools/pack-studio needs Python 3.11 or later (uv run --script tools/pack-studio finds one)")
 
 import argparse
 import contextlib
@@ -164,7 +204,6 @@ import shlex
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -186,8 +225,22 @@ AY_API = "https://api.github.com/repos/chris-y/AY/commits/main"  # the AY collec
 AY_TARBALL = "https://codeload.github.com/chris-y/AY/tar.gz/{sha}"
 UNPACK_MAX = 8 << 30  # bytes an archive may unpack to
 NOT_FIT = "the pack does not fit"
-APPS = [ROOT / "build/fm1/platform/fm1/fmzx_app.bin", ROOT / "build/fm1-preview/platform/fm1/fmzx_app.bin"]
 METHODS = ("ai", "sid", "ay")
+
+
+def build_root() -> Path:
+    return Path(os.environ.get("FMZX_BUILD") or ROOT / "build")
+
+
+def apps() -> list[Path]:
+    """The app images the packs go with: the release build's and the preview build's."""
+    b = build_root()
+    return [b / "fm1/platform/fm1/fmzx_app.bin", b / "fm1-preview/platform/fm1/fmzx_app.bin"]
+
+
+def device_files() -> list[Path]:
+    """What a build needs from the device builds: both app images and the boot loader."""
+    return apps() + [build_root() / "fm1/third_party/felucca-loader/loader.bin"]
 
 
 def die(msg: str) -> None:
@@ -207,7 +260,8 @@ def kb(n: int | float | None) -> str:
 class Tools:
     fmzx_pack: str
     arrange: str
-    make_pack: str
+    make_packages: str
+    web_demo: str
     music_preview: str
     fmzx_pack_given: bool  # a stand-in: no cargo build of it
     preview_given: bool
@@ -218,7 +272,8 @@ class Tools:
         return Tools(
             fmzx_pack=e.get("FMZX_PACK") or str(ROOT / "host/target/release/fmzx-pack"),
             arrange=e.get("FMZX_ARRANGE_MUSIC") or str(ROOT / "tools/arrange-music"),
-            make_pack=e.get("FMZX_MAKE_PERSONAL_PACK") or str(ROOT / "tools/make-personal-pack"),
+            make_packages=e.get("FMZX_MAKE_PACKAGES") or str(ROOT / "tools/make-packages"),
+            web_demo=e.get("FMZX_WEB_DEMO") or str(ROOT / "tools/web-demo"),
             music_preview=e.get("FMZX_MUSIC_PREVIEW") or str(ROOT / "host/target/release/music-preview"),
             fmzx_pack_given=bool(e.get("FMZX_PACK")),
             preview_given=bool(e.get("FMZX_MUSIC_PREVIEW")),
@@ -226,6 +281,9 @@ class Tools:
 
     def preview_ok(self) -> bool:
         return os.access(self.music_preview, os.X_OK)
+
+    def arrange_given(self) -> bool:
+        return bool(os.environ.get("FMZX_ARRANGE_MUSIC"))
 
 
 def hvsc_root() -> Path:
@@ -636,58 +694,136 @@ def member_ok(name: str) -> bool:
     return ".." not in PurePosixPath(name).parts
 
 
-def external_unpacker(archive: Path, into: Path) -> list[str] | None:
-    """bsdtar (libarchive; macOS's tar) or 7-Zip, for the methods py7zr does not read (BCJ2)."""
+@dataclass
+class Member:
+    name: str
+    kind: str  # "file", "dir", "link" (a symbolic or hard link) or "other" (a device, a fifo)
+    size: int
+
+
+def archive_tool() -> tuple[str, str] | None:
+    """("bsdtar", path) for bsdtar (libarchive; macOS's tar), else ("7z", path) for 7-Zip; None
+    when neither is installed."""
     tar = shutil.which("bsdtar")
     if not tar and shutil.which("tar"):
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             if "bsdtar" in subprocess.run(["tar", "--version"], capture_output=True, text=True, timeout=10).stdout:
                 tar = shutil.which("tar")
     if tar:
-        return [tar, "-x", "-f", str(archive), "-C", str(into)]
+        return "bsdtar", tar
     for exe in ("7zz", "7z", "7za"):
         if shutil.which(exe):
-            return [shutil.which(exe), "x", "-y", "-bd", f"-o{into}", str(archive)]
+            return "7z", shutil.which(exe)
     return None
 
 
-def safe_extract_7z(archive: Path, dest: Path, max_bytes: int = UNPACK_MAX, external: bool = False) -> str:
-    """Unpacks an untrusted .7z into dest (replacing it), through a temporary folder beside it:
-    refuses the whole archive when a member's path is absolute or holds "..", a member is a
-    link, or it unpacks to more than max_bytes; then removes any link and checks every path
-    stays inside. py7zr reads the member list and unpacks; when the archive uses a method py7zr
-    does not read (the collection's archive does: BCJ2), or with external, bsdtar or 7-Zip
-    unpacks it. Nothing in it is run. Returns what unpacked it."""
-    import py7zr
+NO_ARCHIVE_TOOL = "unpacking a .7z needs bsdtar (libarchive) or 7-Zip (7zz, 7z or 7za): install one and try again"
+BSDTAR_LINE = re.compile(r"^(?P<mode>\S{10})\s+\d+\s+\S+\s+\S+\s+(?P<size>\d+)\s")
 
+
+def parse_bsdtar_listing(names: str, verbose: str) -> list[Member]:
+    """bsdtar's member list: names from tar -tf (one a line, exactly), kind and size from the
+    same lines of tar -tvf (the mode's first letter: - a file, d a folder, l, h a link, others a
+    device or a fifo; a hard link also says "link to"). A listing that does not read is an
+    error."""
+    ns = names.splitlines()
+    vs = verbose.splitlines()
+    if len(ns) != len(vs):
+        raise ValueError(f"the listings do not agree ({len(ns)} names, {len(vs)} verbose lines)")
+    out = []
+    for n, v in zip(ns, vs):
+        m = BSDTAR_LINE.match(v)
+        if not m:
+            raise ValueError(f"a listing line does not read: {v!r}")
+        c = m["mode"][0]
+        kind = ("link" if c in "lh" or " link to " in v else "file") if c in "-lh" else "dir" if c == "d" else "other"
+        out.append(Member(n, kind, int(m["size"])))
+    return out
+
+
+def parse_7z_listing(text: str) -> list[Member]:
+    """7-Zip's member list (7z l -slt): the blocks after the "----------" line, one a member,
+    "Path = ", "Size = ", "Folder = +" for a folder, "Attributes = " (its Unix mode, when there,
+    gives the kind as for bsdtar) and "Symbolic Link = " or "Hard Link = " for a link."""
+    lines = text.splitlines()
+    try:
+        lines = lines[lines.index("----------") + 1:]
+    except ValueError:
+        raise ValueError("no member list in 7-Zip's listing") from None
+    blocks, cur = [], {}
+    for ln in lines + [""]:
+        if not ln.strip():
+            if cur:
+                blocks.append(cur)
+            cur = {}
+            continue
+        k, sep, v = ln.partition(" = ")
+        if not sep:
+            k, v = ln.rstrip(" ="), ""
+        cur[k.strip()] = v
+    out = []
+    for blk in blocks:
+        if "Path" not in blk:
+            raise ValueError(f"a member without a path in 7-Zip's listing: {blk}")
+        mode = next((t for t in blk.get("Attributes", "").split() if len(t) == 10 and t[0] in "-dlbcps"), "")
+        if blk.get("Symbolic Link") or blk.get("Hard Link") or mode[:1] == "l":
+            kind = "link"
+        elif mode[:1] in ("b", "c", "p", "s"):
+            kind = "other"
+        elif blk.get("Folder") == "+" or mode[:1] == "d" or "D" in blk.get("Attributes", "").split(" ")[0]:
+            kind = "dir"
+        else:
+            kind = "file"
+        size = blk.get("Size", "").strip()
+        out.append(Member(blk["Path"], kind, int(size) if size.isdigit() else 0))
+    return out
+
+
+def check_members(name: str, members: list[Member], max_bytes: int) -> None:
+    """Refuses the whole archive when a member's path would land outside its folder, a member is
+    a link or a device, or it unpacks to more than max_bytes."""
+    for m in members:
+        if not member_ok(m.name):
+            raise ValueError(f"refused {name}: the member {m.name!r} would land outside its folder")
+        if m.kind == "link":
+            raise ValueError(f"refused {name}: the member {m.name!r} is a link")
+        if m.kind == "other":
+            raise ValueError(f"refused {name}: the member {m.name!r} is a device")
+    total = sum(m.size for m in members)
+    if total > max_bytes:
+        raise ValueError(f"refused {name}: it unpacks to {total} bytes")
+
+
+def list_members(archive: Path, tool: tuple[str, str]) -> list[Member]:
+    def run(argv: list[str]) -> str:
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+        if r.returncode != 0:
+            raise ValueError(f"{Path(argv[0]).name} could not list {archive.name}: {(r.stderr or r.stdout).strip()[-300:]}")
+        return r.stdout
+    kind, exe = tool
+    if kind == "bsdtar":
+        return parse_bsdtar_listing(run([exe, "-t", "-f", str(archive)]), run([exe, "-t", "-v", "-f", str(archive)]))
+    return parse_7z_listing(run([exe, "l", "-slt", str(archive)]))
+
+
+def safe_extract_7z(archive: Path, dest: Path, max_bytes: int = UNPACK_MAX) -> str:
+    """Unpacks an untrusted .7z into dest (replacing it), through a temporary folder beside it,
+    with bsdtar or else 7-Zip: their member list first (check_members refuses the whole
+    archive), then the unpacking; then removes any link and checks every path stays inside.
+    Nothing in it is run. Returns the tool's name."""
+    tool = archive_tool()
+    if tool is None:
+        raise ValueError(NO_ARCHIVE_TOOL)
+    check_members(archive.name, list_members(archive, tool), max_bytes)
     tmp = dest.parent / f".{dest.name}.tmp"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     try:
-        with py7zr.SevenZipFile(archive, "r") as z:
-            infos = z.list()
-            for i in infos:
-                if not member_ok(i.filename):
-                    raise ValueError(f"refused {archive.name}: the member {i.filename!r} would land outside its folder")
-                if i.is_symlink:
-                    raise ValueError(f"refused {archive.name}: the member {i.filename!r} is a link")
-            total = sum(int(i.uncompressed or 0) for i in infos)
-            if total > max_bytes:
-                raise ValueError(f"refused {archive.name}: it unpacks to {total} bytes")
-            methods = list(z.archiveinfo().method_names)
-            if not external and not any(m.endswith("*") for m in methods):
-                z.extractall(path=tmp)
-                how = "py7zr"
-            else:
-                argv = external_unpacker(archive, tmp)
-                if argv is None:
-                    raise ValueError(f"{archive.name} uses {', '.join(m.rstrip('*') for m in methods)}, which py7zr does "
-                                     "not read: install 7-Zip (7zz) or bsdtar (libarchive) and try again")
-                r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
-                if r.returncode != 0:
-                    raise ValueError(f"{Path(argv[0]).name} could not unpack {archive.name}: "
-                                     f"{(r.stderr or r.stdout).strip()[-300:]}")
-                how = Path(argv[0]).name
+        kind, exe = tool
+        argv = [exe, "-x", "-f", str(archive), "-C", str(tmp)] if kind == "bsdtar" else [exe, "x", "-y", "-bd", f"-o{tmp}", str(archive)]
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace")
+        if r.returncode != 0:
+            raise ValueError(f"{Path(exe).name} could not unpack {archive.name}: {(r.stderr or r.stdout).strip()[-300:]}")
         root = tmp.resolve()
         for p in sorted(tmp.rglob("*"), reverse=True):
             if p.is_symlink():
@@ -696,7 +832,7 @@ def safe_extract_7z(archive: Path, dest: Path, max_bytes: int = UNPACK_MAX, exte
                 raise ValueError(f"refused {archive.name}: {p} is outside its folder")
         shutil.rmtree(dest, ignore_errors=True)
         tmp.replace(dest)
-        return how
+        return Path(exe).name
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -734,6 +870,8 @@ def url_ok(url: str) -> bool:
 def fetch_hvsc(root: Path, progress: Callable[[str], None], log: Callable[[str], None], api: str | None = None) -> Path:
     """Downloads and unpacks the collection into root/<version>/; returns the collection folder."""
     api = api or os.environ.get("FMZX_HVSC_API") or HVSC_API
+    if archive_tool() is None:
+        raise ValueError(NO_ARCHIVE_TOOL)
     if not url_ok(api):
         raise ValueError(f"not an https address: {api}")
     headers = {"User-Agent": "pack-studio"}
@@ -944,6 +1082,7 @@ class Runner:
         self.cond = threading.Condition(self.lock)
         self.proc: subprocess.Popen | None = None
         self.stopping = False
+        self.failed: list[Job] = []  # the jobs that failed, in turn
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log = log_path.open("a", encoding="utf-8", errors="replace")
         if threaded:
@@ -1010,6 +1149,8 @@ class Runner:
                 self.done.append(job)
 
     def _finish(self, job: Job) -> None:
+        if job.rc != 0:
+            self.failed.append(job)
         if job.rc != 0 and job.chain:
             with self.lock:
                 dropped = [j for j in self.pending if j.chain == job.chain]
@@ -1108,7 +1249,7 @@ class BuildRun:
 
 class Studio:
     def __init__(self, folder: Path, w: Path, args: argparse.Namespace, runner: Runner, tools: Tools | None = None):
-        self.folder = folder
+        self.folder = folder  # the games folder, or a games file used as written
         self.w = w
         self.all = w / "all"
         self.args = args
@@ -1128,6 +1269,7 @@ class Studio:
         self.build_run: BuildRun | None = None
         self.summary: list[str] | None = None
         self.build_ok: bool | None = None
+        self.errors: list[str] = []  # what stopped a step before it ran (the headless commands report them)
         self._cands: dict[tuple, list[Candidate]] = {}
         self._choices: tuple[int, dict] | None = None
 
@@ -1137,6 +1279,14 @@ class Studio:
         self.flash_msg, self.flash_at = msg, time.monotonic()
         if not self.runner.threaded:
             print(f"{PROG}: {msg}", file=sys.stderr, flush=True)
+
+    def fail(self, msg: str) -> None:
+        self.errors.append(msg)
+        self.flash(msg)
+
+    def games_file(self) -> Path:
+        """The games file the packs take their entries from: the one given, else the folder's."""
+        return self.folder if self.folder.is_file() else self.all / "personal-games.toml"
 
     def changed(self, _job: Job | None = None) -> None:
         self.version += 1
@@ -1186,7 +1336,7 @@ class Studio:
 
     # -- start and learning
 
-    def startup(self, learn: bool = True) -> None:
+    def startup(self, learn: bool = True, preview: bool = True) -> None:
         if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") != "1":
             for preset in ("fm1", "fm1-preview"):
                 self.runner.submit(Job(f"device build {preset} (configure)",
@@ -1197,7 +1347,7 @@ class Studio:
         if not self.tools.fmzx_pack_given:
             self.runner.submit(Job("build fmzx-pack", ["cargo", "build", "--release", "-p", "fmzx-pack"],
                                    cwd=ROOT / "host", chain="start"))
-        if not self.tools.preview_given:
+        if preview and not self.tools.preview_given:
             def preview_built(j: Job) -> None:
                 self.changed()
                 if j.rc != 0:
@@ -1209,7 +1359,7 @@ class Studio:
 
     def plan_job(self, chain: str, then: Callable[[Job], None] | None = None) -> Job:
         argv = [self.tools.fmzx_pack, "personal", str(self.folder), "-o", str(self.all)]
-        for a in APPS:
+        for a in apps():
             argv += ["--app", str(a)]
         argv.append("--plan")
 
@@ -1263,16 +1413,19 @@ class Studio:
 
     # -- generating
 
-    def generate(self, ids: list[str] | None = None) -> None:
+    def generate(self, ids: list[str] | None = None, methods: tuple[str, ...] = METHODS) -> None:
+        """Queues the jobs for the marked methods among methods, for the games with scores (those
+        of ids when given)."""
         if not self.plan:
-            self.flash("no plan yet: wait for the learning")
+            self.fail("no plan yet: wait for the learning")
             return
         gs = [g for g in self.plan.games if g.can_arrange and (ids is None or g.id in ids)]
-        ai = [g for g in gs if "ai" in self.marked(g.id)]
-        sid = [g for g in gs if "sid" in self.marked(g.id)]
-        ay = [g for g in gs if "ay" in self.marked(g.id)]
+        ai, sid, ay = ([g for g in gs if m in methods and m in self.marked(g.id)] for m in METHODS)
         if not ai and not sid and not ay:
-            self.flash("nothing marked: a marks AI, s marks SID, y marks AY (FM needs nothing)")
+            self.fail("nothing marked: a marks AI, s marks SID, y marks AY (FM needs nothing)")
+            return
+        if not self.tools.arrange_given() and not shutil.which("uv"):
+            self.fail("AI, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
             return
         for g in ai:
             argv = [self.tools.arrange, "generate", str(self.all), "--game", g.id]
@@ -1291,6 +1444,26 @@ class Studio:
                 self.with_collection(kind, queue)
         self.flash(f"queued: {len(ai)} AI, {len(sid)} SID, {len(ay)} AY")
 
+    def generate_headless(self, methods: list[str], ids: list[str]) -> None:
+        """--generate: marks methods for the games given (every game with scores when none) and
+        queues their jobs."""
+        if not self.plan:
+            return self.fail("no plan: the learning failed (see the log)")
+        unknown = [g for g in ids if self.plan.game(g) is None]
+        if unknown:
+            return self.fail(f"--game {', '.join(unknown)}: no such game (--status lists the ids)")
+        gs = [self.plan.game(g) for g in ids] if ids else [g for g in self.plan.games if g.can_arrange]
+        for g in gs:
+            if not g.can_arrange:
+                return self.fail(f"--game {g.id}: " + (f"left out ({g.reason})" if g.left_out else
+                                                        f"{g.plays()}: no score for AI, SID or AY"))
+        if not gs:
+            return self.fail("no game has a score: nothing to arrange")
+        for g in gs:
+            self.methods.setdefault(g.id, set()).update(methods)
+        save_methods(self.w, self.methods)
+        self.generate([g.id for g in gs], tuple(methods))
+
     def with_collection(self, kind: str, then: Callable[[Path], None]) -> None:
         """Runs then(the collection's folder) for "SID" or "AY": the one given (--sid-dir,
         --ay-dir) or downloaded, else after a download job (none with --offline)."""
@@ -1299,7 +1472,7 @@ class Studio:
         d = find()
         if given:
             if d is None:
-                self.flash(f"{opt} {given}: no such folder")
+                self.fail(f"{opt} {given}: no such folder")
             else:
                 then(d)
             return
@@ -1307,7 +1480,7 @@ class Studio:
             then(d)
             return
         if self.args.offline:
-            self.flash(f"{kind}: --offline downloads nothing: give {opt} PATH, or put the collection in {root}")
+            self.fail(f"{kind}: --offline downloads nothing: give {opt} PATH, or put the collection in {root}")
             return
         if kind in self.waiters:
             self.waiters[kind].append(then)
@@ -1425,6 +1598,11 @@ class Studio:
         self.build_run = BuildRun()
         self.summary = None
         self.build_ok = None
+        missing = [f for f in device_files() if not f.is_file()]
+        if missing:
+            return self._finish(f"no {missing[0]}: the device builds make it (FMZX_SKIP_DEVICE_BUILD=1 skipped them)"
+                                if os.environ.get("FMZX_SKIP_DEVICE_BUILD", "0") == "1"
+                                else f"no {missing[0]}: the device builds did not make it (see the log)")
         self.runner.submit(self.plan_job("build", then=self._split))
         self.flash("building: the plan, then the packs")
 
@@ -1436,7 +1614,7 @@ class Studio:
         if not packed:
             return self._finish("no game to pack")
         try:
-            br.text = (self.all / "personal-games.toml").read_text()
+            br.text = self.games_file().read_text()
             split_games_file(br.text)
         except (OSError, ValueError) as e:
             return self._finish(str(e))
@@ -1447,23 +1625,38 @@ class Studio:
         br = self.build_run
         n = i + 1
         try:
-            note = (f"Pack {n} of the games in ../all/personal-games.toml, made by tools/pack-studio on every build:\n"
-                    f"edit that file instead.")
-            text = subset_games_file(br.text, br.packs[i], self.all, note)
+            src = "../all/personal-games.toml" if not self.folder.is_file() else str(self.folder)
+            note = f"Pack {n} of the games in {src}, made by tools/pack-studio on every build:\nedit that file instead."
+            text = subset_games_file(br.text, br.packs[i], self.games_file().parent, note)
             d = write_pack_folder(self.w, n, br.packs[i], text)
         except (OSError, ValueError) as e:
             return self._finish(str(e))
-        argv = [self.tools.make_pack, str(d / "personal-games.toml"), "-o", str(d)]
+        argv = [self.tools.fmzx_pack, "personal", str(d / "personal-games.toml"), "-o", str(d)]
+        for a in apps():
+            argv += ["--app", str(a)]
+        self.runner.submit(Job(f"pack {n} ({len(br.packs[i])} games)", argv, chain="build",
+                               on_done=lambda j: self._packed(i, j)))
+
+    def _packages(self, i: int) -> None:
+        d = self.w / f"pack-{i + 1}"
+        argv = [self.tools.make_packages]
         if self.args.offline:
             argv.append("--offline")
-        self.runner.submit(Job(f"pack {n} ({len(br.packs[i])} games)", argv, env={"FMZX_SKIP_DEVICE_BUILD": "1"},
-                               chain="build", on_done=lambda j: self._packed(i, j)))
+        if self.args.cache:
+            argv += ["--cache", str(Path(self.args.cache).expanduser().resolve())]
+        env = {"FMZX_SKIP_DEVICE_BUILD": "1", "FMZX_PACKAGES_PACK": str(d / "games.bin"), "FMZX_PACKAGES_OUT": str(d)}
+
+        def done(j: Job) -> None:
+            if j.rc != 0:
+                return self._finish(f"pack {i + 1}'s packages failed (see the log)")
+            self.build_run.built = i + 1
+            return self._pack(i + 1) if i + 1 < len(self.build_run.packs) else self._finish(None)
+        self.runner.submit(Job(f"pack {i + 1}: the packages and their verify", argv, env=env, chain="build", on_done=done))
 
     def _packed(self, i: int, j: Job) -> None:
         br = self.build_run
         if j.rc == 0:
-            br.built = i + 1
-            return self._pack(i + 1) if i + 1 < len(br.packs) else self._finish(None)
+            return self._packages(i)
         if NOT_FIT not in j.text():
             return self._finish(f"pack {i + 1} failed (see the log)")
         if len(br.packs[i]) == 1:
@@ -1941,40 +2134,84 @@ class UI:
 
 
 def workspace(folder: Path, out: str | None) -> Path:
+    """-o W, else: a games file that is a workspace's all/personal-games.toml, that workspace;
+    else build/studio/<folder name, or the games file's name without .toml>."""
     if out:
         return Path(out).expanduser().resolve()
-    name = folder.stem if folder.is_file() else folder.name
-    return ROOT / "build" / "studio" / name
+    if folder.is_file():
+        if folder.name == "personal-games.toml" and folder.parent.name == "all":
+            return folder.parent.parent
+        return ROOT / "build" / "studio" / folder.stem
+    return ROOT / "build" / "studio" / folder.name
+
+
+def parse_methods(text: str) -> list[str]:
+    ms = [m.strip().lower() for m in text.split(",") if m.strip()]
+    bad = [m for m in ms if m not in METHODS]
+    if bad or not ms:
+        die(f"--generate {text}: give one or more of {', '.join(METHODS)}, comma-separated")
+    return [m for m in METHODS if m in ms]
+
+
+def run_try(st: Studio, n: int) -> int:
+    d = st.w / f"pack-{n}"
+    if not (d / "fmzx.fwsc").is_file():
+        print(f"{PROG}: no {d / 'fmzx.fwsc'}: build the packs first (--build)", file=sys.stderr)
+        return 1
+    print(f"{PROG}: the browser test bench on pack {n}: {st.tools.web_demo} --packages {d}", flush=True)
+    try:
+        return subprocess.call([st.tools.web_demo, "--packages", str(d)])
+    except KeyboardInterrupt:
+        return 130
 
 
 def cmd_studio(a: argparse.Namespace) -> int:
     folder = Path(a.folder).expanduser().resolve()
     if not folder.exists():
         die(f"no {folder}")
+    if folder.is_file() and folder.suffix.lower() != ".toml":
+        die(f"{folder}: give a folder of games or a games file (.toml)")
+    if a.game and not a.generate:
+        die("--game goes with --generate")
+    methods = parse_methods(a.generate) if a.generate else []
     w = workspace(folder, a.out)
     w.mkdir(parents=True, exist_ok=True)
-    headless = a.status or a.build
-    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build))
+    headless = a.status or a.build or bool(a.generate) or a.try_ is not None
+    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build or a.generate))
     st = Studio(folder, w, a, runner)
-    if a.status:
-        if st.plan is None:
-            st.startup(learn=True)
+    if headless:
+        if a.generate or a.build or (a.status and st.plan is None):
+            # the learning first only when a step needs the plan before the build makes it
+            st.startup(learn=st.plan is None and bool(a.generate or not a.build), preview=bool(a.status))
             runner.drain()
-        if st.plan is None:
-            die(f"no plan ({w / 'studio.log'} says why)")
-        print("\n".join(st.status_lines()))
+            start = [j for j in runner.failed if j.chain == "start"]
+            if start and (a.generate or a.build):
+                die(f"{start[0].title} failed (see the output above; {w / 'studio.log'})")
+            if not st.tools.fmzx_pack_given and not os.access(st.tools.fmzx_pack, os.X_OK):
+                die("fmzx-pack did not build (see the output above)")
+        if a.generate:
+            n0 = len(runner.failed)
+            st.generate_headless(methods, a.game or [])
+            runner.drain()
+            if st.errors or runner.failed[n0:]:
+                what = st.errors[0] if st.errors else f"{runner.failed[n0].title} failed"
+                die(f"--generate: {what} (the log: {w / 'studio.log'})")
+            print(f"{PROG}: generated; choose a take per score on the screen or with tools/arrange-music pick {st.all}")
+        if a.build:
+            st.build()
+            runner.drain()
+            print("\n".join(st.summary or ["no build"]))
+            if not st.build_ok:
+                return 1
+        if a.status:
+            if st.plan is None:
+                die(f"no plan ({w / 'studio.log'} says why)")
+            print("\n".join(st.status_lines()))
+        if a.try_ is not None:
+            return run_try(st, a.try_)
         return 0
-    if a.build:
-        st.startup(learn=False)
-        runner.drain()
-        if not st.tools.fmzx_pack_given and not os.access(st.tools.fmzx_pack, os.X_OK):
-            die("fmzx-pack did not build (see the output above)")
-        st.build()
-        runner.drain()
-        print("\n".join(st.summary or ["no build"]))
-        return 0 if st.build_ok else 1
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        die("the studio needs a terminal (or --status, --build)")
+        die("the studio needs a terminal (or --generate, --build, --status, --try)")
     st.startup(learn=True)
     try:
         run_ui(st)
@@ -1993,14 +2230,32 @@ def cmd_studio(a: argparse.Namespace) -> int:
 
 
 FAKE_FMZX_PACK = r'''
-import json, sys
+import json, os, sys, tomllib
 from pathlib import Path
 a = sys.argv[1:]
-assert a[0] == "personal" and "--plan" in a, a
+with open(LOG, "a") as f:
+    f.write(json.dumps(a) + "\n")
+assert a[0] == "personal", a
+apps = [a[i + 1] for i, x in enumerate(a) if x == "--app"]
+assert len(apps) == 2 and all(Path(x).is_file() for x in apps), apps
 out = Path(a[a.index("-o") + 1])
 out.mkdir(parents=True, exist_ok=True)
+if "--plan" not in a:
+    # a pack: its games file, the links into W/all, the room
+    assert (out / "sound-cache").is_symlink() and (out / "arrange").is_dir()
+    for f in ("games.bin", "fmzx.fwsc", "fmzx-preview.fwsc"):
+        (out / f).unlink(missing_ok=True)
+    ids = [g["id"] for g in tomllib.loads(Path(a[1]).read_text())["game"]]
+    total = sum(SIZES[g] for g in ids) + 2000
+    room = int(os.environ["FAKE_ROOM"])
+    if total > room:
+        print(f"the pack does not fit: it needs {total}, room {room}", file=sys.stderr)
+        sys.exit(1)
+    (out / "games.bin").write_text(",".join(ids))
+    print(f"used {total / 1024:.1f} of {room / 1024:.1f} KB, {(room - total) / 1024:.1f} KB free")
+    sys.exit(0)
 gf = out / "personal-games.toml"
-if not gf.exists():
+if Path(a[1]).is_dir() and not gf.exists():
     gf.write_text(HEADER + ENTRIES)
 d = out / "arrange" / "alpha" / "8951-1a2b3c4d"
 d.mkdir(parents=True, exist_ok=True)
@@ -2067,25 +2322,24 @@ else:
     sys.exit(2)
 '''
 
-FAKE_MAKE_PACK = r'''
-import os, sys, tomllib
+FAKE_MAKE_PACKAGES = r'''
+import json, os, sys
 from pathlib import Path
-a = sys.argv[1:]
+with open(LOG, "a") as f:
+    f.write(json.dumps({"argv": sys.argv[1:], "env": {k: os.environ.get(k) for k in
+            ("FMZX_SKIP_DEVICE_BUILD", "FMZX_PACKAGES_PACK", "FMZX_PACKAGES_OUT")}}) + "\n")
 assert os.environ.get("FMZX_SKIP_DEVICE_BUILD") == "1"
-games_file = Path(a[0])
-out = Path(a[a.index("-o") + 1])
-assert (out / "sound-cache").is_symlink() and (out / "arrange").is_dir()
+out = Path(os.environ["FMZX_PACKAGES_OUT"])
+ids = Path(os.environ["FMZX_PACKAGES_PACK"]).read_text()
 for f in ("fmzx.fwsc", "fmzx-preview.fwsc"):
-    (out / f).unlink(missing_ok=True)
-ids = [g["id"] for g in tomllib.loads(games_file.read_text())["game"]]
-total = sum(SIZES[g] for g in ids) + 2000
-room = int(os.environ["FAKE_ROOM"])
-if total > room:
-    print(f"tools/make-personal-pack: fmzx-pack: the pack does not fit: it needs {total}, room {room}", file=sys.stderr)
-    sys.exit(1)
-for f in ("fmzx.fwsc", "fmzx-preview.fwsc"):
-    (out / f).write_bytes(b"FWSC" + ",".join(ids).encode())
-print("packed", ids)
+    (out / f).write_bytes(b"FWSC" + ids.encode())
+    print(f"{out / f}: verified")
+'''
+
+FAKE_WEB_DEMO = r'''
+import json, sys
+with open(LOG, "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\n")
 '''
 
 FAKE_PREVIEW = r'''
@@ -2102,7 +2356,7 @@ out.write_bytes(b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + stru
 '''
 
 SELFTEST_HEADER = """\
-# Your games for tools/make-personal-pack (BUILDING.md, "Your own games"), in the syntax of
+# Your games for tools/pack-studio (BUILDING.md, "Your own games"), in the syntax of
 # games/games.toml (docs/controls.md).
 
 """
@@ -2180,16 +2434,27 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
             failures.append(what)
 
     with tempfile.TemporaryDirectory(prefix="pack-studio-") as t:
-        t = Path(t)
+        t = Path(t).resolve()
         fakes = t / "fakes"
         fakes.mkdir()
         calls = t / "arrange-calls.jsonl"
+        pack_calls = t / "fmzx-pack-calls.jsonl"
+        pkg_calls = t / "make-packages-calls.jsonl"
+        demo_calls = t / "web-demo-calls.jsonl"
         sizes = {"alpha": 30000, "bravo": 40000, "charlie": 60000}
+        dev = t / "devbuild"
+        for f in ("fm1/platform/fm1/fmzx_app.bin", "fm1-preview/platform/fm1/fmzx_app.bin",
+                  "fm1/third_party/felucca-loader/loader.bin"):
+            (dev / f).parent.mkdir(parents=True, exist_ok=True)
+            (dev / f).write_bytes(b"app")
         env = {
-            "FMZX_PACK": _script(fakes / "fmzx-pack", FAKE_FMZX_PACK, {"HEADER": SELFTEST_HEADER, "ENTRIES": SELFTEST_ENTRIES}),
+            "FMZX_PACK": _script(fakes / "fmzx-pack", FAKE_FMZX_PACK, {"HEADER": SELFTEST_HEADER, "ENTRIES": SELFTEST_ENTRIES,
+                                                                     "SIZES": sizes, "LOG": str(pack_calls)}),
             "FMZX_ARRANGE_MUSIC": _script(fakes / "arrange-music", FAKE_ARRANGE, {"LOG": str(calls)}),
-            "FMZX_MAKE_PERSONAL_PACK": _script(fakes / "make-personal-pack", FAKE_MAKE_PACK, {"SIZES": sizes}),
+            "FMZX_MAKE_PACKAGES": _script(fakes / "make-packages", FAKE_MAKE_PACKAGES, {"LOG": str(pkg_calls)}),
+            "FMZX_WEB_DEMO": _script(fakes / "web-demo", FAKE_WEB_DEMO, {"LOG": str(demo_calls)}),
             "FMZX_MUSIC_PREVIEW": _script(fakes / "music-preview", FAKE_PREVIEW, {}),
+            "FMZX_BUILD": str(dev),
             "FMZX_SKIP_DEVICE_BUILD": "1",
             "FMZX_PLAYER": "true",
             "FMZX_HVSC_DIR": str(t / "hvsc"),
@@ -2319,6 +2584,26 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         runner.drain()
         check(preview_path(w, "bravo", WHOLE_GAME, "fm").is_file(), "listen: the whole game of a game without scores")
 
+        # -- --generate: the same jobs without the screen
+        before = len(calls.read_text().splitlines())
+        save_methods(w, {})
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--generate", "ay,ai", "--game", "alpha", "--ay-dir", str(t / "ays"),
+                       "--model", "rules"])
+        new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
+        check(rc == 0 and sorted(c[0] for c in new) == ["ay", "generate"] and load_methods(w) == {"alpha": {"ai", "ay"}}
+              and ["generate", str(w / "all"), "--game", "alpha", "--model", "rules"] in new,
+              f"--generate ay,ai --game alpha: marked, an AI and an AY job, nothing else ({[c[0] for c in new]})")
+        for bad, why in ((["--generate", "fm"], "an unknown method"), (["--generate", "ai", "--game", "bravo"], "a game without scores"),
+                         (["--generate", "ai", "--game", "nobody"], "an unknown game"), (["--game", "alpha"], "--game alone"),
+                         (["--generate", "sid", "--offline"], "SID offline without a collection")):
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = main([str(games), "-o", str(w)] + bad)
+            except SystemExit as e:
+                rc = e.code
+            check(rc not in (0, None), f"--generate: {why} fails")
+
         # -- the build: a pack that does not fit gives its last game to the next
         (w / "pack-4").mkdir()
         (w / "pack-4" / MARKER).write_text("{}")
@@ -2341,12 +2626,25 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
               "build: the pack's games file, alpha's entry verbatim")
         check((w / "pack-3" / "fmzx.fwsc").read_bytes() == b"FWSCcharlie" and str(w / "pack-3" / "fmzx.fwsc") in s,
               "build: the packages, and the summary names them")
+        app_args = []
+        for x in apps():
+            app_args += ["--app", str(x)]
+        pcalls = [json.loads(ln) for ln in pack_calls.read_text().splitlines()]
+        check(["personal", str(p1 / "personal-games.toml"), "-o", str(p1)] + app_args in pcalls
+              and ["personal", str(games.resolve()), "-o", str(w / "all")] + app_args + ["--plan"] in pcalls,
+              "build: fmzx-pack personal on each pack's games file, with both apps (and the plan on the folder)")
+        kcalls = [json.loads(ln) for ln in pkg_calls.read_text().splitlines()]
+        check({"argv": [], "env": {"FMZX_SKIP_DEVICE_BUILD": "1", "FMZX_PACKAGES_PACK": str(w / "pack-3" / "games.bin"),
+                                   "FMZX_PACKAGES_OUT": str(w / "pack-3")}} in kcalls and "KB free" in s and "fmzx-preview.fwsc: verified" in s,
+              "build: tools/make-packages per pack (the pack's games.bin, into the pack); the table and the verify shown")
         os.environ["FAKE_ROOM"] = "100000"
         with contextlib.redirect_stdout(io.StringIO()):
-            rc = main([str(games), "-o", str(w), "--build"])
+            rc = main([str(games), "-o", str(w), "--build", "--offline", "--cache", "rel-cache"])
         packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w) if is_studio_pack(d)}
         check(rc == 0 and packs == {1: ["alpha", "bravo"], 2: ["charlie"]} and not (w / "pack-3").exists(),
               f"build: fewer packs, pack-3 removed ({packs})")
+        check(json.loads(pkg_calls.read_text().splitlines()[-1])["argv"] == ["--offline", "--cache", str(Path("rel-cache").resolve())],
+              "build: --offline and --cache DIR (made absolute) go to tools/make-packages")
         check((w / "all" / "sound-cache").is_dir() and (w / "all" / "arrange" / "choices.toml").is_file(),
               "build: the shared folders survive the removal")
         os.environ["FAKE_ROOM"] = "50000"
@@ -2356,33 +2654,154 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         check(rc == 1 and "in no pack (too big for a pack of its own): Charlie" in buf.getvalue(),
               "build: a game too big for any pack is named, exit 1")
         os.environ["FAKE_ROOM"] = "100000"
+        os.environ["FMZX_BUILD"] = str(t / "no-build")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([str(games), "-o", str(t / "w-nobuild"), "--build"])
+        os.environ["FMZX_BUILD"] = str(dev)
+        check(rc == 1 and f"build failed: no {t / 'no-build'}" in buf.getvalue() and "FMZX_SKIP_DEVICE_BUILD=1" in buf.getvalue(),
+              "build: no device builds, no build (the missing file named)")
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--build"])
+        check(rc == 0, "build: again, for what follows")
 
-        # -- the SID collection: safe unpacking, and the download from 127.0.0.1
-        import py7zr
+        # -- a games file as the input, used as written
+        gfile = t / "picked" / "my-games.toml"
+        gfile.parent.mkdir()
+        _, ents = split_games_file(SELFTEST_HEADER + SELFTEST_ENTRIES)
+        gtext = SELFTEST_HEADER + "\n".join(e for g, e in ents if g != "gone")
+        gfile.write_text(gtext)
+        w3 = t / "w3"
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(gfile), "-o", str(w3), "--build"])
+        packs = {n: json.loads((d / MARKER).read_text())["games"] for n, d in pack_folders(w3) if is_studio_pack(d)}
+        g3 = tomllib.loads((w3 / "pack-1" / "personal-games.toml").read_text())
+        check(rc == 0 and packs == {1: ["alpha", "bravo"], 2: ["charlie"]} and gfile.read_text() == gtext
+              and not (w3 / "all" / "personal-games.toml").exists()
+              and ["personal", str(gfile), "-o", str(w3 / "all")] + app_args + ["--plan"]
+              in [json.loads(ln) for ln in pack_calls.read_text().splitlines()],
+              f"games file: learned from it as written, the packs from its entries ({packs})")
+        check(g3["game"][1]["file"] == str(gfile.parent / "bravo.sna") and str(gfile) in (w3 / "pack-1" / "personal-games.toml").read_text(),
+              "games file: a relative file from the games file's folder; the pack's note names it")
+        check(workspace(w / "all" / "personal-games.toml", None) == w and workspace(gfile, None) == ROOT / "build/studio/my-games"
+              and workspace(games, None) == ROOT / "build/studio/My Games",
+              "games file: a workspace's all/personal-games.toml works in that workspace")
 
-        src = t / "web"
-        src.mkdir()
-        with py7zr.SevenZipFile(src / "HVSC_85-all-of-them.7z", "w") as z:
-            z.writestr(b"STIL\n", "C64Music/DOCUMENTS/STIL.txt")
-            z.writestr(b"PSID", "C64Music/MUSICIANS/S/Someone/Alpha.sid")
-        with py7zr.SevenZipFile(t / "evil.7z", "w") as z:
-            z.writestr(b"ok", "C64Music/ok.txt")
-            z._writestr(b"x", "../escaped.txt")  # the writer refuses such a path; the test needs one
+        # -- --try: the browser test bench on a built pack
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--try"])
+            rc2 = main([str(games), "-o", str(w), "--try", "2"])
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            rc5 = main([str(games), "-o", str(w), "--try", "5"])
+        dcalls = [json.loads(ln) for ln in demo_calls.read_text().splitlines()]
+        check(rc == 0 and rc2 == 0 and rc5 == 1 and dcalls == [["--packages", str(w / "pack-1")], ["--packages", str(w / "pack-2")]],
+              f"--try [N]: tools/web-demo --packages W/pack-N; a pack not built fails ({dcalls})")
+
+        # -- the SID collection: the member checks on listings (bsdtar's and 7-Zip's), safe unpacking,
+        # and the download from 127.0.0.1
+        names = "C64Music/\nC64Music/a b.sid\n../escaped.txt\nC64Music/lnk\nC64Music/dev\n"
+        verbose = ("drwxr-xr-x  0 0      0           0 Nov 25 21:33 C64Music/\n"
+                   "-rw-r--r--  0 0      0           5 Nov 25 21:33 C64Music/a b.sid\n"
+                   "-rw-r--r--  0 0      0           2 Nov 25 21:33 ../escaped.txt\n"
+                   "lrwxr-xr-x  0 0      0           0 Nov 25 21:33 C64Music/lnk -> /etc/passwd\n"
+                   "crw-r--r--  0 0      0           0 Nov 25 21:33 C64Music/dev\n")
+        ms = parse_bsdtar_listing(names, verbose)
+        check([(m.name, m.kind, m.size) for m in ms] == [("C64Music/", "dir", 0), ("C64Music/a b.sid", "file", 5),
+                                                          ("../escaped.txt", "file", 2), ("C64Music/lnk", "link", 0),
+                                                          ("C64Music/dev", "other", 0)], "listing: bsdtar's names, kinds and sizes")
+        slt = """7-Zip (z) 24.08 (arm64)
+
+Listing archive: x.7z
+
+--
+Path = x.7z
+Type = 7z
+Physical Size = 300
+
+----------
+Path = C64Music
+Size = 0
+Folder = +
+Attributes = D_ drwxr-xr-x
+
+Path = C64Music/a b.sid
+Size = 5
+Folder = -
+Attributes = A_ -rw-r--r--
+
+Path = C64Music/lnk
+Size = 11
+Folder = -
+Attributes = A_ lrwxrwxrwx
+Symbolic Link = /etc/passwd
+
+Path = /abs.txt
+Size = 3
+Folder = -
+Attributes = A_ -rw-r--r--
+
+Path = C64Music/pipe
+Size = 0
+Folder = -
+Attributes = A_ prw-r--r--
+"""
+        ms7 = parse_7z_listing(slt)
+        check([(m.name, m.kind, m.size) for m in ms7] == [("C64Music", "dir", 0), ("C64Music/a b.sid", "file", 5),
+                                                           ("C64Music/lnk", "link", 11), ("/abs.txt", "file", 3),
+                                                           ("C64Music/pipe", "other", 0)], "listing: 7-Zip's names, kinds and sizes")
+
+        def refused(members: list[Member], max_bytes: int = UNPACK_MAX) -> str | None:
+            try:
+                check_members("x.7z", members, max_bytes)
+            except ValueError as e:
+                return str(e)
+            return None
+        check(refused(ms[:2]) is None and refused(ms7[:2]) is None, "listing: a plain archive passes")
+        check("outside its folder" in (refused(ms[:3]) or "") and "outside its folder" in (refused(ms7[:2] + ms7[3:4]) or ""),
+              "listing: a path escaping its folder (..) or absolute refuses the archive")
+        check("is a link" in (refused(ms[:2] + ms[3:4]) or "") and "is a link" in (refused(ms7[:3]) or ""),
+              "listing: a link refuses the archive")
+        check("is a device" in (refused(ms[:2] + ms[4:]) or "") and "is a device" in (refused(ms7[:2] + ms7[4:]) or ""),
+              "listing: a device or a fifo refuses the archive")
+        check("unpacks to" in (refused(ms[:2], 4) or ""), "listing: more than the limit refuses the archive")
         try:
-            safe_extract_7z(t / "evil.7z", t / "evil-out")
-            check(False, "unpack: a member escaping its folder refuses the archive")
+            parse_bsdtar_listing("a\nb\n", "-rw-r--r--  0 0      0           5 Nov 25 21:33 a\n")
+            check(False, "listing: listings that disagree are an error")
         except ValueError:
-            check(not (t / "escaped.txt").exists() and not (t / "evil-out").exists()
-                  and not (t / ".evil-out.tmp").exists(), "unpack: a member escaping its folder refuses the archive")
-        if external_unpacker(src / "HVSC_85-all-of-them.7z", t) is None:
-            print("skip  unpack with bsdtar or 7-Zip: neither is installed")
-        else:
-            how = safe_extract_7z(src / "HVSC_85-all-of-them.7z", t / "ext" / "85", external=True)
-            check(find_collection(t / "ext") == t / "ext" / "85" / "C64Music"
-                  and (t / "ext/85/C64Music/MUSICIANS/S/Someone/Alpha.sid").read_bytes() == b"PSID",
-                  f"unpack with {how} (for methods py7zr does not read)")
+            check(True, "listing: listings that disagree are an error")
         check(not member_ok("/abs") and not member_ok("a/../../b") and not member_ok("C:x") and member_ok("C64Music/a b.sid"),
               "unpack: the path checks")
+        src = t / "web"
+        src.mkdir()
+        tool = archive_tool()
+        if tool is None or tool[0] != "bsdtar":
+            print("skip  a real .7z (written by bsdtar), its unpacking and the download: bsdtar is not installed")
+        else:
+            tree = t / "tree"
+            (tree / "C64Music/DOCUMENTS").mkdir(parents=True)
+            (tree / "C64Music/MUSICIANS/S/Someone").mkdir(parents=True)
+            (tree / "C64Music/DOCUMENTS/STIL.txt").write_text("STIL\n")
+            (tree / "C64Music/MUSICIANS/S/Someone/Alpha.sid").write_bytes(b"PSID")
+            (tree / "x.txt").write_bytes(b"x")
+            (tree / "lnk").symlink_to("/etc/passwd")
+
+            def seven(out: Path, *members: str, subst: str | None = None) -> None:
+                argv = [tool[1], "--format", "7zip", "-c", "-f", str(out)] + (["-P", "-s", subst] if subst else []) + list(members)
+                subprocess.run(argv, cwd=tree, check=True, capture_output=True)
+            seven(src / "HVSC_85-all-of-them.7z", "C64Music")
+            seven(t / "evil.7z", "C64Music/DOCUMENTS", "x.txt", subst=",^x.txt$,../escaped.txt,")
+            seven(t / "link.7z", "C64Music/DOCUMENTS", "lnk")
+            for bad, why in (("evil.7z", "a member escaping its folder"), ("link.7z", "a link")):
+                try:
+                    safe_extract_7z(t / bad, t / "evil-out")
+                    check(False, f"unpack: {why} refuses the archive (bsdtar's .7z)")
+                except ValueError:
+                    check(not (t / "escaped.txt").exists() and not (t / "evil-out").exists()
+                          and not (t / ".evil-out.tmp").exists(), f"unpack: {why} refuses the archive (bsdtar's .7z)")
+            how = safe_extract_7z(src / "HVSC_85-all-of-them.7z", t / "ext" / "85")
+            check(find_collection(t / "ext") == t / "ext" / "85" / "C64Music"
+                  and (t / "ext/85/C64Music/MUSICIANS/S/Someone/Alpha.sid").read_bytes() == b"PSID",
+                  f"unpack with {how}: the collection found")
         import http.server
 
         class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -2391,21 +2810,22 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
 
             def log_message(self, *a):
                 pass
-        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        base = f"http://127.0.0.1:{srv.server_address[1]}"
-        (src / "api.json").write_text(json.dumps({"version": 85, "complete": {"url": f"{base}/HVSC_85-all-of-them.7z"}}))
-        seen = []
-        try:
-            coll = fetch_hvsc(t / "hvsc", seen.append, lambda s: None, api=f"{base}/api.json")
-        finally:
-            srv.shutdown()
-        check(coll == t / "hvsc" / "85" / "C64Music" and (coll / "MUSICIANS/S/Someone/Alpha.sid").is_file(),
-              "download: unpacked into build/hvsc/<version>/, the collection found")
-        check(not list((t / "hvsc").glob("*.7z*")) and any("unpacking" in x for x in seen),
-              "download: the archive removed after unpacking, progress shown")
-        check(downloaded_collection(t / "hvsc") == coll and find_collection(t / "hvsc") == coll,
-              "download: found again on the next start")
+        if (src / "HVSC_85-all-of-them.7z").is_file():
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            base = f"http://127.0.0.1:{srv.server_address[1]}"
+            (src / "api.json").write_text(json.dumps({"version": 85, "complete": {"url": f"{base}/HVSC_85-all-of-them.7z"}}))
+            seen = []
+            try:
+                coll = fetch_hvsc(t / "hvsc", seen.append, lambda s: None, api=f"{base}/api.json")
+            finally:
+                srv.shutdown()
+            check(coll == t / "hvsc" / "85" / "C64Music" and (coll / "MUSICIANS/S/Someone/Alpha.sid").is_file(),
+                  "download: unpacked into build/hvsc/<version>/, the collection found")
+            check(not list((t / "hvsc").glob("*.7z*")) and any("unpacking" in x for x in seen),
+                  "download: the archive removed after unpacking, progress shown")
+            check(downloaded_collection(t / "hvsc") == coll and find_collection(t / "hvsc") == coll,
+                  "download: found again on the next start")
         check(not url_ok("http://example.org/x.7z") and url_ok("https://example.org/x.7z"), "download: https only (or 127.0.0.1)")
 
         # -- the AY collection: the download from 127.0.0.1, only music/ay unpacked, a bad archive refused
@@ -2530,18 +2950,25 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(prog=PROG, description="A terminal studio for your own games: music per game, then the packs.",
+    ap = argparse.ArgumentParser(prog=PROG, description="The packs of your own games: music per game, then the packs.",
                                  epilog="tools/pack-studio selftest checks the tool. Details: the docstring at the top of tools/pack-studio.")
-    ap.add_argument("folder", help="the folder of your games (.sna, .z80, .tap, .tzx)")
+    ap.add_argument("folder", metavar="games", help="the folder of your games (.sna, .z80, .tap, .tzx), or a games file (.toml) used as written")
     ap.add_argument("-o", dest="out", metavar="W", help="the workspace (default build/studio/<folder name>)")
     ap.add_argument("--sid-dir", metavar="PATH", help="the SID collection to use instead of downloading one")
     ap.add_argument("--ay-dir", metavar="PATH", help="the AY collection (.ay files) to use instead of downloading one")
     ap.add_argument("--offline", action="store_true", help="download nothing")
+    ap.add_argument("--cache", metavar="DIR", help="tools/make-packages --cache DIR: another folder for the SDK files")
     ap.add_argument("--model", metavar="NAME", help="the generator for AI takes (tools/arrange-music generate --model)")
-    m = ap.add_mutually_exclusive_group()
-    m.add_argument("--status", action="store_true", help="print the games, methods, scores, candidates and choices")
-    m.add_argument("--build", action="store_true", help="build the packs without the screen")
-    return ap.parse_args(argv)
+    ap.add_argument("--generate", metavar="METHODS", help="without the screen: mark and generate ai, sid, ay (comma-separated)")
+    ap.add_argument("--game", metavar="ID", action="append", help="with --generate: only this game (again for more)")
+    ap.add_argument("--build", action="store_true", help="build the packs without the screen")
+    ap.add_argument("--status", action="store_true", help="print the games, methods, scores, candidates and choices")
+    ap.add_argument("--try", dest="try_", metavar="N", type=int, nargs="?", const=1,
+                    help="then the browser test bench on pack N (1 unless given): tools/web-demo --packages W/pack-N")
+    a = ap.parse_args(argv)
+    if a.try_ is not None and a.try_ < 1:
+        ap.error("--try N: N counts from 1")
+    return a
 
 
 def main(argv: list[str] | None = None) -> int:

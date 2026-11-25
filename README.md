@@ -14,7 +14,7 @@ real time, with FM-synthesised instruments. It boots on the real hardware.
 
 **Try it in your browser: <https://dev-gh.nisdom.com/fm1-zx/>**, with a set of freely licensed
 Spectrum games (the computer keyboard plays the FM-1's keys; the page lists them). Or build a
-package of your own games with `tools/make-personal-pack` ([your own games](BUILDING.md#your-own-games)),
+package of your own games with `tools/pack-studio` ([your own games](BUILDING.md#your-own-games)),
 to run on the FM-1 or in a local copy of the browser page; it stays on your computer.
 
 The firmware is C for the FM-1's pi32v2 CPU; the tests, the pack builder and every host tool are
@@ -85,7 +85,7 @@ What works:
   fm1-emu's web page ([install and recovery](docs/install.md)); the page (`tools/web-demo`) adds a
   guide, labels on the FM-1 drawing and computer keys that follow the running game's key map
   ([computer keyboard](docs/controls.md#computer-keyboard-browser-page));
-- your own 48K games: `tools/make-personal-pack` builds the packages from a folder of them,
+- your own 48K games: `tools/pack-studio` builds the packages from a folder of them,
   turbo and custom-loader tapes included (loaded through the tape signal on the host), and learns
   each game's music ([your own games](BUILDING.md#your-own-games)); an optional tool has a music
   model write a bass, chords and drums around a recorded tune, as takes you choose by ear

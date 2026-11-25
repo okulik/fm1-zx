@@ -16,7 +16,7 @@
 # FMZX_SKIP_DEVICE_BUILD=1 skips the device builds (they must be up to date).
 # FMZX_PACKAGES_PACK=FILE packs that game pack instead of building one from games/games.toml, and
 # FMZX_PACKAGES_OUT=DIR writes the packages and the licence text to DIR instead of build/fm1
-# (tools/make-personal-pack uses both).
+# (tools/pack-studio uses both, for each pack).
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)

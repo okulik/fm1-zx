@@ -9,7 +9,7 @@
 #   tools/web-demo --no-serve       build only
 #   tools/web-demo --skip-firmware  no device builds (Docker): repack build/fm1's firmware offline
 #   tools/web-demo --port N         serve on another port
-#   tools/web-demo --packages DIR   serve DIR's packages (tools/make-personal-pack's) instead of build/fm1's
+#   tools/web-demo --packages DIR   serve DIR's packages (a tools/pack-studio pack's, W/pack-<n>) instead of build/fm1's
 # Steps: the packages (tools/make-packages; with --packages, DIR's fmzx.fwsc, fmzx-preview.fwsc and
 # keymaps.json, built by nothing here); fm1-emu fetched at the revision
 # host/crates/emu-gate/Cargo.toml pins into build/fm1-emu (shallow, only when HEAD differs),
@@ -75,7 +75,7 @@ if [ -n "$packages" ]; then
     [ -d "$packages" ] || die "--packages: no folder $packages"
     fm1=$(cd "$packages" && pwd)
     for f in fmzx.fwsc fmzx-preview.fwsc keymaps.json; do
-        [ -f "$fm1/$f" ] || die "--packages: no $fm1/$f (tools/make-personal-pack writes it)"
+        [ -f "$fm1/$f" ] || die "--packages: no $fm1/$f (tools/pack-studio --build writes it)"
     done
 elif [ "$skip_firmware" = 1 ]; then
     FMZX_SKIP_DEVICE_BUILD=1 "$root/tools/make-packages" --offline

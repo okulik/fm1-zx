@@ -1,17 +1,18 @@
 // SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The personal pack in the firmware: `tools/make-personal-pack` on a temporary folder of our
-//! own generated test programs (the turbo tape, `tape.tap`, `tune.sna`; never anyone's games)
-//! into a temporary folder, then its release package booted in fm1-emu as fm1-emu's web page
-//! boots one. The picker lists the three games, each starts, and the turbo game (its loaded
+//! The personal pack in the firmware: `tools/pack-studio <folder> --build` on a temporary folder
+//! of our own generated test programs (the turbo tape, `tape.tap`, `tune.sna`; never anyone's
+//! games) into a temporary workspace, then its one pack's release package (`pack-1/fmzx.fwsc`)
+//! booted in fm1-emu as fm1-emu's web page boots one. The picker lists the three games, each starts, and the turbo game (its loaded
 //! snapshot) shows its border at once. The pack learned the tune's music: in FM: engines the
 //! device plays the host mixer's output with that learned entry, sample for sample, and it is FM,
 //! not the delayed beeper.
 //!
-//! Needs the device builds (`build/fm1` and `build/fm1-preview`, from `tools/make-packages`)
-//! and the SDK files cached in `build/ac79/` (the script runs offline). From `host/`,
-//! `FMZX_FM1_BUILD=$PWD/../build/fm1` as for the other firmware tests.
+//! Needs the device builds (`build/fm1` and `build/fm1-preview`, from `tools/make-packages`),
+//! the SDK files cached in `build/ac79/` (the studio runs offline), and uv or a `python3` of 3.11
+//! or later to run `tools/pack-studio`. From `host/`, `FMZX_FM1_BUILD=$PWD/../build/fm1` as for
+//! the other firmware tests.
 
 use emu_gate::budgets::{choose_sound, SOUND_FM_B};
 use emu_gate::fw::{build_dir, BootOpt, Firmware, Machine};
@@ -87,6 +88,26 @@ fn host_picker(pack: &[u8]) -> Vec<u16> {
         .collect()
 }
 
+/// `tools/pack-studio`, run through uv when it is on the PATH, else by a `python3` of 3.11 or later.
+fn pack_studio() -> Command {
+    let script = repo().join("tools/pack-studio");
+    let runs = |c: &mut Command| c.output().is_ok_and(|o| o.status.success());
+    if runs(Command::new("uv").arg("--version")) {
+        let mut c = Command::new("uv");
+        c.args(["run", "--script"]).arg(script);
+        return c;
+    }
+    if runs(Command::new("python3").args(["-c", "import sys; sys.exit(sys.version_info < (3, 11))"])) {
+        let mut c = Command::new("python3");
+        c.arg(script);
+        return c;
+    }
+    panic!(
+        "this test runs tools/pack-studio, which needs uv (https://docs.astral.sh/uv/) or a python3 of 3.11 \
+         or later on the PATH: install one and run the tests again"
+    );
+}
+
 /// Boots the package, selects game `index` and presses PLAY.
 fn start(fw: &Firmware, pkg: &[u8], index: u32) -> Machine {
     let mut m = Machine::boot_package(fw, pkg, Some(OPT));
@@ -107,24 +128,28 @@ fn fw_personal() {
     std::fs::write(games.0.join("turbo.tzx"), turbo_tzx()).unwrap();
     std::fs::write(games.0.join("tape.tap"), tape_tap()).unwrap();
     std::fs::write(games.0.join("tune.sna"), tune_sna()).unwrap();
-    let dir = Tmp::new("out");
-    let run = Command::new(repo().join("tools/make-personal-pack"))
+    let w = Tmp::new("out");
+    let run = pack_studio()
         .arg(&games.0)
+        .arg("--build")
         .arg("-o")
-        .arg(&dir.0)
+        .arg(&w.0)
         .arg("--offline")
         .env("FMZX_SKIP_DEVICE_BUILD", "1") // the builds under test, as they are
         .output()
-        .expect("run tools/make-personal-pack");
+        .expect("run tools/pack-studio");
     let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     println!("{said}");
-    assert!(run.status.success(), "tools/make-personal-pack failed:\n{said}");
+    assert!(run.status.success(), "tools/pack-studio failed:\n{said}");
     assert!(said.contains("used ") && said.contains(" KB free"), "the table:\n{said}");
+    assert!(said.contains("built 1 pack"), "one pack:\n{said}");
+    let dir = w.0.join("pack-1");
+    assert!(!w.0.join("pack-2").exists(), "a second pack");
 
-    let pkg = std::fs::read(dir.0.join("fmzx.fwsc")).expect("DIR/fmzx.fwsc");
-    let pack = std::fs::read(dir.0.join("games.bin")).expect("DIR/games.bin");
+    let pkg = std::fs::read(dir.join("fmzx.fwsc")).expect("W/pack-1/fmzx.fwsc");
+    let pack = std::fs::read(dir.join("games.bin")).expect("W/pack-1/games.bin");
     for name in ["fmzx.fwsc", "fmzx-preview.fwsc"] {
-        let r = verify(&std::fs::read(dir.0.join(name)).unwrap(), &Pins::builtin(), Some(PRODUCT));
+        let r = verify(&std::fs::read(dir.join(name)).unwrap(), &Pins::builtin(), Some(PRODUCT));
         assert!(r.problems.is_empty(), "{name}: {:?}", r.problems);
         assert_eq!(r.pack.map(|p| p.1), Some(3), "{name}: three games");
     }

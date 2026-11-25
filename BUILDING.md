@@ -97,7 +97,7 @@ downloaded; on Apple silicon the image runs under amd64 emulation).
     tools/web-demo --no-serve       # build only
     tools/web-demo --skip-firmware  # no Docker: repack build/fm1's device build offline
     tools/web-demo --port N         # serve on another port
-    tools/web-demo --packages DIR   # DIR's packages instead (tools/make-personal-pack's, below)
+    tools/web-demo --packages DIR   # DIR's packages instead (a tools/pack-studio pack's, below)
     tools/publish-page              # the public page: build, commit to gh-pages, push
     tools/publish-page --no-push    # build and commit to gh-pages only
 
@@ -150,35 +150,35 @@ own custom domain, `dev-gh.nisdom.com`, whose DNS name points at `okulik.github.
 
 ## Your own games
 
-    tools/make-personal-pack ~/games            # build/personal/fmzx.fwsc and fmzx-preview.fwsc
-    tools/make-personal-pack build/personal/personal-games.toml   # from the games file, as written
-    tools/make-personal-pack ~/games --try      # then the browser test bench with these packages
+    tools/pack-studio ~/games                    # the studio: a terminal screen, music by ear, then the packs
+    tools/pack-studio ~/games --build            # the packs, without the screen
+    tools/pack-studio ~/games --build --try      # then the browser test bench with pack 1 (--try 2: pack 2)
+    tools/pack-studio ~/games --status           # the games, their music and choices, as text
+    tools/pack-studio ~/games --generate ai,sid,ay [--game ID]...   # takes for the scores, without the screen
+    tools/pack-studio build/studio/games/all/personal-games.toml --build   # from the games file, as written
 
-builds the two update packages with the games of a folder of yours instead of the built-in pack.
-They stay on your computer: everything goes under `build/personal/` (`-o DIR` for another
-folder), which git ignores, and the folder of games is only read. It runs both device builds
-first (in Docker, a no-op when they are up to date), so it works from a clean `build/`;
-`FMZX_SKIP_DEVICE_BUILD=1` skips them. `--offline` and `--cache DIR` work as for
-`tools/make-packages`.
+builds update packages with the games of a folder of yours instead of the built-in pack: as many
+packs as the games need, each a pair `pack-<n>/fmzx.fwsc` and `pack-<n>/fmzx-preview.fwsc`, with
+each game's music chosen by ear. They stay on your computer: everything goes under the workspace
+`build/studio/<folder name>/` (`-o W` for another folder; `W` below), which git ignores, and the
+folder of games is only read. It runs both device builds first (in Docker, a no-op when they are
+up to date), so it works from a clean `build/`; `FMZX_SKIP_DEVICE_BUILD=1` skips them.
+`--offline` and `--cache DIR` work as for `tools/make-packages`. It needs Python 3.11 or later and
+nothing else of its own: `tools/pack-studio` runs it through [uv](https://docs.astral.sh/uv/),
+`python3 tools/pack-studio` with any Python 3.11 or later.
 
-**The studio.** To choose each game's music by ear and get as many packs as the games need:
-
-    tools/pack-studio ~/games                   # the studio, a terminal screen
-    tools/pack-studio ~/games --status          # the games, their music and choices, as text
-    tools/pack-studio ~/games --build           # the packs, without the screen
-
-It learns the folder's games as `tools/make-personal-pack` does (the device builds, then
-`fmzx-pack personal ... --plan`, which measures every game even when they are too many for one
-pack) and lists each game with how it went in, its packed size and its music. Per game, mark one
-or more ways to make the music of its scores: **FM**, the FM-1 playing the music learned from the
-game's code and memory (always there: the original); **AI**, takes
-[arranged](#arranged-music) by `tools/arrange-music generate`; **SID**, the game's C64 tune, and
-**AY**, its Spectrum 128 tune ([music from other versions](#music-from-other-versions)). A game
-with no score plays FM from its code, or the beeper, and has nothing to arrange. Open a game to
-hear each score's candidates (the beeper, FM, each AI take with its figures, each C64 or
-Spectrum 128 take with its source and melody match) and choose one. What plays is `music-preview`'s render of what the
-FM-1 plays or, when that is not built, the renders `tools/arrange-music` wrote, through `afplay`
-(macOS), `ffplay`, `paplay` or `aplay`.
+It learns every game (`fmzx-pack personal <folder> -o W/all ... --plan`, which measures every
+game even when they are too many for one pack) and lists each game with how it went in, its
+packed size and its music. Per game, mark one or more ways to make the music of its scores:
+**FM**, the FM-1 playing the music learned from the game's code and memory (always there: the
+original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music generate`; **SID**,
+the game's C64 tune, and **AY**, its Spectrum 128 tune ([music from other
+versions](#music-from-other-versions)). A game with no score plays FM from its code, or the
+beeper, and has nothing to arrange. Open a game to hear each score's candidates (the beeper, FM,
+each AI take with its figures, each C64 or Spectrum 128 take with its source and melody match)
+and choose one. What plays is `music-preview`'s render of what the FM-1 plays or, when that is
+not built, the renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay`
+or `aplay`.
 
 Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `a`/`s`/`y` mark
 AI/SID/AY for it, `A`/`S`/`Y` for every game, `g` generates what is marked, `r` learns again, `b`
@@ -186,30 +186,38 @@ builds, `l` shows the log, `?` the full help, `q` quits. On a game: Enter plays,
 stops, `c` chooses, `a`/`s`/`y`/`g` as before, Left, `h` or Backspace goes back. Long steps run one at a time in the
 background; the bottom line shows the step, how many wait and its last output line.
 
-Everything goes under `build/studio/<folder name>/` (`-o W` for another folder): `all/` the
-learning (`personal-games.toml`, which keeps your edits, the scores, their takes and
-`choices.toml`, the cache), `studio.toml` the methods marked, `studio.log` every step's output,
-`previews/` the renders. `b` learns again (choices change the sizes), splits the games in name
-order into packs filled to the room less 2%, and builds each with `tools/make-personal-pack`
-from its own games file, those games' entries from `all/personal-games.toml` as written there:
-`pack-<n>/fmzx.fwsc` and `pack-<n>/fmzx-preview.fwsc`. A pack that does not fit gives its last
-game to the next one. The summary lists each pack's games and its package. The first SID job
-downloads the High Voltage SID Collection (about 85 MB; its address from hvsc.c64.org) into
-`build/hvsc/<version>/`; py7zr checks its member list first, and bsdtar (macOS's `tar`) or 7-Zip
-unpacks it. The first AY job downloads the chris-y/AY collection on GitHub (Spectrum AY music;
-about 30 MB, its newest commit from api.github.com) and unpacks only its `music/ay` folder into
+Without the screen: `--generate` marks the methods named for every game with scores (or for the
+games `--game` names, by the ids `--status` shows) and runs the jobs `g` runs; choosing a take
+stays a choice by ear (the screen, or `tools/arrange-music pick W/all`). `--build` builds, `--status`
+prints, `--try [N]` serves pack N (1 unless given) in the browser test bench; given together they
+run in that order (generate, build, status, try), and a step that fails stops the command.
+
+The workspace: `all/` the learning (`personal-games.toml`, which keeps your edits, the scores,
+their takes and `choices.toml`, the cache), `studio.toml` the methods marked, `studio.log` every
+step's output, `previews/` the renders. A build (`b`, or `--build`) learns again (choices change
+the sizes), splits the games in name order into packs filled to the room less 2%, and builds each
+in `pack-<n>/` from its own games file, those games' entries from `all/personal-games.toml` as
+written there: `fmzx-pack personal` on that file (the pack and its table), then `tools/make-packages`'
+steps for its packages and their verify (`FMZX_PACKAGES_PACK`, `FMZX_PACKAGES_OUT`). A pack that
+does not fit gives its last game to the next one. The summary lists each pack's games and its
+package. The first SID job downloads the High Voltage SID Collection (about 85 MB; its address
+from hvsc.c64.org) into `build/hvsc/<version>/`; bsdtar (macOS's `tar`) or 7-Zip lists its members
+first (one whose path would land outside, a link or a device refuses the archive) and unpacks it.
+The first AY job downloads the chris-y/AY collection on GitHub (Spectrum AY music; about 30 MB, its
+newest commit from api.github.com) and unpacks only its `music/ay` folder into
 `build/ay/<commit>/`, every member's path checked first (one that would land outside, or a link,
 refuses the archive). The tunes belong to their authors: keep the collections and the packs made
 with them to yourself. `--sid-dir PATH` and `--ay-dir PATH` use collections you have instead, and
-`--offline` downloads nothing.
-The studio runs under [uv](https://docs.astral.sh/uv/), as `tools/arrange-music` does;
-`tools/pack-studio selftest` checks it with stand-ins for every tool, and the docstring at the top
-of `tools/pack-studio` is the full reference.
+`--offline` downloads nothing. `tools/pack-studio selftest` checks the tool with stand-ins for
+every tool it runs, and the docstring at the top of `tools/pack-studio` is the full reference.
+
+In what follows, `DIR` is a folder `fmzx-pack personal` writes: `W/all` for the learning,
+`W/pack-<n>` for a pack.
 
 The picker lists your games by name, A to Z (case does not count), whatever their order in the
 games file.
 
-**The games file.** Given a folder, the command writes `build/personal/personal-games.toml`, one
+**The games file.** Given a folder, the studio writes `W/all/personal-games.toml`, one
 entry per loadable `.sna`, `.z80`, `.tap` or `.tzx` file of the folder (not its subfolders), in the
 syntax of `games/games.toml` with `file` an absolute path. The name is the file name without its
 extension, its `(...)` and `[...]` tags and anything from a ` - ` on (`Night Raid II - The
@@ -220,8 +228,10 @@ new files are added at the end, and a game whose file is gone stays, marked with
 line above it; nothing is reordered. To leave a game out, comment out its lines with `#`: a file
 whose path is anywhere in the games file, comment lines included, is never added again. Deleting
 an entry works too when you build from the file itself (a run from the folder would add it back):
-given a games file, the command uses it as written (a relative `file` is taken from the file's
-folder) and changes nothing in it.
+given a games file, the studio uses it as written (a relative `file` is taken from the file's
+folder), changes nothing in it and takes the packs' entries from it. A workspace's own
+`all/personal-games.toml` works in that workspace; another games file in
+`build/studio/<its name without .toml>/` unless `-o` says otherwise.
 
 **How each game goes in.** `.sna` and 48K `.z80` files go in as they are ("as is"). A `.tap`, or a
 `.tzx` of standard blocks only, stays a tape ("tape") only when a trial load through the ROM's
@@ -238,7 +248,7 @@ tape whose program pages a 128K's memory (RAM banks 1-7 or the second screen), a
 fail to load (the tape never finishes, or the program ends at the BASIC editor, an error report
 or a reset: `host/crates/fmzx-pack/src/tapeload.rs`), are left out with the reason.
 
-**The table.** The command prints each game, how it went in, its packed size and its file; the
+**The table.** Each pack's build prints each game, how it went in, its packed size and its file; the
 space used and left in the app slot (about 472 KB beside the current image); and the games left
 out, with why:
 
@@ -250,7 +260,7 @@ out, with why:
     left out:
       big.z80: 128K
 
-**The music.** The command also learns each game's music, so that the Sound choice FM: engines
+**The music.** The learning also works out each game's music, so that the Sound choice FM: engines
 (docs/controls.md) plays it as FM. It runs each game on the host for 3 minutes of emulated time,
 as the FM-1 starts it: 40 s untouched, then ENTER, SPACE, 0, 1 and Kempston fire in turn, then
 random play from a fixed seed (the same game gives the same run). Music demos often start on one
@@ -349,7 +359,7 @@ runs keep, so a re-run learns only new or changed games.
 
 **Instruments.** In FM, each voice plays a bass, lead or pad instrument by its role in the tune.
 The FM-1 decides the roles live, by pitch; for the routines a game's music uses (learned ones,
-and the known routines of FM: engines), the command also works them out over the whole 3-minute
+and the known routines of FM: engines), the learning also works them out over the whole 3-minute
 run and stores them in the pack: per routine, its lowest channel the bass, its highest the lead,
 a third the pad, a lone channel the lead (none for a routine heard too little). The report shows
 each channel's role and where it came from:
@@ -384,25 +394,27 @@ A channel with no stored role (the report says `by the live rule` for it) is ran
 rule only among the other voices without a stored role, so it may play the same instrument as a
 channel with one.
 
-A pack that does not fit fails: the command lists every game by packed size, largest first, and
-writes no pack or packages (those of an earlier run are removed). Then comment out some entries in
-`personal-games.toml` and run again. The output folder must be a personal pack's: one that holds
+A pack that does not fit makes `fmzx-pack personal` fail: it lists every game by packed size,
+largest first, and writes no pack or packages (those of an earlier run are removed); the studio
+then gives the pack's last game to the next pack and builds it again, and a game too big for a
+pack of its own goes in no pack (the summary names it). To leave games out, comment out their
+entries in `personal-games.toml`. The output folder must be a personal pack's: one that holds
 packages or a `games.bin` but no `personal-games.toml` (such as `build/fm1`) is refused, since a
-run clears those files first. The packages are made and verified by
-`tools/make-packages`' own steps, given the pack and the output folder (`FMZX_PACKAGES_PACK`,
-`FMZX_PACKAGES_OUT`).
+run clears those files first.
 
-**Trying and installing.** `--try` serves the browser demo with `DIR/fmzx.fwsc` and the games'
-key maps (`tools/web-demo --packages DIR`, which builds nothing of the firmware). Install
-`build/personal/fmzx.fwsc` as `docs/install.md` describes for `build/fm1/fmzx.fwsc`.
+**Trying and installing.** `--try` serves the browser demo with `W/pack-1/fmzx.fwsc` (`--try N`:
+pack N's) and its games' key maps (`tools/web-demo --packages W/pack-<n>`, which builds nothing of
+the firmware). Install a pack's `fmzx.fwsc` as `docs/install.md` describes for
+`build/fm1/fmzx.fwsc`.
 
 The pieces: `fmzx-pack personal <folder | games.toml> -o DIR --app <app.bin> [--app <app.bin>]...`
 (the games file, the converted games in `DIR/converted/` with a manifest of their own,
 `DIR/games.bin` with the learned music and the chosen takes, `DIR/keymaps.json`,
 `DIR/sound-report.txt`, the scores' `DIR/arrange/<game>/<key>/score.toml` and the table;
 `--app`, required, gives the images, whose size sets the room), then
-those steps. `emu-gate`'s `tests/fw_personal.rs` runs the script on a folder of our own generated
-test programs and boots the result in fm1-emu.
+`tools/make-packages`' steps. `emu-gate`'s `tests/fw_personal.rs` runs
+`tools/pack-studio <folder> --build` on a folder of our own generated test programs and boots the
+pack in fm1-emu.
 
 With `--plan` the command goes as far as measuring the pack: the games converted, their music
 learned and the chosen takes applied, `sound-report.txt` and the scores written, but no
@@ -427,12 +439,15 @@ arranged too, through its shadow score ([the music](#your-own-games)): its takes
 chosen like any score's, and with none chosen the routine plays it live as before; a chosen take
 goes into the pack as a score that plays in place of the routine's notes.
 
-    tools/make-personal-pack ~/games --arrange    # the packages, then takes for the scores without any
-    tools/arrange-music pick build/personal       # listen and choose, on a page on your computer
-    tools/make-personal-pack ~/games              # the packages again, with the chosen takes
+    tools/pack-studio ~/games --generate ai       # takes for every game's scores (a and g on the screen)
+    tools/arrange-music pick build/studio/games/all   # listen and choose on a page (or c on the screen)
+    tools/pack-studio ~/games --build             # the packs, with the chosen takes
 
-**What it needs.** [uv](https://docs.astral.sh/uv/) (`tools/make-personal-pack --arrange` checks
-for it first): `tools/arrange-music` is a uv script, and its first run installs its Python packages
+`tools/arrange-music` is the engine `tools/pack-studio` runs for AI, SID and AY takes, on its
+workspace's `W/all` (`DIR` below); its commands work on their own too, for experiments.
+
+**What it needs.** [uv](https://docs.astral.sh/uv/) (`tools/pack-studio` checks for it before an
+AI, SID or AY job): `tools/arrange-music` is a uv script, and its first run installs its Python packages
 (about 1 GB: PyTorch, Hugging Face Transformers and the model's code, pinned in the script) into
 uv's cache, with a Python 3.11 or 3.12 if you have none. The first run that generates with the
 model downloads it, the Anticipatory Music Transformer (`stanford-crfm/music-medium-800k`, about
@@ -442,12 +457,13 @@ another); without it there is nothing to hear on the page, only MIDI files. ffmp
 installed, matches the renders' loudness. None of this is part of the repository or the packages
 ([LICENSING.md](LICENSING.md#the-arranging-tool)).
 
-**The scores.** Every `tools/make-personal-pack` run writes each recorded score's notes, and each
+**The scores.** Every `fmzx-pack personal` run writes each recorded score's notes, and each
 shadow score's, to `DIR/arrange/<game>/<key>/score.toml` (`<game>` the game's id; `<key>` the
 score's `OUT` address in 4 hex digits and a CRC-32 of its recorded speaker edges, such as
 `8951-1a2b3c4d`, the same for as long as the learner records the same music; a shadow score's
-says `shadow = true`), only when the text changes, and leaves the rest of the folder alone. `--arrange` then runs `tools/arrange-music generate DIR` once the packages are
-made, so takes generated in a run go into the packages of the next one.
+says `shadow = true`), only when the text changes, and leaves the rest of the folder alone. The
+studio's AI jobs run `tools/arrange-music generate W/all --game ID`; a take goes into the packs
+once it is chosen, at the next build.
 
 **The commands.**
 
@@ -477,7 +493,7 @@ sound. To hear a take as the FM-1 plays it, render it with `music-preview` (belo
 build the packages and try them (`--try`, or on the FM-1).
 
 **Hearing a take as the FM-1 plays it.** `music-preview` renders a game of a learning workspace
-(the output folder of `fmzx-pack personal` or `tools/make-personal-pack`, `DIR` here) to a 16-bit
+(the output folder of `fmzx-pack personal`, such as the studio's `W/all`, `DIR` here) to a 16-bit
 WAV through the firmware's sound code, as `music-corpus` renders `_fm_l.wav`:
 
     cd host && cargo build --release -p music --bin music-preview
@@ -495,12 +511,12 @@ first, which takes a while); from the cache a render takes about a second. It pr
 when the WAV is written; an unknown game, score or take, or no workspace, is one line on stderr and
 exit 1, a take the pack would refuse `refused: <why>` and exit 3.
 
-**The files**, in `DIR/arrange/` (under `build/personal/` by default, which git ignores):
+**The files**, in `DIR/arrange/` (`W/all/arrange/` under `build/studio/`, which git ignores):
 
     choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original;
                                      "chip-<n>": a C64 take, "ay-<n>": a Spectrum 128 take,
                                      see "Music from other versions")
-    <game>/<key>/score.toml          the score's notes (tools/make-personal-pack)
+    <game>/<key>/score.toml          the score's notes (fmzx-pack personal)
                  original.mid, original.wav   the score alone
                  takes.toml          the takes made, for which score.toml, by what, how long each took
                  take-<n>/arranged.toml       the take as the FM-1 plays it
@@ -520,7 +536,7 @@ each voice's notes a second. They help to compare takes; the ear decides.
 [docs/music-generation.md](docs/music-generation.md) describes the formats in full, and how to try
 other generators.
 
-**What the next run checks.** Every `tools/make-personal-pack` run reads `choices.toml` (the cache
+**What the next build checks.** Every `fmzx-pack personal` run reads `choices.toml` (the cache
 holds the learned music, so a changed choice learns nothing again) and puts each chosen take into
 the pack in place of the score's notes; the score keeps its trigger and recorded edges, so it
 starts and plays in step with the beeper as before. The take must have the score's key and
@@ -565,8 +581,8 @@ CUDA, else the CPU; on an Apple M4 Max it took 0.11 to 0.15 s a note it wrote, w
 roughly 5 minutes a take, 20 minutes for 4 takes; `generate` prints an estimate first and its
 progress every 15 seconds. The selftest takes about 20 s.
 
-**Offline.** `tools/make-personal-pack ... --arrange --offline` runs `UV_OFFLINE=1
-tools/arrange-music generate DIR --offline`: uv uses only its cached packages and the tool only the
+**Offline.** `tools/pack-studio ... --offline` runs `UV_OFFLINE=1 tools/arrange-music generate
+W/all --offline` for its AI jobs: uv uses only its cached packages and the tool only the
 cached model, and it stops with how to get the model when it is not cached (one run without
 `--offline` downloads it). Run directly, `tools/arrange-music generate --offline` keeps the model
 offline, and `UV_OFFLINE=1` keeps uv offline too.
@@ -580,11 +596,12 @@ takes: the FM-1 then plays that tune's notes from the moment the Spectrum tune s
 tune's own timeline (its own intro and loop), and stops when the beeper stops matching the
 Spectrum tune (the game has moved on), as any score does.
 
-    cd host && cargo build --release -p fmzx-pack && cd ..          # the converter (SID and AY)
-    tools/arrange-music chip build/personal --sid-dir ~/C64Music      # candidates, as chip-<n> takes
-    tools/arrange-music ay build/personal --ay-dir ~/AY/music/ay      # candidates, as ay-<n> takes
-    tools/arrange-music pick build/personal                           # listen, choose chip-1 or ay-1, or --set
-    tools/make-personal-pack ~/games                                  # the packages, with the chosen take
+    tools/pack-studio ~/games --generate sid,ay                       # candidates as chip-<n> and ay-<n> takes
+    cd host && cargo build --release -p fmzx-pack && cd ..          # or directly: the converter (SID and AY),
+    tools/arrange-music chip build/studio/games/all --sid-dir ~/C64Music   # on collections you have
+    tools/arrange-music ay build/studio/games/all --ay-dir ~/AY/music/ay
+    tools/arrange-music pick build/studio/games/all                   # listen, choose chip-1 or ay-1, or --set
+    tools/pack-studio ~/games --build                                 # the packs, with the chosen take
 
 **What it needs.** A SID collection, such as the High Voltage SID Collection (its `C64Music`
 folder; any folder of `.sid` files works, and its `DOCUMENTS/STIL.txt`, when there is one, helps to
@@ -626,7 +643,7 @@ reads `.ay` files (its libgme demuxer).
 (<released>), subtune N, <file>`) and each ay take with its own, with their melody match;
 choosing one saves `"<game>/<key>" = "chip-1"` (or `"ay-1"`) in `choices.toml`, and
 `tools/arrange-music pick DIR --set GAME/KEY=chip-1` does the same without the page (`--list`
-prints the chip and ay takes too). The next `tools/make-personal-pack` run packs the
+prints the chip and ay takes too). The next build packs the
 chosen take as a replacement score: the score's trigger and recorded edges are kept, so it starts
 with the Spectrum tune and follows the beeper as before, and its notes play on their own timeline
 (docs/pack-format.md, "replacement"). The take is checked as an AI take is, against its own
