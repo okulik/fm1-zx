@@ -145,6 +145,8 @@ from the ELF the packages were made from (`build/fm1/platform/fm1/fmzx_app.elf`,
 `web/elf-symbol.py`) and is written into the served `keymaps.json`; it is left out, with a warning,
 when that ELF is missing or newer than the package, and the page then keeps the fixed keys. In the
 page (`web/patch-page.sh`): the fresh package is never read from or saved to the browser's IndexedDB,
+the catalog, the package and the key maps are asked of the server at each visit and our script and
+stylesheet are named with the build (a browser never mixes a page published earlier with this one),
 the clock is pinned at 240 MHz, input hooks let our keyboard layer (`web/fmzx.js`: Spectrum keys by
 the running game's key map, docs/controls.md, "Computer keyboard"; under the synth, the computer
 keys and a game's key map from `keymaps.json`, which follows the running game, and the demo video

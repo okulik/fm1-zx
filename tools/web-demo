@@ -149,7 +149,7 @@ else
 fi
 cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
 cp "$root/docs/images/demo-video.jpg" "$out/"
-"$root/web/patch-page.sh" "$out"
+"$root/web/patch-page.sh" "$out" "$short"
 mkdir -p "$out/licenses"
 cp "$root/LICENSE" "$out/licenses/GPL-3.0-or-later.txt"
 cp "$emu/LICENSE" "$out/licenses/fm1-emu-MIT.txt"

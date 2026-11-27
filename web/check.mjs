@@ -203,10 +203,15 @@ console.log(`speed: ${speed} emulated s / wall s (${span})`);
     [js, "window.fmzxDraw?.(ctx, W, H);"],
     [js, "fresh: !!f.fresh, persistedSectors:"],
     [js, "if (session.fresh) return Promise.resolve();"],
-    [html, '<link rel="stylesheet" href="fmzx.css">'],
-    [html, '<script type="module" src="fmzx.js"></script>'],
+    [js, 'await fetch("firmwares.json", { cache: "no-cache" })'],
+    [js, 'await fetchPackage(f, (u) => fetch(u, { cache: "no-cache" }));'],
+    [js, 'await fetchPackage(selected, (u) => fetch(u, { cache: "no-cache" }));'],
   ];
   const problems = want.filter(([s, t]) => count(s, t) !== 1).map(([, t]) => `not once: ${t}`);
+  // our stylesheet and script, each once and named with the build
+  for (const re of [/<link rel="stylesheet" href="fmzx\.css\?v=[A-Za-z0-9._-]+">/g, /<script type="module" src="fmzx\.js\?v=[A-Za-z0-9._-]+"><\/script>/g]) {
+    if ((html.match(re) || []).length !== 1) problems.push(`not once: ${re.source}`);
+  }
   if (js.includes("smk37/firmwares.json")) problems.push("the SMK-37 catalog is still fetched");
   if (js.includes("new Uint16Array(mem(), ui.panel_lcd()")) problems.push("the memory buffer is read before the panel pointer");
   if (js.includes('stored("fm1.mhz") || 100')) problems.push("the stored clock is still read");

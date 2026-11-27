@@ -524,7 +524,7 @@ export function install(win, doc) {
     wrap.after(card);
   }
 
-  fetch("keymaps.json")
+  fetch("keymaps.json", { cache: "no-cache" }) // asked each time: the games of the package published
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then((doc_) => {
       const games = doc_.games;

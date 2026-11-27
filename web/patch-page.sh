@@ -5,13 +5,14 @@
 # Patches the built page (main.js, index.html in the build directory) for the browser demo.
 # Every edit is exact text that must occur once (web/patch-edit.sh). tools/web-demo runs it
 # after copying our files over upstream's build:
-#   web/patch-page.sh build/web
+#   web/patch-page.sh build/web [build name]
 set -eu
 
-if [ $# -ne 1 ]; then
-    echo "usage: web/patch-page.sh <build dir>" >&2
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+    echo "usage: web/patch-page.sh <build dir> [build name]" >&2
     exit 2
 fi
+v=$(printf %s "${2:-0}" | tr -c 'A-Za-z0-9._-' '-')
 . "$(dirname "$0")/patch-edit.sh"
 
 # main.js: the input hooks for our panel (web/fmzx.js), the fresh package, the one clock
@@ -57,10 +58,16 @@ edit '  ctx.putImageData(img, 0, 0);
   window.fmzxDraw?.(ctx, W, H);
 '
 edit 'let mhz = Number(params.get("mhz") || stored("fm1.mhz") || 100);' 'let mhz = 240;'
+# the catalog and the package are asked of the server each time (it answers "not changed" when
+# they are the ones the browser holds), so a page published again never runs a package it kept
+edit 'await fetch("firmwares.json")' 'await fetch("firmwares.json", { cache: "no-cache" })'
+edit 'const got = await fetchPackage(f);' 'const got = await fetchPackage(f, (u) => fetch(u, { cache: "no-cache" }));'
+edit 'const got = await fetchPackage(selected);' 'const got = await fetchPackage(selected, (u) => fetch(u, { cache: "no-cache" }));'
 
-# index.html: our stylesheet and script
+# index.html: our stylesheet and script, named with the build ($2) so a browser that holds an
+# earlier build's files asks for these
 f="$1/index.html"
-edit '</head>' '<link rel="stylesheet" href="fmzx.css">
-</head>'
-edit '</body>' '<script type="module" src="fmzx.js"></script>
-</body>'
+edit '</head>' "<link rel=\"stylesheet\" href=\"fmzx.css?v=$v\">
+</head>"
+edit '</body>' "<script type=\"module\" src=\"fmzx.js?v=$v\"></script>
+</body>"
