@@ -20,7 +20,7 @@ const params = new URLSearchParams(location.search);
 const stored = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
 
-const catalog = await (await fetch("firmwares.json")).json();
+const catalog = await (await fetch("firmwares.json", { cache: "no-cache" })).json();
 const byId = new Map(catalog.firmwares.map((f) => [f.id, f]));
 // the FM-1 Firmware Hub's ids too, where they differ (its cards link here with ?fw=<its id>)
 for (const f of catalog.firmwares) if (f.hub && !byId.has(f.hub)) byId.set(f.hub, f);
@@ -183,7 +183,7 @@ async function packageOf(f) {
     packages.set(f.id, got);
     return got;
   }
-  const got = await fetchPackage(f);
+  const got = await fetchPackage(f, (u) => fetch(u, { cache: "no-cache" }));
   packages.set(f.id, got);
   noteVersion(f, got.version);
   return got;
@@ -1040,7 +1040,7 @@ document.getElementById("update-firmware").addEventListener("click", action(asyn
   if (fw.id === "local" || fw.byo) throw new Error("open a new .fwsc file to update this firmware");
   const selected = fw;
   saveMessage(`Checking ${selected.name}…`);
-  const got = await fetchPackage(selected);
+  const got = await fetchPackage(selected, (u) => fetch(u, { cache: "no-cache" }));
   const hash = await packageHash(got.bytes);
   packages.set(selected.id, got);
   noteVersion(selected, got.version);
