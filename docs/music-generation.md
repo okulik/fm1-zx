@@ -9,8 +9,10 @@ to use it). This guide is for running experiments with that generation: trying a
 other settings or another way to reduce a band to the FM-1's voices. It is written so that a
 person or an AI agent can start from it with no other context: the pipeline and where each step
 lives, the files between the steps, what the FM-1 can play, how to add and evaluate a generator,
-what is known so far, and the rules for working on it. A score can also take its game's tune
-from the game's C64 version, from a SID collection the owner has, or from its Spectrum 128
+what is known so far, and the rules for working on it. A score can also take its game's own
+tune read exactly from the game's beeper music engine ([BUILDING.md, "The game's own music, read
+exactly"](../BUILDING.md#the-games-own-music-read-exactly); [engine takes](#engine-takes) below),
+or its game's tune from the game's C64 version, from a SID collection the owner has, or from its Spectrum 128
 version, from a collection of `.ay` files ([BUILDING.md, "Music from other
 versions"](../BUILDING.md#music-from-other-versions)); those paths share the files, the choice
 and the pack step, and are described here alongside.
@@ -27,6 +29,10 @@ and the pack step, and are described here alongside.
 - **Nothing from a SID or AY collection enters the repository**: no `.sid` or `.ay` file, no notes
   converted from one, no chip or ay take. The tunes belong to their authors and go only into the
   owner's personal packs. Tests build their own made-up SID and `.ay` files.
+- **An engine's code enters the repository only with a licence or permission statement to cite**
+  (quoted with its address in the fixture's README and in [LICENSING.md](../LICENSING.md)); else
+  its fixture is a program of ours that reproduces what the reader recognises. No game, and no
+  tune from one, is a fixture: the engine fixtures play invented songs.
 - **Repository text describes the current state only**: no history, no dates, no "new" or
   "added". An experiment's story belongs in its report outside the repository; what ships is
   described as it is.
@@ -46,8 +52,9 @@ and the pack step, and are described here alongside.
 | 3. Recorded scores | Every heard routine whose `OUT` sounded in 100 frames or more (learned, built in or neither) has its music recorded: each stretch of at least 100 frames (2 s) from a trigger edge; a run per key for a menu of tunes; the same tune kept once; the loop found on the speaker edges (an intro and one pass of the loop); the notes transcribed from the speaker's sound (up to 3 voices, at least 8 notes over 3 pitches); encoded as a kind-2 record and verified by replaying the run through method B. A stretch the table (learned and built-in entries) claims at most a tenth of the sounding frames of is a *score*, packed; one it claims more of is a *shadow score*: verified with the precedence bit set, kept in the learner's result and cache, not packed. | `scores.rs`, `learn.rs`, `transcribe.rs`, `entry.rs` |
 | 4. `score.toml` | Every `fmzx-pack personal` run (`tools/pack-studio`'s learning and each pack's build) writes each recorded score's notes, decoded from the learned list, and each shadow score's (with `shadow = true`) to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
 | 5. Generator | `tools/arrange-music generate DIR` runs a generator per take, reduces what it wrote to the FM-1's four voices, measures it and writes `take-<n>/` with MIDI and renders. | `tools/arrange-music` (`GENERATORS`, `arrange`, `metrics`) |
+| 5a. Engine takes | `tools/arrange-music engine DIR` has `fmzx-pack engine-notes` play each score's own run (the one that recorded it, as `music-preview` plays it) with a known engine's state tapped at its row read: the engine found by its code, each channel's notes and the drum hits on the score's timeline. It writes them, a voice per channel, as `engine-1/`, on the score's timeline; a shadow score a built-in entry already plays exactly gets none. | `tools/arrange-music` (`cmd_engine`, `engine_voices`), `host/crates/chipmusic/src/engine/`, `host/crates/fmzx-pack/src/engine_notes.rs` |
 | 5b. C64 takes | `tools/arrange-music chip DIR --sid-dir PATH` finds the game's SID files in the owner's collection (file names, header titles, STIL), converts each candidate subtune with `fmzx-pack chip-notes` (a 6502 and C64 model capturing the SID registers once per play call, turned into notes), ranks them by their closeness to the score's tune (the judge's, step 6), and writes the best as `chip-<n>/` takes on their own timeline. `tools/arrange-music ay DIR --ay-dir PATH` does the same with the owner's `.ay` files (file names, misc strings, song names), each song's Z80 player run in the Spectrum machine core (its AY registers captured once per frame), as `ay-<n>/` takes. | `tools/arrange-music` (`cmd_chip`, `cmd_ay`, `own_score`), `host/crates/chipmusic`, `fmzx-pack chip-notes` |
-| 6. Choice | `tools/arrange-music judge DIR` weighs every take and the original from their notes (closeness to the tune, quality, faults, provenance) and, with `--apply`, chooses where it is sure and the owner has not; the owner listens to the rest on `tools/arrange-music pick DIR` (or the studio) and chooses a take, a C64 or Spectrum 128 take, or the original. | `tools/arrange-music` (`judge_score`, `cmd_judge`, `cmd_pick`), `DIR/arrange/<game>/<key>/judge.toml`, `DIR/arrange/choices.toml` |
+| 6. Choice | `tools/arrange-music judge DIR` weighs every take and the original from their notes (closeness to the tune, quality, faults, provenance) and, with `--apply`, chooses where it is sure and the owner has not; the owner listens to the rest on `tools/arrange-music pick DIR` (or the studio) and chooses a take, an engine take, a C64 or Spectrum 128 take, or the original. A faultless engine take is the judge's pick, sure. | `tools/arrange-music` (`judge_score`, `cmd_judge`, `cmd_pick`), `DIR/arrange/<game>/<key>/judge.toml`, `DIR/arrange/choices.toml` |
 | 7. Pack | The next build (`tools/pack-studio`'s `fmzx-pack personal` runs) checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A chosen C64 or Spectrum 128 take becomes a replacement record instead: the score's trigger and fingerprints, precedence set, and the take's events on its own sections. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
 | 8. Device | FM: engines arms the score at its trigger edge, follows the beeper's edges against the recorded fingerprint, and plays the events on the FM synth with each voice's stored role (lead, bass, pad) and the FM drum. A score yields the frames a table entry claims; a score with precedence keeps them, the entry's voices unused there. | `core/sound/learned.c` (`snd_b_scores`), `core/sound/fm.c` |
 
@@ -184,6 +191,82 @@ rounding and the frame cap are as for a SID. A song is refused, with the reason,
 speaker and not the AY (a 48K beeper tune), drives an Amstrad CPC's or a SAM Coupé's ports, needs
 a special player, or stays silent. `host/crates/chipmusic/src/notes.rs` holds the full rules.
 
+### Notes from a game's engine (written by fmzx-pack engine-notes)
+
+`fmzx-pack engine-notes <W/all> --game ID --score KEY -o <notes.toml>` (exit 3 when no known
+engine plays the score; `fmzx-pack engine-notes --info <W/all> --game ID` prints each score's
+engine, or why none) writes:
+
+    game = "some-game"
+    key = "9CE0-3901e61d"
+    shadow = false
+    clock_hz = 3500000
+    intro_t = 0                   # the score's
+    loop_t = 82607968
+    engine = "ntropic"            # ntropic, Tritone or Stocker
+    anchor = "9C98"               # where its signature matched
+    read = "its rows at 9C9Ch (4 bytes at HL: drum flag, two counters, noise), ..."
+    pass_t = 185.669              # the sound loop's pass, T
+    channels = 2
+    rows = 129                    # rows (or ticks) read in the run
+    first_frame = 148             # the score's frame in its run
+    t0 = 10394124                 # its trigger edge's T in the run
+    builtin_share = 0.000         # of its sounding frames a built-in entry plays
+    live = ""                     # a sentence when a built-in entry plays this shadow score exactly
+
+    [[note]]
+    channel = 0                   # the engine's
+    start_t = 0                   # T since T0 (a note sounding at T0 starts at 0)
+    end_t = 609803
+    period_t = 32306              # full period, T
+    midi = 44.74
+    level = 255                   # the engine's volume or duty, 1-255
+    duty = 128                    # 0-255 of a period high
+
+    [[drum]]
+    start_t = 1395
+    end_t = 12811
+    kind = "kick"                 # kick, snare, hat, tom, tone (a tone burst) or noise
+
+The run is the score's as `music-preview` plays it (its inputs, its frame from the learner's
+details), T0 the first speaker edge from the score's `OUT` in that frame. The engine is looked for
+every 25 frames up to the score's end, by its signature, and must lie within 512 bytes of the
+score's `OUT` (another engine the game holds is not the score's). The tap starts 250 frames before
+the score, its copy of memory refreshed each frame and kept by the write events. Notes and hits are
+cut to `[0, intro_t + loop_t)`, those under 64 T left out. `host/crates/chipmusic/src/engine/`
+holds each engine's rules (its file's docs: what is read, the period, the level, the drums).
+
+### An engine take's arranged.toml (written by tools/arrange-music engine)
+
+The same file as an AI take's, in `engine-1/`, with the score's header (its `key`, `intro_t` and
+`loop_t`: the take is on the score's timeline), voices 0-3 as an AI take's, and these fields:
+
+    take = "engine-1"
+    generator = "engine ntropic"
+    source = "ntropic, read exactly: its rows at 9C9Ch (...)"
+    engine = "ntropic"
+    channels = 2
+    channel_roles = ["bass", "lead"]   # each engine channel's voice
+    score_digest = "edb0b11aa8e24d5c"  # score.toml's, as takes.toml's
+
+    [metrics]
+    lead_nps = 2.75
+    bass_nps = 4.28
+    pad_nps = 0.0
+    drums_nps = 4.79
+    notes = 166                   # what the reader gave
+    drum_hits = 115
+
+Each channel keeps one voice: the highest by its duration-weighted mean pitch the lead; with two
+channels the other the bass under E3 (MIDI 52), else the pad; with three or more the lowest the
+bass and the others the pad, sharing it (a newer note cuts the one sounding). Levels: lead 200,
+bass 210, pad 150, times the note's level / 255, at least 48. A same-pitch note (within 1/32 of a
+period) right after another on a voice ends 128 T early, so the FM voice strikes it again. The drum
+hits on voice 3 by kind (kick 200, snare 170, tom 130, hat 80, tone 200, noise 120), within the drum
+rules below (a hit within 40 ms of the one before merged into it, the stronger kept). fmzx-pack
+reads `key`, `intro_t`, `loop_t`, `take`, `source` (the report's name for it) and the notes, and
+packs it as an AI take.
+
 ### A C64 or Spectrum 128 take's arranged.toml (written by tools/arrange-music chip or ay)
 
 The same file as an AI take's, in `chip-<n>/` (or `ay-<n>/`), with the score's header (its `key`, `intro_t` and
@@ -229,12 +312,13 @@ the digest matches and takes 1 to N are done; a changed `score.toml` gets new ta
     [choices]
     "some-game/8951-1a2b3c4d" = 2           # the take; 0 or absent: the original
     "some-game/9A00-0b1c2d3e" = "chip-1"    # a C64 take, by its folder
+    "some-game/9CE0-3901e61d" = "engine-1"  # an engine take, by its folder
     "other-game/3B10-1c2d3e4f" = "ay-1"     # a Spectrum 128 take, by its folder
 
     [judged]
     "some-game/9A00-0b1c2d3e" = "chip-1"    # a choice judge --apply made
 
-Any other value in `[choices]` (a negative number, `"chip-0"`, `"ay-0"`, `"take-1"`, a float) fails
+Any other value in `[choices]` (a negative number, `"chip-0"`, `"ay-0"`, `"engine-0"`, `"take-1"`, a float) fails
 the pack's run with the file and the key named. fmzx-pack reads only `[choices]`. A choice is the
 judge's while `[judged]` holds the same value for its key: `judge --apply` changes or takes back
 only those, and a choice the owner makes (pick, its page, the studio's `c`) drops the key from
@@ -257,6 +341,7 @@ next write.
     confidence = "high"          # high, medium or low
     flags = []                   # the reasons it is not high
     margin = 0.42                # the pick's lead over the next, as a share of its combined
+    exact = true                 # only when the pick is an engine take with no fault (below)
     order = ["chip-1", "0", "chip-2"]
 
     [[take]]
@@ -305,6 +390,10 @@ The measures (`tools/arrange-music`'s docstring, "judge", has every constant):
 - **Faults**, each a factor: refused by the renderer (0), mostly silent (sounding under 60% of
   the time), a silent gap over 2 s, notes held over 8 s, sound below MIDI 26 or above 100, a take
   shorter than 85% of the window (plays only a fragment).
+- **An engine take** (`engine-<n>`) is the game's own tune read exactly: closeness 1 (no z) and
+  provenance 1 by construction. One with no fault (none shown, not refused) ranks first, the
+  pick with high confidence and no flags (`exact = true`; `margin` its lead by combined, at least
+  0); with a fault it is weighed as any take.
 - **Provenance**: 1 for a STIL entry naming the Spectrum; else the title match (1, 0.5 from 0.8,
   0.2) times the era (a C64 release year to 1990 1, later 0.15, a DEMOS file at most 0.3; a
   Spectrum 128 file under games/ 1, else 0.2).
@@ -315,7 +404,7 @@ The measures (`tools/arrange-music`'s docstring, "judge", has every constant):
   any flag (the winner not shown to be the same tune, closeness under 0.5; a take with a partial
   match, closeness 0.2 to 0.8; fewer than 10 real controls); else high.
 
-### The progress lines (printed by tools/arrange-music judge, and by generate, chip and ay as they end by judging)
+### The progress lines (printed by tools/arrange-music judge, and by generate, engine, chip and ay as they end by judging)
 
 For `tools/pack-studio`'s bars, the judge says how far it is, each on a line of its own:
 
@@ -323,26 +412,30 @@ For `tools/pack-studio`'s bars, the judge says how far it is, each on a line of 
     progress: rendered some-game/1A2B-3c4d5e6f chip-1
     [some-game/1A2B-3c4d5e6f] judged: chip-1 (high)
 
-First a `progress: score` line for each score with takes, `renders` its takes the renderer
+`engine` also says `progress: engine <game>/<key>` before each score it reads. First a `progress: score` line for each score with takes, `renders` its takes the renderer
 checks (0 without `music-preview`, or when its verdicts are kept), then a `progress: rendered`
 line as each is checked, then the `judged` line as each score is judged: a score's share done is
 its takes rendered, plus 1 once judged, of `renders` + 1.
 
-### The summary line (printed by tools/arrange-music generate, chip, ay and judge)
+### The summary line (printed by tools/arrange-music generate, engine, chip, ay and judge)
 
 Each of these commands ends with one line of `key=value` fields, kept stable for
 `tools/pack-studio`'s jobs view and for scripts:
 
     summary: kind=ai game=some-game scores=1 pending=1 takes=4 model=amt seconds=2172
+    summary: kind=engine game=some-game scores=1 pending=1 takes=1 live=0 unknown=0 failed=0 engines=ntropic seconds=4 source=ntropic, 2 channels + drums
     summary: kind=sid game=some-game scores=1 pending=1 takes=3 candidates=4 checked=3 refused=1 best=0.73 seconds=41 source=C64: <title> by <author> (<released>), subtune 1, <file>
     summary: kind=judge game=all tunes=67 owner=20 picked=4 applied=4 sure=4 flagged=43 faults=46 renderer=checked seconds=153
 
-`kind` is `ai`, `sid` or `ay`; `game` the `--game` ids, comma-separated, or `all`; `scores` the
+`kind` is `ai`, `engine`, `sid` or `ay`; `game` the `--game` ids, comma-separated, or `all`; `scores` the
 scores found, `pending` those worked on (the others had their takes), `takes` the takes written;
 for `sid` and `ay`, `candidates` the (file, subtune) pairs that name the game, `checked` those
 converted and compared, `refused` those the converter refused, `best` the closeness of the
 take written with the best one (`-` with none) and `source` that take's source line, last and to
-the end of the line (absent with no take). For `judge`: `tunes` the scores with takes judged,
+the end of the line (absent with no take). For `engine`: `takes` the engine takes written,
+`live` the scores a built-in entry already plays exactly, `unknown` those no known engine plays,
+`failed` those the reader failed on, `engines` the engines found (comma-separated, `-` with none)
+and `source` each take's engine and channels (several joined by `; `). For `judge`: `tunes` the scores with takes judged,
 `owner` those the owner chose for, `picked` those with the judge's choice, `applied` the
 choices `--apply` wrote in this run, `sure` those without the owner's choice the judge is sure of, `flagged` those
 with no choice it is not sure of (they need the owner's ear), `faults` the takes with a fault,
@@ -415,6 +508,35 @@ frames, the size counted with them.
   too. Without the bit the routine's entry would keep its frames, and the replay at pack time
   (which needs at least 90% of the stretch's sounding frames for the score) would refuse it.
 
+## Engine takes
+
+The engine reader (`host/crates/chipmusic/src/engine/`) knows three beeper engines:
+
+| Engine | Channels | What the tap reads, and where | Period | Drums |
+|---|---|---|---|---|
+| ntropic | 2 tone (counters), noise | the 4-byte row at HL at its row read (`LD A,(HL)` after `LD IYH,10h; POP HL`): drum flag, two counters, noise length | 2 x counter x pass | the click drum's `OUT` (kick); the row's noise (noise) |
+| Tritone | 3 tone (phase accumulators, duty each) | at the row's `LD BC,step0` before the sound loop: the three steps and duties from the loop's operands, the row's passes in DE | 65,536 / step passes | the tone burst's `OUT` (tone), the noise burst's (noise) |
+| Stocker | 2 tone (phase accumulators, volume each) | at the tick's `LD HL,nn` (H the passes): the steps in DE and DE', the volumes from the loop's `AND` operands | 65,536 / step passes | its four drums' `OUT`s (kick, hat, snare, tom) |
+
+The pass time is measured, not assumed: the spacing of an `OUT` the sound loop makes once a pass
+(within each row, the median over the run), or for Stocker a tick over its passes. A note runs
+while its channel's value stays the same (Stocker: while it sounds, a new note when its step moves
+by more than 1/32 or its volume rises, the envelope restarting).
+
+**Adding an engine.** One file in `host/crates/chipmusic/src/engine/`: a unit struct implementing
+`Engine` with its signature (`locate`: the row read, the pass `OUT` and the drum `OUT`s found by
+their code with `find_ram`/`find_near`, wildcards `??` for operands a game patches), its tap
+(`read`: a `Row` from the registers and memory at the row read), its period (`period_t`) and, where
+the defaults do not fit, its level, pass time and note rules. Add it to `ENGINES` in `mod.rs`, give
+it a fixture test in `host/crates/chipmusic/tests/engines.rs` (a program in the machine core
+playing an invented song, every note and hit checked; the engine's own code only with a licence
+or permission statement to cite, see the rules above), and name it in BUILDING.md and the tools'
+usage. `fmzx-pack engine-notes`, `tools/arrange-music engine`, the judge and the studio take it
+from there. A good candidate is an engine some of the owner's games play that the reader says it
+does not know (`no known engine in its run`): run `fmzx-pack engine-notes --info` over a workspace
+to list them, and find the engine's row read and sound loop in the game's code (a trace of the
+instructions around the score's `OUT` shows them).
+
 ## Adding a generator
 
 A generator is one function in `tools/arrange-music`, registered by name:
@@ -484,6 +606,8 @@ The two generators to compare against:
   `rules` (the files, the four voices, the drum rules, no overlaps, the lead copied, determinism,
   resuming, `pick --set`, `--list`, the page's save). It needs no network and no model; keep it
   passing and add checks for what a change guarantees.
+- **The engine reader**: `cd host && cargo test -p chipmusic --test engines` runs each engine on its
+  fixture (`host/crates/chipmusic/tests/engines/README.md`).
 - **The pack side**: `cd host && cargo test -p fmzx-pack` runs `arrange.rs`'s unit tests and
   `tests/personal_arrange.rs` (a synthetic game whose take, and a C64 and a Spectrum 128 take on
   their own timeline, go into the pack and pass the replay, with the refusals); `cargo test -p
@@ -570,6 +694,18 @@ generating with the original as controls:
   (3 a note): 0.25-0.4 s a note on Apple M4 Max MPS. With the cached `add_token`, 0.11-0.15 s. The
   model download is about 1.4 GB.
 
+### Reading the engines
+
+- **Exact.** On two freely licensed titles, a two-channel ntropic tune (a 23.6 s loop) and a
+  Stocker tune (67 s), the reader's notes matched a separate tap of the same engines' rows,
+  written for the comparison: 166 of 167 notes within 20 ms and 3% in pitch (the missing one a
+  sliver of 0.07 ms at the loop's end) and every drum hit (116), and 736 of 736 notes and 156 of
+  156 drum hits.
+- **Already exact.** Two Tritone titles the firmware's built-in entry reads play exactly live (a
+  built-in entry claims 100% of their scores' sounding frames); they get no engine take.
+- **Speed.** Reading a score takes about a second of host time (the run to the score's end twice:
+  once to find the engine, once with the tap on).
+
 ### C64 and Spectrum 128 versions of the games' music
 
 From a survey of 27 Spectrum games against the High Voltage SID Collection and chip music for the
@@ -628,6 +764,8 @@ AY chip (Spectrum 128K rips, Amstrad CPC register dumps):
   many windows were cut). Below that cap there is no density control: a dense take can hold over 14 pad notes
   a second, which the frame cap then thins.
 - Voice 0 keeps only the score's lead voice; an original bass or pad voice is replaced.
+- An engine take's channels keep one voice each for the whole tune; a channel that swaps between
+  melody and accompaniment keeps one role. More than three tone channels share the pad.
 - A C64 or Spectrum 128 take's voices take their roles by mean pitch over the whole tune; a SID
   voice or AY channel that swaps between melody and accompaniment keeps one role. The 8-events cap is counted per section, so
   where a pass of the take's own loop ends and the next begins within one frame, the player can

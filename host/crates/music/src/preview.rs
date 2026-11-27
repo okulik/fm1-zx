@@ -23,12 +23,10 @@
 
 use crate::{sample_rate, RATE};
 use fmzx_pack::arrange::{self, Choice, Of, Status, ARRANGE, CLOCK_HZ, TAKE_FILE};
-use fmzx_pack::manifest::{game_path, parse_manifest, parse_personal_manifest};
-use fmzx_pack::personal::{cache_path, learn_music, machine, verify_in_run, LearnerRun, GAMES_FILE};
-use soundlearn::listen::RunKind;
+use fmzx_pack::personal::{cache_path, learn_music, machine, verify_in_run};
+use fmzx_pack::workspace::{game_files, learner_run, score_frame};
 use soundlearn::{decode_scores, encode_list_scores, score_key, ScoreRecord};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use zx_sys::{Beeper, SndMixer, SND_DELAY_FRAMES, SND_MODE_FM_B, ZX_FRAME_TSTATES};
 
 /// The seconds of a preview when none are given (with a score, at most its length and 3 s).
@@ -47,13 +45,13 @@ pub enum Take {
     Chosen,
     /// The score as recorded (a shadow score: the routine, live).
     Original,
-    /// `take-<n>`, `chip-<n>` or `ay-<n>`.
+    /// `take-<n>`, `engine-<n>`, `chip-<n>` or `ay-<n>`.
     Of(Choice),
 }
 
 impl Take {
-    /// A take's name on the command line: `0` or `original`, `<n>` (`take-<n>`), `chip-<n>`,
-    /// `ay-<n>`.
+    /// A take's name on the command line: `0` or `original`, `<n>` (`take-<n>`), `engine-<n>`,
+    /// `chip-<n>`, `ay-<n>`.
     pub fn parse(s: &str) -> Option<Take> {
         let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
         if s == "original" {
@@ -65,7 +63,7 @@ impl Take {
                 n => Some(Take::Of(Choice::Take(n))),
             };
         }
-        Choice::own_named(s).map(Take::Of)
+        Choice::named(s).map(Take::Of)
     }
 }
 
@@ -110,7 +108,8 @@ pub struct Preview {
     /// Where it starts in its run, in seconds.
     pub from: f64,
     /// What the score plays, when a score was asked for: `original`, `the live version`,
-    /// `take 2 (<generator>)`, `C64 take chip-1 (<source>)`, `Spectrum 128 take ay-1 (<source>)`.
+    /// `take 2 (<generator>)`, `engine take engine-1 (<source>)`, `C64 take chip-1 (<source>)`,
+    /// `Spectrum 128 take ay-1 (<source>)`.
     pub plays: Option<String>,
     /// Whether the game's music came from the sound cache (else it was learned just now).
     pub cached: bool,
@@ -121,49 +120,14 @@ pub fn rate() -> u32 {
     sample_rate().round() as u32
 }
 
-/// The game of a workspace: its converted file's name and bytes, and where its key script would
-/// be and its overrides.
-struct GameFiles {
-    file: String,
-    data: Vec<u8>,
-    keys: PathBuf,
-    instruments: BTreeMap<u16, Vec<u8>>,
-}
-
-fn game_files(all: &Path, id: &str) -> Result<GameFiles, Error> {
-    let conv = all.join("converted");
-    let manifest = conv.join("manifest.toml");
-    let text = std::fs::read_to_string(&manifest).map_err(|_| {
-        other(format!("{}: no converted/manifest.toml: not a personal pack's workspace (make it with fmzx-pack personal <games> -o {0})", all.display()))
-    })?;
-    let games = parse_manifest(&text).map_err(|e| other(format!("{}: {e}", manifest.display())))?.game;
-    let Some(g) = games.iter().find(|g| g.id == id) else {
-        let ids: Vec<&str> = games.iter().map(|g| g.id.as_str()).collect();
-        return Err(other(format!("no game {id:?} in {} (its games: {})", all.display(), ids.join(", "))));
-    };
-    let at = conv.join(&g.file);
-    let data = std::fs::read(&at).map_err(|e| other(format!("{}: {e}", at.display())))?;
-    // the key script and overrides as the run had them: the games file's entry (a workspace made
-    // from a games file elsewhere has none here, and its game is learned again if that matters)
-    let entry = std::fs::read_to_string(all.join(GAMES_FILE))
-        .ok()
-        .and_then(|t| parse_personal_manifest(&t).ok())
-        .and_then(|m| m.game.into_iter().find(|e| e.id == id));
-    let (keys, instruments) = match entry {
-        Some(e) => (game_path(all, &e).with_extension("keys"), e.instruments),
-        None => (conv.join(format!("{id}.no-key-script")), BTreeMap::new()),
-    };
-    Ok(GameFiles { file: g.file.clone(), data, keys, instruments })
-}
-
-/// The takes in a score's folder: `take-<n>`, `chip-<n>` and `ay-<n>` folders with an `arranged.toml`.
+/// The takes in a score's folder: `take-<n>`, `engine-<n>`, `chip-<n>` and `ay-<n>` folders with an `arranged.toml`.
 fn takes_in(folder: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(folder)
         .map(|rd| {
             rd.flatten()
                 .filter(|e| e.path().join(TAKE_FILE).is_file())
                 .filter_map(|e| e.file_name().to_str().map(str::to_string))
-                .filter(|n| n.starts_with("take-") || n.starts_with("chip-") || n.starts_with("ay-"))
+                .filter(|n| n.starts_with("take-") || Choice::named(n).is_some())
                 .collect()
         })
         .unwrap_or_default();
@@ -176,7 +140,7 @@ pub fn preview(all: &Path, req: &Request) -> Result<Preview, Error> {
     if !all.is_dir() {
         return Err(other(format!("{}: no such folder", all.display())));
     }
-    let g = game_files(all, &req.game)?;
+    let g = game_files(all, &req.game).map_err(other)?;
     let cache = all.join("sound-cache");
     std::fs::create_dir_all(&cache).map_err(|e| other(format!("{}: {e}", cache.display())))?;
     let script = std::fs::read_to_string(&g.keys).ok();
@@ -245,10 +209,7 @@ pub fn preview(all: &Path, req: &Request) -> Result<Preview, Error> {
     }
 
     // the run, and where the preview starts in it
-    let learner = s.runs.as_ref().map(|r| r.learner.clone()).unwrap_or_else(|| match script.as_deref().map(fmzx_pack::keys::parse_keys) {
-        Some(Ok(steps)) => LearnerRun::Script(steps),
-        _ => LearnerRun::Kind(RunKind::Generic, u64::from(crc32(&g.data))),
-    });
+    let learner = learner_run(&s, &g);
     let (inputs, score_at) = match asked {
         None => (learner.inputs(), None),
         Some((of, rec, _)) => {
@@ -301,31 +262,7 @@ pub fn preview(all: &Path, req: &Request) -> Result<Preview, Error> {
     Ok(Preview { samples, from, plays, cached })
 }
 
-/// The frame a score starts in, in the run that recorded it: from its line in the learner's
-/// details (`recorded score: 20.7 s from frame 6378, ... (score C21A-62aabd0d)`, a shadow
-/// score's `shadow score ...`), the frame of the edge that starts it.
-fn score_frame(details: &str, key: &str) -> Option<usize> {
-    let tag = format!("(score {key}");
-    let line = details.lines().find(|l| {
-        let t = l.trim_start();
-        (t.starts_with("recorded score") || t.starts_with("shadow score")) && l.contains(&tag)
-    })?;
-    let rest = &line[line.find(" from frame ")? + " from frame ".len()..];
-    rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())].parse().ok()
-}
-
 /// The seconds of `frames` frames.
 fn secs(frames: usize) -> f64 {
     frames as f64 * f64::from(ZX_FRAME_TSTATES) / f64::from(CLOCK_HZ)
-}
-
-/// CRC-32 (IEEE), as the personal pack seeds a game's generic run.
-fn crc32(data: &[u8]) -> u32 {
-    !data.iter().fold(!0u32, |mut c, &b| {
-        c ^= u32::from(b);
-        for _ in 0..8 {
-            c = (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg());
-        }
-        c
-    })
 }

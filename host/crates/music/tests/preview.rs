@@ -47,6 +47,15 @@ fn octave_down(rec: &ScoreRecord, key: &str) -> String {
     t
 }
 
+/// An engine take of `rec` (`engine-1`) on the score's timeline: its notes a fifth down.
+fn engine(rec: &ScoreRecord, key: &str) -> String {
+    let mut t = format!("key = \"{key}\"\nintro_t = {}\nloop_t = {}\ntake = \"engine-1\"\ngenerator = \"engine\"\nsource = \"ntropic: an invented reading\"\n", rec.intro_t, rec.loop_t);
+    for n in timeline(rec) {
+        t += &format!("\n[[note]]\nvoice = {}\nstart_t = {}\nend_t = {}\nperiod_t = {}\nlevel = 250\n", n.voice, n.start_t, n.end_t, n.period_t * 3 / 2);
+    }
+    t
+}
+
 /// A C64 take of `rec` (`chip-1`) on its own timeline: two notes a fifth apart, looped.
 fn chip(rec: &ScoreRecord) -> String {
     let f = u64::from(ZX_FRAME_TSTATES);
@@ -110,6 +119,7 @@ fn previews_of_a_workspace() {
     write(&folder.join("take-1/arranged.toml"), &octave_down(&rec, &key));
     write(&folder.join("chip-1/arranged.toml"), &chip(&rec));
     write(&folder.join("ay-1/arranged.toml"), &ay(&rec));
+    write(&folder.join("engine-1/arranged.toml"), &engine(&rec, &key));
     write(&folder.join("take-2/arranged.toml"), &octave_down(&rec, "0000-00000000").replace("take = 1", "take = 2"));
     let rate = rate();
     let samples = |s: f64| (s * f64::from(rate)).round() as usize;
@@ -139,6 +149,7 @@ fn previews_of_a_workspace() {
         (Take::Of(fmzx_pack::arrange::Choice::Take(1)), "take 1 (octave down)"),
         (Take::Of(fmzx_pack::arrange::Choice::Chip(1)), "C64 take chip-1 (C64: an invented tune)"),
         (Take::parse("ay-1").expect("ay-1 names a take"), "Spectrum 128 take ay-1 (Spectrum 128: an invented tune)"),
+        (Take::parse("engine-1").expect("engine-1 names a take"), "engine take engine-1 (ntropic: an invented reading)"),
     ] {
         let p = preview(&all, &req(take)).unwrap_or_else(|e| panic!("{take:?}: {e}"));
         assert_eq!((p.plays.as_deref(), p.from), (Some(plays), live.from));
@@ -169,7 +180,7 @@ fn previews_of_a_workspace() {
     assert!(said.contains(", the beeper), from "), "{said}");
     let (bp, _) = wav(&out.join("b.wav"));
     assert_eq!(bp.len(), samples(5.0));
-    assert_eq!(bp[..], heard[4][..bp.len()], "the beeper whatever the take");
+    assert_eq!(bp[..], heard[5][..bp.len()], "the beeper whatever the take");
     let (code, said, err) = cli(&[all.to_str().unwrap(), "--game", "tune", "--score", &key, "--take", "ay-1", "-o", &path("ay.wav")]);
     assert_eq!(code, 0, "{err}");
     assert!(said.contains(&format!("score {key} playing Spectrum 128 take ay-1")), "{said}");
@@ -183,7 +194,7 @@ fn previews_of_a_workspace() {
         (vec![nowhere.to_str().unwrap(), "--game", "tune", "-o", &o], "no such folder".to_string()),
         (vec![a, "--game", "other", "-o", &o], "no game \"other\" in ".to_string()),
         (vec![a, "--game", "tune", "--score", "0000-00000000", "--take", "1", "-o", &o], format!("game \"tune\" has no score 0000-00000000 (its scores: {key})")),
-        (vec![a, "--game", "tune", "--score", &key, "--take", "5", "-o", &o], format!("score {key} has no take take-5 (its takes: ay-1, chip-1, take-1, take-2)")),
+        (vec![a, "--game", "tune", "--score", &key, "--take", "5", "-o", &o], format!("score {key} has no take take-5 (its takes: ay-1, chip-1, engine-1, take-1, take-2)")),
         (vec![a, "--game", "tune", "--score", &key, "--take", "chip-2", "-o", &o], format!("score {key} has no take chip-2 (")),
         (vec![a, "--game", "tune", "--score", &key, "--take", "ay-2", "-o", &o], format!("score {key} has no take ay-2 (")),
         (vec![a, "--game", "tune", "--score", &key, "--take", "ay-0", "-o", &o], "unknown take \"ay-0\"".to_string()),

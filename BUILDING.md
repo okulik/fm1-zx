@@ -182,20 +182,23 @@ copied into `W/all/sound-cache/` where that lacks it: a cache file names its gam
 converted file's CRC, its key script and overrides, the learner's version), so those games are not
 learned again (`reused 27 learned games from build/zx-tunes` in the log). Per game, mark one or more ways to make the music of its scores:
 **FM**, the FM-1 playing the music learned from the game's code and memory (always there: the
-original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music generate`; **SID**,
-the game's C64 tune, and **AY**, its Spectrum 128 tune ([music from other
-versions](#music-from-other-versions)). A game with no score plays FM from its code, or the
+original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music generate`; **ENG**,
+the game's own music read exactly from its music engine ([the game's own music, read
+exactly](#the-games-own-music-read-exactly)); **SID**, the game's C64 tune, and **AY**, its
+Spectrum 128 tune ([music from other versions](#music-from-other-versions)). A game with no score plays FM from its code, or the
 beeper, and has nothing to arrange; one where no music was found says `no music` on the list
 (`m`, `M` and `--auto` skip it, the log says so) and on its screen whether it makes any sound of
 its own: a render that is silent is not played (`silent: this game makes no sound in its first
 40 s`, the entry marked silent; the same for any silent take). Open a game to hear each score's candidates (the beeper, FM,
-each AI take with its figures, each C64 or Spectrum 128 take with its source) and choose one.
+each AI take with its figures, its engine take and each C64 or Spectrum 128 take with its source)
+and choose one.
 What plays is `music-preview`'s render of what the FM-1 plays or, when that is not built, the
 renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay` or `aplay`.
 
 The judge cuts down how much there is to hear. `m` on a game (`M` for every game) works game by
-game: it finds and converts the game's C64 and Spectrum 128 versions (SID and AY, no AI model),
-then runs [`tools/arrange-music judge --apply`](#arranged-music) for it, which weighs every take of
+game: it reads the game's own music from its engine where the reader knows the engine (ENG: no
+download, seconds), finds and converts the game's C64 and Spectrum 128 versions (SID and AY, no AI
+model), then runs [`tools/arrange-music judge --apply`](#arranged-music) for it, which weighs every take of
 each score from its notes and chooses the take where it is sure and you have not chosen, before
 the next game begins. A score's closeness is measured against other games' takes, so on more than
 one game each game's judge is provisional and a final pass (`judge --apply` over the same games;
@@ -222,21 +225,21 @@ games, where the same keys move a game. Sizes are the last learning's: after cho
 panel says so, and `r` measures again.
 
 Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `m`/`M` find and judge
-(above), `n` the next game to hear, `1`-`9`/`0` as above, `f` fills, `p` the packs, `a`/`s`/`y`
-mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g` generates what is marked, `J` lists the
+(above), `n` the next game to hear, `1`-`9`/`0` as above, `f` fills, `p` the packs, `a`/`e`/`s`/`y`
+mark AI/ENG/SID/AY for it, `A`/`E`/`S`/`Y` for every game, `g` generates what is marked, `J` lists the
 jobs, `r` learns again, `b` builds, `l` shows the log, `?` the full help, `q` quits. On a game:
 Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c`
-chooses it (at once, as your choice; the chosen one is marked `*`), `m` and `a`/`s`/`y`/`g` as
+chooses it (at once, as your choice; the chosen one is marked `*`), `m` and `a`/`e`/`s`/`y`/`g` as
 before, Left, `h` or Backspace goes back. Long steps run one at a time in the background. Nothing
 a tool prints shows on the screen: every line goes to `W/studio.log` (below). What shows is
 progress, as bars of squares (`■` done, `□` to go; `#` and `.` without UTF-8). `g`, `m` and `M`
-queue their work game by game (a game's AI, SID and AY jobs and its judge, then the next game's;
+queue their work game by game (a game's AI, ENG, SID and AY jobs and its judge, then the next game's;
 a collection to download first), so games finish one at a time. On the games list, a game with
 work in hand has a bar in place of its columns, with what is in hand (`learning`, `SID takes`,
 `judging`, `pack 2`): its share of all the work the studio knows of for it in the current
 activity (the jobs since the queue was last empty), each step a share, a step that reports how
-far it is (the learning's load, conversion, learning and check of each game, a SID or AY job's
-candidates, an AI job's takes and passes, the judge's takes checked and scores judged) by that
+far it is (the learning's load, conversion, learning and check of each game, an ENG job's scores, a
+SID or AY job's candidates, an AI job's takes and passes, the judge's takes checked and scores judged) by that
 measure, any other done or not. A game with work to come but none in hand (not begun, or between
 its steps) shows its columns with `queued` (dim) in place of its tunes; a game done shows its
 columns again, one whose step failed a red mark (`✗ SID takes failed (l: the log)`). The bottom
@@ -253,7 +256,8 @@ a step failed (on a narrow terminal the time left and then the figures go first)
 the key line above it for 3 s. `J`, on every screen, lists every job of the session, each with its state and a bar: the one
 running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
 MB), those waiting in the order they run, and those finished with their result, read from
-`tools/arrange-music`'s summary line (`3 takes, best closeness 73% (C64: …)`, `no C64 tune
+`tools/arrange-music`'s summary line (`3 takes, best closeness 73% (C64: …)`, `engine: ntropic, 2
+channels + drums`, `already exact: a built-in entry of the firmware plays it live`, `no C64 tune
 found by that name`, `0 takes, 4 songs skipped (48K beeper or CPC tunes)`, `12 scores: 3 chosen by the
 judge (2 in this run), 4 by you, 5 to hear`); a failed one its reason in a line and where the rest is
 (`exit 1: no music-preview here (the rest in studio.log: l)`); Enter shows a job's lines from the
@@ -273,7 +277,7 @@ Without the screen: `--assign ID=N` (again for more) puts a game in pack N (0: i
 would take over refuses it) and `--auto-fill` fills the packs as `f` does; `--generate` marks the
 methods named for every game with scores (or for the games `--game` names, by the ids `--status`
 shows) and runs the jobs `g` runs; `--auto` (with `--game`, or for every game with scores) does
-what `m` and `M` do: game by game the SID and AY jobs and the judge, then the final pass, and
+what `m` and `M` do: game by game the ENG, SID and AY jobs and the judge, then the final pass, and
 prints the scores settled and those to hear (the rest is a choice by ear: the screen, or
 `tools/arrange-music pick W/all`). `--build` builds, `--status` prints (the scores settled, by you or the judge, and to
 hear; each score's state and the judge's verdict, each take's figures; each game's pack and the
@@ -536,7 +540,8 @@ bytes), and `games`, the packed games in pack order and then those left out, eac
 `name`, `file`, `how`, `packed` (its bytes in the pack with its music; `null` when left out),
 `reason` (why left out, else `null`), `music` (its line in the table) and `scores`: each score
 and shadow score with its `key`, `shadow`, `seconds` (intro and one loop pass) and `status`
-(`original`, `take 2 (<generator>)`, `chip-1 (<source>)`, `ay-1 (<source>)` or `refused: <why>`).
+(`original`, `take 2 (<generator>)`, `engine-1 (<source>)`, `chip-1 (<source>)`, `ay-1 (<source>)`
+or `refused: <why>`).
 Any run removes the
 `plan.json` of an earlier one. Packs built from games files into folders whose `sound-cache` and
 `arrange` are symlinks to one shared pair use that pair: each run writes its own games' scores and
@@ -556,11 +561,11 @@ goes into the pack as a score that plays in place of the routine's notes.
     tools/arrange-music pick build/studio/games/all   # listen and choose the rest on a page (or c on the screen)
     tools/pack-studio ~/games --build             # the packs, with the chosen takes
 
-`tools/arrange-music` is the engine `tools/pack-studio` runs for AI, SID and AY takes, on its
+`tools/arrange-music` is the engine `tools/pack-studio` runs for AI, ENG, SID and AY takes, on its
 workspace's `W/all` (`DIR` below); its commands work on their own too, for experiments.
 
 **What it needs.** [uv](https://docs.astral.sh/uv/) (`tools/pack-studio` checks for it before an
-AI, SID or AY job): `tools/arrange-music` is a uv script, and its first run installs its Python packages
+AI, ENG, SID or AY job): `tools/arrange-music` is a uv script, and its first run installs its Python packages
 (about 1 GB: PyTorch, Hugging Face Transformers and the model's code, pinned in the script) into
 uv's cache, with a Python 3.11 or 3.12 if you have none. The first run that generates with the
 model downloads it, the Anticipatory Music Transformer (`stanford-crfm/music-medium-800k`, about
@@ -613,11 +618,12 @@ once it is chosen, at the next build.
   `[judged]` table so it is told apart from yours and judged again later (changed, or taken back
   when no longer sure); yours are never changed. The renderer check runs `music-preview`
   (`FMZX_MUSIC_PREVIEW`, else `host/target/release/music-preview`); without it the check is skipped
-  and the judge says so. `generate`, `chip` and `ay` end by judging the scores they worked on
+  and the judge says so. An engine take (the game's own tune, read exactly) is the pick, sure,
+  whenever it has no fault. `generate`, `engine`, `chip` and `ay` end by judging the scores they worked on
   (without `--apply`). The figures go to `judge.toml` beside each `score.toml`, reused while the
   score and its takes stay the same.
-- `tools/arrange-music selftest` checks `generate` (with `rules`), the files it writes, `chip`,
-  `ay`, `pick --set`, `--list`, the page's save and the judge (its measures on made-up tunes, the
+- `tools/arrange-music selftest` checks `generate` (with `rules`), the files it writes, `engine`
+  (through a stand-in reader), `chip`, `ay`, `pick --set`, `--list`, the page's save and the judge (its measures on made-up tunes, the
   renderer's refusals through a stand-in, the cache, `--apply`) in a temporary folder, with no model
   (and, once uv has installed the packages, no network).
 
@@ -637,7 +643,7 @@ would hold it, the takes `choices.toml` chooses in, each checked as a run checks
 `--score`: the learner's run from its start, 40 s. With `--score KEY`: the run that recorded the
 score, from where it starts (what the run played before it would sound the same in every take), for the score (its intro and one pass of its loop) and 2 s
 (at most 40 s), with the score playing take T in place of its choice: `0` or `original` (a shadow
-score: the routine, live), `<n>` (`take-<n>`), `chip-<n>` or `ay-<n>`; without `--take`, what `choices.toml`
+score: the routine, live), `<n>` (`take-<n>`), `engine-<n>`, `chip-<n>` or `ay-<n>`; without `--take`, what `choices.toml`
 chooses. `--seconds N` sets the length (up to 600), `--beeper` renders the beeper alone over the
 same frames. The game's music comes from `DIR/sound-cache/` (a game not there is learned and cached
 first, which takes a while); from the cache a render takes about a second. It prints one line
@@ -647,8 +653,9 @@ exit 1, a take the pack would refuse `refused: <why>` and exit 3.
 **The files**, in `DIR/arrange/` (`W/all/arrange/` under `build/studio/`, which git ignores):
 
     choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original;
-                                     "chip-<n>": a C64 take, "ay-<n>": a Spectrum 128 take,
-                                     see "Music from other versions"); [judged] the same keys
+                                     "engine-<n>": an engine take, "chip-<n>": a C64 take,
+                                     "ay-<n>": a Spectrum 128 take, see "The game's own music,
+                                     read exactly" and "Music from other versions"); [judged] the same keys
                                      for the choices judge --apply made (fmzx-pack reads only
                                      [choices])
     <game>/<key>/score.toml          the score's notes (fmzx-pack personal)
@@ -658,6 +665,7 @@ exit 1, a take the pack would refuse `refused: <why>` and exit 3.
                  take-<n>/arranged.toml       the take as the FM-1 plays it
                  take-<n>/fm1.mid, fm1.wav    the same, to listen to (the drum's level picks a drum)
                  take-<n>/full.mid, full.wav  the original with everything the model wrote
+                 engine-1/...        the engine take (see "The game's own music, read exactly")
                  chip-<n>/...        a C64 take (see "Music from other versions")
                  ay-<n>/...          a Spectrum 128 take (the same)
 
@@ -722,6 +730,47 @@ W/all --offline` for its AI jobs: uv uses only its cached packages and the tool 
 cached model, and it stops with how to get the model when it is not cached (one run without
 `--offline` downloads it). Run directly, `tools/arrange-music generate --offline` keeps the model
 offline, and `UV_OFFLINE=1` keeps uv offline too.
+
+### The game's own music, read exactly
+
+A score's notes are transcribed from the speaker's one bit, so they can miss or mishear a note.
+Where the game plays its music through a beeper engine the reader knows, the notes can instead be
+read exactly from the engine itself: its channels' pitches, lengths and volumes and its drums, as
+the game plays them. The engines known are ntropic, Tritone and Stocker.
+
+    tools/pack-studio ~/games --generate eng                      # an engine take per score whose game runs a known engine
+    tools/pack-studio ~/games --auto                              # or with the judge: the engine first, then the C64 and 128 searches
+    cd host && cargo build --release -p fmzx-pack && cd ..        # or directly:
+    host/target/release/fmzx-pack engine-notes --info build/studio/games/all --game ID   # which engine, or none
+    tools/arrange-music engine build/studio/games/all [--game ID]... [--force]
+
+`fmzx-pack engine-notes DIR --game ID --score KEY -o notes.toml` plays the run that recorded the
+score (the same run `music-preview` plays, so the timelines agree), finds the engine in the game's
+memory by its code (an engine moved to another address or with its operands patched still
+matches), reads each channel's state at the engine's own row read and each drum at its drum code,
+and writes the notes and drum hits on the score's timeline: from the score's trigger edge, over
+its intro and one pass of its loop. `--info` prints, per score, the engine and what it gave
+(`ntropic at 9C98h, 2 channels + drums (kick, noise): 166 notes, 115 drum hits`), or why none was
+read (`no known engine in its run`). It exits 3 when no known engine plays the score.
+
+`tools/arrange-music engine DIR` writes one take per such score, `DIR/arrange/<game>/<key>/engine-1/`
+(`arranged.toml`, `fm1.mid`, `fm1.wav`): on the score's own timeline (its key, `intro_t` and
+`loop_t`), so it plays in step with the beeper as an AI take does. Each engine channel keeps one
+voice for the whole take, chosen by its register: the highest the lead, the lowest the bass (with
+two channels, only when it lies under E3), the others the pad; the drums go on the FM-1's drum with
+a strength by kind, and a note struck again at the same pitch is kept apart so the voice strikes
+again. `source` names the engine and what was read. A shadow score that a built-in entry of the
+firmware already plays exactly, from the same engine's state, gets no take (the output says
+`already exact`): the live entry follows the game as it plays and costs the pack nothing. The judge
+takes an engine take as the game's own tune (closeness and provenance 1) and picks it, sure, when
+it has no fault, ahead of the transcribed original; it never changes a choice of yours. `pick` and
+the studio list it as `engine-1` (`ENG engine-1` on the game screen), and `choices.toml` holds
+`"<game>/<key>" = "engine-1"`. In the studio, `e` marks ENG for a game (`E` for every game), and
+`m`, `M` and `--auto` read the engine before the C64 and Spectrum 128 searches: it needs no
+download and takes a few seconds a game.
+
+[docs/music-generation.md](docs/music-generation.md#engine-takes) has the files and how to add
+an engine.
 
 ### Music from other versions
 

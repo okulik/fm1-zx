@@ -16,6 +16,10 @@
 //!     SID tune's or a Spectrum 128 `.ay` song's notes for `tools/arrange-music`: the `chipmusic`
 //!     crate; `--subtune` (1-based) defaults to the file's start song, `--seconds` to 180)
 //! `fmzx-pack chip-notes --info <file.sid | file.ay>` (the file's header)
+//! `fmzx-pack engine-notes <W/all> --game ID --score KEY -o <notes.toml>` (a score's music read
+//!     exactly from the game's music engine, on the score's timeline, for `tools/arrange-music
+//!     engine`: [`fmzx_pack::engine_notes`]; exit 3 when no known engine plays it)
+//! `fmzx-pack engine-notes --info <W/all> --game ID` (each score's engine, or why none)
 
 use fmzx_pack::inputs::{check_loader, default_cache, load_sdk, sha256_hex, Pins};
 use fmzx_pack::keymaps::keymaps_json;
@@ -36,7 +40,13 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
        fmzx-pack verify <pkg.fwsc> [--product FM-1_048]
        fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]... [--plan]
        fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S (default 180)] -o <notes.toml>
-       fmzx-pack chip-notes --info <file.sid | file.ay>";
+       fmzx-pack chip-notes --info <file.sid | file.ay>
+       fmzx-pack engine-notes <W/all> --game ID --score KEY -o <notes.toml>
+       fmzx-pack engine-notes --info <W/all> --game ID";
+
+/// The start of the error an `engine-notes` run ends with when no known engine plays the score
+/// (exit 3).
+const NO_ENGINE: &str = "no engine: ";
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -182,6 +192,36 @@ fn chip_notes(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn engine_notes(args: &[String]) -> Result<(), String> {
+    use fmzx_pack::engine_notes::{notes_toml, read_scores, summary};
+    let o = opts(args, &["--game", "--score", "-o"], &["--info"])?;
+    let [all] = &o.free[..] else { return Err(USAGE.to_string()) };
+    let game = o.need("--game")?;
+    if o.flags.iter().any(|f| f == "--info") {
+        let got = read_scores(Path::new(all), game, o.get("--score"))?;
+        if got.is_empty() {
+            println!("{game}: no scores");
+        }
+        for se in &got {
+            let shadow = if se.shadow { " (shadow score)" } else { "" };
+            println!("{game}/{}{shadow}: {}", se.key, summary(se));
+        }
+        return Ok(());
+    }
+    let key = o.need("--score")?;
+    let out = o.need("-o")?;
+    let got = read_scores(Path::new(all), game, Some(key))?;
+    let se = got.first().ok_or(format!("game {game:?} has no score {key}"))?;
+    match &se.found {
+        Err(why) => Err(format!("{NO_ENGINE}{game}/{key}: {why}")),
+        Ok(f) => {
+            std::fs::write(out, notes_toml(game, se, f)).map_err(|e| format!("{out}: {e}"))?;
+            println!("{out}: {}", summary(se));
+            Ok(())
+        }
+    }
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     match args {
         [cmd, manifest, flag, out] if cmd == "games" && flag == "-o" => {
@@ -213,6 +253,7 @@ fn run(args: &[String]) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "verify" => verify(rest),
         [cmd, rest @ ..] if cmd == "personal" => personal(rest),
         [cmd, rest @ ..] if cmd == "chip-notes" => chip_notes(rest),
+        [cmd, rest @ ..] if cmd == "engine-notes" => engine_notes(rest),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -223,7 +264,11 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("fmzx-pack: {e}");
-            ExitCode::FAILURE
+            if e.starts_with(NO_ENGINE) {
+                ExitCode::from(3)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -246,5 +291,16 @@ mod tests {
         assert!(run(&["chip-notes", "x.sid"]).starts_with("-o is required"));
         assert!(run(&["chip-notes", "/nonexistent/x.sid", "-o", "n.toml"]).starts_with("/nonexistent/x.sid: "));
         assert!(run(&["chip-notes", "--bad", "x.sid"]).starts_with("unknown option --bad"));
+    }
+
+    #[test]
+    fn engine_notes_arguments() {
+        let run = |a: &[&str]| super::run(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap_err();
+        assert!(run(&["engine-notes"]).starts_with("usage:"));
+        assert!(run(&["engine-notes", "W/all"]).starts_with("--game is required"));
+        assert!(run(&["engine-notes", "W/all", "--game", "g", "-o", "n.toml"]).starts_with("--score is required"));
+        assert!(run(&["engine-notes", "W/all", "--game", "g", "--score", "k"]).starts_with("-o is required"));
+        assert!(run(&["engine-notes", "/nonexistent/all", "--game", "g", "--score", "k", "-o", "n.toml"]).starts_with("/nonexistent/all: no such folder"));
+        assert!(run(&["engine-notes", "--info", "/nonexistent/all", "--game", "g"]).starts_with("/nonexistent/all: no such folder"));
     }
 }

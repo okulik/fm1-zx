@@ -8,6 +8,7 @@
 //! firmware image links none of it.
 
 pub mod arrange;
+pub mod engine_notes;
 pub mod fwsc;
 pub mod inputs;
 pub mod keymaps;
@@ -22,3 +23,4 @@ pub mod personal;
 pub mod tapeload;
 pub mod testprogs;
 pub mod tzx;
+pub mod workspace;

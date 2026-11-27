@@ -4,7 +4,7 @@
 //! `music-preview <W/all> --game ID [--score KEY [--take T]] [--seconds N] [--beeper] -o OUT.wav`:
 //! what the FM-1 plays for a game of a personal pack's learning workspace, through `core/sound`,
 //! in FM: engines with the game's list as the pack has it, or with score KEY playing take T (`0`
-//! or `original`, `<n>`, `chip-<n>`, `ay-<n>`); `--beeper` the beeper alone over the same frames. One line
+//! or `original`, `<n>`, `engine-<n>`, `chip-<n>`, `ay-<n>`); `--beeper` the beeper alone over the same frames. One line
 //! on stdout when written; one line on stderr and exit 1 when not (an unknown workspace, game,
 //! score or take; 3 when the take is refused: `refused: <why>`), 2 for a usage error. See BUILDING.md, "Arranged music", and
 //! [`music::preview`].
@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 fn usage(why: &str) -> ExitCode {
     eprintln!("music-preview: {why}");
-    eprintln!("usage: music-preview <W/all> --game ID [--score KEY [--take 0|original|<n>|chip-<n>|ay-<n>]] [--seconds N] [--beeper] -o OUT.wav");
+    eprintln!("usage: music-preview <W/all> --game ID [--score KEY [--take 0|original|<n>|engine-<n>|chip-<n>|ay-<n>]] [--seconds N] [--beeper] -o OUT.wav");
     ExitCode::from(2)
 }
 
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
         None => Take::Chosen,
         Some((_, Some(t))) => t,
         Some((t, None)) => {
-            eprintln!("unknown take {t:?}: a take is 0 or original, <n> (take-<n>) or chip-<n>");
+            eprintln!("unknown take {t:?}: a take is 0 or original, <n> (take-<n>), engine-<n>, chip-<n> or ay-<n>");
             return ExitCode::FAILURE;
         }
     };

@@ -11,6 +11,9 @@
 //!
 //! Either capture is turned into notes on the Spectrum's clock ([`notes`]).
 //!
+//! A game's own beeper music is read exactly from its music engine in [`engine`] (`fmzx-pack
+//! engine-notes`): a known engine recognised by its code, its state tapped at its row read.
+//!
 //! # The notes file
 //!
 //! Top-level keys: `file` (the tune's file as named), `format` (`PSID`, `RSID` or `AY`),
@@ -27,6 +30,7 @@ pub mod ay;
 pub mod ayfile;
 pub mod c64;
 pub mod cpu;
+pub mod engine;
 pub mod notes;
 pub mod sidfile;
 

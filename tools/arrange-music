@@ -15,16 +15,17 @@
 # ///
 """Arranged takes for the scores a personal pack records (BUILDING.md, "Your own games").
 
-It is the engine tools/pack-studio runs for its AI, SID and AY takes (on its workspace's W/all);
+It is the engine tools/pack-studio runs for its AI, ENG, SID and AY takes (on its workspace's W/all);
 its commands below also work on their own, for experiments. fmzx-pack personal writes
 DIR/arrange/<game>/<key>/score.toml for every score it records (DIR: W/all for the studio).
 This tool adds a bass, a pad (chords, one note at a time) and a drum to each score, as several
 takes to choose from by ear; the next build (tools/pack-studio --build) packs the chosen takes. A
 score.toml with `shadow = true` is a shadow score: music a learned or built-in routine already
 plays live. Its takes are made like any score's; it is packed only when a take is chosen for it,
-and the take then replaces the live version. A score can also take its game's tune from the
-game's C64 version, from a SID collection the owner has (chip, below), or from its Spectrum 128
-version, from a collection of .ay files the owner has (ay, below).
+and the take then replaces the live version. A score can also take its game's own tune read
+exactly from the game's music engine (engine, below), its game's tune from the game's C64
+version, from a SID collection the owner has (chip, below), or from its Spectrum 128 version,
+from a collection of .ay files the owner has (ay, below).
 
   tools/arrange-music generate DIR [--takes N] [--game ID]... [--force] [--jobs J]
                                    [--model NAME] [--soundfont PATH] [--seed S] [--offline]
@@ -55,6 +56,41 @@ version, from a collection of .ay files the owner has (ay, below).
       A score has its takes when takes.toml next to it lists takes 1..N for its score.toml as it
       is now, whatever generator made them (--force replaces them; a changed score.toml gets new
       ones); a run interrupted with the same generator and seed resumes at the missing takes.
+
+  tools/arrange-music engine DIR [--game ID]... [--force] [--fmzx-pack PATH] [--soundfont PATH]
+      For each score whose game runs a music engine the reader knows (ntropic, Tritone, Stocker),
+      reads its music exactly from the engine and writes it as DIR/arrange/<game>/<key>/engine-1/.
+      fmzx-pack engine-notes (the converter of chip, below) plays the score's own run, the one
+      that recorded it, as music-preview plays it: the engine found by its code, its channels'
+      state read at its row read, its drums at its drum code's OUTs; the notes and drum hits on
+      the score's timeline (cached in DIR/arrange/.engine-notes/ while the score, the converted
+      games and fmzx-pack are the same). The take:
+        arranged.toml  the score's header (key, intro_t, loop_t: the take is on the score's
+                       timeline and plays in step with the beeper, as an AI take), take =
+                       "engine-1", generator = "engine <engine>", source ("<engine>, read
+                       exactly: <what was read>"), engine, channels, channel_roles (each
+                       channel's voice), score_digest (score.toml's, as takes.toml's), [metrics]
+                       notes a second per voice, notes and drum_hits (what the reader gave), and
+                       the notes on 4 voices. Each channel keeps one voice for the whole take: the
+                       highest on average the lead; with two channels the other the bass when it
+                       lies under E3 (MIDI 52), else the pad; with three or more the lowest the
+                       bass and the rest the pad (with more than one there, a newer note cuts the
+                       one sounding: the pad follows the latest onset). Levels: lead 200, bass
+                       210, pad 150, times the note's level / 255 (an engine's volume or duty),
+                       at least 48. A same-pitch note right after another on a voice ends 128 T
+                       early, so the FM voice strikes it again (within 1/32 of a period it would
+                       glide on). The drum hits on voice 3 by kind (kick 200, snare 170, tom 130,
+                       hat 80, an engine's tone burst 200, its noise 120), one at a time within
+                       the drum rules (generate's): a hit within 40 ms of the one before merged
+                       into it, the stronger kept
+        fm1.mid, fm1.wav  the notes on General MIDI instruments, rendered as the takes are
+      A score with no known engine gets no take (said: "no engine take: no known engine in its
+      run"), nor does a shadow score a built-in entry of the firmware already plays exactly from
+      the engine's state (said: "already exact, no engine take": the live entry follows the game
+      as it plays and costs the pack nothing, where a take would only repeat it). A score has its
+      engine take while engine-1/arranged.toml's score_digest is its score.toml's, or the cached
+      reading says it needs none; --force writes it again. generate, chip and ay leave engine-<n>/
+      alone. The reader is --fmzx-pack PATH, else $FMZX_PACK, else host/target/release/fmzx-pack.
 
   tools/arrange-music chip DIR --sid-dir PATH [--game ID]... [--max N] [--force]
                                [--fmzx-pack PATH] [--soundfont PATH]
@@ -117,14 +153,16 @@ version, from a collection of .ay files the owner has (ay, below).
 
   tools/arrange-music pick DIR [--port P] [--set GAME/KEY=N]... [--list]
       Serves a page on http://127.0.0.1:P/ (default 8765, or a free port) to listen to each
-      score's original, its takes and its chip and ay takes and choose one, saved to
+      score's original, its takes and its engine, chip and ay takes and choose one, saved to
       DIR/arrange/choices.toml:
           [choices]
           "<game>/<key>" = <take>     # 0 or absent: the original
+          "<game>/<key>" = "engine-1" # an engine take, by its folder
           "<game>/<key>" = "chip-1"   # a chip take, by its folder
           "<game>/<key>" = "ay-1"     # an ay take, by its folder
-      --set writes choices without the page (N, chip-N or ay-N); --list prints every score, the
-      judge's verdict, its takes, their metrics, its chip and ay takes with their source, and
+      --set writes choices without the page (N, engine-N, chip-N or ay-N); --list prints every
+      score, the judge's verdict, its takes, their metrics, its engine, chip and ay takes with
+      their source, and
       each take's judge figures (closeness, quality, its place in the judge's order, its faults),
       and the choice ("(the judge)" after one the judge made). The page shows the same. Choices
       of other scores in the file are kept, and a choice made here is the owner's (the judge's
@@ -135,7 +173,7 @@ version, from a collection of .ay files the owner has (ay, below).
       the live version.
 
   tools/arrange-music judge DIR [--game ID]... [--apply] [--provisional]
-      Weighs each score's takes (take-<n>, chip-<n>, ay-<n>) and its original (take 0) from their
+      Weighs each score's takes (take-<n>, engine-<n>, chip-<n>, ay-<n>) and its original (take 0) from their
       notes, prints a table per score and, with --apply, chooses where it is sure. Per take:
         closeness   how close it is to the original's tune, 0 to 1: the best Smith-Waterman
                     local alignment of any of the original's melody lines (each voice's and the
@@ -160,7 +198,12 @@ version, from a collection of .ay files the owner has (ay, below).
                     and remixes little
         score       quality x (0.3 + 0.7 x closeness), closeness raised to 0.6 x provenance (the
                     original's 1): another tune must sound much better to win
-      The highest score is the judge's pick (the original can win). Its confidence: low on a
+      An engine take is the game's own tune read exactly: closeness 1 and provenance 1 by
+      construction, and one with no fault (not refused by the renderer, not mostly silent, no
+      fragment and so on) is the pick, with high confidence and no flags, ahead of the original
+      (a transcription of the same tune) and of every other take (judge.toml says exact = true);
+      with a fault it is weighed as any take. Otherwise the highest score is the judge's pick
+      (the original can win). Its confidence: low on a
       close call (the pick less than 15% ahead of the next) or when the original is too plain to
       check closeness (itself under z 5) and another take wins, or the pick is refused; medium
       with any flag (the winner not shown to be the same tune, closeness 0.5; a partial melodic
@@ -193,25 +236,30 @@ version, from a collection of .ay files the owner has (ay, below).
       own choices are judged again: changed to another sure pick, or taken back (the score plays
       the original) when it is no longer sure.
 
-  The summary line: generate, chip, ay and judge each end with one line of key=value fields,
+  The summary line: generate, engine, chip, ay and judge each end with one line of key=value fields,
   kept stable for tools/pack-studio's jobs view and for scripts (each on one line):
       summary: kind=ai game=<ids|all> scores=N pending=N takes=N model=NAME seconds=S
+      summary: kind=engine game=<ids|all> scores=N pending=N takes=N live=N unknown=N failed=N engines=<names|-> seconds=S source=...
       summary: kind=sid game=<ids|all> scores=N pending=N takes=N candidates=N checked=N refused=N best=M seconds=S source=...
       summary: kind=judge game=<ids|all> tunes=N owner=N picked=N applied=N sure=N flagged=N faults=N renderer=checked|skipped seconds=S
-  kind is ai (generate), sid (chip), ay (ay) or judge; game the --game ids, comma-separated, or
+  kind is ai (generate), engine (engine), sid (chip), ay (ay) or judge; game the --game ids, comma-separated, or
   all; scores the scores found; pending those worked on (the others had their takes); takes the
   takes written; candidates the (file, subtune) pairs that name the game; checked those
   converted and compared; refused those the converter refused; best the closeness of the take
   written with the best one (two decimals, or - with no take), and source that take's source
-  line (absent with no take); seconds the command's time. For judge: tunes the scores with takes
+  line (absent with no take); seconds the command's time. For engine: takes the engine takes
+  written, live the scores a built-in entry already plays exactly, unknown those no known engine
+  plays, failed those the reader failed on, engines the engines found (comma-separated), source
+  each take's engine and channels ("ntropic, 2 channels + drums", several joined by "; "). For judge: tunes the scores with takes
   judged; owner those with the owner's choice; picked those with the judge's choice; applied
   the choices --apply wrote in this run; sure those without the owner's choice the judge is sure of; flagged
   those with no choice it is not sure of (they need the owner's ear); faults the takes with a
   fault; renderer whether the renderer check ran. source comes last and runs to the end of the
   line; no other value holds a space. A command that stops on an error prints no summary line.
 
-  The progress lines: judge (and generate, chip and ay as they end by judging) say how far they
-  are, for tools/pack-studio's bars, each on a line of its own:
+  The progress lines: judge (and generate, engine, chip and ay as they end by judging) say how
+  far they are, for tools/pack-studio's bars, each on a line of its own (and engine, before each
+  score it reads, "progress: engine <game>/<key>"):
       progress: score <game>/<key> renders=N    before the work: each score with takes, N its
                                                 takes the renderer checks (0 without it)
       progress: rendered <game>/<key> <take>    a take checked by the renderer
@@ -219,7 +267,11 @@ version, from a collection of .ay files the owner has (ay, below).
   A score's share done is (its takes rendered + 1 when judged) / (N + 1).
 
   tools/arrange-music selftest
-      Checks generate (with the rules generator), the files it writes, chip (a small collection
+      Checks generate (with the rules generator), the files it writes, engine (through a stand-in
+      reader: the take on the score's timeline, each channel's voice, more than 3 channels, the
+      re-strikes, the drums by kind, a score played exactly live and one with no engine said, the
+      cache, the judge's pick and an owner's choice kept, a faulty engine take not picked, pick
+      --set and --list), chip (a small collection
       of made-up SID files and a stand-in converter, both written in the temporary folder), ay
       (made-up .ay files, through the same stand-in), the summary lines (a C64 tune found, none
       found by name, songs the converter refuses, scores that have their takes), pick --set and
@@ -2027,6 +2079,292 @@ def cmd_ay(a: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
+# engine: the game's own music read exactly from its music engine, as a take
+#
+# fmzx-pack engine-notes runs the score's own run (the one that recorded it, as music-preview plays
+# it) with a known engine's state tapped at its row read, and writes each channel's notes and the
+# drum hits on the score's timeline. engine_voices puts them on the FM-1's voices: each channel
+# keeps one voice for the whole take, the highest on average the lead, the lowest the bass (with
+# two channels, only when it lies below ENGINE_BASS_BELOW), the others the pad (more than one
+# channel there: a newer note cuts the one sounding); the drum hits on the drum by kind. The take
+# is on the score's timeline (its key, intro_t and loop_t), so it plays in step with the beeper
+# as an AI take does.
+
+ENGINE_PREFIX = "engine"
+ENGINE_BASS_BELOW = 52.0  # MIDI (E3): with two channels, the lower is the bass under it, else the pad
+ENGINE_LEVEL = {"lead": 200, "bass": 210, "pad": 150}  # a voice's level for a note of full level
+ENGINE_LEVEL_MIN = 48
+ENGINE_DRUM_LEVEL = {**DRUM_LEVEL, "tone": 200, "noise": 120}  # tone and noise: an engine's tone burst and noise
+ENGINE_RESTRIKE_T = 128  # a same-pitch note right after another on a voice ends this early, so it strikes again
+ENGINE_SAME_PITCH = 1 / 32  # a period within this share of the one before is the same pitch (the FM-1 glides on)
+
+
+def engine_dirs(score_dir: Path) -> list[tuple[int, Path]]:
+    out = []
+    for p in score_dir.glob(f"{ENGINE_PREFIX}-*"):
+        n = p.name[len(ENGINE_PREFIX) + 1:]
+        if n.isdigit() and (p / "arranged.toml").is_file():
+            out.append((int(n), p))
+    return sorted(out)
+
+
+def engine_notes_cache(d: Path, score: Score) -> Path:
+    return d / "arrange" / ".engine-notes" / f"{score.game}__{score.key}.toml"
+
+
+def run_engine_reader(fp: str, d: Path, score: Score) -> tuple[dict | None, str, bool]:
+    """fmzx-pack engine-notes for the score, cached in DIR/arrange/.engine-notes/ (the result, or
+    why no engine plays it, kept while the score, the converted games' manifest and fmzx-pack are
+    unchanged): (the notes TOML, "", True), (None, why, True) when no known engine plays it, or
+    (None, why, False) when the reader failed."""
+    out = engine_notes_cache(d, score)
+    stamp = out.with_suffix(".src")
+    src = engine_stamp(fp, d, score)
+    old = stamp.read_text() if stamp.is_file() else ""
+    if old.startswith(src):
+        rest = old[len(src):]
+        if rest.startswith("none: "):
+            return None, rest[6:].strip(), True
+        doc = read_toml(out) if out.is_file() else {}
+        if doc:
+            return doc, "", True
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    r = subprocess.run([fp, "engine-notes", str(d), "--game", score.game, "--score", score.key, "-o", str(out)],
+                       capture_output=True, text=True, check=False)
+    lines = (r.stderr or r.stdout).strip().splitlines()
+    why = lines[-1].removeprefix("fmzx-pack: ").removeprefix("no engine: ") if lines else f"exit {r.returncode}"
+    why = why.removeprefix(f"{score.id}: ")
+    if r.returncode == 3:
+        stamp.write_text(f"{src}none: {why}\n")
+        return None, why, True
+    if r.returncode != 0 or not out.is_file():
+        return None, why, False
+    stamp.write_text(src)
+    doc = read_toml(out)
+    return (doc, "", True) if doc else (None, "unreadable notes", False)
+
+
+def engine_stamp(fp: str, d: Path, score: Score) -> str:
+    """The key the reader's cached result holds for: the score, the converted games' manifest and
+    fmzx-pack."""
+    man = d / "converted" / "manifest.toml"
+    fp_t = Path(fp).stat().st_mtime_ns if Path(fp).is_file() else 0
+    return f"{score.digest()} {man.stat().st_mtime_ns if man.is_file() else 0} {fp} {fp_t}\n"
+
+
+def engine_settled(fp: str, d: Path, score: Score) -> bool:
+    """Whether the reader's cached result for the score as it is says it needs no take: no known
+    engine plays it, or a built-in entry plays it exactly."""
+    out = engine_notes_cache(d, score)
+    stamp = out.with_suffix(".src")
+    old = stamp.read_text() if stamp.is_file() else ""
+    src = engine_stamp(fp, d, score)
+    if not old.startswith(src):
+        return False
+    return old[len(src):].startswith("none: ") or bool(read_toml(out).get("live"))
+
+
+def engine_roles(doc: dict) -> dict[int, str]:
+    """Each channel's voice for the whole take (see the section's comment), by the duration-weighted
+    mean of its notes' pitches."""
+    dur: dict[int, float] = {}
+    pitch: dict[int, float] = {}
+    for n in doc.get("note", []):
+        c, d = int(n["channel"]), max(int(n["end_t"]) - int(n["start_t"]), 1)
+        dur[c] = dur.get(c, 0.0) + d
+        pitch[c] = pitch.get(c, 0.0) + d * float(n["midi"])
+    by = sorted(dur, key=lambda c: -pitch[c] / dur[c])
+    roles: dict[int, str] = {}
+    if not by:
+        return roles
+    roles[by[0]] = "lead"
+    rest = by[1:]
+    if len(rest) == 1:
+        roles[rest[0]] = "bass" if pitch[rest[0]] / dur[rest[0]] < ENGINE_BASS_BELOW else "pad"
+    elif rest:
+        roles[rest[-1]] = "bass"
+        for c in rest[:-1]:
+            roles[c] = "pad"
+    return roles
+
+
+def engine_voices(score: Score, doc: dict) -> tuple[dict[int, list[Note]], dict[int, str]]:
+    """The reader's notes on the take's voices (0 lead, 1 bass, 2 pad, 3 drum) and each channel's
+    role: levels by voice times the note's level, a newer note cutting an older one on a voice, a
+    same-pitch note right after another made to strike again, the drum hits one at a time within
+    the drum rules (the stronger kind wins a clash)."""
+    roles = engine_roles(doc)
+    total = score.total_t
+    voices: dict[int, list[Note]] = {0: [], 1: [], 2: [], 3: []}
+    for n in doc.get("note", []):
+        role = roles.get(int(n["channel"]))
+        if role is None:
+            continue
+        v = TAKE_ROLES.index(role)
+        s, e = int(n["start_t"]), min(int(n["end_t"]), total)
+        p = max(64, min(0xFFFFFF, int(n["period_t"])))
+        lv = max(ENGINE_LEVEL_MIN, min(255, round(ENGINE_LEVEL[role] * int(n.get("level", 255)) / 255)))
+        if e > s:
+            voices[v].append(Note(v, s, e, p, lv))
+    for v in range(3):
+        ns = sorted(voices[v], key=lambda n: (n.start_t, -n.end_t))
+        kept: list[Note] = []
+        for n in ns:
+            if kept and kept[-1].start_t == n.start_t:
+                continue  # two channels sharing the pad start together: the longer note keeps it
+            if kept and kept[-1].end_t > n.start_t:
+                kept[-1].end_t = n.start_t
+            if kept and kept[-1].end_t == n.start_t and abs(kept[-1].period_t - n.period_t) <= kept[-1].period_t * ENGINE_SAME_PITCH:
+                kept[-1].end_t = n.start_t - ENGINE_RESTRIKE_T
+            kept.append(n)
+        voices[v] = [n for n in kept if n.end_t - n.start_t >= 64]
+    hits: list[list[int]] = []
+    spacing, hit = score.tstate(DRUM_SPACING_S), score.tstate(DRUM_HIT_S)
+    for dr in sorted(doc.get("drum", []), key=lambda x: int(x["start_t"])):
+        s = int(dr["start_t"])
+        lv = ENGINE_DRUM_LEVEL.get(str(dr.get("kind", "")), DRUM_OTHER_LEVEL)
+        if s >= total:
+            continue
+        if hits and s - hits[-1][0] < spacing:
+            hits[-1][1] = max(hits[-1][1], lv)
+            continue
+        hits.append([s, lv])
+    for i, (s, lv) in enumerate(hits):
+        e = min(s + hit, total, hits[i + 1][0] - DRUM_GAP_T if i + 1 < len(hits) else total)
+        if e - s >= 64:
+            voices[3].append(Note(3, s, e, 0, lv))
+    return voices, roles
+
+
+def engine_source(doc: dict) -> str:
+    """"ntropic, read exactly: its rows at 9C9Ch (...)"."""
+    return f"{doc.get('engine', '?')}, read exactly: {doc.get('read', '')}"
+
+
+def engine_shape(doc: dict) -> str:
+    """"ntropic, 2 channels + drums"."""
+    return f"{doc.get('engine', '?')}, {doc.get('channels', '?')} channels" + (" + drums" if doc.get("drum") else "")
+
+
+def write_engine_take(score: Score, doc: dict, renderer: Renderer) -> dict:
+    voices, roles = engine_voices(score, doc)
+    secs = max(score.seconds, 1e-6)
+    m = {f"{nm}_nps": round(len(voices[v]) / secs, 2) for v, nm in ((0, "lead"), (1, "bass"), (2, "pad"), (3, "drums"))}
+    m["notes"] = len(doc.get("note", []))
+    m["drum_hits"] = len(doc.get("drum", []))
+    out = dict(score.header)
+    out.pop("shadow", None)
+    out["voices"] = 3
+    out["roles"] = list(TAKE_ROLES)
+    out["take"] = f"{ENGINE_PREFIX}-1"
+    out["generator"] = f"engine {doc.get('engine', '?')}"
+    out["source"] = engine_source(doc)
+    out["engine"] = str(doc.get("engine", ""))
+    out["channels"] = int(doc.get("channels", 0))
+    out["channel_roles"] = [roles.get(c, "") for c in range(int(doc.get("channels", 0)))]
+    out["score_digest"] = score.digest()
+    out["metrics"] = m
+    out["note"] = [asdict(x) for x in sorted((x for v in voices.values() for x in v), key=lambda x: (x.start_t, x.voice))]
+    final = score.dir / f"{ENGINE_PREFIX}-1"
+    tmp = score.dir / f".{ENGINE_PREFIX}-1.tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    dump_toml(tmp / "arranged.toml", out)
+    fm1_midi(score, voices, tmp / "fm1.mid")
+    renderer.render(tmp / "fm1.mid", tmp / "fm1.wav", secs)
+    for _, p in engine_dirs(score.dir):
+        shutil.rmtree(p)
+    tmp.replace(final)
+    return m
+
+
+def engine_current(score: Score) -> bool:
+    """Whether the score has its engine take for its score.toml as it is."""
+    return any(toml_head(p / "arranged.toml").get("score_digest") == score.digest() for _, p in engine_dirs(score.dir))
+
+
+@dataclass
+class EngineResult:
+    """What engine_score did for a score."""
+    take: bool = False  # an engine take written
+    live: bool = False  # a built-in entry already plays it exactly: no take
+    unknown: bool = False  # no known engine plays it
+    failed: str = ""  # the reader failed: why
+    engine: str = ""
+    shape: str = ""
+
+
+def engine_score(fp: str, d: Path, score: Score, renderer: Renderer) -> EngineResult:
+    log = lambda msg: print(f"[{score.id}] {msg}", flush=True)  # noqa: E731
+    print(f"progress: engine {score.id}", flush=True)
+    doc, why, known = run_engine_reader(fp, d, score)
+    if doc is None:
+        if known:
+            log(f"no engine take: {why}")
+            return EngineResult(unknown=True)
+        log(f"the engine reader failed: {why}")
+        return EngineResult(failed=why)
+    res = EngineResult(engine=str(doc.get("engine", "")), shape=engine_shape(doc))
+    if doc.get("live"):
+        log(f"already exact, no engine take: {res.shape}; {doc['live']}")
+        res.live = True
+        return res
+    m = write_engine_take(score, doc, renderer)
+    log(f"{ENGINE_PREFIX}-1: engine: {res.shape}; {m['notes']} notes, {m['drum_hits']} drum hits, read exactly")
+    res.take = True
+    return res
+
+
+def cmd_engine(a: argparse.Namespace) -> int:
+    t0 = time.time()
+    d = Path(a.dir)
+    scores = find_scores(d, a.game)
+    if not scores:
+        print(f"{PROG}: no scores under {d / 'arrange'}")
+        print(summary_line("engine", a.game, t0, scores=0, pending=0, takes=0, live=0, unknown=0, failed=0, engines="-"), flush=True)
+        return 0
+    fp = engine_reader_path(a.fmzx_pack)
+    pending = [s for s in scores if a.force or not (engine_current(s) or engine_settled(fp, d, s))]
+    print(f"{PROG}: {len(scores)} scores, {len(pending)} to read from their engines", flush=True)
+    results: list[EngineResult] = []
+    if pending:
+        fp = find_engine_reader(a.fmzx_pack)
+        renderer = Renderer(a.soundfont)
+        if not renderer.ok:
+            print(f"{PROG}: {renderer.why_not()}")
+        results = [engine_score(fp, d, s, renderer) for s in pending]
+        judge_scores(d, pending)
+    takes = sum(r.take for r in results)
+    live = sum(r.live for r in results)
+    engines = sorted({r.engine for r in results if r.engine})
+    shapes = sorted({r.shape for r in results if r.take})
+    print(f"{PROG}: {takes} engine takes" + (f", {live} already exact (a built-in entry plays them live)" if live else "")
+          + (f"; listen and choose with: {PROG} pick {d}" if takes else ""))
+    print(summary_line("engine", a.game, t0, scores=len(scores), pending=len(pending), takes=takes, live=live,
+                       unknown=sum(r.unknown for r in results), failed=sum(bool(r.failed) for r in results),
+                       engines=",".join(engines) or "-", source="; ".join(shapes) or None), flush=True)
+    return 0
+
+
+def engine_reader_path(given: str | None) -> str:
+    """fmzx-pack's path: --fmzx-pack, $FMZX_PACK, else host/target/release/fmzx-pack."""
+    return given or os.environ.get("FMZX_PACK") or str(repo_root() / "host" / "target" / "release" / "fmzx-pack")
+
+
+def find_engine_reader(given: str | None) -> str:
+    """fmzx-pack with engine-notes (engine_reader_path), checked."""
+    fp = engine_reader_path(given)
+    hint = "build it with: cd host && cargo build --release -p fmzx-pack"
+    if not Path(fp).is_file():
+        die(f"no {fp}: {hint} (or --fmzx-pack PATH)")
+    r = subprocess.run([fp, "engine-notes"], capture_output=True, text=True, check=False)
+    if "engine-notes" not in r.stdout + r.stderr:
+        die(f"{fp} has no engine-notes command: {hint}")
+    return fp
+
+
+# ---------------------------------------------------------------------------------------------
 # judge: which take a score plays, from the notes
 #
 # Per score, every take (and the original, take 0) is measured from its notes as the FM-1 plays
@@ -2500,8 +2838,9 @@ def toml_head(path: Path) -> dict:
 
 
 def judged_takes(score_dir: Path) -> list[tuple[str, Path]]:
-    """A score's takes the judge weighs, by name: take-<n>, chip-<n>, ay-<n>."""
+    """A score's takes the judge weighs, by name: take-<n>, engine-<n>, chip-<n>, ay-<n>."""
     out = [(f"take-{n}", p) for n, p in take_dirs(score_dir)]
+    out += [(f"{ENGINE_PREFIX}-{n}", p) for n, p in engine_dirs(score_dir)]
     for kind in OWN_KINDS:
         out += [(f"{kind.prefix}-{n}", p) for n, p in own_dirs(score_dir, kind)]
     return out
@@ -2706,6 +3045,16 @@ def render_todo(jg: Judge, score: Score) -> list[tuple[str, str]]:
     return out
 
 
+def is_exact(name: str) -> bool:
+    """Whether a take is an engine take: the game's own tune read exactly from its engine."""
+    return name.startswith(f"{ENGINE_PREFIX}-")
+
+
+def exact_ok(row: dict) -> bool:
+    """Whether a judged take is an engine take with no fault: the judge's pick, with high confidence."""
+    return is_exact(row["name"]) and not row.get("faults") and not row.get("refused")
+
+
 def judge_score(jg: Judge, score: Score) -> dict | None:
     """The judge's figures for the score's takes, written to judge.toml beside score.toml and
     reused while the score, a take's arranged.toml and the renderer stay the same; None for a
@@ -2767,15 +3116,15 @@ def judge_score(jg: Judge, score: Score) -> dict | None:
         r = orig if name == "0" else rendition(read_toml(p), name)
         q = quality(r, win, refused)
         z = None
-        if name == "0":
-            clo, raw = 1.0, J_SELF
+        if name == "0" or is_exact(name):
+            clo, raw = 1.0, J_SELF  # the original, or the game's own tune read exactly: the same tune by construction
         elif olines:
             raw = best_align(olines, cut_lines(jg.take_lines(p, name), srch))
             clo, z = calibrated(raw, null, real)
         else:
             clo, raw, z = 0.0, 0.0, 0.0
         h = heads.get(name, {})
-        prov = 1.0 if name == "0" else provenance(h)
+        prov = 1.0 if name == "0" or is_exact(name) else provenance(h)
         row = {"name": name, "digest": dg, "closeness": round(clo, 3), "raw": round(raw, 3), "provenance": round(prov, 3),
                "quality": round(q["quality"], 3), "polyphony": round(q["polyphony"], 3), "harmony": round(q["harmony"], 3),
                "rhythm": round(q["rhythm"], 3), "fault": round(q["fault"], 3),
@@ -2785,7 +3134,9 @@ def judge_score(jg: Judge, score: Score) -> dict | None:
         if z is not None:
             row["z"] = round(z, 2)
         rows.append(row)
-    rows.sort(key=lambda t: (-t["combined"], t["name"]))
+    # an engine take without faults first: it is the game's own tune, read exactly, where the
+    # original is a transcription of it and the other takes are built on that or on another version
+    rows.sort(key=lambda t: (not exact_ok(t), -t["combined"], t["name"]))
     for i, t in enumerate(rows, 1):
         t["rank"] = i
     top = rows[0]
@@ -2805,6 +3156,8 @@ def judge_score(jg: Judge, score: Score) -> dict | None:
         flags.append("the pick is refused by the renderer")
     conf = ("low" if rel < J_CLOSE_CALL or (checkable < J_CHECKABLE_Z and top["name"] != "0") or top["refused"]
             else "medium" if flags else "high")
+    if exact_ok(top):  # the game's own tune read exactly, with no fault: no closeness or margin to doubt
+        flags, conf, rel = [], "high", max(rel, 0.0)
     doc = {"version": JUDGE_VERSION, "score": digest, "plays": round(win, 1), "search": round(srch, 1),
            "checkable_z": round(checkable, 1), "null_real": real, "null_built": len(null) - real,
            "null": [float(x) for x in null]}
@@ -2812,6 +3165,8 @@ def judge_score(jg: Judge, score: Score) -> dict | None:
         doc["null_provisional"] = True
     doc.update({"renderer": jg.render_note, "pick": top["name"], "confidence": conf, "flags": flags, "margin": round(rel, 3),
                 "order": [t["name"] for t in rows], "take": rows})
+    if exact_ok(top):
+        doc["exact"] = True
     dump_toml(path, doc)
     return doc
 
@@ -2935,11 +3290,11 @@ def choices_path(d: Path) -> Path:
     return d / "arrange" / "choices.toml"
 
 
-Choice = int | str  # a take's number (0: the original) or a chip or ay take's dir, "chip-<n>", "ay-<n>"
+Choice = int | str  # a take's number (0: the original) or an engine, chip or ay take's dir, "engine-<n>", "chip-<n>", "ay-<n>"
 
 
 def parse_choice(v) -> Choice | None:
-    """A choices.toml value: a number (an arranged take, 0 the original), "chip-<n>" or "ay-<n>"."""
+    """A choices.toml value: a number (an arranged take, 0 the original), "engine-<n>", "chip-<n>" or "ay-<n>"."""
     if isinstance(v, bool):
         return None
     if isinstance(v, int):
@@ -2947,10 +3302,10 @@ def parse_choice(v) -> Choice | None:
     if isinstance(v, str):
         if v.isdigit():
             return int(v)
-        for kind in OWN_KINDS:
-            n = v.removeprefix(f"{kind.prefix}-")
+        for prefix in [ENGINE_PREFIX] + [k.prefix for k in OWN_KINDS]:
+            n = v.removeprefix(f"{prefix}-")
             if n != v and n.isdigit() and int(n) > 0:
-                return f"{kind.prefix}-{int(n)}"
+                return f"{prefix}-{int(n)}"
     return None
 
 
@@ -3026,7 +3381,12 @@ def score_entries(d: Path) -> list[dict]:
             doc = read_toml(p / "arranged.toml")
             takes.append({"n": n, "generator": doc.get("generator", ""), "metrics": doc.get("metrics", {}),
                           "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file(), "judge": judge_of(jd, f"take-{n}")})
-        chips = []  # the takes on their own timeline: chip-<n>, then ay-<n>
+        chips = []  # the engine takes (the game's own tune, read exactly), then those on their own timeline: chip-<n>, ay-<n>
+        for n, p in engine_dirs(s.dir):
+            doc = toml_head(p / "arranged.toml")
+            name = f"{ENGINE_PREFIX}-{n}"
+            chips.append({"name": name, "label": "engine take", "source": doc.get("source", ""), "stil": "", "title_match": 1.0,
+                          "judge": judge_of(jd, name), "fm1": (p / "fm1.wav").is_file(), "own": "", "own_label": ""})
         for kind in OWN_KINDS:
             for n, p in own_dirs(s.dir, kind):
                 doc = read_toml(p / "arranged.toml")
@@ -3063,7 +3423,7 @@ def apply_set(d: Path, sets: list[str]) -> None:
         sid, eq, n = s.rpartition("=")
         n_ = parse_choice(n) if eq else None
         if n_ is None:
-            die(f"--set {s}: expected GAME/KEY=N, GAME/KEY=chip-N or GAME/KEY=ay-N")
+            die(f"--set {s}: expected GAME/KEY=N, GAME/KEY=engine-N, GAME/KEY=chip-N or GAME/KEY=ay-N")
         if sid not in entries:
             die(f"--set {s}: no score {sid} under {d / 'arrange'}")
         if not choice_ok(entries[sid], n_):
@@ -3377,6 +3737,47 @@ SELFTEST_CONVERTER = r'''
 import json, sys
 from pathlib import Path
 a = sys.argv[1:]
+if a and a[0] == "engine-notes":
+    # the engine reader's stand-in: notes from the score itself, as an engine's channels; by game:
+    # plain-game no engine (exit 3), live-game read but played exactly live, wide-game 4 channels
+    import math, tomllib
+    if len(a) == 1:
+        print("usage: fmzx-pack engine-notes <W/all> --game ID --score KEY -o <notes.toml>", file=sys.stderr)
+        sys.exit(1)
+    d, game, key, out = Path(a[1]), a[a.index("--game") + 1], a[a.index("--score") + 1], a[a.index("-o") + 1]
+    with open(Path(__file__).with_name("engine-calls.log"), "a") as lg:
+        lg.write(f"{game}/{key}\n")
+    if game == "plain-game":
+        print(f"fmzx-pack: no engine: {game}/{key}: no known engine in its run (looked for ntropic, Tritone, Stocker)", file=sys.stderr)
+        sys.exit(3)
+    sc = tomllib.loads((d / "arrange" / game / key / "score.toml").read_text())
+    beat = 875000
+    midi = lambda p: 69 + 12 * math.log2(3500000 / p / 440)
+    by = {v: [n for n in sc["note"] if n["voice"] == v] for v in range(3)}
+    chans = [[(n["start_t"], n["start_t"] + 4 * beat, n["period_t"]) for n in by[0]],  # the bass, notes end to end
+             [(n["start_t"], n["end_t"], n["period_t"]) for n in by[2]]]  # the melody
+    if game == "wide-game":
+        chans.append([(n["start_t"], n["end_t"], n["period_t"]) for n in by[1]])
+        chans.append([(n["start_t"] + beat // 2, n["end_t"] + beat // 2, n["period_t"] * 2) for n in by[2]])
+    end = sc["intro_t"] + sc["loop_t"]
+    lines = [f"game = {json.dumps(game)}", f"key = {json.dumps(key)}", "engine = \"ntropic\"", "anchor = \"9C98\"",
+             "read = \"its rows at 9C9Ch\"", f"channels = {len(chans)}", "pass_t = 185.669",
+             f"live = {json.dumps('a built-in entry of the firmware reads this engine and plays it live in 100% of the score' + chr(39) + 's frames' if game == 'live-game' else '')}"]
+    for c, ns in enumerate(chans):
+        for s0, e0, p in ns:
+            if s0 < end:
+                lines += ["", "[[note]]", f"channel = {c}", f"start_t = {s0}", f"end_t = {min(e0, end)}", f"period_t = {p}",
+                          f"midi = {midi(p):.2f}", "level = 255", "duty = 128"]
+    t = 0
+    while t < end:
+        hits = [(t, "kick"), (t + beat // 2, "hat")] + ([(t + 35000, "noise")] if t % (4 * beat) == 0 else [])
+        for h, kind in hits:
+            if h < end:
+                lines += ["", "[[drum]]", f"start_t = {h}", f"end_t = {h + 20000}", f"kind = {json.dumps(kind)}"]
+        t += beat
+    Path(out).write_text("\n".join(lines) + "\n")
+    print(f"{out}: ntropic at 9C98h, {len(chans)} channels + drums")
+    sys.exit(0)
 if not a or a[0] != "chip-notes" or "--help" in a:
     print("usage: fmzx-pack chip-notes <file.sid> [--subtune N] [--seconds S] -o <notes.toml>")
     sys.exit(0 if a and a[0] == "chip-notes" else 2)
@@ -4026,6 +4427,94 @@ def cmd_selftest(a: argparse.Namespace) -> int:
               "judge --provisional: its null marked; reused by another provisional run; made again by a judge without it, "
               "which leaves what a judge from nothing leaves")
 
+        # engine: the game's own music read from its engine (through the stand-in reader)
+        de = d / "eng"
+        ek = "9CE0-3901e61d"
+        for g in ("test-game", "live-game", "plain-game", "wide-game"):
+            selftest_score(de / "arrange" / g / ek / "score.toml", g, ek, shadow=g == "live-game", name=g.replace("-", " ").title())
+        elog = conv.parent / "engine-calls.log"
+        rc, sm, out = summed("engine", str(de), "--fmzx-pack", str(conv))
+        check(rc == 0 and {k: v for k, v in sm.items() if k != "seconds"}
+              == {"kind": "engine", "game": "all", "scores": "4", "pending": "4", "takes": "2", "live": "1", "unknown": "1", "failed": "0",
+                  "engines": "ntropic", "source": "ntropic, 2 channels + drums; ntropic, 4 channels + drums"},
+              f"engine: its summary line: 2 takes, one already exact, one with no known engine ({sm})")
+        check("[live-game/9CE0-3901e61d] already exact, no engine take: ntropic, 2 channels + drums; a built-in entry" in out
+              and not (de / "arrange" / "live-game" / ek / "engine-1").exists(), "engine: a score a built-in entry plays exactly gets no take, and says so")
+        check("[plain-game/9CE0-3901e61d] no engine take: no known engine in its run" in out, "engine: a score no known engine plays says so")
+        check(all(f"progress: engine {g}/{ek}" in out for g in ("test-game", "live-game", "plain-game", "wide-game")), "engine: a progress line per score")
+        sdir = de / "arrange" / "test-game" / ek
+        score = load_score(sdir / "score.toml")
+        e1 = read_toml(sdir / "engine-1" / "arranged.toml")
+        for f in ("game", "name", "key", "clock_hz", "intro_t", "loop_t"):
+            check(e1.get(f) == score.header[f], f"engine-1: {f} as the score's (its timeline)")
+        check(e1.get("take") == "engine-1" and e1.get("generator") == "engine ntropic" and "timeline" not in e1
+              and e1.get("source") == "ntropic, read exactly: its rows at 9C9Ch" and e1.get("score_digest") == score.digest()
+              and e1.get("channel_roles") == ["bass", "lead"] and e1.get("voices") == 3 and e1.get("roles") == TAKE_ROLES,
+              "engine-1: take, generator, source, the score's digest, each channel's voice (the higher the lead, the lower under E3 the bass)")
+        notes = e1.get("note", [])
+        by = {v: sorted((x for x in notes if x["voice"] == v), key=lambda x: x["start_t"]) for v in range(4)}
+        lead = [(x.start_t, x.end_t, x.period_t) for x in score.notes if x.voice == 2]
+        check([(x["start_t"], x["end_t"], x["period_t"]) for x in by[0]] == lead and all(x["level"] == 200 for x in by[0]),
+              "engine-1: the melody channel's notes exactly, on the lead at its level")
+        bass = by[1]
+        check(bass and all(a_["end_t"] <= b_["start_t"] for a_, b_ in zip(bass, bass[1:])) and not by[2]
+              and all(x["level"] == 210 for x in bass), "engine-1: the bass channel on the bass, no pad")
+        same = [(a_, b_) for a_, b_ in zip(bass, bass[1:]) if a_["period_t"] == b_["period_t"]]
+        check(same and all(b_["start_t"] - a_["end_t"] == ENGINE_RESTRIKE_T for a_, b_ in same),
+              f"engine-1: a same-pitch note right after another ends {ENGINE_RESTRIKE_T} T early, so it strikes again")
+        dr = by[3]
+        check(all(a_["end_t"] + DRUM_GAP_T <= b_["start_t"] and b_["start_t"] - a_["start_t"] >= score.tstate(DRUM_SPACING_S) - 1
+                  for a_, b_ in zip(dr, dr[1:])) and all(x["end_t"] - x["start_t"] <= score.tstate(DRUM_HIT_S) for x in dr),
+              "engine-1: the drum hits within the drum rules")
+        beat = 875000
+        check([(x["start_t"], x["level"]) for x in dr[:3]] == [(0, ENGINE_DRUM_LEVEL["kick"]), (beat // 2, ENGINE_DRUM_LEVEL["hat"]),
+                                                               (beat, ENGINE_DRUM_LEVEL["kick"])],
+              "engine-1: a drum's strength by its kind; a noise 10 ms after a kick merged into it, the stronger kept")
+        check(all(0 <= x["start_t"] < x["end_t"] <= score.total_t for x in notes), "engine-1: notes inside the score's timeline")
+        w1 = read_toml(de / "arrange" / "wide-game" / ek / "engine-1" / "arranged.toml")
+        pad = sorted((x for x in w1.get("note", []) if x["voice"] == 2), key=lambda x: x["start_t"])
+        check(w1.get("channel_roles") == ["bass", "lead", "pad", "pad"] and pad and all(a_["end_t"] <= b_["start_t"] for a_, b_ in zip(pad, pad[1:]))
+              and len(pad) > len([x for x in load_score(de / "arrange" / "wide-game" / ek / "score.toml").notes if x.voice == 1]),
+              "engine: more than 3 channels: the highest the lead, the lowest the bass, the others share the pad (a newer note cuts the one sounding)")
+        jd = read_toml(sdir / JUDGE_FILE)
+        row = next((t for t in jd.get("take", []) if t["name"] == "engine-1"), {})
+        check(jd.get("pick") == "engine-1" and jd.get("confidence") == "high" and jd.get("exact") is True and jd.get("flags") == []
+              and row.get("closeness") == 1.0 and row.get("provenance") == 1.0 and "z" not in row,
+              f"engine: the judge picks the engine take, sure: the same tune by construction, provenance 1 ({jd.get('pick')}, {jd.get('confidence')})")
+        calls = elog.read_text().splitlines()
+        rc, sm, _ = summed("engine", str(de), "--fmzx-pack", str(conv))
+        check(rc == 0 and sm.get("pending") == "0" and sm.get("takes") == "0" and elog.read_text().splitlines() == calls,
+              f"engine again: the scores with their engine take, or whose reading needs none, for their score.toml as it is are left alone ({sm})")
+        rc, sm, _ = summed("engine", str(de), "--fmzx-pack", str(conv), "--force", "--game", "test-game")
+        check(rc == 0 and sm.get("pending") == "1" and sm.get("takes") == "1" and elog.read_text().splitlines() == calls
+              and read_toml(sdir / "engine-1" / "arranged.toml") == e1,
+              "engine --force: the take written again, the same, from the reader's cached notes")
+        sp = sdir / "score.toml"
+        sp.write_text(sp.read_text().replace("level = 116", "level = 120", 1))
+        rc, sm, _ = summed("engine", str(de), "--fmzx-pack", str(conv))
+        check(rc == 0 and sm.get("pending") == "1" and sm.get("takes") == "1" and elog.read_text().splitlines()[len(calls):] == [f"test-game/{ek}"],
+              f"engine: a changed score.toml is read again ({sm})")
+        rc, sm, _ = summed("judge", str(de), "--apply")
+        ch, judged = read_choice_tables(de)
+        check(ch.get(f"test-game/{ek}") == "engine-1" and judged.get(f"test-game/{ek}") == "engine-1", "engine: judge --apply chooses the engine take")
+        apply_set(de, [f"wide-game/{ek}=0"])
+        rc, sm, _ = summed("judge", str(de), "--apply")
+        ch, judged = read_choice_tables(de)
+        check(ch.get(f"wide-game/{ek}") == 0 and f"wide-game/{ek}" not in judged, "engine: the owner's choice of the original is kept")
+        (mp.parent / "refuse.txt").write_text(f"test-game/{ek} engine-1\n")
+        (sdir / JUDGE_FILE).unlink()
+        rc, sm, _ = summed("judge", str(de), "--game", "test-game", "--apply")
+        jd = read_toml(sdir / JUDGE_FILE)
+        check(jd.get("pick") == "0" and not jd.get("exact") and any("refused" in f for t in jd["take"] if t["name"] == "engine-1" for f in t["faults"]),
+              "engine: a faulty engine take (the renderer refuses it) is not picked for being exact")
+        (mp.parent / "refuse.txt").unlink()
+        apply_set(de, [f"test-game/{ek}=engine-1"])
+        check(read_choices(de).get(f"test-game/{ek}") == "engine-1", "pick --set GAME/KEY=engine-1")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_list(de)
+        check("engine-1: ntropic, read exactly: its rows at 9C9Ch" in buf.getvalue(), "pick --list: the engine take and its source")
+
         # the summary when no file names the game
         d2 = d / "nomatch"
         selftest_score(d2 / "arrange" / "nothing-alike" / keys[0] / "score.toml", "nothing-alike", keys[0], name="Nothing Alike")
@@ -4076,17 +4565,23 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("pick", help="listen and choose a take per score")
     p.add_argument("dir")
     p.add_argument("--port", type=int, default=8765, help="the page's port on 127.0.0.1 (default 8765, else a free one)")
-    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original; chip-N, ay-N: a chip or ay take) without the page; several at once, or --set again")
+    p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original; engine-N, chip-N, ay-N: an engine, chip or ay take) without the page; several at once, or --set again")
     p.add_argument("--list", action="store_true", help="print the scores, their takes and choices")
+    e = sub.add_parser("engine", help="takes of the games' own music, read exactly from their music engines")
+    e.add_argument("dir")
+    e.add_argument("--game", action="append", help="only this game's scores (repeatable)")
+    e.add_argument("--force", action="store_true", help="read again the scores that have their engine take")
+    e.add_argument("--fmzx-pack", help="the fmzx-pack with engine-notes (default $FMZX_PACK, else host/target/release/fmzx-pack)")
+    e.add_argument("--soundfont", help="the .sf2 for renders (default: Homebrew fluid-synth's)")
     j = sub.add_parser("judge", help="weigh each score's takes from their notes; with --apply, choose where sure")
     j.add_argument("dir")
     j.add_argument("--game", action="append", help="only this game's scores (repeatable)")
     j.add_argument("--apply", action="store_true", help="write the judge's pick to choices.toml where it is sure and you have not chosen")
     j.add_argument("--provisional", action="store_true",
                    help="mark the nulls this run makes provisional: a later judge without it makes them again")
-    sub.add_parser("selftest", help="check generate, chip, ay, judge and pick in a temporary folder")
+    sub.add_parser("selftest", help="check generate, engine, chip, ay, judge and pick in a temporary folder")
     a = ap.parse_args(argv)
-    return {"generate": cmd_generate, "chip": cmd_chip, "ay": cmd_ay, "pick": cmd_pick, "judge": cmd_judge,
+    return {"generate": cmd_generate, "engine": cmd_engine, "chip": cmd_chip, "ay": cmd_ay, "pick": cmd_pick, "judge": cmd_judge,
             "selftest": cmd_selftest}[a.cmd](a)
 
 

@@ -21,7 +21,8 @@
 //! # The takes chosen
 //!
 //! `<out>/arrange/choices.toml` holds a `[choices]` table, `"<game-id>/<key>" = <take>`: a number
-//! for an AI take (`take-<n>`, 0 the original), `"chip-<n>"` for a C64 take or `"ay-<n>"` for a
+//! for an AI take (`take-<n>`, 0 the original), `"engine-<n>"` for an engine take (the game's own
+//! music read exactly from its engine), `"chip-<n>"` for a C64 take or `"ay-<n>"` for a
 //! Spectrum 128 take ([`Choice`]; a value that is none of these, or a file that does not read,
 //! fails the run, naming the file and the key). A chosen AI take is read from `<key>/take-<n>/arranged.toml` (the header of `score.toml`
 //! and `take`, `generator`, and notes on 4 voices: 0 the lead, 1 the bass, 2 the pad, 3 the drum
@@ -39,6 +40,11 @@
 //! notes (the latest in the frame first), and the take says how many; a frame over it with the
 //! lead and bass alone refuses the take. The record keeps the score's trigger, code, quiet and
 //! fingerprints, so it plays in step as before.
+//!
+//! A chosen engine take (`<key>/engine-<n>/arranged.toml`, written by `tools/arrange-music
+//! engine`) is on the score's timeline as an AI take is, `take` its number or its folder's name,
+//! and becomes the record's events the same way; its `source` (the engine and what was read)
+//! names it in the report.
 //!
 //! A chosen C64 take (`<key>/chip-<n>/arranged.toml`, written by `tools/arrange-music chip`) or
 //! Spectrum 128 take (`<key>/ay-<n>/arranged.toml`, written by `tools/arrange-music ay`) has
@@ -196,24 +202,36 @@ fn toml_error(text: &str, e: &toml::de::Error) -> String {
     at.map_or_else(|| what.to_string(), |l| format!("line {l}: {what}"))
 }
 
-/// A choice of `choices.toml`: an AI take (`take-<n>`; `Take(0)` the original), a C64 take
-/// (`chip-<n>`) or a Spectrum 128 take (`ay-<n>`). The last two are a tune from another version
-/// of the game, each on its own timeline.
+/// A choice of `choices.toml`: an AI take (`take-<n>`; `Take(0)` the original), an engine take
+/// (`engine-<n>`: the game's own music read from its engine, on the score's timeline), a C64
+/// take (`chip-<n>`) or a Spectrum 128 take (`ay-<n>`). The last two are a tune from another
+/// version of the game, each on its own timeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Choice {
     Take(u32),
     Chip(u32),
     Ay(u32),
+    Engine(u32),
 }
 
 impl Choice {
-    /// The choice a `choices.toml` value names: a number (0 the original), `"chip-<n>"` or
-    /// `"ay-<n>"` (n 1 or more). None: none of these.
+    /// The choice a `choices.toml` value names: a number (0 the original), `"engine-<n>"`,
+    /// `"chip-<n>"` or `"ay-<n>"` (n 1 or more). None: none of these.
     pub fn parse(v: &toml::Value) -> Option<Choice> {
         match v {
             toml::Value::Integer(n) => u32::try_from(*n).ok().map(Choice::Take),
-            toml::Value::String(s) => Choice::own_named(s),
+            toml::Value::String(s) => Choice::named(s),
             _ => None,
+        }
+    }
+
+    /// The take a folder name names besides `take-<n>`: `engine-<n>`, `chip-<n>` or `ay-<n>` (n 1
+    /// or more, plain digits). None: none of these.
+    pub fn named(s: &str) -> Option<Choice> {
+        let number = |n: &str| Some(n).filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))?.parse().ok().filter(|&n| n > 0);
+        match s.strip_prefix("engine-") {
+            Some(n) => number(n).map(Choice::Engine),
+            None => Choice::own_named(s),
         }
     }
 
@@ -230,37 +248,39 @@ impl Choice {
 
     /// Whether it is a tune on its own timeline (a C64 or Spectrum 128 take).
     pub fn is_own(self) -> bool {
-        !matches!(self, Choice::Take(_))
+        matches!(self, Choice::Chip(_) | Choice::Ay(_))
     }
 
     /// Its number.
     pub fn number(self) -> u32 {
         match self {
-            Choice::Take(n) | Choice::Chip(n) | Choice::Ay(n) => n,
+            Choice::Take(n) | Choice::Chip(n) | Choice::Ay(n) | Choice::Engine(n) => n,
         }
     }
 
-    /// Its folder in the score's folder: `take-<n>`, `chip-<n>` or `ay-<n>`.
+    /// Its folder in the score's folder: `take-<n>`, `engine-<n>`, `chip-<n>` or `ay-<n>`.
     pub fn dir(self) -> String {
         match self {
             Choice::Take(n) => format!("take-{n}"),
             Choice::Chip(n) => format!("chip-{n}"),
             Choice::Ay(n) => format!("ay-{n}"),
+            Choice::Engine(n) => format!("engine-{n}"),
         }
     }
 
-    /// The kind of take: `AI`, `C64` or `Spectrum 128`.
+    /// The kind of take: `AI`, `engine`, `C64` or `Spectrum 128`.
     pub fn kind(self) -> &'static str {
         match self {
             Choice::Take(_) => "AI",
             Choice::Chip(_) => "C64",
             Choice::Ay(_) => "Spectrum 128",
+            Choice::Engine(_) => "engine",
         }
     }
 }
 
 impl fmt::Display for Choice {
-    /// `take 2`, `C64 take chip-1` or `Spectrum 128 take ay-1`.
+    /// `take 2`, `engine take engine-1`, `C64 take chip-1` or `Spectrum 128 take ay-1`.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Choice::Take(n) => write!(f, "take {n}"),
@@ -292,7 +312,7 @@ pub fn read_choices(dir: &Path) -> Result<BTreeMap<String, Choice>, String> {
         .map(|(k, v)| match Choice::parse(&v) {
             Some(c) => Ok((k, c)),
             None => Err(bad(format!(
-                "{k:?} = {v}: a choice is a take's number (1 or more, 0 the original), \"chip-<n>\" (a C64 take) or \"ay-<n>\" (a Spectrum 128 take)"
+                "{k:?} = {v}: a choice is a take's number (1 or more, 0 the original), \"engine-<n>\" (an engine take), \"chip-<n>\" (a C64 take) or \"ay-<n>\" (a Spectrum 128 take)"
             ))),
         })
         .collect()
@@ -362,7 +382,7 @@ pub fn arrange(rec: &ScoreRecord, choice: Choice, text: &str) -> Result<Arranged
     let named = match (&f.take, choice) {
         (None, _) => true,
         (Some(toml::Value::Integer(t)), c) => *t == i64::from(c.number()),
-        (Some(toml::Value::String(t)), c) => c.is_own() && Choice::own_named(t) == Some(c),
+        (Some(toml::Value::String(t)), c) => !matches!(c, Choice::Take(_)) && Choice::named(t) == Some(c),
         _ => false,
     };
     if !named {
@@ -373,7 +393,7 @@ pub fn arrange(rec: &ScoreRecord, choice: Choice, text: &str) -> Result<Arranged
     let own = match (choice.is_own(), f.timeline.as_deref()) {
         (false, None | Some("score")) => None,
         (false, Some(t)) => {
-            return Err(format!("its timeline is {t:?}: a take-<n> is on the score's (only a C64 or Spectrum 128 take, chip-<n> or ay-<n>, has its own)"))
+            return Err(format!("its timeline is {t:?}: {} is on the score's (only a C64 or Spectrum 128 take, chip-<n> or ay-<n>, has its own)", choice.dir()))
         }
         (true, Some("own")) => {
             let (Some(oi), Some(ol)) = (f.own_intro_t, f.own_loop_t) else {
@@ -466,9 +486,10 @@ pub fn arrange(rec: &ScoreRecord, choice: Choice, text: &str) -> Result<Arranged
     let voices = notes.iter().filter(|x| x.voice < SCORE_DRUM).map(|x| x.voice + 1).max().unwrap_or(1);
     let mut roles = [0u8; SND_TONAL];
     roles[..usize::from(voices)].copy_from_slice(&TAKE_ROLES[..usize::from(voices)]);
-    let generator = match own {
-        Some(_) => f.source.unwrap_or_else(|| "no source named".into()),
-        None => f.generator.unwrap_or_else(|| "no generator named".into()),
+    let generator = match (own, choice) {
+        (Some(_), _) => f.source.unwrap_or_else(|| "no source named".into()),
+        (None, Choice::Engine(_)) => f.source.or(f.generator).unwrap_or_else(|| "no source named".into()),
+        (None, _) => f.generator.unwrap_or_else(|| "no generator named".into()),
     };
     Ok(Arranged { rec: ScoreRecord { voices, roles, intro_events, loop_events, ..base }, generator, dropped })
 }
@@ -620,10 +641,10 @@ impl Status {
     }
 }
 
-/// Whether a score's folder holds a take (a `take-<n>`, `chip-<n>` or `ay-<n>` folder with an
-/// `arranged.toml`).
+/// Whether a score's folder holds a take (a `take-<n>`, `engine-<n>`, `chip-<n>` or `ay-<n>`
+/// folder with an `arranged.toml`).
 pub fn has_takes(folder: &Path) -> bool {
-    let named = |n: &str| n.strip_prefix("take-").is_some_and(|k| k.parse::<u32>().is_ok()) || Choice::own_named(n).is_some();
+    let named = |n: &str| n.strip_prefix("take-").is_some_and(|k| k.parse::<u32>().is_ok()) || Choice::named(n).is_some();
     std::fs::read_dir(folder).is_ok_and(|rd| rd.flatten().any(|e| e.file_name().to_str().is_some_and(named) && e.path().join(TAKE_FILE).is_file()))
 }
 
@@ -836,6 +857,29 @@ mod tests {
         t
     }
 
+    /// An engine take is on the score's timeline: its notes become the record's events as an AI
+    /// take's do, named by its source.
+    #[test]
+    fn an_engine_take_is_on_the_scores_timeline() {
+        let s = score();
+        let notes = [(0, 0, 640, 3000, 90), (1, 640, 1280, 9000, 50), (3, 0, 640, 0, 200)];
+        let ai = arrange(&s, Choice::Take(1), &take(&s, &notes)).unwrap();
+        let text = take(&s, &notes).replace("take = 1\ngenerator = \"g 1\"\n", "take = \"engine-1\"\ngenerator = \"engine ntropic\"\nsource = \"ntropic: its rows\"\n");
+        let a = arrange(&s, Choice::Engine(1), &text).unwrap();
+        assert_eq!((a.rec.intro_events, a.rec.loop_events, a.rec.replacement), (ai.rec.intro_events, ai.rec.loop_events, None));
+        assert_eq!(a.generator, "ntropic: its rows");
+        assert_eq!(Status::Take { take: Choice::Engine(1), generator: a.generator, dropped: (0, 0) }.text(false), "arranged: engine take engine-1 (ntropic: its rows)");
+        // a number names it too; another kind's name or its own timeline does not fit
+        assert!(arrange(&s, Choice::Engine(1), &take(&s, &notes)).is_ok());
+        assert_eq!(arrange(&s, Choice::Chip(1), &text).unwrap_err(), "it says take \"engine-1\", in chip-1");
+        assert_eq!(arrange(&s, Choice::Engine(2), &text).unwrap_err(), "it says take \"engine-1\", in engine-2");
+        let own = text.replace("source =", "timeline = \"own\"\nown_intro_t = 640\nown_loop_t = 0\nsource =");
+        assert!(arrange(&s, Choice::Engine(1), &own).unwrap_err().starts_with("its timeline is \"own\": engine-1 is on the score's"));
+        assert_eq!((Choice::named("engine-3"), Choice::named("engine-0"), Choice::named("engine-x"), Choice::named("ay-2")), (Some(Choice::Engine(3)), None, None, Some(Choice::Ay(2))));
+        assert_eq!((Choice::Engine(3).dir(), Choice::Engine(3).to_string(), Choice::Engine(3).is_own()), ("engine-3".into(), "engine take engine-3".into(), false));
+        assert_eq!(Choice::parse(&toml::Value::String("engine-2".into())), Some(Choice::Engine(2)));
+    }
+
     #[test]
     fn a_take_becomes_the_records_events() {
         let s = score();
@@ -1001,10 +1045,16 @@ mod tests {
     fn choices_files() {
         let dir = Tmp::new("choices");
         assert_eq!(read_choices(&dir.0), Ok(BTreeMap::new()));
-        std::fs::write(dir.0.join(CHOICES), "[choices]\n\"g/8000-0a0b0c0d\" = 2\n\"h/1\" = 0\n\"h/2\" = \"chip-3\"\n\"h/3\" = \"ay-12\"\n").unwrap();
+        std::fs::write(dir.0.join(CHOICES), "[choices]\n\"g/8000-0a0b0c0d\" = 2\n\"h/1\" = 0\n\"h/2\" = \"chip-3\"\n\"h/3\" = \"ay-12\"\n\"h/4\" = \"engine-1\"\n").unwrap();
         assert_eq!(
             read_choices(&dir.0),
-            Ok(BTreeMap::from([("g/8000-0a0b0c0d".into(), Choice::Take(2)), ("h/1".into(), Choice::Take(0)), ("h/2".into(), Choice::Chip(3)), ("h/3".into(), Choice::Ay(12))]))
+            Ok(BTreeMap::from([
+                ("g/8000-0a0b0c0d".into(), Choice::Take(2)),
+                ("h/1".into(), Choice::Take(0)),
+                ("h/2".into(), Choice::Chip(3)),
+                ("h/3".into(), Choice::Ay(12)),
+                ("h/4".into(), Choice::Engine(1))
+            ]))
         );
         std::fs::write(dir.0.join(CHOICES), "").unwrap();
         assert_eq!(read_choices(&dir.0), Ok(BTreeMap::new()));
@@ -1013,11 +1063,11 @@ mod tests {
         let e = read_choices(&dir.0).unwrap_err();
         assert!(e.starts_with(&format!("{}: line 2: ", dir.0.join(CHOICES).display())), "{e}");
         // values that name no take: the file and the key
-        for v in ["1.5", "-1", "4294967296", "\"two\"", "\"chip-0\"", "\"chip-\"", "\"chip-+1\"", "\"take-1\"", "\"chip-1 \"", "\"ay-0\"", "\"ay-\"", "\"ay-1x\"", "\"AY-1\"", "true", "[1]"] {
+        for v in ["1.5", "-1", "4294967296", "\"two\"", "\"chip-0\"", "\"chip-\"", "\"chip-+1\"", "\"take-1\"", "\"chip-1 \"", "\"ay-0\"", "\"ay-\"", "\"ay-1x\"", "\"AY-1\"", "\"engine-0\"", "\"engine\"", "true", "[1]"] {
             std::fs::write(dir.0.join(CHOICES), format!("[choices]\n\"g/k\" = {v}\n")).unwrap();
             let e = read_choices(&dir.0).unwrap_err();
             let want = format!(
-                "{}: \"g/k\" = {v}: a choice is a take's number (1 or more, 0 the original), \"chip-<n>\" (a C64 take) or \"ay-<n>\" (a Spectrum 128 take) (fix it, or choose again with tools/arrange-music pick)",
+                "{}: \"g/k\" = {v}: a choice is a take's number (1 or more, 0 the original), \"engine-<n>\" (an engine take), \"chip-<n>\" (a C64 take) or \"ay-<n>\" (a Spectrum 128 take) (fix it, or choose again with tools/arrange-music pick)",
                 dir.0.join(CHOICES).display()
             );
             assert_eq!(e, want);
@@ -1142,7 +1192,7 @@ mod tests {
         assert_eq!(arrange(&s, Choice::Take(1), &ok).unwrap_err(), "it says take \"chip-1\", in take-1");
         assert_eq!(
             arrange(&s, Choice::Take(1), &ok.replace("take = \"chip-1\"", "take = 1")).unwrap_err(),
-            "its timeline is \"own\": a take-<n> is on the score's (only a C64 or Spectrum 128 take, chip-<n> or ay-<n>, has its own)"
+            "its timeline is \"own\": take-1 is on the score's (only a C64 or Spectrum 128 take, chip-<n> or ay-<n>, has its own)"
         );
         assert_eq!(why(&take(&s, &good)), "its timeline is not given: a C64 take's is \"own\"");
         assert_eq!(why(&ok.replace("timeline = \"own\"", "timeline = \"score\"")), "its timeline is \"score\": a C64 take's is \"own\"");

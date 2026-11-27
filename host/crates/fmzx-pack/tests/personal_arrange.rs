@@ -10,7 +10,8 @@
 //! own timeline with another loop than the score's) goes in as a replacement record, which the
 //! replay verifies, and C64 takes that do not fit or are not there leave the original with the
 //! reason; a Spectrum 128 take (`ay-1`, the same on its own timeline) goes in the same way, and
-//! one that does not fit leaves the original with the reason; a choice naming no score is a note, and a choices file that does not read, or a
+//! one that does not fit leaves the original with the reason; an engine take (`engine-1`, on the
+//! score's timeline) goes in as take 1 does; a choice naming no score is a note, and a choices file that does not read, or a
 //! choice that names no take, fails the run. The music of a routine the learner
 //! learned (`games/test/tune.sna`) is a shadow score: written out with `shadow = true`, packed
 //! only once a take is chosen for it, and then with precedence, so that the replay verifies it
@@ -387,6 +388,21 @@ fn chosen_takes_go_into_the_pack() {
     run(&games.0, &out.0);
     assert_eq!(list(&out.0), original);
 
+    // an engine take chosen: on the score's timeline, packed as take 1 is (the same events, no
+    // replacement), named by its source
+    let e_text = good
+        .replace("take = 1\ngenerator = \"test generator\"\n", "take = \"engine-1\"\ngenerator = \"engine ntropic\"\nsource = \"ntropic, read exactly: its rows\"\n");
+    write(&folder.join("engine-1/arranged.toml"), &e_text);
+    write(&choices, &format!("[choices]\n\"looper/{key}\" = \"engine-1\"\n"));
+    let r = run(&games.0, &out.0);
+    let got = decode_scores(&list(&out.0)).unwrap();
+    assert_eq!((got.len(), got[0].replacement, got[0].precedence), (1, None, false));
+    assert_eq!(list(&out.0), arranged, "the same record as take 1's");
+    assert!(report(&out.0).contains("\n      arranged: engine take engine-1 (ntropic, read exactly: its rows)\n"), "{}", report(&out.0));
+    assert!(table(&r).contains(&format!("looper: score {key} plays engine take engine-1 (ntropic, read exactly: its rows)\n")), "{}", table(&r));
+    write(&choices, &format!("[choices]\n\"looper/{key}\" = 0\n"));
+    run(&games.0, &out.0);
+
     // a C64 take chosen: a replacement on its own timeline (another loop than the score's)
     let (c_text, c_intro, c_loop, own) = chip(&rec);
     write(&folder.join("chip-1/arranged.toml"), &c_text);
@@ -468,10 +484,10 @@ fn chosen_takes_go_into_the_pack() {
     write(&choices, "[choices]\n\"looper/x\" = \n");
     let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad choices file");
     assert!(e.contains("choices.toml: line 2: ") && e.contains(&choices.canonicalize().unwrap().display().to_string()), "{e}");
-    for v in ["-1", "\"two\"", "\"chip-0\"", "\"ay-0\"", "2.5"] {
+    for v in ["-1", "\"two\"", "\"chip-0\"", "\"ay-0\"", "\"engine-0\"", "2.5"] {
         write(&choices, &format!("[choices]\n\"looper/x\" = {v}\n"));
         let e = run_with_limit(&games.0, &out.0, None).expect_err("a bad choice");
-        assert!(e.contains(&format!("choices.toml: \"looper/x\" = {v}: a choice is a take's number (1 or more, 0 the original), \"chip-<n>\" (a C64 take) or \"ay-<n>\"")), "{e}");
+        assert!(e.contains(&format!("choices.toml: \"looper/x\" = {v}: a choice is a take's number (1 or more, 0 the original), \"engine-<n>\" (an engine take), \"chip-<n>\" (a C64 take) or \"ay-<n>\"")), "{e}");
     }
 }
 

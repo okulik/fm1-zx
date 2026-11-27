@@ -89,6 +89,10 @@ What works:
   of them, turbo and custom-loader tapes included (loaded through the tape signal on the host):
   it learns each game's music, shows each game's size and which pack it goes in, and plays every
   candidate for a tune before you choose one ([your own games](BUILDING.md#your-own-games));
+- a game's own music read exactly: where a game plays its tune through a beeper engine the
+  studio knows (ntropic, Tritone, Stocker), it reads every note and drum from the engine as the
+  game plays it and offers that as a take, which the judge prefers to the transcribed tune
+  ([the game's own music, read exactly](BUILDING.md#the-games-own-music-read-exactly));
 - music from a game's other versions: the studio finds the game's Commodore 64 and Spectrum 128
   music in the public collections, converts it to the FM-1's voices, and a judge ranks the
   candidates by how close they are to the game's own tune and how well they are written
@@ -133,7 +137,8 @@ Your own games (`W` is the workspace, `build/studio/<folder name>/`):
 
     tools/pack-studio ~/games                                     # the studio screen: sizes, packs, listen, choose
     tools/pack-studio ~/games --status                            # the games, their music and choices, as text
-    tools/pack-studio ~/games --auto                              # find C64 and Spectrum 128 music, judge, choose where sure
+    tools/pack-studio ~/games --auto                              # read the games' own music, find C64 and Spectrum 128 music, judge, choose where sure
+    tools/pack-studio ~/games --generate eng                      # the games' own music, read exactly from their engines
     tools/pack-studio ~/games --auto --game some-game             # the same for one game (--status lists the ids)
     tools/pack-studio ~/games --generate ai --game some-game      # a music model's takes for one game
     tools/pack-studio ~/games --assign some-game=2 --auto-fill    # put a game in pack 2, fill the packs with the rest
@@ -147,6 +152,7 @@ Music takes without the screen (`DIR` is `W/all`):
     tools/arrange-music judge build/studio/games/all --apply      # choose where the judge is sure
     tools/arrange-music pick build/studio/games/all               # a local page to listen and choose
     tools/arrange-music pick build/studio/games/all --list        # the choices as text
+    tools/arrange-music engine build/studio/games/all             # engine takes: each tune read exactly from its game's engine
     tools/arrange-music chip build/studio/games/all --sid-dir ~/C64Music    # C64 takes from a collection you have
     tools/arrange-music ay build/studio/games/all --ay-dir ~/AY/music/ay    # Spectrum 128 takes
     tools/arrange-music generate build/studio/games/all --game some-game --takes 3
@@ -156,6 +162,7 @@ What the FM-1 plays, as a WAV (`cd host && cargo build --release -p music --bin 
     host/target/release/music-preview build/studio/games/all --game some-game -o game.wav
     host/target/release/music-preview build/studio/games/all --game some-game --beeper -o beeper.wav
     host/target/release/music-preview build/studio/games/all --game some-game --score KEY --take chip-1 -o take.wav
+    host/target/release/music-preview build/studio/games/all --game some-game --score KEY --take engine-1 -o exact.wav
     tools/drops ~/games/some-game.tap --seconds 60                # where FM playback falls back to the beeper
 
 Packs and packages by hand (`cd host && cargo build --release -p fmzx-pack` first):
@@ -164,6 +171,8 @@ Packs and packages by hand (`cd host && cargo build --release -p fmzx-pack` firs
     host/target/release/fmzx-pack verify build/fm1/fmzx.fwsc                # check a package
     host/target/release/fmzx-pack chip-notes --info ~/C64Music/some.sid     # a SID or AY file's tunes
     host/target/release/fmzx-pack chip-notes some.ay --subtune 2 -o notes.toml
+    host/target/release/fmzx-pack engine-notes --info build/studio/games/all --game some-game   # which engine plays its music
+    host/target/release/fmzx-pack engine-notes build/studio/games/all --game some-game --score KEY -o notes.toml
 
 The browser page:
 

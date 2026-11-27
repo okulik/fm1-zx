@@ -57,18 +57,19 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       Long steps run one at a time in the background. Nothing a tool prints shows on the screen
       (nor without it): every line goes to W/studio.log (the log, below). What shows is progress,
       as bars of squares (■ done, □ to go; # and . without UTF-8):
-      g, m and M queue their work game by game (a game's AI, SID and AY jobs, then its judge,
+      g, m and M queue their work game by game (a game's AI, ENG, SID and AY jobs, then its judge,
       then the next game's; a collection's download first), so games finish one at a time; the
       queue runs in the order submitted, a job waiting for those it is after (a game's judge for
-      its SID and AY jobs) and a job held for a download taking its place again once released.
+      its takes jobs) and a job held for a download taking its place again once released.
       Per game, on the games list: a game with work in hand in the current activity (the jobs
       since the queue was last empty) has a bar in place of its columns, as wide as the row
       leaves (4 to 20 cells), then what is in hand, dim: loading, converting, learning, checking
-      (its chosen takes), SID takes, AY takes, AI takes, judging, pack <n>. Its share: each of its
+      (its chosen takes), ENG takes, SID takes, AY takes, AI takes, judging, pack <n>. Its share: each of its
       steps (its learning, each takes job, the judge, its pack's fmzx-pack run and packages) a
       share, done (1) or by its measure while it runs: the learning its load (a tape loaded),
       conversion, learning and check (when it has chosen takes) done of those known, each counted
-      when its line comes, not before; a SID or AY job its candidates checked of those found; an
+      when its line comes, not before; an ENG job its scores read of those to read; a SID or AY
+      job its candidates checked of those found; an
       AI job (take - 1 + the take's share done) / takes; the judge its takes rendered and scores
       judged of those its progress lines plan (tools/arrange-music's docstring, "The progress
       lines"); a pack's fmzx-pack run that game's steps in it; any other step 0 until done. A game
@@ -122,19 +123,24 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
               take 0, "the original" (for a shadow score, the routine playing live)
       A  AI   arranged takes (a bass, a pad and a drum around the melody):
               tools/arrange-music generate W/all --game ID [--model NAME], takes take-<n>
+      E  ENG  the game's own music, read exactly from its music engine (ntropic, Tritone, Stocker):
+              tools/arrange-music engine W/all --game ID --fmzx-pack <fmzx-pack>, take engine-1
+              on the score's timeline; nothing to download, a few seconds a game. A game whose
+              engine the reader does not know gets none, nor does one a built-in entry of the
+              firmware already plays exactly (the result says which)
       S  SID  the game's C64 tune: tools/arrange-music chip W/all --game ID --sid-dir PATH,
               takes chip-<n>
       Y  AY   the game's Spectrum 128 tune: tools/arrange-music ay W/all --game ID --ay-dir PATH,
               takes ay-<n>
-  AI, SID and AY work on a game's scores (recorded or shadow scores, BUILDING.md "Arranged music"); a
+  AI, ENG, SID and AY work on a game's scores (recorded or shadow scores, BUILDING.md "Arranged music"); a
   game with none has nothing to arrange: its music plays as FM from its code, or on the beeper.
   tools/arrange-music runs through uv (https://docs.astral.sh/uv/); its first AI job downloads
   its packages and a 1.4 GB model.
 
   The games screen: a row per game, its name, how it went in, its packed size (with its chosen
   music, as of the last learning), its pack (P1 to P9, a colour per pack, or a dash), its music
-  methods ("FM AI SID AY": FM always, the others coloured when marked, dots when not), its
-  scores at a glance (below), and per score the choice (original, take-2, chip-1, ay-1;
+  methods ("FM AI ENG SID AY": FM always, the others coloured when marked, dots when not), its
+  scores at a glance (below), and per score the choice (original, take-2, engine-1, chip-1, ay-1;
   "chip-1 (judge)" for one the judge made, "listen" where the judge is not sure and nothing is
   chosen), else "nothing to arrange: FM from code", "beeper", or "no music" (dim: no score, no
   shadow score, no routine learned; never to hear, nothing for the judge). Games left out are
@@ -159,20 +165,22 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       f              every packed game in no pack into the first pack with room, in name order
       p              the packs: each pack, its fill and its games (1-9, 0/x move the game chosen,
                      Enter opens it, b builds, Left/h/Esc/p back)
-      a / s / y      mark or unmark a way to get new music for the game (nothing runs yet):
+      a / e / s / y  mark or unmark a way to get new music for the game (nothing runs yet):
                      a AI, the model writes a bass, chords and drums around its melody;
+                     e ENG, the game's own music, read exactly from its music engine;
                      s SID, its C64 version's tune from the SID collection;
                      y AY, its Spectrum 128 version's tune from the AY collection
-      A / S / Y      the same for every game with scores
-      m              find and judge: marks SID and AY for the game, queues their jobs as g does
-                     (the collections downloaded first when there are none; no AI model, no
-                     GPU), then a judge job, tools/arrange-music judge W/all --game ID --apply,
+      A / E / S / Y  the same for every game with scores
+      m              find and judge: marks ENG, SID and AY for the game, queues their jobs as g
+                     does (the engine first: it needs no download and takes seconds; the
+                     collections downloaded first when there are none; no AI model, no GPU),
+                     then a judge job, tools/arrange-music judge W/all --game ID --apply,
                      after those: it weighs every take of the game's scores and chooses where
                      it is sure and you have not chosen; then the screen reads it all again. Its
                      bars on the game's row, the bottom line and in J, as for every job; for a
                      game with no score: nothing to find or judge (said)
-      M              the same for every game with scores, game by game (each game's SID and AY
-                     jobs and its judge before the next game's); with more than one game each
+      M              the same for every game with scores, game by game (each game's ENG, SID and
+                     AY jobs and its judge before the next game's); with more than one game each
                      game's judge runs with --provisional and the judge's final pass,
                      tools/arrange-music judge W/all --apply (with --game for the games m was
                      given), follows them all: a score is measured against other games' takes,
@@ -182,8 +190,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
                      replace) is skipped, and the log says so ("find and judge: skipped 13 games
                      with no music ...")
       n              the cursor to the next game with scores to hear (round to the top)
-      g              generate the marked methods: an AI job per game with A, a SID job per game
-                     with S, an AY job per game with Y (the SID or AY collection is downloaded
+      g              generate the marked methods: an AI job per game with A, an ENG job per game
+                     with E, a SID job per game with S, an AY job per game with Y (the SID or AY collection is downloaded
                      first when there is none); it says how many it queued ("queued 5 jobs (2 AI,
                      3 SID): J shows them"), and each game with a job has its bar (above)
       J              the jobs (below)
@@ -197,7 +205,7 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   border is a Spectrum's in proportion from 94x27 up, narrower below; under 72x20, no start screen.
   Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
   titles bold, the chosen candidate green (blue when the judge chose it), marked methods AI
-  magenta, SID cyan, AY yellow (dim when not), errors, refusals and a take's faults red, scores
+  magenta, ENG green, SID cyan, AY yellow (dim when not), errors, refusals and a take's faults red, scores
   to hear yellow, the bar yellow while a step runs, green when the last one is done, red when
   one failed; while learning, ▸ yellow, ✓ green, ✓ from the cache dim green; on the jobs view,
   running yellow, done green, failed red, waiting dim; on the game screen a take's closeness to
@@ -219,6 +227,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       beeper                  the game's own sound (to compare; not a choice)
       FM (from code/memory)   take 0, the original (no closeness: it is the tune)
       AI take-<n>             with its key, consonance and notes a second (arranged.toml [metrics])
+      ENG engine-<n>          its source: the engine and what was read ("ntropic, read exactly: its
+                              rows at 9C9Ch ...")
       SID chip-<n>            its source
       C64 original (chip-<n>) the C64's own sound, when tools/arrange-music wrote chip.wav
       AY ay-<n>               its source
@@ -244,13 +254,14 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       c              choose the candidate for its score: written to W/all/arrange/choices.toml
                      at once (as tools/arrange-music pick --set does), as your choice (the
                      judge never changes it); the chosen one is marked * and the others not
-      a / s / y / g  mark AI / SID / AY for this game, generate them (Y: AY for every game)
+      a / e / s / y / g  mark AI / ENG / SID / AY for this game, generate them (E, Y: ENG, AY for
+                     every game)
       m              find and judge, for this game (as on the games screen)
       Left, h, Backspace   back; l the log; J the jobs
   What plays: music-preview's render of exactly what the FM-1 plays (W/previews/<game>__<key>__
   <take>.wav, made in the background, "rendering..." until it is ready, then played; kept until
   the take changes); without music-preview, the renders tools/arrange-music wrote: original.wav
-  (General MIDI, for take 0), take-<n>/fm1.wav, chip-<n>/fm1.wav, ay-<n>/fm1.wav. A candidate with nothing to
+  (General MIDI, for take 0), take-<n>/fm1.wav, engine-<n>/fm1.wav, chip-<n>/fm1.wav, ay-<n>/fm1.wav. A candidate with nothing to
   play says why. The player is afplay on macOS, else ffplay, paplay or aplay; FMZX_PLAYER="cmd
   args" overrides (the file is added last).
 
@@ -259,17 +270,19 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   takes held until their collection's download is done), then those finished, newest first. Per
   job its state (running m:ss yellow, waiting dim, done in N s green, failed red, cancelled, or
   skipped when a job before it in its chain failed or its collection did not download), what it
-  is (AI, SID or AY takes, the method in its colour; a collection's download, the learning, a
+  is (AI, ENG, SID or AY takes, the method in its colour; a collection's download, the learning, a
   render, a choice, a pack's build), its game, and a line in words (never its output): while a
   job runs, a small bar of its own, then, for an AI job, "take 2 of 4,
   pass 'bass', 38% (about 24 min left)" (from tools/arrange-music generate's progress lines: the
-  passes drums, bass, chords; the time left from the takes done, else its estimate), a SID or AY
-  job "checking candidates: 3 of 12", a judge job "judging: 3 of 12 scores", a download its
+  passes drums, bass, chords; the time left from the takes done, else its estimate), an ENG job
+  "reading the engine: 1 of 2 scores", a SID or AY job "checking candidates: 3 of 12", a judge job "judging: 3 of 12 scores", a download its
   MB, the learning its header; when it is done, its result from tools/arrange-music's summary
   line (its docstring, "The summary line"): "3 takes, best closeness 73% (C64: <title> by
   <author> (<released>))" (with "weak: probably another tune, listen" under 20%), "no C64 tune
   found by that name", "0 takes, 4 songs skipped (48K beeper or CPC tunes)", "4 takes written,
-  3 min 12 s", "had its SID takes already: nothing to do", for the judge "12 scores: 3 chosen
+  3 min 12 s", "had its SID takes already: nothing to do", for an ENG job "engine: ntropic, 2
+  channels + drums", "already exact: a built-in entry of the firmware plays it live (no take
+  needed)" or "no known engine (its music stays as learned)", for the judge "12 scores: 3 chosen
   by the judge (2 in this run), 4 by you, 5 to hear, 1 faulty take" (and "the renderer check skipped
   (no music-preview)" when it was); a failed job its reason in a line, its exit code and the
   last line of its output that reads as an error, without the tool's "tools/<name>: " (cut to
@@ -347,8 +360,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
         Lamp Quest         ■■■■■■■■■■■■ 2 C64; 1 by the judge, 2 to hear
         Mole Dig           ■■■■■■■■□□□□ judging 0/1 scores
       finding and judging ■■■■□□□□□□□□□□□□□□□□□□□□□□□□□□□ 4 of 31 games  0:41  ~5 min
-  The result: --auto the C64 and Spectrum 128 versions found (distinct tune files among the
-  game's takes) and what became of its tunes (chosen by the judge, chosen by you, to hear, plays
+  The result: --auto the game's own music read from its engine ("engine: ntropic, 2 channels +
+  drums") and the C64 and Spectrum 128 versions found (distinct tune files among the game's takes) and what became of its tunes (chosen by the judge, chosen by you, to hear, plays
   its own; with several tunes, how many of each); --generate each takes job's ("AI: 1 take written, 0 s"); the learning
   "learned in 12 s", "left out: <why>" (a game taken from its cache gets no line; the games it
   works on at once each have their line); a failure its reason, in red. Only the lines of the
@@ -361,8 +374,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       Puts each game given (its id) in pack N (1 to 9; 0: in none), refused when that takes the
       pack over what it holds; --auto-fill then does what f does. Prints the packs. Learns first
       when W/all/plan.json is missing.
-  tools/pack-studio <games> --generate ai,sid,ay [--game ID]...
-      Marks the methods named (one or more of ai, sid, ay, comma-separated) for every game with
+  tools/pack-studio <games> --generate ai,eng,sid,ay [--game ID]...
+      Marks the methods named (one or more of ai, eng, sid, ay, comma-separated) for every game with
       scores, or for each game given with --game (its id, as --status shows it), and runs the
       jobs g runs for them, one at a time (the SID or AY collection downloaded first when there
       is none); learns first when W/all/plan.json is missing. Prints each takes job's result
@@ -372,7 +385,7 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       the judge: --auto).
   tools/pack-studio <games> --auto [--game ID]...
       What m does, for each game given with --game, or M for every game with scores: game by
-      game the SID and AY jobs (the collections downloaded first when there are none), then
+      game the ENG, SID and AY jobs (the collections downloaded first when there are none), then
       tools/arrange-music judge W/all --game ID --apply, which chooses where the judge is sure and
       you have not chosen, then (more than one game) the judge's final pass; learns first when
       W/all/plan.json is missing. A game with no score is skipped (nothing to find a version for,
@@ -407,7 +420,9 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       bar at the bottom, a message above it, no progress text in the header or the rows),
       silence (a silent render not played, said, its level kept and read again; one with sound
       played; "no music" on the list and the game screen), the closeness as a percentage and its
-      colour, the judge (m and --auto: the SID and AY jobs, then the judge after them; on three
+      colour, the judge (m and --auto: the ENG, SID and AY jobs, then the judge after them; an
+      engine take chosen by the judge and said in the game's result, a game played exactly live
+      given none; on three
       games, game by game, each judge provisional, the final pass over the three, the figures
       and choices one judge over every game leaves (a stand-in judge that measures against the
       other games' takes), the games screen while it runs (the game in hand a bar, the others
@@ -419,9 +434,10 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       those, one over its room refused), the split, the games-file subsets ([game.keys] tables kept), the pack folders and
       their links, each pack's fmzx-pack and tools/make-packages runs, the stale-pack removal, the
       retry when a pack does not fit, a games file as the input, the methods file, generate and
-      choose through --set (AI, SID and AY, on the screen's path and through --generate), --try,
+      choose through --set (AI, SID and AY, on the screen's path and through --generate; ENG
+      through --generate eng, among the candidates), e marking ENG, --try,
       the previews, --status, the jobs (their states, a waiting one cancelled, a running one
-      stopped, takes held for a download that fails, the result of AI, SID and AY jobs from
+      stopped, takes held for a download that fails, the result of AI, ENG, SID and AY jobs from
       tools/arrange-music's output: a C64 tune found, none found by name, songs the converter
       refuses, the progress of an AI job; what g says and the games marked), the SID and AY downloads (from a server on 127.0.0.1) and the safe
       unpacking (archive listings with a path escaping their folder, a link or a device; a
@@ -486,7 +502,7 @@ AY_API = "https://api.github.com/repos/chris-y/AY/commits/main"  # the AY collec
 AY_TARBALL = "https://codeload.github.com/chris-y/AY/tar.gz/{sha}"
 UNPACK_MAX = 8 << 30  # bytes an archive may unpack to
 NOT_FIT = "the pack does not fit"
-METHODS = ("ai", "sid", "ay")
+METHODS = ("ai", "eng", "sid", "ay")
 PACKS_MAX = 9  # the packs a game can be put in, 1 to 9
 
 
@@ -678,7 +694,7 @@ def parse_choice(v) -> int | str | None:
     if isinstance(v, str):
         if v.isdigit():
             return int(v)
-        if re.fullmatch(r"(chip|ay)-[1-9][0-9]*", v):
+        if re.fullmatch(r"(engine|chip|ay)-[1-9][0-9]*", v):
             return v
     return None
 
@@ -750,8 +766,16 @@ def score_digest(path: Path) -> str:
 
 
 def take_names(d: Path) -> list[tuple[str, Path]]:
-    """A score's takes as the judge names them: take-<n>, chip-<n>, ay-<n>."""
-    return [(f"{pre}{n}", p) for pre in ("take-", "chip-", "ay-") for n, p in numbered(d, pre)]
+    """A score's takes as the judge names them: take-<n>, engine-<n>, chip-<n>, ay-<n>."""
+    return [(f"{pre}{n}", p) for pre in ("take-", "engine-", "chip-", "ay-") for n, p in numbered(d, pre)]
+
+
+def engine_shape(head: dict) -> str:
+    """An engine take's engine and channels from its arranged.toml's header: "ntropic, 2 channels
+    + drums" (+ drums when it has drum notes: its [metrics] drums_nps above 0)."""
+    m = head.get("metrics") if isinstance(head.get("metrics"), dict) else {}
+    drums = " + drums" if float(m.get("drums_nps", 0) or 0) > 0 else ""
+    return f"{head.get('engine') or '?'}, {head.get('channels', '?')} channels{drums}"
 
 
 def read_judge(d: Path) -> dict:
@@ -798,7 +822,7 @@ def metrics_line(m: dict) -> str:
 @dataclass
 class Candidate:
     label: str
-    take: str  # the preview's take: "beeper", "fm" (the whole game), "0", "<n>", "chip-<n>", "c64-<n>", "ay-<n>", "zx128-<n>"
+    take: str  # the preview's take: "beeper", "fm" (the whole game), "0", "<n>", "engine-<n>", "chip-<n>", "c64-<n>", "ay-<n>", "zx128-<n>"
     choice: int | str | None  # the value for pick --set; None: not a choice
     info: str
     file: Path | None = None  # tools/arrange-music's render, played without music-preview
@@ -857,6 +881,10 @@ def score_candidates(all_dir: Path, gid: str, sc: Score | None) -> list[Candidat
         gen = str(doc.get("generator", "")).split(" ")[0]
         out.append(Candidate(f"AI take-{n}" + (f" ({gen})" if gen else ""), str(n), n,
                              metrics_line(doc.get("metrics", {})), p / "fm1.wav", p / "arranged.toml", judge=rows.get(f"take-{n}")))
+    for n, p in numbered(d, "engine-"):
+        doc = read_toml_head(p / "arranged.toml")
+        out.append(Candidate(f"ENG engine-{n}", f"engine-{n}", f"engine-{n}", str(doc.get("source", "?")), p / "fm1.wav",
+                             p / "arranged.toml", judge=rows.get(f"engine-{n}")))
     for n, p in numbered(d, "chip-"):
         doc = read_toml_head(p / "arranged.toml")
         out.append(Candidate(f"SID chip-{n}", f"chip-{n}", f"chip-{n}", str(doc.get("source", "?")), p / "fm1.wav",
@@ -2031,11 +2059,13 @@ def fetch_ay(root: Path, progress: Callable[[str], None], log: Callable[[str], N
 # line ("summary: kind=sid game=ID scores=1 pending=1 takes=3 ... best=0.73 seconds=41 source=...")
 
 
-TAKES_LABEL = {"ai": "AI", "sid": "SID", "ay": "AY"}
+TAKES_LABEL = {"ai": "AI", "eng": "ENG", "sid": "SID", "ay": "AY"}
 AMT_PASSES = ("drums", "bass", "chords")  # tools/arrange-music's amt passes, in order
 ORIGIN = {"sid": "C64", "ay": "Spectrum 128"}
 RE_AI_HEAD = re.compile(r"(\d+) scores, (\d+) to arrange \((\d+) takes each")
 RE_OWN_HEAD = re.compile(r"(\d+) scores, (\d+) to search for")
+RE_ENG_HEAD = re.compile(r"(\d+) scores, (\d+) to read from their engines")
+RE_ENG_DONE = re.compile(r"^\[[^\]]+\] (engine-\d+: |no engine take: |already exact|the engine reader failed)")
 RE_SCORE = re.compile(r"^\[[^\]]+\] .*: [\d.]+ s of music, \d+ notes; (\d+) takes with \w+(?:, roughly (.+) a take)?$")
 RE_PASS_AT = re.compile(r"^\[[^\]]+\] take (\d+) (\w+): ([\d.]+)/([\d.]+) s, \d+ notes, \d+ s so far, about (.+) left in this take")
 RE_PASS_DONE = re.compile(r"^\[[^\]]+\] take (\d+) (\w+): \d+ notes in \d+ s")
@@ -2103,6 +2133,8 @@ def summary_text(kind: str, s: dict[str, str]) -> str:
     label = TAKES_LABEL.get(kind, kind.upper())
     if s.get("scores") == "0":
         return "no scores to arrange"
+    if kind == "eng":
+        return engine_text(s)
     if s.get("pending") == "0":
         return f"had its {label} takes already: nothing to do"
     takes = num("takes")
@@ -2127,6 +2159,28 @@ def summary_text(kind: str, s: dict[str, str]) -> str:
     if num("candidates") == 0:
         return f"no {ORIGIN.get(kind, kind)} tune found by that name"
     return f"0 takes{skipped}" + ("" if refused >= num("candidates") else f" ({plural(num('candidates'), 'candidate')}, none converted)")
+
+
+def engine_text(s: dict[str, str]) -> str:
+    """A finished ENG job's result in words, from its summary line (kind=engine): "engine:
+    ntropic, 2 channels + drums", "already exact: a built-in entry of the firmware plays it live
+    (no take needed)", "no known engine (its music stays as learned)"."""
+    num = lambda k: int(s.get(k, "0") or 0) if str(s.get(k, "0")).isdigit() else 0  # noqa: E731
+    if s.get("pending") == "0":
+        return "had its ENG takes already: nothing to do"
+    parts = []
+    if num("takes"):
+        parts.append(f"engine: {s.get('source') or s.get('engines', '?')}" + (f" ({plural(num('takes'), 'take')})" if num("takes") > 1 else ""))
+    if num("live"):
+        parts.append("already exact: a built-in entry of the firmware plays it live (no take needed)" if not num("takes")
+                     else f"{num('live')} already exact (played live)")
+    if num("failed"):
+        parts.append(f"the engine reader failed for {plural(num('failed'), 'score')}")
+    if num("unknown") and not parts:
+        parts.append("no known engine (its music stays as learned)")
+    elif num("unknown"):
+        parts.append(f"{num('unknown')} with no known engine")
+    return "; ".join(parts) or "nothing read"
 
 
 class JudgeWatch:
@@ -2181,7 +2235,7 @@ class JudgeWatch:
 
 
 class TakesWatch:
-    """A takes job's (tools/arrange-music generate, chip or ay) progress, fed its output lines:
+    """A takes job's (tools/arrange-music generate, engine, chip or ay) progress, fed its output lines:
     what it is doing (running_text) and, at its end, its summary line's fields."""
 
     def __init__(self, kind: str):
@@ -2215,8 +2269,11 @@ class TakesWatch:
             self.phase = "uv: getting tools/arrange-music's packages (once)"
         elif m := RE_AI_HEAD.search(s):
             self.pending, self.takes_each, self.phase = int(m[2]), int(m[3]), ""
-        elif m := RE_OWN_HEAD.search(s):
+        elif m := RE_OWN_HEAD.search(s) or RE_ENG_HEAD.search(s):
             self.pending, self.phase = int(m[2]), ""
+        elif self.kind == "eng" and RE_ENG_DONE.match(s):
+            self.checked += 1
+            self.written += s.split("] ", 1)[1].startswith("engine-")
         elif s.startswith("tools/arrange-music: indexing "):
             self.phase = "indexing the collection (once)"
         elif m := RE_SCORE.match(s):
@@ -2251,6 +2308,8 @@ class TakesWatch:
         now = time.monotonic() if now is None else now
         if self.phase:
             return self.phase
+        if self.kind == "eng":
+            return f"reading the engine: {self.checked} of {self.pending} scores" if self.pending else "starting"
         if self.kind != "ai":
             if not self.cands:
                 return "looking for the game's tune by name"
@@ -2283,11 +2342,16 @@ class TakesWatch:
 
     def progress(self, label: str, now: float | None = None) -> Progress:
         """The bar: an AI job (take - 1 + the take's share done) / takes, per score of those to
-        arrange; a SID or AY job the candidates checked of those found; a phase without figures
+        arrange; an ENG job its scores read of those to read; a SID or AY job the candidates
+        checked of those found; a phase without figures
         (the model's download, indexing) not known (a spinner)."""
         now = time.monotonic() if now is None else now
         if self.phase:
             return Progress(label, None, self.phase.split(" (")[0])
+        if self.kind == "eng":
+            if not self.pending:
+                return Progress(label, None, "starting")
+            return Progress(label, min(1.0, self.checked / self.pending), f"{self.checked}/{self.pending} scores")
         if self.kind != "ai":
             if not self.cands:
                 return Progress(label, None, "looking for the tune")
@@ -2534,7 +2598,7 @@ def job_progress(j: Job, now: float | None = None) -> Progress:
 # The activity: the jobs since the queue was last empty, as a bar per game and one for it all
 
 
-GAME_KINDS = ("ai", "sid", "ay", "judge")  # the jobs for one game each: the activity's bar names none of them
+GAME_KINDS = ("ai", "eng", "sid", "ay", "judge")  # the jobs for one game each: the activity's bar names none of them
 
 
 @dataclass
@@ -2637,7 +2701,7 @@ def activity_name(jobs: list[Job]) -> str:
     if kinds & {"judge", "settle"}:
         return "finding and judging" if takes else "judging"
     if takes:
-        return {frozenset({"ai"}): "making AI takes", frozenset({"sid"}): "finding C64 versions",
+        return {frozenset({"ai"}): "making AI takes", frozenset({"eng"}): "reading the games' own music", frozenset({"sid"}): "finding C64 versions",
                 frozenset({"ay"}): "finding 128 versions", frozenset({"sid", "ay"}): "finding C64 and 128 versions"}.get(
             frozenset(takes), "making takes")
     if "pack" in kinds:
@@ -3451,10 +3515,10 @@ class Studio:
         gs = [g for g in self.plan.games if g.can_arrange and (ids is None or g.id in ids)]
         per = {m: {g.id for g in gs if m in methods and m in self.marked(g.id)} for m in METHODS}
         if not any(per.values()):
-            self.fail("nothing marked: a marks AI, s marks SID, y marks AY (FM needs nothing)")
+            self.fail("nothing marked: a marks AI, e marks ENG, s marks SID, y marks AY (FM needs nothing)")
             return []
         if not self.tools.arrange_given() and not shutil.which("uv"):
-            self.fail("AI, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
+            self.fail("AI, ENG, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
             return []
         errors = len(self.errors)
         queued, counts, total = self.takes_jobs(gs, per)
@@ -3470,8 +3534,8 @@ class Studio:
     def takes_jobs(self, gs: list[Game], per: dict[str, set[str]], judge: bool = False,
                    judge_flags: tuple[str, ...] = ()) -> tuple[list[Job], list[str], int]:
         """Queues the takes jobs of per (method -> the game ids marked for it), game by game in the
-        plan's order (its AI, SID and AY jobs, then, with judge, its judge job, which waits for
-        them), so a game is done before the next begins; a collection to download first, its jobs
+        plan's order (its AI, ENG, SID and AY jobs, then, with judge, its judge job, which waits
+        for them), so a game is done before the next begins; a collection to download first, its jobs
         held until it is there. Returns the jobs (the downloads among them), the counts in words
         and the jobs counted."""
         queued: list[Job] = []
@@ -3516,6 +3580,10 @@ class Studio:
                     argv += ["--offline"]
                 mine.append(self.runner.submit(Job(f"AI takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed,
                                                    kind="ai", what="AI takes", game=g.name, gid=g.id)))
+            if g.id in per["eng"]:
+                argv = [self.tools.arrange, "engine", str(self.all), "--game", g.id, "--fmzx-pack", self.tools.fmzx_pack]
+                mine.append(self.runner.submit(Job(f"ENG takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed,
+                                                   kind="eng", what="ENG takes", game=g.name, gid=g.id)))
             for m in ("sid", "ay"):
                 if g.id not in per[m]:
                     continue
@@ -3534,9 +3602,9 @@ class Studio:
                                                                        "--apply", *judge_flags],
                                                    env=self.uv_env(), on_done=self.changed, kind="judge", what="judge",
                                                    game=g.name, gid=g.id, after=list(mine),
-                                                   wait_note="after the game's SID and AY jobs" if mine else "")))
+                                                   wait_note="after the game's takes jobs" if mine else "")))
             queued += mine
-        for m, label in (("ai", "AI"), ("sid", "SID"), ("ay", "AY")):
+        for m, label in (("ai", "AI"), ("eng", "ENG"), ("sid", "SID"), ("ay", "AY")):
             if per[m]:
                 counts.append(f"{len(per[m])} {label}")
                 total += len(per[m])
@@ -3547,9 +3615,9 @@ class Studio:
 
     def auto(self, ids: list[str] | None = None) -> None:
         """m (M: every game): for the games given (every game with scores when None), game by
-        game, finds and converts the C64 and Spectrum 128 versions (SID and AY marked, their jobs
-        as g queues them), then judges the game's scores and chooses where the judge is sure and
-        the owner has not chosen (tools/arrange-music judge --game ID --apply); with more than one
+        game, reads the game's own music from its engine and finds and converts the C64 and
+        Spectrum 128 versions (ENG, SID and AY marked, their jobs as g queues them), then judges
+        the game's scores and chooses where the judge is sure and the owner has not chosen (tools/arrange-music judge --game ID --apply); with more than one
         game, those judges are provisional and the judge's final pass (judge --apply over the
         same games) settles the figures where another game's takes changed what a score is
         compared with, as one judge over them all would. The screen reads it all again."""
@@ -3569,15 +3637,15 @@ class Studio:
                 self.fail(f"{g.name}: left out ({g.reason})" if g else "no game has a score: nothing to judge")
             return
         if not self.tools.arrange_given() and not shutil.which("uv"):
-            self.fail("AI, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
+            self.fail("AI, ENG, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
             return
         for g in gs:
-            self.methods.setdefault(g.id, set()).update({"sid", "ay"})
+            self.methods.setdefault(g.id, set()).update({"eng", "sid", "ay"})
         save_methods(self.w, self.methods)
         errors = len(self.errors)
         many = len(gs) > 1
         ids_ = {g.id for g in gs}
-        queued, _, _ = self.takes_jobs(gs, {"ai": set(), "sid": set(ids_), "ay": set(ids_)}, judge=True,
+        queued, _, _ = self.takes_jobs(gs, {"ai": set(), "eng": set(ids_), "sid": set(ids_), "ay": set(ids_)}, judge=True,
                                        judge_flags=("--provisional",) if many else ())
         n = len(queued)
         if many:
@@ -3588,7 +3656,7 @@ class Studio:
                                    on_done=lambda j: self.settled(j, gs), kind="settle", what="final judge pass",
                                    game=f"{len(gs)} games", after=list(queued), wait_note="after every game's judge"))
             n += 1
-        msg = (f"queued {plural(n, 'job')} (game by game: the C64 and Spectrum 128 versions, then the judge"
+        msg = (f"queued {plural(n, 'job')} (game by game: its own music read exactly, the C64 and Spectrum 128 versions, then the judge"
                + ("; then its final pass" if many else "") + ")" + (": J shows them" if self.runner.threaded else ""))
         if len(self.errors) > errors:
             self.flash(f"{msg}; {self.errors[-1]}", "err")
@@ -3616,10 +3684,13 @@ class Studio:
                                                  if moved else "every game as judged"), "ok")
 
     def tune_words(self, g: Game) -> str:
-        """A game's C64 and Spectrum 128 versions found (distinct tune files among its takes) and
-        what became of its tunes, in the summary line's words: "3 C64, 1 128; chosen by the
-        judge", "2 C64; 1 by the judge, 1 by you, 2 to hear", "no C64 or 128 version; plays its
-        own"."""
+        """A game's own music read from its engine (its engine take's engine and shape) and its C64
+        and Spectrum 128 versions found (distinct tune files among its takes), and what became of
+        its tunes, in the summary line's words: "engine: ntropic, 2 channels + drums; chosen by
+        the judge", "3 C64, 1 128; chosen by the judge", "2 C64; 1 by the judge, 1 by you, 2 to
+        hear", "no C64 or 128 version; plays its own"."""
+        shapes = sorted({engine_shape(read_toml_head(p / "arranged.toml")) for s in g.scores
+                         for _, p in numbered(self.all / "arrange" / g.id / s.key, "engine-")})
         files: dict[str, set[str]] = {"chip-": set(), "ay-": set()}
         for s in g.scores:
             d = self.all / "arrange" / g.id / s.key
@@ -3629,6 +3700,8 @@ class Studio:
                     seen.add(str(h.get("sid_file") or h.get("ay_file") or h.get("source") or p.name))
         c64, zx = len(files["chip-"]), len(files["ay-"])
         found = ", ".join(x for x in (f"{c64} C64" if c64 else "", f"{zx} 128" if zx else "") if x) or "no C64 or 128 version"
+        if shapes:
+            found = "engine: " + ", ".join(shapes) + ("" if not (c64 or zx) else f"; {found}")
         n = self.tune_counts(g)
         words = (("judge", "chosen by the judge", "by the judge"), ("owner", "chosen by you", "by you"),
                  ("hear", "to hear", "to hear"), ("sure", "sure, not chosen", "sure, not chosen"),
@@ -3762,6 +3835,9 @@ class Studio:
             self.flash(f"{label} takes for {j.game}: done{hint}", "ok")
             return
         n = int(sm["takes"]) if sm.get("takes", "").isdigit() else 0
+        if j.kind == "eng":
+            self.flash(f"{label} takes for {j.game}: {summary_text(j.kind, sm)}" + (hint if n else ""), "ok" if n else "info")
+            return
         if n:
             best = (f" (best closeness {pct(sm['best'])})" if sm.get("best", "-") != "-"
                     else " written" if j.kind == "ai" else "")
@@ -4268,23 +4344,23 @@ FLASH_SECS = 3.0  # a message's time on the key line
 JOB_BAR = 10  # the cells of a running job's bar on the jobs view
 ROW_BAR = 20  # the cells of a game's bar on its row, at most
 DONE_SECS = 3.0  # the last job's bar, green or red, after it ends
-HELP_GAMES = ("Enter open  m find+judge  n next-to-hear  a/s/y mark  g make-takes  J jobs  1-9/0 pack  f fill  p packs  "
+HELP_GAMES = ("Enter open  m find+judge  n next-to-hear  a/e/s/y mark  g make-takes  J jobs  1-9/0 pack  f fill  p packs  "
               "b build-firmware  r re-learn  l log  ? help  q quit")
 HELP_LIVE = "1-9/0 pack  J jobs  l log  ? help  q quit"
-HELP_GAME = "Enter play/stop  c choose  m find+judge  a/s/y mark  g make-takes  J jobs  Esc back  l log  ? help"
+HELP_GAME = "Enter play/stop  c choose  m find+judge  a/e/s/y mark  g make-takes  J jobs  Esc back  l log  ? help"
 HELP_PACKS = "1-9 pack  0/x none  f fill  Enter open  b build-firmware  J jobs  Esc back  l log  q quit"
 HELP_TEXT = "j/k PgUp/PgDn scroll  Home/End  J jobs  q/Esc back"
 HELP_JOBS = "Enter its-log-lines  o open-game  x cancel/stop  Esc back  l log  ? help  q quit"
 # the keys that start work or make a choice, per screen: what the log says the owner asked for
 KEY_WORDS = {"g": "make the takes of the methods marked", "m": "find and judge", "M": "find and judge, every game",
              "b": "build the firmware", "r": "learn again", "f": "fill the packs", "A": "AI for every game",
-             "S": "SID for every game", "Y": "AY for every game", "c": "choose", "x": "cancel or stop"}
+             "E": "ENG for every game", "S": "SID for every game", "Y": "AY for every game", "c": "choose", "x": "cancel or stop"}
 HELP_JOB_TEXT = "j/k PgUp/PgDn scroll  Home/End  o open-game  x cancel/stop  Esc back"
 # a score's state on the game screen (Studio.tune_state): its words and their colour
 TUNE_STATES = {"owner": ("chosen by you", "chosen"), "judge": ("chosen by the judge", "judge"), "hear": ("to hear", "warn"),
                "sure": ("the judge is sure: m chooses", "ok"), "unjudged": ("not judged", "dim"), "none": ("", "dim")}
 # the methods to mark: key, label on a row, what it is
-METHOD_KEYS = (("a", "AI", "ai", "arrangement"), ("s", "SID", "sid", "C64 version"),
+METHOD_KEYS = (("a", "AI", "ai", "arrangement"), ("e", "ENG", "eng", "own music, read exactly"), ("s", "SID", "sid", "C64 version"),
                ("y", "AY", "ay", "Spectrum 128 version"))
 
 
@@ -4548,7 +4624,7 @@ class UI:
     def attrs(curses, colors: bool) -> dict[str, int]:
         B, D, R = curses.A_BOLD, curses.A_DIM, curses.A_REVERSE
         a = {"dim": D, "bold": B, "rev": R, "sel": R | B, "title": B, "name": B, "head": B, "key": B,
-             "chosen": B, "judge": B, "ai": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
+             "chosen": B, "judge": B, "ai": B, "eng": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
              "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B, "keycap": R | B,
              "prog_run": B, "prog_ok": B, "prog_err": R | B, "prog_off": D, "track": D}
         a.update({f"p{n}": B for n in range(1, PACKS_MAX + 1)})
@@ -4568,7 +4644,7 @@ class UI:
             a["keycap"] = curses.color_pair(len(names) + 1) | B
         except curses.error:
             return a
-        a.update({"chosen": g | B, "judge": b | B, "ai": m | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
+        a.update({"chosen": g | B, "judge": b | B, "ai": m | B, "eng": g | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
                   "cached": g | D, "warn": y | B, "bar_run": y | R, "bar_ok": g | R, "bar_err": r | R,
                   "prog_run": y | B, "prog_ok": g | B, "prog_err": r | B})
         cycle = (c, m, y, g, b)
@@ -4659,7 +4735,7 @@ class UI:
     def columns(self, w: int) -> tuple[int, int]:
         """The name's and how's widths on the games list (how goes on a narrow screen)."""
         how = 12 if w >= 72 else 0
-        return min(28, max(8, w - 40 - how)), how
+        return min(28, max(8, w - 44 - how)), how
 
     def draw_panel(self, y: int, h: int, w: int) -> int:
         """The packs panel from line y (at most a third of the screen); returns the next line."""
@@ -5301,8 +5377,8 @@ class UI:
                     st.flash(f"{r.name}: not in the games file yet", "err")
             elif ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
                 st.flash("still learning: the games open when the plan is ready")
-            elif ch in (ord("r"), ord("b"), ord("g"), ord("f"), ord("p"), ord("A"), ord("S"), ord("Y"), ord("a"), ord("s"), ord("y"),
-                        ord("m"), ord("M"), ord("n")):
+            elif ch in (ord("r"), ord("b"), ord("g"), ord("f"), ord("p"), ord("A"), ord("E"), ord("S"), ord("Y"), ord("a"), ord("e"),
+                        ord("s"), ord("y"), ord("m"), ord("M"), ord("n")):
                 st.flash("still learning: wait for the plan", "err")
         elif ch == ord("r"):
             st.relearn()
@@ -5310,6 +5386,8 @@ class UI:
             st.build()
         elif ch == ord("A"):
             st.toggle_all("ai")
+        elif ch == ord("E"):
+            st.toggle_all("eng")
         elif ch == ord("S"):
             st.toggle_all("sid")
         elif ch == ord("Y"):
@@ -5334,6 +5412,8 @@ class UI:
             self.next_to_hear()
         elif ch == ord("a"):
             st.toggle(g.id, "ai")
+        elif ch == ord("e"):
+            st.toggle(g.id, "eng")
         elif ch == ord("s"):
             st.toggle(g.id, "sid")
         elif ch == ord("y"):
@@ -5394,12 +5474,16 @@ class UI:
             self.open_text("help")
         elif ch == ord("a"):
             st.toggle(g.id, "ai")
+        elif ch == ord("e"):
+            st.toggle(g.id, "eng")
         elif ch == ord("s"):
             st.toggle(g.id, "sid")
         elif ch == ord("y"):
             st.toggle(g.id, "ay")
         elif ch == ord("Y"):
             st.toggle_all("ay")
+        elif ch == ord("E"):
+            st.toggle_all("eng")
         elif ch == ord("g"):
             st.generate([g.id])
         elif ch == ord("m"):
@@ -5844,7 +5928,7 @@ with open(LOG, "a") as f:
 d = Path(a[1])
 cmd = a[0]
 # the judge's figures per take (FAKE_JUDGE=unsure: a close call)
-FIGS = {"0": (1.0, 0.3, []), "take-1": (1.0, 0.45, []), "chip-1": (0.97, 0.62, []),
+FIGS = {"0": (1.0, 0.3, []), "take-1": (1.0, 0.45, []), "engine-1": (1.0, 0.7, []), "chip-1": (0.97, 0.62, []),
         "ay-1": (0.4, 0.5, ["plays only a fragment: 1.5 s of the 12.5 s that play"])}
 slow = float(os.environ.get("FAKE_ARRANGE_SLOW", "0"))
 def null_of(sd, old):
@@ -5891,6 +5975,35 @@ if cmd == "pick":
         lines.append(f"{json.dumps(k)} = {v if v.isdigit() else json.dumps(v)}")
     p.write_text("[choices]\n" + "\n".join(lines) + "\n")
     print("set", sets)
+elif cmd == "engine":
+    # FAKE_ENGINE: "take" an engine take per score, "live" already exact (played live), else no known engine
+    game = a[a.index("--game") + 1]
+    assert "--fmzx-pack" in a
+    how = os.environ.get("FAKE_ENGINE", "")
+    sds = sorted((d / "arrange" / game).glob("*/score.toml"))
+    print(f"tools/arrange-music: {len(sds)} scores, {len(sds)} to read from their engines", flush=True)
+    for sd in sds:
+        sid = f"{game}/{sd.parent.name}"
+        print(f"progress: engine {sid}", flush=True)
+        time.sleep(slow)
+        if how == "take":
+            t = sd.parent / "engine-1"
+            t.mkdir(exist_ok=True)
+            (t / "arranged.toml").write_text('take = "engine-1"\ngenerator = "engine ntropic"\nsource = "ntropic, read exactly: its rows at 9C9Ch"\n'
+                                             'engine = "ntropic"\nchannels = 2\n[metrics]\nlead_nps = 2.0\nbass_nps = 3.0\npad_nps = 0.0\ndrums_nps = 4.0\n')
+            (t / "fm1.wav").write_bytes(b"RIFF")
+            print(f"[{sid}] engine-1: engine: ntropic, 2 channels + drums; 166 notes, 115 drum hits, read exactly", flush=True)
+            if os.environ.get("FAKE_NULL") != "1":
+                judge(sd.parent)
+        elif how == "live":
+            print(f"[{sid}] already exact, no engine take: Tritone, 3 channels + drums; a built-in entry of the firmware reads this engine", flush=True)
+        else:
+            print(f"[{sid}] no engine take: no known engine in its run (looked for ntropic, Tritone, Stocker)", flush=True)
+    n = len(sds)
+    took = n if how == "take" else 0
+    print(f"summary: kind=engine game={game} scores={n} pending={n} takes={took} live={n if how == 'live' else 0} "
+          f"unknown={n if how not in ('take', 'live') else 0} failed=0 engines={'ntropic' if took else 'Tritone' if how == 'live' else '-'} seconds=0"
+          + (" source=ntropic, 2 channels + drums" if took else ""))
 elif cmd in ("generate", "chip", "ay"):
     game = a[a.index("--game") + 1]
     if cmd != "generate":
@@ -6064,6 +6177,22 @@ summary: kind=ay game=alpha scores=1 pending=1 takes=0 candidates=4 checked=0 re
 SAMPLE_AY_HAD = """\
 tools/arrange-music: 1 scores, 0 to search for ay takes (up to 3 each)
 summary: kind=ay game=alpha scores=1 pending=0 takes=0 candidates=0 checked=0 refused=0 best=- seconds=0
+"""
+
+
+SAMPLE_ENG = """\
+tools/arrange-music: 3 scores, 3 to read from their engines
+progress: engine alpha/9CE0-3901e61d
+[alpha/9CE0-3901e61d] engine-1: engine: ntropic, 2 channels + drums; 166 notes, 115 drum hits, read exactly
+progress: engine alpha/DF36-08f25b97
+@@
+[alpha/DF36-08f25b97] already exact, no engine take: Tritone, 3 channels + drums; a built-in entry of the firmware reads this engine and plays it live in 100% of the score's frames
+progress: engine alpha/8000-00000001
+[alpha/8000-00000001] no engine take: no known engine in its run (looked for ntropic, Tritone, Stocker)
+progress: score alpha/9CE0-3901e61d renders=1
+[alpha/9CE0-3901e61d] judged: engine-1 (high)
+tools/arrange-music: 1 engine takes, 1 already exact (a built-in entry plays them live); listen and choose with: tools/arrange-music pick W/all
+summary: kind=engine game=alpha scores=3 pending=3 takes=1 live=1 unknown=1 failed=0 engines=Tritone,ntropic seconds=4 source=ntropic, 2 channels + drums
 """
 
 
@@ -6512,6 +6641,26 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         check(rc == 0 and sorted(c[0] for c in new) == ["ay", "generate"] and load_methods(w) == {"alpha": {"ai", "ay"}}
               and ["generate", str(w / "all"), "--game", "alpha", "--model", "rules"] in new,
               f"--generate ay,ai --game alpha: marked, an AI and an AY job, nothing else ({[c[0] for c in new]})")
+        before = len(calls.read_text().splitlines())
+        mprev = load_methods(w)
+        os.environ["FAKE_ENGINE"] = "take"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main([str(games), "-o", str(w), "--generate", "eng", "--game", "alpha"])
+        os.environ.pop("FAKE_ENGINE")
+        new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
+        st.changed()
+        ec = [c for c in st.candidates(st.plan.game("alpha"), st.plan.game("alpha").scores[0]) if c.take == "engine-1"]
+        check(rc == 0 and [c[0] for c in new] == ["engine"] and new[0][4:] == ["--fmzx-pack", st.tools.fmzx_pack]
+              and "alpha" in load_methods(w) and "eng" in load_methods(w)["alpha"]
+              and "ENG takes for Alpha: engine: ntropic, 2 channels + drums" in buf.getvalue()
+              and len(ec) == 1 and ec[0].label == "ENG engine-1" and ec[0].choice == "engine-1"
+              and ec[0].info == "ntropic, read exactly: its rows at 9C9Ch",
+              f"--generate eng --game alpha: an ENG job (tools/arrange-music engine with the studio's fmzx-pack), its result, "
+              f"the engine take among the candidates ({[c[0] for c in new]}; {buf.getvalue()[-300:]!r})")
+        shutil.rmtree(w / "all" / "arrange" / "alpha" / st.plan.game("alpha").scores[0].key / "engine-1")
+        st.changed()
+        save_methods(w, mprev)
         for bad, why in ((["--generate", "fm"], "an unknown method"), (["--generate", "ai", "--game", "bravo"], "a game without scores"),
                          (["--generate", "ai", "--game", "nobody"], "an unknown game"), (["--game", "alpha"], "--game alone"),
                          (["--generate", "sid", "--offline"], "SID offline without a collection")):
@@ -6908,6 +7057,18 @@ Attributes = A_ prw-r--r--
         check(summary_text("sid", {**watched("sid", SAMPLE_SID).summary, "best": "0.08"}).endswith("; weak: probably another tune, listen, "
                                                                                                     "1 tune skipped (the converter refuses it)"),
               "jobs: a weak best closeness said")
+        wt = watched("eng", SAMPLE_ENG, 1)
+        check(wt.running_text() == "reading the engine: 1 of 3 scores" and wt.progress("ENG takes: Alpha").frac == 1 / 3,
+              f"jobs: an ENG job's scores read ({wt.running_text()})")
+        wt = watched("eng", SAMPLE_ENG)
+        check(summary_text("eng", wt.summary) == "engine: ntropic, 2 channels + drums; 1 already exact (played live); 1 with no known engine"
+              and wt.written == 1 and wt.progress("x").frac == 1.0, f"jobs: an ENG job's result ({summary_text('eng', wt.summary)})")
+        eng = lambda **kw: {"kind": "engine", "game": "alpha", "scores": "1", "pending": "1", "takes": "0", "live": "0", "unknown": "0",  # noqa: E731
+                            "failed": "0", "engines": "-", "seconds": "1", **kw}
+        check(summary_text("eng", eng(live="1", engines="Tritone")) == "already exact: a built-in entry of the firmware plays it live (no take needed)"
+              and summary_text("eng", eng(unknown="1")) == "no known engine (its music stays as learned)"
+              and summary_text("eng", eng(pending="0")) == "had its ENG takes already: nothing to do",
+              "jobs: an ENG job's result: already exact, no known engine, nothing to do")
         wj = JudgeWatch()
         for ln in SAMPLE_JUDGE.split("@@\n")[0].splitlines():
             wj.feed(ln)
@@ -7328,14 +7489,17 @@ Attributes = A_ prw-r--r--
         before = len(calls.read_text().splitlines())
         sj.auto(["alpha"])
         held = [j for j in rjd.jobs if j.kind == "judge"]
-        takes = [j for j in rjd.jobs if j.kind in ("sid", "ay")]
+        takes = [j for j in rjd.jobs if j.kind in ("eng", "sid", "ay")]
         check(len(held) == 1 and held[0].state == "waiting" and held[0] in rjd.pending and held[0].after == takes and not held[0].ready()
+              and [j.kind for j in takes] == ["eng", "sid", "ay"]
               and "then the judge" in sj.flash_msg and "final pass" not in sj.flash_msg and not any(j.kind == "settle" for j in rjd.jobs),
-              f"m: the SID and AY jobs queued, the judge after them; one game: no final pass ({sj.flash_msg})")
+              f"m: the ENG, SID and AY jobs queued (the engine first: no download, quick), the judge after them; one game: no final pass ({sj.flash_msg})")
         rjd.drain()
         new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
-        check([c[0] for c in new] == ["chip", "ay", "judge"] and new[-1] == ["judge", str(w / "all"), "--game", "alpha", "--apply"]
-              and sj.marked("alpha") >= {"sid", "ay"}, f"m: SID and AY marked and made, then judge --apply for the game ({[c[0] for c in new]})")
+        check([c[0] for c in new] == ["engine", "chip", "ay", "judge"] and new[-1] == ["judge", str(w / "all"), "--game", "alpha", "--apply"]
+              and new[0][:4] == ["engine", str(w / "all"), "--game", "alpha"] and new[0][4] == "--fmzx-pack"
+              and sj.marked("alpha") >= {"eng", "sid", "ay"},
+              f"m: ENG, SID and AY marked and made, then judge --apply for the game ({[c[0] for c in new]})")
         ch, jd = read_choice_tables(w / "all")
         check(ch == {sid: "chip-1"} and jd == {sid: "chip-1"} and sj.tune_state(g, sc)[0] == "judge" and sj.choice_summary(g) == "chip-1 (judge)"
               and sj.flash_msg.startswith("judge, Alpha: 1 score: 1 chosen by the judge (1 in this run)"), f"m: the judge's choice, marked as its own, read back ({sj.flash_msg})")
@@ -7397,7 +7561,7 @@ Attributes = A_ prw-r--r--
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             rc = main([str(games), "-o", str(w), "--auto", "--game", "alpha", "--sid-dir", str(t / "sids"), "--ay-dir", str(t / "ays")])
         new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
-        check(rc == 0 and [c[0] for c in new] == ["chip", "ay", "judge"] and read_choice_tables(w / "all") == ({sid: "chip-1"}, {sid: "chip-1"})
+        check(rc == 0 and [c[0] for c in new] == ["engine", "chip", "ay", "judge"] and read_choice_tables(w / "all") == ({sid: "chip-1"}, {sid: "chip-1"})
               and "judged; 1 scores settled (0 by you, 1 by the judge), 0 to hear" in buf.getvalue(),
               f"--auto --game alpha: the jobs, the judge's choice, the counts ({buf.getvalue()[-200:]!r})")
         before = len(calls.read_text().splitlines())
@@ -7455,7 +7619,7 @@ Attributes = A_ prw-r--r--
         with rm.lock:
             first = rm._start()
         rows, bot = rows_now()
-        check(first.kind == "sid" and first.gid == "kettle-run" and re.search("[■□]+ SID takes", rows["Kettle Run"])
+        check(first.kind == "eng" and first.gid == "kettle-run" and re.search("[■□]+ ENG takes", rows["Kettle Run"])
               and all("queued" in rows[nm] and not re.search("[■□]", rows[nm]) for nm in ("Lamp Quest", "Mole Dig"))
               and "queued" not in rows["Quiet Hut"] and not re.search("[■□]", rows["Quiet Hut"])
               and bot.startswith("finding and judging ") and re.search(r" 0 of 3 games  0:0\d$", bot)
@@ -7464,7 +7628,7 @@ Attributes = A_ prw-r--r--
               f"line what the whole does and its games done, no game named ({rows}; {bot!r})")
         rm._run(first)
         rm._finish(first)
-        for _ in range(2):  # Kettle Run's AY job and judge
+        for _ in range(3):  # Kettle Run's SID and AY jobs and judge
             with rm.lock:
                 j = rm._start()
             rm._run(j)
@@ -7480,10 +7644,11 @@ Attributes = A_ prw-r--r--
         allw = str(wm / "all")
         want = []
         for gid, _ in mnames:
-            want += [["chip", allw, "--game", gid], ["ay", allw, "--game", gid], ["judge", allw, "--game", gid, "--apply", "--provisional"]]
+            want += [["engine", allw, "--game", gid], ["chip", allw, "--game", gid], ["ay", allw, "--game", gid],
+                     ["judge", allw, "--game", gid, "--apply", "--provisional"]]
         want.append(["judge", allw] + [x for gid, _ in mnames for x in ("--game", gid)] + ["--apply"])
         check([c[:4] if c[0] != "judge" else c for c in new] == want,
-              f"m on three games: game by game its SID and AY takes, then its judge (provisional), then the judge's final pass "
+              f"m on three games: game by game its ENG, SID and AY takes, then its judge (provisional), then the judge's final pass "
               f"over the three ({[c[0] + ' ' + (c[3] if len(c) > 3 else 'all') for c in new]})")
         key = sm.activity_key(rm.jobs[0])
         check([sm.results.get((key, gid), ("", ""))[0] for gid, _ in mnames] == ["1 C64, 1 128; chosen by the judge"] * 3
@@ -7777,6 +7942,48 @@ Attributes = A_ prw-r--r--
               f"--auto on a terminal: the game in hand redrawn in place ({len(kettle_live)} frames), printed once when done; "
               f"the bottom line names no game, its games done go 0 to 3 ({sorted(set(ks))}; {bars[:1]})")
 
+        # -- e: ENG marked and unmarked for the game on the games screen
+        st.changed()
+        before_m = set(load_methods(w).get("alpha", set())) - {"eng"}
+        save_methods(w, {"alpha": before_m})
+        st.methods = load_methods(w)
+        ue = UI(Scr(24, 120), st, KeyCurses())
+        ue.utf8, ue.screen, ue.gi = True, "games", next(i for i, g in enumerate(st.plan.games) if g.id == "alpha")
+        ue.key(ord("e"))
+        marked = set(load_methods(w).get("alpha", set()))
+        ue.draw()
+        arow = next((ln for ln in ue.scr.lines() if "Alpha" in ln and "FM" in ln), "")
+        head = ue.scr.lines()[1]
+        ue.key(ord("e"))
+        check(marked == before_m | {"eng"} and " ENG " in arow and "ENG own music, read exactly" in head
+              and set(load_methods(w).get("alpha", set())) == before_m,
+              f"methods: e marks and unmarks ENG for the game, its row and the methods' line say so ({arow!r}; {head!r})")
+
+        # -- --auto with an engine take: read first, chosen by the judge; one played exactly live gets none
+        we = t / "w-eng-auto"
+        multi_ws(we)
+        outs = {}
+        for gid, how in (("kettle-run", "take"), ("lamp-quest", "live")):
+            os.environ["FAKE_ENGINE"] = how
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                rc = main([str(games), "-o", str(we), "--auto", "--game", gid, "--sid-dir", str(t / "sids"), "--ay-dir", str(t / "ays")])
+            outs[gid] = (rc, buf.getvalue())
+        os.environ.pop("FAKE_ENGINE")
+        ch, jd = read_choice_tables(we / "all")
+        logt = (we / "studio.log").read_text()
+        se = Studio(games.resolve(), we, parse_args([str(games), "-o", str(we)]), Runner(t / "eng.log", threaded=False))
+        words = {gid: se.tune_words(se.plan.game(gid)) for gid in ("kettle-run", "lamp-quest")}
+        order = [json.loads(ln)[0] for ln in calls.read_text().splitlines() if str(we) in ln]
+        check(outs["kettle-run"][0] == 0 and words["kettle-run"] == "engine: ntropic, 2 channels + drums; 1 C64, 1 128; chosen by the judge"
+              and ch.get("kettle-run/1000-00000000") == "engine-1" == jd.get("kettle-run/1000-00000000")
+              and "ENG takes for Kettle Run: engine: ntropic, 2 channels + drums" in logt and order[:4] == ["engine", "chip", "ay", "judge"],
+              f"--auto: the engine take made before the C64 and 128 searches, chosen by the judge, said in the game's result ({words}; {order})")
+        check(outs["lamp-quest"][0] == 0 and words["lamp-quest"] == "1 C64, 1 128; chosen by the judge"
+              and "already exact, no engine take" in logt and "ENG takes for Lamp Quest: already exact: a built-in entry" in logt
+              and not (we / "all" / "arrange" / "lamp-quest" / "1000-00000001" / "engine-1").exists(),
+              f"--auto: a game a built-in entry already plays exactly gets no engine take, and the log says so ({words})")
+
     if failures:
         print(f"{PROG} selftest: {len(failures)} failed: " + "; ".join(failures))
         return 1
@@ -7794,7 +8001,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--offline", action="store_true", help="download nothing")
     ap.add_argument("--cache", metavar="DIR", help="tools/make-packages --cache DIR: another folder for the SDK files")
     ap.add_argument("--model", metavar="NAME", help="the generator for AI takes (tools/arrange-music generate --model)")
-    ap.add_argument("--generate", metavar="METHODS", help="without the screen: mark and generate ai, sid, ay (comma-separated)")
+    ap.add_argument("--generate", metavar="METHODS", help="without the screen: mark and generate ai, eng, sid, ay (comma-separated)")
     ap.add_argument("--auto", action="store_true",
                     help="without the screen: find the C64 and Spectrum 128 versions, judge, choose where the judge is sure")
     ap.add_argument("--game", metavar="ID", action="append", help="with --generate or --auto: only this game (again for more)")
