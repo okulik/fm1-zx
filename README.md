@@ -118,6 +118,58 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
     tools/make-packages                                           # build/fm1/fmzx.fwsc, fmzx-preview.fwsc
     tools/web-demo                                                # the release package in fm1-emu's web page
 
+## The tools, by example
+
+Each tool prints its usage when run without arguments or with `--help`; BUILDING.md has the detail.
+
+Your own games (`W` is the workspace, `build/studio/<folder name>/`):
+
+    tools/pack-studio ~/games                                     # the studio screen: sizes, packs, listen, choose
+    tools/pack-studio ~/games --status                            # the games, their music and choices, as text
+    tools/pack-studio ~/games --auto                              # find C64 and Spectrum 128 music, judge, choose where sure
+    tools/pack-studio ~/games --auto --game some-game             # the same for one game (--status lists the ids)
+    tools/pack-studio ~/games --generate ai --game some-game      # a music model's takes for one game
+    tools/pack-studio ~/games --assign some-game=2 --auto-fill    # put a game in pack 2, fill the packs with the rest
+    tools/pack-studio ~/games --build                             # W/pack-<n>/fmzx.fwsc and fmzx-preview.fwsc
+    tools/pack-studio ~/games --build --try                       # then pack 1 in the local browser page
+    tail -f build/studio/games/studio.log                         # everything the studio and its tools did
+
+Music takes without the screen (`DIR` is `W/all`):
+
+    tools/arrange-music judge build/studio/games/all              # every tune's candidates, ranked, with the reasons
+    tools/arrange-music judge build/studio/games/all --apply      # choose where the judge is sure
+    tools/arrange-music pick build/studio/games/all               # a local page to listen and choose
+    tools/arrange-music pick build/studio/games/all --list        # the choices as text
+    tools/arrange-music chip build/studio/games/all --sid-dir ~/C64Music    # C64 takes from a collection you have
+    tools/arrange-music ay build/studio/games/all --ay-dir ~/AY/music/ay    # Spectrum 128 takes
+    tools/arrange-music generate build/studio/games/all --game some-game --takes 3
+
+What the FM-1 plays, as a WAV (`cd host && cargo build --release -p music --bin music-preview` first):
+
+    host/target/release/music-preview build/studio/games/all --game some-game -o game.wav
+    host/target/release/music-preview build/studio/games/all --game some-game --beeper -o beeper.wav
+    host/target/release/music-preview build/studio/games/all --game some-game --score KEY --take chip-1 -o take.wav
+    tools/drops ~/games/some-game.tap --seconds 60                # where FM playback falls back to the beeper
+
+Packs and packages by hand (`cd host && cargo build --release -p fmzx-pack` first):
+
+    host/target/release/fmzx-pack games games/games.toml -o pack.bin        # the built-in pack
+    host/target/release/fmzx-pack verify build/fm1/fmzx.fwsc                # check a package
+    host/target/release/fmzx-pack chip-notes --info ~/C64Music/some.sid     # a SID or AY file's tunes
+    host/target/release/fmzx-pack chip-notes some.ay --subtune 2 -o notes.toml
+
+The browser page:
+
+    tools/web-demo                                                # build and serve on http://127.0.0.1:8642
+    tools/web-demo --check                                        # build, then the headless smoke test
+    tools/web-demo --packages build/studio/games/pack-1           # a personal pack in the local page
+    tools/publish-page --no-push                                  # the public page, built and committed to gh-pages
+
+The tools' own tests:
+
+    tools/pack-studio selftest
+    tools/arrange-music selftest
+
 ## Documents
 
 - [Building](BUILDING.md): toolchain, host and firmware builds, the test suite, the browser demo,
