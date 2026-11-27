@@ -129,7 +129,7 @@ export function pressFor(token, held, table) {
 // Without the running game: the fixed table (the joystick arrows, Space as fire, Enter PLAY, Esc
 // HOME and a few notes below C4), by event.key; everything else is left to fm1-emu's piano map.
 // The demo video's id on YouTube ("" for none: the page then has no video card).
-export const VIDEO = "BG5fZenP_KE";
+export const VIDEO = "Is4KYSKhlqY";
 
 // Where a video id plays: embedded (the host's no-cookie player, started by the click) and on
 // its own page; null for no id or one that is not an id.
