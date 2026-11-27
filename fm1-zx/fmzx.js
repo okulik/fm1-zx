@@ -128,6 +128,16 @@ export function pressFor(token, held, table) {
 
 // Without the running game: the fixed table (the joystick arrows, Space as fire, Enter PLAY, Esc
 // HOME and a few notes below C4), by event.key; everything else is left to fm1-emu's piano map.
+// The demo video's id on YouTube ("" for none: the page then has no video card).
+export const VIDEO = "BG5fZenP_KE";
+
+// Where a video id plays: embedded (the host's no-cookie player, started by the click) and on
+// its own page; null for no id or one that is not an id.
+export function videoLinks(id) {
+  if (!/^[A-Za-z0-9_-]{11}$/.test(id || "")) return null;
+  return { embed: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0`, watch: `https://youtu.be/${id}` };
+}
+
 export const LEGACY = {
   ArrowLeft: [{ key: 22 }, { enc: 0, step: -1 }],   // C#4 (the default map's Kempston left)
   ArrowRight: [{ key: 24 }, { enc: 0, step: 1 }],   // D#4 right
@@ -482,6 +492,37 @@ export function install(win, doc) {
   for (const [k, v] of FIXED) { el("dt", k, dl); el("dd", v, dl); }
   const msg = el("p");
   deck.insertBefore(wrap, deck.querySelector(".hint"));
+
+  // the demo video, under the two cards: a picture of ours until it is clicked, so nothing is
+  // asked of the video's host before that
+  const video = videoLinks(VIDEO);
+  if (video) {
+    const card = doc.createElement("section");
+    card.className = "box fmzx-video";
+    card.setAttribute("aria-label", "Demo video");
+    el("h3", "Demo video", card);
+    const frame = el("div", undefined, card);
+    frame.className = "fmzx-video-frame";
+    const play = el("button", undefined, frame);
+    play.type = "button";
+    play.setAttribute("aria-label", "Play the demo video");
+    const img = el("img", undefined, play);
+    img.src = "demo-video.jpg";
+    img.alt = "";
+    play.addEventListener("click", () => {
+      const player = doc.createElement("iframe");
+      player.src = video.embed;
+      player.title = "FM-1 ZX demo video";
+      player.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+      player.allowFullscreen = true;
+      frame.replaceChildren(player);
+    });
+    const link = el("a", "Watch on YouTube", el("p", undefined, card));
+    link.href = video.watch;
+    link.target = "_blank";
+    link.rel = "noopener";
+    wrap.after(card);
+  }
 
   fetch("keymaps.json")
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
