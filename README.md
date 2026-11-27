@@ -12,6 +12,9 @@ You play games with the synth's keys and knobs. The emulator also goes a step be
 machine: it spots the instructions that drive the Spectrum's beeper and replaces those sounds, in
 real time, with FM-synthesised instruments. It boots on the real hardware.
 
+<p align="center"><a href="https://youtu.be/BG5fZenP_KE"><img src="docs/images/demo-video.jpg" width="560" alt="Demo video: a game's title tune on the beeper and through FM, the menu, and the studio for your own games"></a><br>
+<a href="https://youtu.be/BG5fZenP_KE">Watch the demo video</a></p>
+
 **Try it in your browser: <https://dev-gh.nisdom.com/fm1-zx/>**, with a set of freely licensed
 Spectrum games whose title tunes play as FM instruments (the computer keyboard plays the FM-1's
 keys; the page lists them). Or build a

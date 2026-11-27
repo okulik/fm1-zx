@@ -147,7 +147,8 @@ when that ELF is missing or newer than the package, and the page then keeps the 
 page (`web/patch-page.sh`): the fresh package is never read from or saved to the browser's IndexedDB,
 the clock is pinned at 240 MHz, input hooks let our keyboard layer (`web/fmzx.js`: Spectrum keys by
 the running game's key map, docs/controls.md, "Computer keyboard"; under the synth, the computer
-keys and a game's key map from `keymaps.json`, which follows the running game) claim keys, the boot message passes
+keys and a game's key map from `keymaps.json`, which follows the running game, and the demo video
+(`VIDEO` in `web/fmzx.js`: our picture, `docs/images/demo-video.jpg`, until a click loads the player)) claim keys, the boot message passes
 the `fmzx_stats` address to the worklet, each frame goes to our layer, our labels (each key's
 Spectrum key, placed by the drawing's own hit test) are drawn over the synth after each frame, the
 draw loop takes the panel pointer before the memory buffer, and the SMK-37 catalog is not fetched;

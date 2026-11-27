@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   VIEW, HOME, PLAY, LEGACY, inputId, target, tokenOf, buildTable, resolve, createKeys, panelRows, labels,
-  scanPanel, shortName,
+  scanPanel, shortName, VIDEO, videoLinks,
 } from "./fmzx.js";
 
 const spy = () => {
@@ -292,4 +292,15 @@ test("the panel scan boxes each control", () => {
   const b = scanPanel(hit, 40, 8, 2);
   assert.deepEqual(b.get(114), { x0: 1, y0: 1, x1: 9, y1: 3 });
   assert.deepEqual(b.get(0), { x0: 21, y0: 1, x1: 29, y1: 7 });
+});
+
+test("the demo video: an id gives the player and the page, anything else no card", () => {
+  assert.deepEqual(videoLinks("abcDEF_1-23"), {
+    embed: "https://www.youtube-nocookie.com/embed/abcDEF_1-23?autoplay=1&rel=0",
+    watch: "https://youtu.be/abcDEF_1-23",
+  });
+  for (const bad of ["", undefined, "short", "https://youtu.be/abcDEF_1-23", "abcDEF_1-2\"", "abcDEF_1-23x"]) {
+    assert.equal(videoLinks(bad), null);
+  }
+  assert.ok(VIDEO === "" || videoLinks(VIDEO));
 });

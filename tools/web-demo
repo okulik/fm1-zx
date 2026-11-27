@@ -148,6 +148,7 @@ else
         echo "tools/web-demo: no fmzx_stats in $elf: the page will not see the running game" >&2
 fi
 cp "$root/web/fmzx.js" "$root/web/fmzx.css" "$out/"
+cp "$root/docs/images/demo-video.jpg" "$out/"
 "$root/web/patch-page.sh" "$out"
 mkdir -p "$out/licenses"
 cp "$root/LICENSE" "$out/licenses/GPL-3.0-or-later.txt"
