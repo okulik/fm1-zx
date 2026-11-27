@@ -4698,7 +4698,7 @@ class UI:
         hear = sum(1 for g in p.games if st.tune_counts(g)["hear"]) if p else 0
         if hear:
             x = self.put(0, x, f"  {plural(hear, 'game')} to hear (n: the next)", self.attr["warn"])
-        self.put(0, x, f"  ->  {st.w}", self.attr["bold"])
+        self.put(0, x, f"  ->  {shown_path(st.w)}", self.attr["bold"])
         live = st.live
         if live and live.phase == "failed":
             self.put(1, 0, "the learning failed (l: the log)", self.attr["err"])

@@ -122,6 +122,13 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
 
 Each tool prints its usage when run without arguments or with `--help`; BUILDING.md has the detail.
 
+The studio opens on a start screen, a game's loading screen in ZX pixels, then lists the games
+with their sizes, packs and music (here the built-in pack's freely licensed games):
+
+![The studio's start screen: FM-1 ZX in tall letters over a sun, mountains and a piano keyboard, inside a striped border](docs/images/studio-start.png)
+
+![The studio's games screen: five games with their sizes, pack and music, the keys along the bottom](docs/images/studio-games.png)
+
 Your own games (`W` is the workspace, `build/studio/<folder name>/`):
 
     tools/pack-studio ~/games                                     # the studio screen: sizes, packs, listen, choose
