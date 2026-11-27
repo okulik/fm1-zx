@@ -155,6 +155,7 @@ own custom domain, `dev-gh.nisdom.com`, whose DNS name points at `okulik.github.
     tools/pack-studio ~/games --build --try      # then the browser test bench with pack 1 (--try 2: pack 2)
     tools/pack-studio ~/games --status           # the games, their music and choices, as text
     tools/pack-studio ~/games --generate ai,sid,ay [--game ID]...   # takes for the scores, without the screen
+    tools/pack-studio ~/games --auto [--game ID]...                  # C64 and Spectrum 128 versions found, judged, chosen where sure
     tools/pack-studio ~/games --assign ID=2 --auto-fill --build      # games put in packs, then the packs
     tools/pack-studio build/studio/games/all/personal-games.toml --build   # from the games file, as written
 

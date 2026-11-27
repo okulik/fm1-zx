@@ -85,10 +85,16 @@ What works:
   fm1-emu's web page ([install and recovery](docs/install.md)); the page (`tools/web-demo`) adds a
   guide, labels on the FM-1 drawing and computer keys that follow the running game's key map
   ([computer keyboard](docs/controls.md#computer-keyboard-browser-page));
-- your own 48K games: `tools/pack-studio` builds the packages from a folder of them,
-  turbo and custom-loader tapes included (loaded through the tape signal on the host), and learns
-  each game's music ([your own games](BUILDING.md#your-own-games)); an optional tool has a music
-  model write a bass, chords and drums around a recorded tune, as takes you choose by ear
+- your own 48K games: `tools/pack-studio`, a terminal screen, builds the packages from a folder
+  of them, turbo and custom-loader tapes included (loaded through the tape signal on the host):
+  it learns each game's music, shows each game's size and which pack it goes in, and plays every
+  candidate for a tune before you choose one ([your own games](BUILDING.md#your-own-games));
+- music from a game's other versions: the studio finds the game's Commodore 64 and Spectrum 128
+  music in the public collections, converts it to the FM-1's voices, and a judge ranks the
+  candidates by how close they are to the game's own tune and how well they are written
+  (polyphony, harmony, rhythm section), chooses where it is sure and marks the tunes left for
+  your ear ([music from other versions](BUILDING.md#music-from-other-versions)); an optional tool
+  has a music model write a bass, chords and drums around a recorded tune
   ([arranged music](BUILDING.md#arranged-music));
 - the UBOOT gesture: OCT- held at power-on calls the boot loader's update-mode entry
   (`fmzx_enter_uboot`); behind M-VAVE's stock bootloader the computer then sees the boot loader on
@@ -118,7 +124,8 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
   your own games and their music, measured budgets
 - [Controls](docs/controls.md): the FM-1's controls in the picker, the menu and the games; key maps
 - [Game pack format](docs/pack-format.md)
-- [Music generation](docs/music-generation.md): experiments with the arranged music's generators
+- [Music generation](docs/music-generation.md): the arranged music's generators, the music from
+  other versions and the judge, for experiments
 - [Install and recovery](docs/install.md): the packages, trying them in the browser, installing,
   the update mode, back to the stock firmware
 - [First device test](docs/hardware-test.md)
