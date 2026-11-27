@@ -103,8 +103,17 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
 
   The games screen: a row per game, its name, how it went in, its packed size (with its chosen
   music, as of the last learning), its pack (P1 to P9, a colour per pack, or a dash), its music
-  methods ("FM AI SID AY": FM always, the others coloured when marked, dots when not), and per score the choice (original, take-2, chip-1, ay-1), else
-  "nothing to arrange: FM from code" or "beeper". Games left out are dimmed, with why. Above the
+  methods ("FM AI SID AY": FM always, the others coloured when marked, dots when not), its
+  scores at a glance (below), and per score the choice (original, take-2, chip-1, ay-1;
+  "chip-1 (judge)" for one the judge made, "listen" where the judge is not sure and nothing is
+  chosen), else "nothing to arrange: FM from code" or "beeper". Games left out are dimmed, with
+  why. The glance: "?2" (yellow) two scores to hear (the judge weighed their takes and is not
+  sure, and nothing is chosen); "m" (dim) takes the judge has not chosen from yet (takes it
+  has not weighed or that changed since, or a judge sure of its pick that has not chosen: m
+  does); "✓" (green, "+"
+  without UTF-8) every score with takes chosen, by you or by the judge; nothing for a game
+  with no takes. The header says how many games have scores to hear ("3 games to hear (n: the
+  next)"). Above the
   rows, the packs: per pack with games "P1  312.4/416.7 KB <bar> 4 games" (its games' bytes
   against what a pack holds: the room less 2% less the pack's overhead, the plan's bytes beyond
   its games, as the split counts), red with how much over when over; then the games in no pack
@@ -123,6 +132,14 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
                      s SID, its C64 version's tune from the SID collection;
                      y AY, its Spectrum 128 version's tune from the AY collection
       A / S / Y      the same for every game with scores
+      m              find and judge: marks SID and AY for the game, queues their jobs as g does
+                     (the collections downloaded first when there are none; no AI model, no
+                     GPU), then a judge job, tools/arrange-music judge W/all --game ID --apply,
+                     held until those are done: it weighs every take of the game's scores and
+                     chooses where it is sure and you have not chosen; then the screen reads it
+                     all again. Progress on the bottom line and in J, as for every job
+      M              the same for every game with scores (one judge job for them all)
+      n              the cursor to the next game with scores to hear (round to the top)
       g              generate the marked methods: an AI job per game with A, a SID job per game
                      with S, an AY job per game with Y (the SID or AY collection is downloaded
                      first when there is none); it says how many it queued ("queued 5 jobs (2 AI,
@@ -134,33 +151,45 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
                      with each game's chosen music, in W/pack-<n>/
       l              the log (W/studio.log); ? this text; q quit (asks when jobs are running)
   Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
-  titles bold, the chosen candidate green, marked methods AI magenta, SID cyan, AY yellow (dim
-  when not), errors and refusals red, the bar yellow while a step runs, green when the last one
-  is done, red when one failed; while learning, ▸ yellow, ✓ green, ✓ from the cache dim green;
-  on the jobs view, running yellow, done green, failed red, waiting dim; on the game screen a
-  take's match to the original green from 50%, yellow from 20%, dim under 20%.
+  titles bold, the chosen candidate green (blue when the judge chose it), marked methods AI
+  magenta, SID cyan, AY yellow (dim when not), errors, refusals and a take's faults red, scores
+  to hear yellow, the bar yellow while a step runs, green when the last one is done, red when
+  one failed; while learning, ▸ yellow, ✓ green, ✓ from the cache dim green; on the jobs view,
+  running yellow, done green, failed red, waiting dim; on the game screen a take's closeness to
+  the original green from 50% (the same tune), yellow from 20% (part of it), dim under 20%
+  (another tune), the judge's pick (#1) blue.
 
   The game screen: the game's scores (key, seconds, shadow or not, what the last plan says
-  plays), and per score its candidates:
+  plays; on the line under it, for a score with takes, its state, "chosen by you", "chosen by
+  the judge", "to hear", "the judge is sure: m chooses" or "not judged", and the judge's
+  verdict, "judge: chip-1 (low: close call; winner not shown to be the same tune)", with
+  "(takes changed since: m judges again)" when its judge.toml no longer fits the takes), and
+  per score its candidates. Each take the judge
+  weighed (W/all/arrange/<game>/<key>/judge.toml, written by tools/arrange-music) shows, before
+  its own line, its place in the judge's order ("#1", the judge's pick, in blue), its
+  closeness to the original ("close 97%": the same tune from 50%), its quality ("qual 62%";
+  on a screen 140 columns wide or more its polyphony, harmony and rhythm too) and its faults
+  in words, in red ("refused by the renderer: ...", "plays only a fragment: 1.5 s of the 14.5
+  s that play", "a silent gap of 3.2 s"):
       beeper                  the game's own sound (to compare; not a choice)
-      FM (from code/memory)   take 0
+      FM (from code/memory)   take 0, the original (no closeness: it is the tune)
       AI take-<n>             with its key, consonance and notes a second (arranged.toml [metrics])
-      SID chip-<n>            its melody match to the original as a whole percentage, first
-                              ("73% match", "<1%" under half a percent; unrelated tunes score
-                              about 0-10%, the same tune arranged again 20-90%), then its source
+      SID chip-<n>            its source
       C64 original (chip-<n>) the C64's own sound, when tools/arrange-music wrote chip.wav
-      AY ay-<n>               the same: its match to the original, then its source
+      AY ay-<n>               its source
       Spectrum 128 original (ay-<n>)  the Spectrum 128's own sound, when tools/arrange-music
                               wrote ay.wav
+  The choice is marked * (green) when you made it, j (blue) when the judge did.
   A game with no scores lists the whole game's beeper and FM, to listen to.
       Up/Down, j/k   move
       Enter, space   play the candidate, or stop it when it is the one playing (playing
                      another stops the one playing)
       Esc            stop (with nothing playing: back)
       c              choose the candidate for its score: written to W/all/arrange/choices.toml
-                     at once (as tools/arrange-music pick --set does); the chosen one is marked *
-                     and the others not
+                     at once (as tools/arrange-music pick --set does), as your choice (the
+                     judge never changes it); the chosen one is marked * and the others not
       a / s / y / g  mark AI / SID / AY for this game, generate them (Y: AY for every game)
+      m              find and judge, for this game (as on the games screen)
       Left, h, Backspace   back; l the log; J the jobs
   What plays: music-preview's render of exactly what the FM-1 plays (W/previews/<game>__<key>__
   <take>.wav, made in the background, "rendering..." until it is ready, then played; kept until
@@ -179,14 +208,17 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   the bottom line, then, for an AI job, "take 2 of 4,
   pass 'bass', 38% (about 24 min left)" (from tools/arrange-music generate's progress lines: the
   passes drums, bass, chords; the time left from the takes done, else its estimate), a SID or AY
-  job "checking candidates: 3 of 12", a download its MB, the learning its header; when it is
-  done, its result from tools/arrange-music's summary line (its docstring, "The summary line"):
-  "3 takes, best 73% match to the original (C64: <title> by <author> (<released>))" (with
-  "weak: maybe another tune, listen" under 15%), "no C64 tune found by that name", "0 takes, 4 songs skipped
-  (48K beeper or CPC tunes)", "4 takes written, 3 min 12 s", "had its SID takes already:
-  nothing to do"; a failed job its exit code and last output line. A finished takes job also
-  says its result on the key line ("SID takes for <game>: 3 (best 73% match to the original);
-  Enter on the game to listen"). The jobs are the session's (their output is in W/studio.log too).
+  job "checking candidates: 3 of 12", a judge job "judging: 3 of 12 scores", a download its
+  MB, the learning its header; when it is done, its result from tools/arrange-music's summary
+  line (its docstring, "The summary line"): "3 takes, best closeness 73% (C64: <title> by
+  <author> (<released>))" (with "weak: probably another tune, listen" under 20%), "no C64 tune
+  found by that name", "0 takes, 4 songs skipped (48K beeper or CPC tunes)", "4 takes written,
+  3 min 12 s", "had its SID takes already: nothing to do", for the judge "12 scores: 3 chosen
+  by the judge (2 in this run), 4 by you, 5 to hear, 1 faulty take" (and "the renderer check skipped
+  (no music-preview)" when it was); a failed job its exit code and last output line. A
+  finished takes or judge job also says its result on the key line ("SID takes for <game>: 3
+  (best closeness 73%); Enter on the game to listen", "judge, <game>: ...; n goes to the next
+  game to hear"). The jobs are the session's (their output is in W/studio.log too).
       Up/Down, j/k   move (PgUp/PgDn, Home/End)
       Enter          the job's own output, scrollable (l: the whole log)
       o              open the job's game, to listen to its takes
@@ -243,8 +275,8 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
   deleted, and nothing in it is ever run. The same holds for these tunes: keep them and the
   packs made with them to yourself.
 
-  Without the screen: any of --assign, --auto-fill, --generate, --build, --status and --try
-  (several run in that order; a step that fails stops the command, exit 1). They take the
+  Without the screen: any of --assign, --auto-fill, --generate, --auto, --build, --status and
+  --try (several run in that order; a step that fails stops the command, exit 1). They take the
   options above, and print the learning's progress lines as they come.
   tools/pack-studio <games> --assign GAME=N [--assign GAME=N]... [--auto-fill]
       Puts each game given (its id) in pack N (1 to 9; 0: in none), refused when that takes the
@@ -255,14 +287,22 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       scores, or for each game given with --game (its id, as --status shows it), and runs the
       jobs g runs for them, one at a time (the SID or AY collection downloaded first when there
       is none); learns first when W/all/plan.json is missing. Choosing a take stays a choice by
-      ear: the screen, or tools/arrange-music pick W/all.
+      ear: the screen, or tools/arrange-music pick W/all (or the judge: --auto).
+  tools/pack-studio <games> --auto [--game ID]...
+      What m does, for each game given with --game, or M for every game with scores: the SID and
+      AY jobs (the collections downloaded first when there are none), then tools/arrange-music
+      judge W/all [--game ID]... --apply, which chooses where the judge is sure and you have not
+      chosen; learns first when W/all/plan.json is missing. Prints the jobs' output and then the
+      scores settled (by you, by the judge) and those to hear. Exit 1 when the judge fails.
   tools/pack-studio <games> --build
       The start steps and the build, without the screen; prints the summary. Exit 1 when a step
       fails or a game fits in no pack.
   tools/pack-studio <games> --status
-      Prints the games, their methods, packs, scores, candidates and choices, the packs' fill,
-      the packs a build would make and the packs built; runs the start steps and the learning first when W/all/plan.json
-      is missing.
+      Prints the scores with takes settled (by you, by the judge), to hear and for the judge;
+      the games, their methods, packs, scores (each with its state and the judge's verdict),
+      candidates (each with the judge's figures; the choice marked * when yours, j when the
+      judge's) and choices, the packs' fill, the packs a build would make and the packs built;
+      runs the start steps and the learning first when W/all/plan.json is missing.
   tools/pack-studio <games> --try [N]
       The browser test bench on pack N's packages (tools/web-demo --packages W/pack-<N>; N is 1
       unless given), after the build when --build is given too, else on the packs built before.
@@ -271,8 +311,11 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       file, the estimate), the progress bar (fractions to squares, ASCII, widths 20 to
       200, the spinner when not known; each kind of job's fraction from sample output; the line on a
       narrow screen; the screen drawn in memory at 80, 120, 40 and 16 columns: the bar at the
-      bottom, a message above it, no progress text in the header or the rows), the match as a
-      percentage and its colour, the reuse of earlier learning (only missing files copied, never over
+      bottom, a message above it, no progress text in the header or the rows), the closeness as a
+      percentage and its colour, the judge (m and --auto: the SID and AY jobs, then the judge
+      job held until they are done; its choices marked as the judge's, c making one yours; the
+      glance, the scores to hear and n; the judge's figures on the candidates, the game screen
+      and --status), the reuse of earlier learning (only missing files copied, never over
       one, the workspace and links not read), the colours (NO_COLOR), the packs filled (kept in
       studio.toml, refused over the room, f, --assign and --auto-fill, the build of exactly
       those, one over its room refused), the split, the games-file subsets ([game.keys] tables kept), the pack folders and
@@ -513,22 +556,36 @@ def parse_choice(v) -> int | str | None:
     return None
 
 
+def read_choice_tables(all_dir: Path) -> tuple[dict[str, int | str], dict[str, int | str]]:
+    """all/arrange/choices.toml's [choices] (every choice) and [judged] (those tools/arrange-music
+    judge --apply made: a choice is the judge's while [judged] holds the same value for it)."""
+    doc = read_toml(all_dir / "arrange" / "choices.toml")
+    out = []
+    for table in ("choices", "judged"):
+        t = {}
+        for k, v in (doc.get(table) or {}).items():
+            c = parse_choice(v)
+            if c is not None:
+                t[str(k)] = c
+        out.append(t)
+    return out[0], out[1]
+
+
 def read_choices(all_dir: Path) -> dict[str, int | str]:
-    out = {}
-    for k, v in read_toml(all_dir / "arrange" / "choices.toml").get("choices", {}).items():
-        c = parse_choice(v)
-        if c is not None:
-            out[str(k)] = c
-    return out
+    return read_choice_tables(all_dir)[0]
 
 
 def write_choice(all_dir: Path, sid: str, choice: int | str) -> None:
-    """Sets "<game>/<key>" to choice in all/arrange/choices.toml, as tools/arrange-music pick --set
-    does (the other choices kept, sorted by key; 0 the original), atomically."""
+    """Sets "<game>/<key>" to choice in all/arrange/choices.toml as the owner's, as tools/arrange-music
+    pick --set does (the other choices kept, sorted by key; 0 the original; the judge's mark on
+    this one gone, its others kept), atomically."""
     path = all_dir / "arrange" / "choices.toml"
-    ch = {str(k): v for k, v in read_toml(path).get("choices", {}).items() if parse_choice(v) is not None}
+    ch, judged = read_choice_tables(all_dir)
     ch[sid] = choice
+    judged = {k: v for k, v in judged.items() if k != sid and ch.get(k) == v}
     lines = ["[choices]"] + [f"{json.dumps(k)} = {json.dumps(v)}" for k, v in sorted(ch.items())]
+    if judged:
+        lines += ["", "[judged]"] + [f"{json.dumps(k)} = {json.dumps(v)}" for k, v in sorted(judged.items())]
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
     tmp.write_text("\n".join(lines) + "\n")
@@ -550,6 +607,60 @@ def numbered(d: Path, prefix: str) -> list[tuple[int, Path]]:
     return sorted(out)
 
 
+JUDGE_FILE = "judge.toml"  # tools/arrange-music judge's figures, beside each score.toml
+
+
+def score_digest(path: Path) -> str:
+    """score.toml's digest as tools/arrange-music takes it: SHA-256 of its lines but the comment
+    lines, 16 hex digits."""
+    import hashlib
+
+    try:
+        lines = path.read_bytes().splitlines(keepends=True)
+    except OSError:
+        return ""
+    return hashlib.sha256(b"".join(ln for ln in lines if not ln.startswith(b"#"))).hexdigest()[:16]
+
+
+def take_names(d: Path) -> list[tuple[str, Path]]:
+    """A score's takes as the judge names them: take-<n>, chip-<n>, ay-<n>."""
+    return [(f"{pre}{n}", p) for pre in ("take-", "chip-", "ay-") for n, p in numbered(d, pre)]
+
+
+def read_judge(d: Path) -> dict:
+    """A score's judge.toml (d: its folder), with "fresh": whether it still fits the score and
+    its takes (the same score.toml, the same takes, each with the same arranged.toml); {} when
+    there is none."""
+    import hashlib
+
+    doc = read_toml(d / JUDGE_FILE)
+    if not doc or not isinstance(doc.get("take"), list):
+        return {}
+    rows = {str(t.get("name")): t for t in doc["take"]}
+    takes = take_names(d)
+    fresh = doc.get("score") == score_digest(d / "score.toml") and set(rows) == {"0"} | {n for n, _ in takes}
+    for n, p in takes:
+        if not fresh:
+            break
+        try:
+            fresh = hashlib.sha256((p / "arranged.toml").read_bytes()).hexdigest()[:16] == rows[n].get("digest")
+        except OSError:
+            fresh = False
+    doc["fresh"] = fresh
+    doc["rows"] = rows
+    return doc
+
+
+def judge_text(j: dict, original: bool = False) -> str:
+    """A take's judge figures in words: "close 97%, quality 62%, #1 the judge's pick; plays only
+    a fragment: ..." (the original: no closeness)."""
+    text = ("" if original else f"close {pct(j.get('closeness'))}, ") + f"quality {pct(j.get('quality'))}, #{j.get('rank', '?')}"
+    if j.get("rank") == 1:
+        text += " the judge's pick"
+    faults = j.get("faults") or []
+    return text + ("; " + "; ".join(faults) if faults else "")
+
+
 def metrics_line(m: dict) -> str:
     f = lambda k: float(m.get(k, 0) or 0)  # noqa: E731
     return (f"key {m.get('key') or '?'}; consonance bass {f('bass_consonance'):.2f} pad {f('pad_consonance'):.2f}; "
@@ -566,18 +677,21 @@ class Candidate:
     file: Path | None = None  # tools/arrange-music's render, played without music-preview
     source: Path | None = None  # a preview older than this is made again
     direct: bool = False  # always the file (the C64's or the Spectrum 128's own sound)
-    match: float | None = None  # a SID or AY take's melody match to the original (0 to 1)
+    judge: dict | None = None  # its row in the score's judge.toml (None: not judged)
 
     def text(self) -> str:
-        """Its info as --status prints it: the match first, as a percentage."""
-        return f"{match_pct(self.match)} match to the original; {self.info}" if self.match is not None else self.info
+        """Its info as --status prints it: the judge's figures first."""
+        if self.judge is None:
+            return self.info
+        return f"{judge_text(self.judge, original=self.take == '0')}; {self.info}"
 
 
-MATCH_STRONG, MATCH_FAIR = 0.5, 0.2  # unrelated tunes score about 0-10%, the same tune arranged again 20-90%
+CLOSE_SAME, CLOSE_PARTIAL = 0.5, 0.2  # the judge's closeness: the same tune from 50%, part of it from 20%
+WEAK_CLOSE = CLOSE_PARTIAL  # a best closeness under this is probably another tune
 
 
-def match_pct(x: float | str | None) -> str:
-    """A melody match (0 to 1) as a whole percentage: "73%", "<1%" under half a percent, "0%"."""
+def pct(x: float | str | None) -> str:
+    """A figure (0 to 1) as a whole percentage: "73%", "<1%" under half a percent, "0%"."""
     try:
         v = float(x)
     except (TypeError, ValueError):
@@ -591,10 +705,11 @@ def whole_pct(v: float) -> int:
     return int(v * 100 + 0.5 + 1e-9)  # half up: 0.005 is 1%
 
 
-def match_band(x: float) -> str:
-    """A match's colour on the game screen: ok (50% and up), warn (20-49%), dim (under 20%)."""
-    pct = whole_pct(x)  # as shown
-    return "ok" if pct >= MATCH_STRONG * 100 else "warn" if pct >= MATCH_FAIR * 100 else "dim"
+def close_band(x: float) -> str:
+    """A closeness's colour on the game screen: ok (50% and up, the same tune), warn (20-49%,
+    part of it), dim (under 20%, another tune)."""
+    p = whole_pct(x)  # as shown
+    return "ok" if p >= CLOSE_SAME * 100 else "warn" if p >= CLOSE_PARTIAL * 100 else "dim"
 
 
 WHOLE_GAME = "game"  # the preview key of a game without scores
@@ -605,28 +720,27 @@ def score_candidates(all_dir: Path, gid: str, sc: Score | None) -> list[Candidat
         return [Candidate("beeper", "beeper", None, "the game's own sound"),
                 Candidate("FM (from code/memory)", "fm", None, "what FM: engines plays")]
     d = all_dir / "arrange" / gid / sc.key
+    rows = read_judge(d).get("rows", {})
     out = [Candidate("beeper", "beeper", None, "the game's own sound, to compare", source=d / "score.toml"),
            Candidate("FM (from code/memory)", "0", 0,
                      "take 0: the live version (the routine)" if sc.shadow else "take 0: the original",
-                     d / "original.wav", d / "score.toml")]
+                     d / "original.wav", d / "score.toml", judge=rows.get("0"))]
     for n, p in numbered(d, "take-"):
         doc = read_toml(p / "arranged.toml")
         gen = str(doc.get("generator", "")).split(" ")[0]
         out.append(Candidate(f"AI take-{n}" + (f" ({gen})" if gen else ""), str(n), n,
-                             metrics_line(doc.get("metrics", {})), p / "fm1.wav", p / "arranged.toml"))
+                             metrics_line(doc.get("metrics", {})), p / "fm1.wav", p / "arranged.toml", judge=rows.get(f"take-{n}")))
     for n, p in numbered(d, "chip-"):
         doc = read_toml(p / "arranged.toml")
-        mm = float(doc.get("metrics", {}).get("melody_match", 0.0) or 0.0)
         out.append(Candidate(f"SID chip-{n}", f"chip-{n}", f"chip-{n}", str(doc.get("source", "?")), p / "fm1.wav",
-                             p / "arranged.toml", match=mm))
+                             p / "arranged.toml", judge=rows.get(f"chip-{n}")))
         if (p / "chip.wav").is_file():
             out.append(Candidate(f"C64 original (chip-{n})", f"c64-{n}", None, "the C64's own sound (sidplayfp)",
                                  p / "chip.wav", direct=True))
     for n, p in numbered(d, "ay-"):
         doc = read_toml(p / "arranged.toml")
-        mm = float(doc.get("metrics", {}).get("melody_match", 0.0) or 0.0)
         out.append(Candidate(f"AY ay-{n}", f"ay-{n}", f"ay-{n}", str(doc.get("source", "?")), p / "fm1.wav",
-                             p / "arranged.toml", match=mm))
+                             p / "arranged.toml", judge=rows.get(f"ay-{n}")))
         if (p / "ay.wav").is_file():
             out.append(Candidate(f"Spectrum 128 original (ay-{n})", f"zx128-{n}", None, "the Spectrum 128's own sound (ffmpeg)",
                                  p / "ay.wav", direct=True))
@@ -1727,7 +1841,6 @@ def fetch_ay(root: Path, progress: Callable[[str], None], log: Callable[[str], N
 TAKES_LABEL = {"ai": "AI", "sid": "SID", "ay": "AY"}
 AMT_PASSES = ("drums", "bass", "chords")  # tools/arrange-music's amt passes, in order
 ORIGIN = {"sid": "C64", "ay": "Spectrum 128"}
-WEAK_MATCH = 0.15  # a best melody match under this (15%) is probably another tune
 RE_AI_HEAD = re.compile(r"(\d+) scores, (\d+) to arrange \((\d+) takes each")
 RE_OWN_HEAD = re.compile(r"(\d+) scores, (\d+) to search for")
 RE_SCORE = re.compile(r"^\[[^\]]+\] .*: [\d.]+ s of music, \d+ notes; (\d+) takes with \w+(?:, roughly (.+) a take)?$")
@@ -1735,7 +1848,9 @@ RE_PASS_AT = re.compile(r"^\[[^\]]+\] take (\d+) (\w+): ([\d.]+)/([\d.]+) s, \d+
 RE_PASS_DONE = re.compile(r"^\[[^\]]+\] take (\d+) (\w+): \d+ notes in \d+ s")
 RE_TAKE_DONE = re.compile(r"^\[[^\]]+\] take (\d+)/(\d+) in ([^:]+):")
 RE_CANDS = re.compile(r"^\[[^\]]+\] .*: (\d+) candidates to check$")
-RE_CHECKED = re.compile(r"^\[[^\]]+\]   \S.* #\d+: (melody match|not converted|no notes)")
+RE_CHECKED = re.compile(r"^\[[^\]]+\]   \S.* #\d+: (closeness|not converted|no notes)")
+RE_JUDGING = re.compile(r"^tools/arrange-music: judging (\d+) scores")
+RE_JUDGED = re.compile(r"^\[[^\]]+\] judged: ")
 RE_OWN_TAKE = re.compile(r"^\[[^\]]+\] (chip|ay)-\d+: ")
 RE_UV = re.compile(r"^(Downloading|Downloaded|Installed|Prepared|Resolved|Building|Built|Updating|Updated) ")
 
@@ -1780,8 +1895,16 @@ def plural(n: int, word: str) -> str:
 
 
 def summary_text(kind: str, s: dict[str, str]) -> str:
-    """A finished takes job's result in words, from its summary line."""
+    """A finished takes or judge job's result in words, from its summary line."""
     num = lambda k: int(s.get(k, "0") or 0) if str(s.get(k, "0")).isdigit() else 0  # noqa: E731
+    if kind == "judge":
+        if not num("tunes"):
+            return "no takes to judge"
+        text = (f"{plural(num('tunes'), 'score')}: {num('picked')} chosen by the judge"
+                + (f" ({num('applied')} in this run)" if num("applied") else "") + f", {num('owner')} by you, {num('flagged')} to hear")
+        if num("faults"):
+            text += f", {plural(num('faults'), 'faulty take')}"
+        return text + ("; the renderer check skipped (no music-preview)" if s.get("renderer") == "skipped" else "")
     label = TAKES_LABEL.get(kind, kind.upper())
     if s.get("scores") == "0":
         return "no scores to arrange"
@@ -1801,14 +1924,42 @@ def summary_text(kind: str, s: dict[str, str]) -> str:
         best = s.get("best", "-")
         weak = ""
         try:
-            weak = "; weak: maybe another tune, listen" if float(best) < WEAK_MATCH else ""
+            weak = "; weak: probably another tune, listen" if float(best) < WEAK_CLOSE else ""
         except ValueError:
             pass
         src = short_source(s.get("source", ""))
-        return f"{plural(takes, 'take')}, best {match_pct(best)} match to the original" + (f" ({src})" if src else "") + weak + skipped
+        return f"{plural(takes, 'take')}, best closeness {pct(best)}" + (f" ({src})" if src else "") + weak + skipped
     if num("candidates") == 0:
         return f"no {ORIGIN.get(kind, kind)} tune found by that name"
     return f"0 takes{skipped}" + ("" if refused >= num("candidates") else f" ({plural(num('candidates'), 'candidate')}, none converted)")
+
+
+class JudgeWatch:
+    """A judge job's progress (tools/arrange-music judge): the scores judged of those to judge,
+    then its summary line's fields."""
+
+    def __init__(self):
+        self.kind = "judge"
+        self.summary: dict[str, str] | None = None
+        self.total = 0
+        self.done = 0
+
+    def feed(self, line: str, now: float | None = None) -> None:
+        s = line.strip()
+        if (sm := parse_summary(s)) is not None:
+            self.summary = sm
+        elif m := RE_JUDGING.match(s):
+            self.total = int(m[1])
+        elif RE_JUDGED.match(s):
+            self.done += 1
+
+    def running_text(self, now: float | None = None) -> str:
+        return f"judging: {self.done} of {self.total} scores" if self.total else "starting"
+
+    def progress(self, label: str, now: float | None = None) -> Progress:
+        if not self.total:
+            return Progress(label, None, "starting")
+        return Progress(label, min(1.0, self.done / self.total), f"{self.done}/{self.total} scores")
 
 
 class TakesWatch:
@@ -1974,13 +2125,15 @@ class Job:
     started: float | None = None
     ended: float | None = None
     cancelled: bool = False
-    watch: TakesWatch | None = None
+    watch: TakesWatch | JudgeWatch | None = None
     live: Live | None = None  # the learning's games list (a learn job)
     stage: tuple[int, int, int] | None = None  # a build's job: (its pack, of packs, 0 the pack or 1 its packages)
 
     def __post_init__(self):
         if self.kind in TAKES_LABEL:
             self.watch = TakesWatch(self.kind)
+        elif self.kind == "judge":
+            self.watch = JudgeWatch()
 
     def check(self) -> None:
         """A function job calls this (through out and its progress) to stop when cancelled."""
@@ -2051,6 +2204,8 @@ def job_progress(j: Job, now: float | None = None) -> Progress:
         return j.live.progress(now)
     if j.kind in TAKES_LABEL and j.watch is not None:
         return j.watch.progress(f"{TAKES_LABEL[j.kind]} takes: {j.game}", now)
+    if j.kind == "judge" and j.watch is not None:
+        return j.watch.progress(f"judge: {j.game}" if j.game else "judge", now)
     if j.kind.startswith("dl-"):
         what = j.kind[3:].upper()
         if m := RE_DL.match(j.progress):
@@ -2381,7 +2536,9 @@ class Studio:
         self.build_ok: bool | None = None
         self.errors: list[str] = []  # what stopped a step before it ran (the headless commands report them)
         self._cands: dict[tuple, list[Candidate]] = {}
-        self._choices: tuple[int, dict] | None = None
+        self._choices: tuple[int, dict, dict] | None = None
+        self._judges: dict[tuple[str, str], dict] = {}
+        self.after_jobs: list[tuple[Job, list[Job]]] = []  # held jobs and the jobs they wait for
         runner.after = self.job_finished
 
     # -- messages and data
@@ -2402,6 +2559,7 @@ class Studio:
     def changed(self, _job: Job | None = None) -> None:
         self.version += 1
         self._cands.clear()
+        self._judges.clear()
         self._choices = None
 
     def reload_plan(self) -> None:
@@ -2410,8 +2568,49 @@ class Studio:
 
     def choices(self) -> dict[str, int | str]:
         if self._choices is None or self._choices[0] != self.version:
-            self._choices = (self.version, read_choices(self.all))
+            self._choices = (self.version, *read_choice_tables(self.all))
         return self._choices[1]
+
+    def judged(self) -> dict[str, int | str]:
+        """The choices the judge made (choices.toml's [judged] entries that still hold)."""
+        ch = self.choices()
+        return {k: v for k, v in self._choices[2].items() if ch.get(k) == v}
+
+    def judge_doc(self, gid: str, key: str) -> dict:
+        k = (gid, key)
+        if k not in self._judges:
+            self._judges[k] = read_judge(self.all / "arrange" / gid / key)
+        return self._judges[k]
+
+    def tune_state(self, g: Game, s: Score) -> tuple[str, str]:
+        """A score's state and the judge's words: "owner" (the owner chose), "judge" (the judge
+        chose), "hear" (the judge is not sure: the owner's ear is needed; its reasons), "sure"
+        (the judge is sure but has not chosen: m chooses), "unjudged" (takes the judge has not
+        weighed, or changed since), "none" (no takes: nothing to choose)."""
+        sid = f"{g.id}/{s.key}"
+        ch, jd = self.choices(), self.judged()
+        doc = self.judge_doc(g.id, s.key)
+        words = ""
+        if doc.get("pick") is not None:
+            words = (f"judge: {choice_label(0 if doc['pick'] == '0' else doc['pick'])} ({doc.get('confidence', '?')}"
+                     + (f": {'; '.join(doc.get('flags', []))}" if doc.get("flags") else "") + ")"
+                     + ("" if doc.get("fresh") else " (takes changed since: m judges again)"))
+        if not any(c.choice not in (None, 0) for c in self.candidates(g, s)):
+            return "none", words
+        if sid in jd:
+            return "judge", words
+        if sid in ch:
+            return "owner", words
+        if not doc or not doc.get("fresh"):
+            return "unjudged", words or "not judged yet (m finds, judges and chooses where sure)"
+        return ("sure", words) if doc.get("confidence") == "high" else ("hear", words)
+
+    def tune_counts(self, g: Game) -> dict[str, int]:
+        out = {k: 0 for k in ("owner", "judge", "hear", "sure", "unjudged", "none")}
+        if g.can_arrange:
+            for s in g.scores:
+                out[self.tune_state(g, s)[0]] += 1
+        return out
 
     def candidates(self, g: Game, sc: Score | None) -> list[Candidate]:
         k = (g.id, sc.key if sc else WHOLE_GAME)
@@ -2420,12 +2619,19 @@ class Studio:
         return self._cands[k]
 
     def choice_summary(self, g: Game) -> str:
+        """Per score its choice ("(judge)" after one the judge made), "listen" where the judge is
+        not sure and nothing is chosen."""
         if g.left_out:
             return f"left out: {g.reason or g.how}"
         if not g.scores:
             return g.plays()
         ch = self.choices()
-        return " / ".join(choice_label(ch.get(f"{g.id}/{s.key}", 0)) for s in g.scores)
+        out = []
+        for s in g.scores:
+            state = self.tune_state(g, s)[0]
+            label = choice_label(ch.get(f"{g.id}/{s.key}", 0))
+            out.append(f"{label} (judge)" if state == "judge" else "listen" if state == "hear" else label)
+        return " / ".join(out)
 
     def marked(self, gid: str) -> set[str]:
         return self.methods.get(gid, set())
@@ -2651,30 +2857,31 @@ class Studio:
 
     # -- generating
 
-    def generate(self, ids: list[str] | None = None, methods: tuple[str, ...] = METHODS) -> None:
+    def generate(self, ids: list[str] | None = None, methods: tuple[str, ...] = METHODS) -> list[Job]:
         """Queues the jobs for the marked methods among methods, for the games with scores (those
-        of ids when given)."""
+        of ids when given); returns them (the downloads among them)."""
         if not self.plan:
             self.fail("no plan yet: wait for the learning")
-            return
+            return []
         gs = [g for g in self.plan.games if g.can_arrange and (ids is None or g.id in ids)]
         ai, sid, ay = ([g for g in gs if m in methods and m in self.marked(g.id)] for m in METHODS)
         if not ai and not sid and not ay:
             self.fail("nothing marked: a marks AI, s marks SID, y marks AY (FM needs nothing)")
-            return
+            return []
         if not self.tools.arrange_given() and not shutil.which("uv"):
             self.fail("AI, SID and AY takes need uv (https://docs.astral.sh/uv/): tools/arrange-music runs through it")
-            return
+            return []
         errors = len(self.errors)
         counts, total = [], 0
+        queued: list[Job] = []
         for g in ai:
             argv = [self.tools.arrange, "generate", str(self.all), "--game", g.id]
             if self.args.model:
                 argv += ["--model", self.args.model]
             if self.args.offline:
                 argv += ["--offline"]
-            self.runner.submit(Job(f"AI takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed, kind="ai",
-                                   what="AI takes", game=g.name, gid=g.id))
+            queued.append(self.runner.submit(Job(f"AI takes for {g.name}", argv, env=self.uv_env(), on_done=self.changed, kind="ai",
+                                                 what="AI takes", game=g.name, gid=g.id)))
         if ai:
             counts.append(f"{len(ai)} AI")
             total += len(ai)
@@ -2691,6 +2898,7 @@ class Studio:
 
             def argv_of(j: Job, d: Path, cmd=cmd, opt=opt) -> list[str]:
                 return [self.tools.arrange, cmd, str(self.all), "--game", j.gid, opt, str(d)]
+            queued += jobs
             if state == "ready":
                 for j in jobs:
                     j.argv = argv_of(j, d)
@@ -2709,19 +2917,90 @@ class Studio:
                         else:
                             j.argv, j.wait_note = argv_of(j, d), ""
                             self.runner.release(j)
-                downloads += self.download(kind, go)
+                    self.release_ready()
+                downloads += self.download(kind, go, queued)
             counts.append(f"{len(gs_)} {kind}")
             total += len(gs_)
         if downloads:
             counts.append(plural(downloads, "download"))
             total += downloads
         if not total:
-            return
+            return queued
         msg = f"queued {plural(total, 'job')} ({', '.join(counts)})" + (": J shows them" if self.runner.threaded else "")
         if len(self.errors) > errors:
             self.flash(f"{msg}; {self.errors[-1]}", "err")
         else:
             self.flash(msg)
+        return queued
+
+    def auto(self, ids: list[str] | None = None) -> None:
+        """m (M: every game): for the games given (every game with scores when None) finds and
+        converts the C64 and Spectrum 128 versions (SID and AY marked, their jobs as g queues
+        them), then judges their scores and chooses where the judge is sure and the owner has
+        not chosen (tools/arrange-music judge --apply), then the screen reads it all again."""
+        if not self.plan:
+            self.fail("no plan yet: wait for the learning")
+            return
+        gs = [g for g in self.plan.games if g.can_arrange and (ids is None or g.id in ids)]
+        if not gs:
+            g = self.plan.game(ids[0]) if ids and len(ids) == 1 else None
+            self.fail(f"{g.name}: " + (f"left out ({g.reason})" if g.left_out else f"{g.plays()}: no score to judge") if g
+                      else "no game has a score: nothing to judge")
+            return
+        for g in gs:
+            self.methods.setdefault(g.id, set()).update({"sid", "ay"})
+        save_methods(self.w, self.methods)
+        errors = len(self.errors)
+        prereqs = self.generate([g.id for g in gs], ("sid", "ay"))
+        if not prereqs and len(self.errors) > errors and "need uv" in self.errors[-1]:
+            return
+        argv = [self.tools.arrange, "judge", str(self.all)]
+        for g in (gs if ids is not None else []):
+            argv += ["--game", g.id]
+        who = gs[0].name if len(gs) == 1 else f"{len(gs)} games"
+        job = Job(f"judge {who}", argv + ["--apply"], env=self.uv_env(), on_done=self.changed, kind="judge", what="judge",
+                  game=who, gid=gs[0].id if len(gs) == 1 else "")
+        pending = [j for j in prereqs if j.state not in FINISHED]
+        if pending:
+            self.runner.submit(job, hold=True)
+            job.wait_note = "after the SID and AY takes"
+            self.after_jobs.append((job, pending))
+        else:
+            self.runner.submit(job)
+        n = len(prereqs) + 1
+        msg = (f"queued {plural(n, 'job')} (C64 and Spectrum 128 versions, then the judge)"
+               + (": J shows them" if self.runner.threaded else ""))
+        if len(self.errors) > errors:
+            self.flash(f"{msg}; {self.errors[-1]}", "err")
+        else:
+            self.flash(msg)
+
+    def release_ready(self) -> None:
+        """Releases each held job whose jobs to wait for have all finished (or were skipped)."""
+        keep = []
+        for job, waits in self.after_jobs:
+            if job.state != "waiting":
+                continue
+            if all(j.state in FINISHED for j in waits):
+                job.wait_note = ""
+                self.runner.release(job)
+            else:
+                keep.append((job, waits))
+        self.after_jobs = keep
+
+    def auto_headless(self, ids: list[str]) -> None:
+        """--auto: auto for the games given (every game with scores when none)."""
+        if not self.plan:
+            return self.fail("no plan: the learning failed (see the log)")
+        unknown = [g for g in ids if self.plan.game(g) is None]
+        if unknown:
+            return self.fail(f"--game {', '.join(unknown)}: no such game (--status lists the ids)")
+        for gid in ids:
+            g = self.plan.game(gid)
+            if not g.can_arrange:
+                return self.fail(f"--game {g.id}: " + (f"left out ({g.reason})" if g.left_out else
+                                                        f"{g.plays()}: no score to judge"))
+        self.auto(ids or None)
 
     def generate_headless(self, methods: list[str], ids: list[str]) -> None:
         """--generate: marks methods for the games given (every game with scores when none) and
@@ -2757,10 +3036,10 @@ class Studio:
             return "fail", None, f"{kind}: --offline downloads nothing: give {opt} PATH, or put the collection in {root}"
         return "download", None, ""
 
-    def download(self, kind: str, then: Callable[[Path | None], None]) -> int:
+    def download(self, kind: str, then: Callable[[Path | None], None], queued: list[Job] | None = None) -> int:
         """Runs then(the collection's folder, or None when it did not download) after the "SID"
-        or "AY" collection's download job; returns 1 when it queued that job, 0 when one was
-        queued before."""
+        or "AY" collection's download job (added to queued); returns 1 when it queued that job, 0
+        when one was queued before."""
         find, root = (self.sid_dir, hvsc_root()) if kind == "SID" else (self.ay_dir, ay_root())
         if kind in self.waiters:
             self.waiters[kind].append(then)
@@ -2782,16 +3061,28 @@ class Studio:
             for t in waiters:
                 t(d)
         src = "HVSC" if kind == "SID" else "chris-y/AY"
-        self.runner.submit(Job(f"download the {kind} collection ({src})", fn=fetch, on_done=fetched,
-                               kind=f"dl-{kind.lower()}", what=f"download {kind} collection", game=src))
+        job = self.runner.submit(Job(f"download the {kind} collection ({src})", fn=fetch, on_done=fetched,
+                                     kind=f"dl-{kind.lower()}", what=f"download {kind} collection", game=src))
+        if queued is not None:
+            queued.append(job)
         return 1
 
     # -- the jobs
 
     def job_finished(self, j: Job) -> None:
-        """Each finished job (after its on_done): a cancelled one said, a takes job's result."""
+        """Each finished job (after its on_done): a cancelled one said, a takes or judge job's
+        result; the held jobs waiting for it released when it was the last."""
+        self.release_ready()
         if j.state == "cancelled":
             self.flash(f"cancelled: {j.title}" + (" (stopped while it ran)" if j.started else ""))
+            return
+        if j.kind == "judge":
+            sm = j.watch.summary if j.watch else None
+            if j.rc != 0:
+                self.flash(f"the judge failed for {j.game}" + (" (J: its output)" if self.runner.threaded else ""), "err")
+            elif sm is not None:
+                hint = "; n goes to the next game to hear" if self.runner.threaded and sm.get("flagged", "0") != "0" else ""
+                self.flash(f"judge, {j.game}: {summary_text('judge', sm)}{hint}", "ok")
             return
         if j.kind not in TAKES_LABEL:
             return
@@ -2806,7 +3097,7 @@ class Studio:
             return
         n = int(sm["takes"]) if sm.get("takes", "").isdigit() else 0
         if n:
-            best = (f" (best {match_pct(sm['best'])} match to the original)" if sm.get("best", "-") != "-"
+            best = (f" (best closeness {pct(sm['best'])})" if sm.get("best", "-") != "-"
                     else " written" if j.kind == "ai" else "")
             self.flash(f"{label} takes for {j.game}: {n}{best}{hint}", "ok")
         else:
@@ -2823,7 +3114,7 @@ class Studio:
         """The games with a takes job waiting or running: id -> "running" or "waiting"."""
         out: dict[str, str] = {}
         for j in self.runner.jobs:
-            if j.gid and j.kind in TAKES_LABEL and j.state in ("waiting", "running"):
+            if j.gid and (j.kind in TAKES_LABEL or j.kind == "judge") and j.state in ("waiting", "running"):
                 if out.get(j.gid) != "running":
                     out[j.gid] = j.state
         return out
@@ -3094,6 +3385,9 @@ class Studio:
                                         else f"downloaded to {ay_root()} on the first AY job"))
         out.append("listening: " + ("music-preview" if self.tools.preview_ok()
                                     else "tools/arrange-music's renders (music-preview is not built)"))
+        tot = {k: sum(self.tune_counts(g)[k] for g in p.games) for k in ("owner", "judge", "hear", "sure", "unjudged")}
+        out.append(f"scores with takes: {tot['owner'] + tot['judge']} settled ({tot['owner']} by you, {tot['judge']} by the judge), "
+                   f"{tot['hear']} to hear, {tot['sure'] + tot['unjudged']} for the judge (m, --auto)")
         ch = self.choices()
         for g in p.games:
             out.append("")
@@ -3102,7 +3396,11 @@ class Studio:
                 continue
             ms = ["FM"] + [m.upper() for m in METHODS if m in self.marked(g.id)]
             pk = self.packs.get(g.id)
-            out.append(f"{g.name} ({g.id})  {g.how}  {kb(g.packed)}  methods: {' '.join(ms)}  pack: {f'P{pk}' if pk else '-'}")
+            n = self.tune_counts(g)
+            tunes = (f"  scores: {n['owner'] + n['judge']} settled, {n['hear']} to hear"
+                     + (f", {n['sure'] + n['unjudged']} for the judge" if n["sure"] + n["unjudged"] else "")
+                     if sum(n.values()) - n["none"] else "")
+            out.append(f"{g.name} ({g.id})  {g.how}  {kb(g.packed)}  methods: {' '.join(ms)}  pack: {f'P{pk}' if pk else '-'}{tunes}")
             out.append(f"  {g.music}")
             groups = [(s, s.key) for s in g.scores] or [(None, WHOLE_GAME)]
             if not g.scores:
@@ -3110,8 +3408,12 @@ class Studio:
             for s, key in groups:
                 if s:
                     chosen = ch.get(f"{g.id}/{s.key}", 0)
+                    tstate, words = self.tune_state(g, s)
                     out.append(f"  score {s.key}  {s.seconds:.1f} s{'  shadow' if s.shadow else ''}  "
-                               f"plan: {s.status or '-'}  choice: {choice_label(chosen)}")
+                               f"plan: {s.status or '-'}  choice: {choice_label(chosen)}"
+                               + (" (the judge's)" if tstate == "judge" else "") + (f"  {TUNE_STATES[tstate][0]}" if tstate != "none" else ""))
+                    if words:
+                        out.append(f"    {words}")
                 else:
                     chosen = None
                 for c in self.candidates(g, s):
@@ -3120,7 +3422,8 @@ class Studio:
                         play = f"plays {path.name if note != 'music-preview' else 'its preview'}"
                     else:
                         play = "plays a music-preview render" if how == "render" else note
-                    mark = "*" if s and c.choice is not None and c.choice == chosen else " "
+                    mark = (("j" if self.judged().get(f"{g.id}/{s.key}") == chosen else "*")
+                            if s and c.choice is not None and c.choice == chosen else " ")
                     out.append(f"   {mark} {c.label:<26} {c.text()}  [{play}]")
         out.append("")
         out.append("packs:" + (f" ({self.sizes_note()})" if self.sizes_note() else ""))
@@ -3148,14 +3451,17 @@ class Studio:
 FLASH_SECS = 3.0  # a message's time on the key line
 JOB_BAR = 10  # the cells of a running job's bar on the jobs view
 DONE_SECS = 3.0  # the last job's bar, green or red, after it ends
-HELP_GAMES = ("Enter open  a/s/y mark  g make-takes  J jobs  1-9/0 pack  f fill  p packs  b build-firmware  r re-learn  "
-              "l log  ? help  q quit")
+HELP_GAMES = ("Enter open  m find+judge  n next-to-hear  a/s/y mark  g make-takes  J jobs  1-9/0 pack  f fill  p packs  "
+              "b build-firmware  r re-learn  l log  ? help  q quit")
 HELP_LIVE = "1-9/0 pack  J jobs  l log  ? help  q quit"
-HELP_GAME = "Enter play/stop  c choose  a/s/y mark  g make-takes  J jobs  Esc back  l log  ? help"
+HELP_GAME = "Enter play/stop  c choose  m find+judge  a/s/y mark  g make-takes  J jobs  Esc back  l log  ? help"
 HELP_PACKS = "1-9 pack  0/x none  f fill  Enter open  b build-firmware  J jobs  Esc back  l log  q quit"
 HELP_TEXT = "j/k PgUp/PgDn scroll  Home/End  J jobs  q/Esc back"
 HELP_JOBS = "Enter output  o open-game  x cancel/stop  Esc back  l log  ? help  q quit"
 HELP_JOB_TEXT = "j/k PgUp/PgDn scroll  Home/End  o open-game  x cancel/stop  Esc back"
+# a score's state on the game screen (Studio.tune_state): its words and their colour
+TUNE_STATES = {"owner": ("chosen by you", "chosen"), "judge": ("chosen by the judge", "judge"), "hear": ("to hear", "warn"),
+               "sure": ("the judge is sure: m chooses", "ok"), "unjudged": ("not judged", "dim"), "none": ("", "dim")}
 # the methods to mark: key, label on a row, what it is
 METHOD_KEYS = (("a", "AI", "ai", "arrangement"), ("s", "SID", "sid", "C64 version"),
                ("y", "AY", "ay", "Spectrum 128 version"))
@@ -3229,7 +3535,7 @@ class UI:
     def attrs(curses, colors: bool) -> dict[str, int]:
         B, D, R = curses.A_BOLD, curses.A_DIM, curses.A_REVERSE
         a = {"dim": D, "bold": B, "rev": R, "sel": R | B, "title": B, "name": B, "head": B, "key": B,
-             "chosen": B, "ai": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
+             "chosen": B, "judge": B, "ai": B, "sid": B, "ay": B, "err": B, "run": B, "ok": 0, "cached": D, "warn": B,
              "bar": R, "bar_run": R | B, "bar_ok": R, "bar_err": R | B, "keycap": R | B,
              "prog_run": B, "prog_ok": B, "prog_err": R | B, "prog_off": D, "track": D}
         a.update({f"p{n}": B for n in range(1, PACKS_MAX + 1)})
@@ -3249,7 +3555,7 @@ class UI:
             a["keycap"] = curses.color_pair(len(names) + 1) | B
         except curses.error:
             return a
-        a.update({"chosen": g | B, "ai": m | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
+        a.update({"chosen": g | B, "judge": b | B, "ai": m | B, "sid": c | B, "ay": y | B, "err": r | B, "run": y, "ok": g,
                   "cached": g | D, "warn": y | B, "bar_run": y | R, "bar_ok": g | R, "bar_err": r | R,
                   "prog_run": y | B, "prog_ok": g | B, "prog_err": r | B})
         cycle = (c, m, y, g, b)
@@ -3398,8 +3704,11 @@ class UI:
             head += f"  {len(p.games)} games, {kb(p.used)}, room {kb(p.room)}: {n} pack{'s' if n != 1 else ''}"
         elif st.live:
             head += "  learning" + ("…" if self.utf8 else "...")
-        head += f"  ->  {st.w}"
-        self.put(0, x, head, self.attr["bold"])
+        x = self.put(0, x, head, self.attr["bold"])
+        hear = sum(1 for g in p.games if st.tune_counts(g)["hear"]) if p else 0
+        if hear:
+            x = self.put(0, x, f"  {plural(hear, 'game')} to hear (n: the next)", self.attr["warn"])
+        self.put(0, x, f"  ->  {st.w}", self.attr["bold"])
         live = st.live
         if live and live.phase == "failed":
             self.put(1, 0, "the learning failed (l: the log)", self.attr["err"])
@@ -3455,10 +3764,38 @@ class UI:
             jobs = busy.get(g.id)
             x = self.put(y, x, ("\u2026" if self.utf8 else "*") if jobs else " ",
                          (self.attr["run"] if jobs == "running" else self.attr["dim"]) | rv)
+            mark, ma = self.tune_mark(g)
+            x = self.put(y, x + 1, f"{mark:<3}", ma | rv)
             summary = st.choice_summary(g)
             x = self.put(y, x + 1, summary, base)
             if not g.left_out and g.scores:
                 self.put(y, x + 3, g.music, self.attr["dim"] | rv)
+
+    def tune_mark(self, g: Game) -> tuple[str, int]:
+        """A game's tunes at a glance: "?2" (yellow) two to hear (the judge is not sure, nothing
+        chosen); "m" (dim) takes the judge has not chosen from yet (m judges); "✓" (green) every
+        score with takes chosen, by the owner or the judge; nothing without takes."""
+        n = self.st.tune_counts(g)
+        if n["hear"]:
+            return f"?{n['hear']}", self.attr["warn"]
+        if n["sure"] or n["unjudged"]:
+            return "m", self.attr["dim"]
+        if n["owner"] or n["judge"]:
+            return ("\u2713" if self.utf8 else "+"), self.attr["ok"]
+        return "", 0
+
+    def next_to_hear(self) -> None:
+        """n: the cursor to the next game with a score to hear (round to the top)."""
+        st, p = self.st, self.st.plan
+        n = len(p.games)
+        for k in range(1, n + 1):
+            i = (self.gi + k) % n
+            if st.tune_counts(p.games[i])["hear"]:
+                self.gi = i
+                c = st.tune_counts(p.games[i])
+                st.flash(f"{p.games[i].name}: {plural(c['hear'], 'score')} to hear (Enter: its takes)")
+                return
+        st.flash("no game to hear: the judge is sure of every score it weighed, or you chose")
 
     def live_attr(self, kind: str) -> int:
         return {"run": self.attr["run"], "ok": self.attr["ok"], "cached": self.attr["cached"], "out": self.attr["dim"],
@@ -3495,12 +3832,15 @@ class UI:
                 self.put(y, x + 1, r.how, self.attr["dim"] | rv)
 
     def game_rows(self) -> list[tuple[str, Score | None, str, Candidate | None]]:
-        """("head", score, key, None) and ("cand", score, key, candidate) rows."""
+        """("head", score, key, None), ("judge", score, key, None) (its state and the judge's
+        verdict, for a score with takes) and ("cand", score, key, candidate) rows."""
         g = self.game
         rows = []
         for s in g.scores or [None]:
             key = s.key if s else WHOLE_GAME
             rows.append(("head", s, key, None))
+            if s is not None and any(self.st.tune_state(g, s)):
+                rows.append(("judge", s, key, None))
             rows += [("cand", s, key, c) for c in self.st.candidates(g, s)]
         return rows
 
@@ -3551,15 +3891,25 @@ class UI:
                     x = self.put(y, x, "   plan: ", self.attr["dim"])
                     self.put(y, x, status, self.attr["err"] if status.startswith("refused") else 0)
                 continue
+            if kind == "judge":
+                tstate, words = st.tune_state(g, s)
+                label, la = TUNE_STATES[tstate]
+                x = self.put(y, 2, label, self.attr[la]) + 2 if label else 2
+                if words:
+                    self.put(y, x, words, self.attr["warn"] if tstate == "hear" else self.attr["dim"])
+                continue
             sel = self.ctop + k == sel_row
-            chosen = s is not None and c.choice is not None and ch.get(f"{g.id}/{s.key}", 0) == c.choice
+            sid = f"{g.id}/{s.key}" if s is not None else ""
+            chosen = s is not None and c.choice is not None and ch.get(sid, 0) == c.choice
+            by_judge = chosen and st.judged().get(sid) == c.choice
             state = st.state_of(g, key, c)
             rv = self.attr["sel"] if sel else 0
             unavailable = state.startswith(("nothing to play", "no "))
             self.put(y, 0, " " * w, rv)
             x = self.put(y, 0, "> " if sel else "  ", rv)
-            x = self.put(y, x, "* " if chosen else "  ", (self.attr["chosen"] if chosen else 0) | rv)
-            la = self.attr["chosen"] if chosen else self.attr["dim"] if unavailable else 0
+            ca = self.attr["judge" if by_judge else "chosen"]
+            x = self.put(y, x, ("j " if by_judge else "* ") if chosen else "  ", (ca if chosen else 0) | rv)
+            la = ca if chosen else self.attr["dim"] if unavailable else 0
             self.put(y, x, f"{c.label[:26]:<26} ", la | rv)
             x = 32
             if state:
@@ -3567,9 +3917,30 @@ class UI:
                       else self.attr["err"] if state.startswith("render failed") else self.attr["dim"])
                 self.put(y, x, f"[{state}] ", sa | rv)
                 x += len(state) + 3
-            if c.match is not None:
-                x = self.put(y, x, f"{match_pct(c.match):>4} match", self.attr[match_band(c.match)] | rv) + 2
+            if c.judge is not None:
+                x = self.put_judge(y, x, c, w, rv)
             self.put(y, x, c.info, (self.attr["dim"] if not sel else 0) | rv)
+
+    def put_judge(self, y: int, x: int, c: Candidate, w: int, rv: int) -> int:
+        """A take's judge figures on its row: its place in the judge's order (#1, the judge's
+        pick, in the judge's colour), closeness (coloured: the same tune, part of it, another),
+        quality (and its three parts on a wide screen), its faults in red; the next column."""
+        j = c.judge
+        rank = j.get("rank", 0)
+        x = self.put(y, x, f"#{rank:<2}", (self.attr["judge"] if rank == 1 else self.attr["dim"]) | rv) + 1
+        if c.take == "0":
+            x = self.put(y, x, " " * 10, rv) + 1
+        else:
+            cl = float(j.get("closeness", 0) or 0)
+            x = self.put(y, x, f"close {pct(cl):>4}", self.attr[close_band(cl)] | rv) + 1
+        x = self.put(y, x, f"qual {pct(j.get('quality')):>4}", rv) + 1
+        if w >= 140:
+            x = self.put(y, x, f"(poly {pct(j.get('polyphony')):>4} harm {pct(j.get('harmony')):>4} rhy {pct(j.get('rhythm')):>4})",
+                         self.attr["dim"] | rv) + 1
+        faults = j.get("faults") or []
+        if faults:
+            x = self.put(y, x + 1, "; ".join(faults), self.attr["err"] | rv) + 1
+        return x + 1
 
     def pack_rows(self) -> list[tuple[str, int, Game | None]]:
         """The pack view's rows: ("head", pack, None) and ("game", pack, game); pack 0: in none."""
@@ -3900,7 +4271,8 @@ class UI:
                     st.flash(f"{r.name}: not in the games file yet", "err")
             elif ch in (10, 13, c.KEY_ENTER, c.KEY_RIGHT):
                 st.flash("still learning: the games open when the plan is ready")
-            elif ch in (ord("r"), ord("b"), ord("g"), ord("f"), ord("p"), ord("A"), ord("S"), ord("Y"), ord("a"), ord("s"), ord("y")):
+            elif ch in (ord("r"), ord("b"), ord("g"), ord("f"), ord("p"), ord("A"), ord("S"), ord("Y"), ord("a"), ord("s"), ord("y"),
+                        ord("m"), ord("M"), ord("n")):
                 st.flash("still learning: wait for the plan", "err")
         elif ch == ord("r"):
             st.relearn()
@@ -3914,6 +4286,8 @@ class UI:
             st.toggle_all("ay")
         elif ch == ord("g"):
             st.generate()
+        elif ch == ord("M"):
+            st.auto()
         elif ch == ord("f"):
             st.fill()
         elif ch == ord("p"):
@@ -3924,6 +4298,10 @@ class UI:
             self.gi = self.move(ch, self.gi, len(p.games), max(1, h - 6))
         elif self.pack_key(ch) is not None:
             st.assign(g.id, self.pack_key(ch))
+        elif ch == ord("m"):
+            st.auto([g.id])
+        elif ch == ord("n"):
+            self.next_to_hear()
         elif ch == ord("a"):
             st.toggle(g.id, "ai")
         elif ch == ord("s"):
@@ -3994,6 +4372,8 @@ class UI:
             st.toggle_all("ay")
         elif ch == ord("g"):
             st.generate([g.id])
+        elif ch == ord("m"):
+            st.auto([g.id])
         elif ch == ord("b"):
             st.build()
         elif self.moves(ch):
@@ -4131,23 +4511,23 @@ def cmd_studio(a: argparse.Namespace) -> int:
         die(f"no {folder}")
     if folder.is_file() and folder.suffix.lower() != ".toml":
         die(f"{folder}: give a folder of games or a games file (.toml)")
-    if a.game and not a.generate:
-        die("--game goes with --generate")
+    if a.game and not a.generate and not a.auto:
+        die("--game goes with --generate or --auto")
     methods = parse_methods(a.generate) if a.generate else []
     assigns = parse_assigns(a.assign or [])
     w = workspace(folder, a.out)
     w.mkdir(parents=True, exist_ok=True)
     packing = bool(assigns) or a.auto_fill
-    headless = a.status or a.build or bool(a.generate) or a.try_ is not None or packing
-    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build or a.generate), progress=headless)
+    headless = a.status or a.build or bool(a.generate) or a.auto or a.try_ is not None or packing
+    runner = Runner(w / "studio.log", threaded=not headless, echo=bool(a.build or a.generate or a.auto), progress=headless)
     st = Studio(folder, w, a, runner)
     if headless:
-        if a.generate or a.build or packing or (a.status and st.plan is None):
+        if a.generate or a.auto or a.build or packing or (a.status and st.plan is None):
             # the learning first only when a step needs the plan before the build makes it
-            st.startup(learn=st.plan is None and bool(a.generate or packing or not a.build), preview=bool(a.status))
+            st.startup(learn=st.plan is None and bool(a.generate or a.auto or packing or not a.build), preview=bool(a.status or a.auto))
             runner.drain()
             start = [j for j in runner.failed if j.chain == "start"]
-            if start and (a.generate or a.build or packing):
+            if start and (a.generate or a.auto or a.build or packing):
                 die(f"{start[0].title} failed (see the output above; {w / 'studio.log'})")
             if not st.tools.fmzx_pack_given and not os.access(st.tools.fmzx_pack, os.X_OK):
                 die("fmzx-pack did not build (see the output above)")
@@ -4172,6 +4552,17 @@ def cmd_studio(a: argparse.Namespace) -> int:
                 what = st.errors[0] if st.errors else f"{runner.failed[n0].title} failed"
                 die(f"--generate: {what} (the log: {w / 'studio.log'})")
             print(f"{PROG}: generated; choose a take per score on the screen or with tools/arrange-music pick {st.all}")
+        if a.auto:
+            n0 = len(runner.failed)
+            st.auto_headless(a.game or [])
+            runner.drain()
+            if st.errors and not any(j.kind == "judge" for j in runner.jobs) or any(j.kind == "judge" for j in runner.failed[n0:]):
+                what = st.errors[0] if st.errors else "the judge failed"
+                die(f"--auto: {what} (the log: {w / 'studio.log'})")
+            st.changed()
+            n = {k: sum(st.tune_counts(g)[k] for g in (st.plan.games if st.plan else [])) for k in ("owner", "judge", "hear", "sure", "unjudged")}
+            print(f"{PROG}: judged; {n['owner'] + n['judge']} scores settled ({n['owner']} by you, {n['judge']} by the judge), "
+                  f"{n['hear']} to hear: listen on the screen (n: the next game to hear) or with tools/arrange-music pick {st.all}")
         if a.build:
             st.build()
             runner.drain()
@@ -4271,13 +4662,35 @@ print("planned 4 games")
 '''
 
 FAKE_ARRANGE = r'''
-import json, sys
+import hashlib, json, os, sys, tomllib
 from pathlib import Path
 a = sys.argv[1:]
 with open(LOG, "a") as f:
     f.write(json.dumps(a) + "\n")
 d = Path(a[1])
 cmd = a[0]
+# the judge's figures per take (FAKE_JUDGE=unsure: a close call)
+FIGS = {"0": (1.0, 0.3, []), "take-1": (1.0, 0.45, []), "chip-1": (0.97, 0.62, []),
+        "ay-1": (0.4, 0.5, ["plays only a fragment: 1.5 s of the 12.5 s that play"])}
+def judge(sd):
+    lines = (sd / "score.toml").read_bytes().splitlines(keepends=True)
+    rows = [{"name": "0", "digest": hashlib.sha256(b"".join(ln for ln in lines if not ln.startswith(b"#"))).hexdigest()[:16]}]
+    for t in sorted(sd.iterdir()):
+        if t.is_dir() and (t / "arranged.toml").is_file():
+            rows.append({"name": t.name, "digest": hashlib.sha256((t / "arranged.toml").read_bytes()).hexdigest()[:16]})
+    for r in rows:
+        c, q, faults = FIGS.get(r["name"], (0.1, 0.2, []))
+        r.update(closeness=c, quality=q, polyphony=0.5, harmony=0.6, rhythm=0.7, faults=faults, combined=round(q * (0.3 + 0.7 * c), 4))
+    sdig = rows[0]["digest"]
+    rows.sort(key=lambda r: -r["combined"])
+    unsure = os.environ.get("FAKE_JUDGE") == "unsure"
+    out = ["version = 1", f"score = {json.dumps(sdig)}",
+           f"pick = {json.dumps(rows[0]['name'])}", f"confidence = {json.dumps('low' if unsure else 'high')}",
+           f"flags = {json.dumps(['close call'] if unsure else [])}"]
+    for i, r in enumerate(rows, 1):
+        out += ["", "[[take]]"] + [f"{k} = {json.dumps(v)}" for k, v in dict(r, rank=i).items()]
+    (sd / "judge.toml").write_text("\n".join(out) + "\n")
+    return rows[0]["name"], not unsure
 if cmd == "pick":
     sets = a[a.index("--set") + 1:]
     p = d / "arrange" / "choices.toml"
@@ -4303,15 +4716,16 @@ elif cmd in ("generate", "chip", "ay"):
             t = sd.parent / "chip-1"
             t.mkdir(exist_ok=True)
             (t / "arranged.toml").write_text('take = "chip-1"\nsource = "C64: Alpha by Someone (1987), subtune 1, '
-                                             'MUSICIANS/S/Someone/Alpha.sid"\n[metrics]\nmelody_match = 0.42\n')
+                                             'MUSICIANS/S/Someone/Alpha.sid"\n[metrics]\ncloseness = 0.42\n')
             (t / "chip.wav").write_bytes(b"RIFF")
         if cmd == "ay":
             assert Path(a[a.index("--ay-dir") + 1]).is_dir()
             t = sd.parent / "ay-1"
             t.mkdir(exist_ok=True)
             (t / "arranged.toml").write_text('take = "ay-1"\ngenerator = "chip ay"\nsource = "Spectrum 128: Alpha by Someone, '
-                                             'song 2, games/Alpha.ay"\n[metrics]\nmelody_match = 0.37\n')
+                                             'song 2, games/Alpha.ay"\n[metrics]\ncloseness = 0.37\n')
             (t / "ay.wav").write_bytes(b"RIFF")
+        judge(sd.parent)
     print(cmd, "done for", game)
     n = len(list((d / "arrange" / game).glob("*/score.toml")))
     kind = {"generate": "ai", "chip": "sid", "ay": "ay"}[cmd]
@@ -4323,6 +4737,30 @@ elif cmd in ("generate", "chip", "ay"):
         best = "0.42" if cmd == "chip" else "0.37"
         print(f"summary: kind={kind} game={game} scores={n} pending={n} takes={n} candidates=2 checked=2 refused={int(cmd == 'ay')} "
               f"best={best if n else '-'} seconds=0" + (f" source={src}" if n else ""))
+elif cmd == "judge":
+    games = [a[i + 1] for i, x in enumerate(a) if x == "--game"]
+    sds = sorted(p.parent for p in (d / "arrange").glob("*/*/score.toml") if not games or p.parent.parent.name in games)
+    print(f"tools/arrange-music: judging {len(sds)} scores")
+    p = d / "arrange" / "choices.toml"
+    doc = tomllib.loads(p.read_text()) if p.exists() else {}
+    ch, jd = doc.get("choices", {}), doc.get("judged", {})
+    new = flagged = 0
+    for sd in sds:
+        sid = f"{sd.parent.name}/{sd.name}"
+        pick, sure = judge(sd)
+        print(f"[{sid}] judged: {pick} ({'high' if sure else 'low: close call'})")
+        mine = sid in ch and jd.get(sid) != ch[sid]
+        if "--apply" in a and sure and not mine:
+            ch[sid] = jd[sid] = 0 if pick == "0" else int(pick[5:]) if pick.startswith("take-") else pick
+            new += 1
+        flagged += int(not sure and sid not in ch)
+    if "--apply" in a:
+        lines = ["[choices]"] + [f"{json.dumps(k)} = {json.dumps(v)}" for k, v in sorted(ch.items())]
+        if jd:
+            lines += ["", "[judged]"] + [f"{json.dumps(k)} = {json.dumps(v)}" for k, v in sorted(jd.items())]
+        p.write_text("\n".join(lines) + "\n")
+    print(f"summary: kind=judge game={','.join(games) or 'all'} tunes={len(sds)} owner=0 picked={new} applied={new} sure={new} "
+          f"flagged={flagged} faults=1 renderer=checked seconds=0")
 else:
     sys.exit(2)
 '''
@@ -4385,18 +4823,30 @@ tools/arrange-music: indexing /c/C64Music
 tools/arrange-music: 4 SID files, 2 STIL entries
 tools/arrange-music: no sidplayfp on PATH: no chip.wav (the C64's own sound); fm1.wav only
 [alpha/8951-1a2b3c4d] Alpha: 4 candidates to check
-[alpha/8951-1a2b3c4d]   MUSICIANS/E/Example_Bob/Cover.sid #2: melody match 0.17, title match 1.00, STIL: Spectrum, pitch classes 0.62
+[alpha/8951-1a2b3c4d]   MUSICIANS/E/Example_Bob/Cover.sid #2: closeness 17% (z 2.1), title match 1.00, STIL: Spectrum
 [alpha/8951-1a2b3c4d]   MUSICIANS/R/Rs_Example/Alpha.sid #1: not converted (chip-notes: RSID tunes are not supported)
 @@
-[alpha/8951-1a2b3c4d]   GAMES/A-F/Alpha.sid #1: melody match 0.73, title match 1.00, pitch classes 0.85
-[alpha/8951-1a2b3c4d]   GAMES/A-F/Alpha.sid #2: melody match 0.05, title match 1.00, pitch classes 0.40
-[alpha/8951-1a2b3c4d] chip-1: C64: Alpha by Ann Example (1985 Nobody Soft), subtune 1, GAMES/A-F/Alpha.sid; melody match 0.73
-[alpha/8951-1a2b3c4d] chip-2: C64: Some Cover by Bob Example (1999 Example Group), subtune 2, MUSICIANS/E/Example_Bob/Cover.sid; melody match 0.17
-[alpha/8951-1a2b3c4d] chip-3: C64: Alpha by Ann Example (1985 Nobody Soft), subtune 2, GAMES/A-F/Alpha.sid; melody match 0.05
+[alpha/8951-1a2b3c4d]   GAMES/A-F/Alpha.sid #1: closeness 73% (z 3.6), title match 1.00
+[alpha/8951-1a2b3c4d]   GAMES/A-F/Alpha.sid #2: closeness 5% (z 0.9), title match 1.00
+[alpha/8951-1a2b3c4d] chip-1: C64: Alpha by Ann Example (1985 Nobody Soft), subtune 1, GAMES/A-F/Alpha.sid; closeness 73%
+[alpha/8951-1a2b3c4d] chip-2: C64: Some Cover by Bob Example (1999 Example Group), subtune 2, MUSICIANS/E/Example_Bob/Cover.sid; closeness 17%
+[alpha/8951-1a2b3c4d] chip-3: C64: Alpha by Ann Example (1985 Nobody Soft), subtune 2, GAMES/A-F/Alpha.sid; closeness 5%
+[alpha/8951-1a2b3c4d] judged: chip-1 (high)
 [alpha/8951-1a2b3c4d] Alpha: 4 candidates, 3 checked, 1 refused by the converter, 3 chip takes
 tools/arrange-music: 3 chip takes; listen and choose with: tools/arrange-music pick W/all
 summary: kind=sid game=alpha scores=1 pending=1 takes=3 candidates=4 checked=3 refused=1 best=0.73 seconds=41 \
 source=C64: Alpha by Ann Example (1985 Nobody Soft), subtune 1, GAMES/A-F/Alpha.sid
+"""
+SAMPLE_JUDGE = """\
+tools/arrange-music: judging 3 scores
+[alpha/8951-1a2b3c4d] judged: chip-1 (high)
+@@
+[alpha/9000-00000001] judged: original (medium: partial melodic match)
+[alpha/9000-00000002] judged: ay-1 (low: close call)
+
+alpha/8951-1a2b3c4d  plays 60.0 s; original checkable z 16.2; null 30 real controls
+tools/arrange-music: 1 choices made by the judge, 0 of its earlier ones taken back (no longer sure); your own choices left alone
+summary: kind=judge game=alpha tunes=3 owner=0 picked=2 applied=1 sure=2 flagged=1 faults=2 renderer=checked seconds=1
 """
 SAMPLE_SID_NONE = """\
 tools/arrange-music: 1 scores, 1 to search for chip takes (up to 3 each)
@@ -4769,10 +5219,12 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
                          "Spectrum 128 original (ay-1)"], f"candidates: {labels}")
         cands = {c.take: c for c in st.candidates(g, sc)}
         check("consonance bass 0.71 pad 0.66" in cands["1"].info and cands["chip-1"].info.startswith("C64: Alpha")
-              and cands["chip-1"].match == 0.42 and cands["chip-1"].text().startswith("42% match to the original; C64: Alpha"),
-              "candidates: the take's metrics, the chip take's source and match")
-        check(cands["ay-1"].text().startswith("37% match to the original; Spectrum 128: Alpha by Someone, song 2") and cands["ay-1"].choice == "ay-1"
-              and cands["zx128-1"].choice is None and cands["zx128-1"].direct, "candidates: the AY take's source and match, its own sound")
+              and cands["chip-1"].judge["closeness"] == 0.97 and cands["chip-1"].text().startswith("close 97%, quality 62%, #1 the judge's pick; C64: Alpha"),
+              f"candidates: the take's metrics, the chip take's source and the judge's figures ({cands['chip-1'].text()})")
+        check(cands["ay-1"].text().startswith("close 40%, quality 50%, #4; plays only a fragment: 1.5 s of the 12.5 s that play; Spectrum 128: Alpha by Someone, song 2")
+              and cands["ay-1"].choice == "ay-1" and cands["0"].text().startswith("quality 30%, #3; take 0")
+              and cands["zx128-1"].choice is None and cands["zx128-1"].direct and cands["zx128-1"].judge is None,
+              f"candidates: the AY take's source, figures and fault, the original's, its own sound ({cands['ay-1'].text()}; {cands['0'].text()})")
         st.choose(g, sc, cands["ay-1"])
         check(read_choices(w / "all") == {"alpha/8951-1a2b3c4d": "ay-1"} and st.choice_summary(g) == "ay-1"
               and runner.waiting() == 0 and runner.current is None, "choose: written at once (no job), read back")
@@ -5199,7 +5651,7 @@ Attributes = A_ prw-r--r--
         wt = watched("sid", SAMPLE_SID, 2)
         check(wt.running_text() == "checking candidates: 2 of 4", f"jobs: a SID job's candidates ({wt.running_text()})")
         wt = watched("sid", SAMPLE_SID)
-        check(summary_text("sid", wt.summary) == "3 takes, best 73% match to the original (C64: Alpha by Ann Example (1985 Nobody Soft)), "
+        check(summary_text("sid", wt.summary) == "3 takes, best closeness 73% (C64: Alpha by Ann Example (1985 Nobody Soft)), "
               "1 tune skipped (the converter refuses it)", f"jobs: a SID job's result ({summary_text('sid', wt.summary)})")
         check(summary_text("sid", watched("sid", SAMPLE_SID_NONE).summary) == "no C64 tune found by that name",
               "jobs: a SID job that found no tune by the game's name")
@@ -5207,16 +5659,26 @@ Attributes = A_ prw-r--r--
               "jobs: an AY job whose songs the converter refused")
         check(summary_text("ay", watched("ay", SAMPLE_AY_HAD).summary) == "had its AY takes already: nothing to do",
               "jobs: an AY job with nothing to do")
-        check(summary_text("sid", {**watched("sid", SAMPLE_SID).summary, "best": "0.08"}).endswith("; weak: maybe another tune, listen, "
+        check(summary_text("sid", {**watched("sid", SAMPLE_SID).summary, "best": "0.08"}).endswith("; weak: probably another tune, listen, "
                                                                                                     "1 tune skipped (the converter refuses it)"),
-              "jobs: a weak best match said")
+              "jobs: a weak best closeness said")
+        wj = JudgeWatch()
+        for ln in SAMPLE_JUDGE.split("@@\n")[0].splitlines():
+            wj.feed(ln)
+        check(wj.running_text() == "judging: 1 of 3 scores" and wj.progress("judge").frac == 1 / 3, f"jobs: a judge job's progress ({wj.running_text()})")
+        for ln in SAMPLE_JUDGE.split("@@\n")[1].splitlines():
+            wj.feed(ln)
+        check(summary_text("judge", wj.summary) == "3 scores: 2 chosen by the judge (1 in this run), 0 by you, 1 to hear, 2 faulty takes",
+              f"jobs: a judge job's result ({summary_text('judge', wj.summary)})")
+        check(summary_text("judge", dict(wj.summary, renderer="skipped")).endswith("; the renderer check skipped (no music-preview)")
+              and summary_text("judge", {"kind": "judge", "tunes": "0"}) == "no takes to judge", "jobs: a judge job without the renderer, with nothing to judge")
         check(parse_summary("summary: kind=sid game=a takes=1 best=0.5 source=C64: X by Y, subtune 1, A/B C.sid")
               == {"kind": "sid", "game": "a", "takes": "1", "best": "0.5", "source": "C64: X by Y, subtune 1, A/B C.sid"}
               and parse_summary("tools/arrange-music: done") is None, "jobs: the summary line read, source to the line's end")
-        check(match_pct(0.73) == "73%" and match_pct("0.734") == "73%" and match_pct(0.004) == "<1%" and match_pct(0) == "0%"
-              and match_pct(0.005) == "1%" and match_pct(1) == "100%" and match_pct("-") == "-"
-              and [match_band(x) for x in (0.9, 0.497, 0.49, 0.2, 0.195, 0.19, 0.0)] == ["ok", "ok", "warn", "warn", "warn", "dim", "dim"],
-              "match: a whole percentage (<1% under half a percent), green from 50%, yellow from 20%, dim under, as shown")
+        check(pct(0.73) == "73%" and pct("0.734") == "73%" and pct(0.004) == "<1%" and pct(0) == "0%"
+              and pct(0.005) == "1%" and pct(1) == "100%" and pct("-") == "-"
+              and [close_band(x) for x in (0.9, 0.497, 0.49, 0.2, 0.195, 0.19, 0.0)] == ["ok", "ok", "warn", "warn", "warn", "dim", "dim"],
+              "closeness: a whole percentage (<1% under half a percent), green from 50%, yellow from 20%, dim under, as shown")
         check(parse_dur("40 s") == 40 and parse_dur("12 min") == 720 and parse_dur("1.5 h") == 5400 and parse_dur("?") is None
               and fmt_secs(192) == "3 min 12 s" and fmt_secs(7) == "7 s", "jobs: durations read and written")
 
@@ -5299,7 +5761,7 @@ Attributes = A_ prw-r--r--
             none.watch.feed(ln)
         none.rc, none.state = 0, "done"
         sg.job_finished(none)
-        check(msg1 == "SID takes for Alpha: 3 (best 73% match to the original); Enter on the game to listen"
+        check(msg1 == "SID takes for Alpha: 3 (best closeness 73%); Enter on the game to listen"
               and sg.flash_msg == "SID takes for Bravo: no C64 tune found by that name",
               f"jobs: a finished takes job says its result ({msg1}; {sg.flash_msg})")
 
@@ -5407,7 +5869,7 @@ Attributes = A_ prw-r--r--
         check(screen(24, 120)[23].endswith("1/3  · job 1 of 3") and len(screen(24, 120)[23]) == 119
               and screen(12, 40)[11].startswith("learning games ■") and "job" not in screen(12, 40)[11]
               and len(screen(12, 40)[11]) <= 39 and "■" in screen(6, 16)[5], "screen: the bar at 120 and 40 columns and at 16, the queue gone")
-        sv.flash("SID takes for Alpha: 3 (best 73% match to the original)", "ok")
+        sv.flash("SID takes for Alpha: 3 (best closeness 73%)", "ok")
         sc = screen(24, 80)
         check(sc[22].startswith(" SID takes for Alpha: 3") and sc[23].startswith("learning games ■"),
               "screen: a message on the key line, the bar kept below it")
@@ -5424,6 +5886,99 @@ Attributes = A_ prw-r--r--
         bot = screen(24, 80)[23]
         check(bot.startswith("AI takes: Alpha ■") and "take 2/4 bass 38%" in bot and bot.endswith("· job 2 of 3"),
               f"screen: an AI job's bar, with the queue (a held job counted) ({bot!r})")
+
+        # -- the judge: m and --auto, its choices told apart from the owner's, the glance, n, the figures
+        class KeyCurses(ScrCurses):
+            KEY_DOWN, KEY_UP, KEY_NPAGE, KEY_PPAGE, KEY_HOME, KEY_END = range(258, 264)
+            KEY_ENTER, KEY_RIGHT, KEY_LEFT, KEY_BACKSPACE, KEY_RESIZE = range(264, 269)
+        rjd = Runner(t / "judge.log", threaded=False)
+        sj = Studio(games.resolve(), w, parse_args([str(games), "-o", str(w), "--sid-dir", str(t / "sids"), "--ay-dir", str(t / "ays")]), rjd)
+        chf = w / "all" / "arrange" / "choices.toml"
+        chf.write_text("[choices]\n")
+        sj.changed()
+        g, sc = sj.plan.game("alpha"), sj.plan.game("alpha").scores[0]
+        sid = f"alpha/{sc.key}"
+        check(sj.tune_state(g, sc)[0] == "sure" and sj.tune_counts(g)["sure"] == 1 and sj.choice_summary(g) == "original",
+              f"judge: a judge sure of its pick that has not chosen ({sj.tune_state(g, sc)})")
+        before = len(calls.read_text().splitlines())
+        sj.auto(["alpha"])
+        held = [j for j in rjd.jobs if j.kind == "judge"]
+        check(len(held) == 1 and held[0].state == "waiting" and held[0] not in rjd.pending and "then the judge" in sj.flash_msg,
+              f"m: the SID and AY jobs queued, the judge held until they are done ({sj.flash_msg})")
+        rjd.drain()
+        new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
+        check([c[0] for c in new] == ["chip", "ay", "judge"] and new[-1] == ["judge", str(w / "all"), "--game", "alpha", "--apply"]
+              and sj.marked("alpha") >= {"sid", "ay"}, f"m: SID and AY marked and made, then judge --apply for the game ({[c[0] for c in new]})")
+        ch, jd = read_choice_tables(w / "all")
+        check(ch == {sid: "chip-1"} and jd == {sid: "chip-1"} and sj.tune_state(g, sc)[0] == "judge" and sj.choice_summary(g) == "chip-1 (judge)"
+              and sj.flash_msg.startswith("judge, Alpha: 1 score: 1 chosen by the judge (1 in this run)"), f"m: the judge's choice, marked as its own, read back ({sj.flash_msg})")
+        status = "\n".join(sj.status_lines())
+        check("scores with takes: 1 settled (0 by you, 1 by the judge), 0 to hear" in status and "choice: chip-1 (the judge's)  chosen by the judge" in status
+              and "judge: chip-1 (high)" in status and "   j SID chip-1" in status and "close 97%, quality 62%, #1 the judge's pick" in status,
+              "--status: the scores settled, the judge's choice told apart, its verdict and figures")
+        ui = UI(Scr(24, 140), sj, KeyCurses())
+        ui.utf8 = True
+        ui.scr = Scr(24, 140)
+        ui.draw()
+        row = next((ln for ln in ui.scr.lines() if "Alpha" in ln and "FM" in ln), "")
+        check("✓" in row and "chip-1 (judge)" in row, f"games screen: the glance and the judge's choice ({row!r})")
+        ui.game, ui.screen = g, "game"
+        ui.draw()
+        gl = ui.scr.lines()
+        chip = next((ln for ln in gl if "SID chip-1" in ln), "")
+        ayr = next((ln for ln in gl if "AY ay-1" in ln), "")
+        head = next((gl[i + 1] for i, ln in enumerate(gl) if ln.startswith("score ")), "")
+        check(chip.startswith("> j SID chip-1") or chip.startswith("  j SID chip-1"), f"game screen: the judge's choice marked j ({chip!r})")
+        check("#1" in chip and "close  97%" in chip and "qual  62%" in chip and "(poly  50% harm  60% rhy  70%)" in chip
+              and "#4" in ayr and "plays only a fragment" in ayr and "chosen by the judge" in head and "judge: chip-1 (high)" in head,
+              f"game screen: the judge's order, closeness, quality and its parts, faults, the score's state ({chip!r}; {ayr!r}; {head!r})")
+        cands = {c.take: c for c in sj.candidates(g, sc)}
+        sj.choose(g, sc, cands["ay-1"])
+        ch, jd = read_choice_tables(w / "all")
+        ui.draw()
+        ayr = next((ln for ln in ui.scr.lines() if "AY ay-1" in ln), "")
+        check(ch == {sid: "ay-1"} and jd == {} and sj.tune_state(g, sc)[0] == "owner" and "* AY ay-1" in ayr,
+              "c: a choice of the owner's, the judge's mark gone, marked *")
+        sj.auto(["alpha"])
+        rjd.drain()
+        check(read_choice_tables(w / "all") == ({sid: "ay-1"}, {}), "m: the judge leaves the owner's choice alone")
+        chf.write_text("[choices]\n")
+        os.environ["FAKE_JUDGE"] = "unsure"
+        before = len(calls.read_text().splitlines())
+        sj.auto()
+        rjd.drain()
+        os.environ.pop("FAKE_JUDGE")
+        new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
+        check(new and new[-1] == ["judge", str(w / "all"), "--apply"] and read_choices(w / "all") == {}
+              and sj.tune_state(g, sc)[0] == "hear" and sj.choice_summary(g) == "listen",
+              f"M: every game, one judge job; a judge not sure chooses nothing: to hear ({new[-1] if new else None})")
+        ui.screen, ui.gi = "games", 1
+        ui.draw()
+        lines = ui.scr.lines()
+        row = next((ln for ln in lines if "Alpha" in ln and "FM" in ln), "")
+        check("?1" in row and "listen" in row and "1 game to hear (n: the next)" in lines[0], f"games screen: a game to hear, and how many ({row!r})")
+        ui.key(ord("n"))
+        check(ui.gi == 0 and sj.flash_msg.startswith("Alpha: 1 score to hear"), f"n: the cursor to the next game to hear ({ui.gi}, {sj.flash_msg})")
+        ui.screen = "game"
+        ui.draw()
+        gl = ui.scr.lines()
+        head = next((gl[i + 1] for i, ln in enumerate(gl) if ln.startswith("score ")), "")
+        check(head.startswith("  to hear  judge: chip-1 (low: close call)"), f"game screen: the score to hear and why, under its heading ({head!r})")
+        before = len(calls.read_text().splitlines())
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            rc = main([str(games), "-o", str(w), "--auto", "--game", "alpha", "--sid-dir", str(t / "sids"), "--ay-dir", str(t / "ays")])
+        new = [json.loads(ln) for ln in calls.read_text().splitlines()[before:]]
+        check(rc == 0 and [c[0] for c in new] == ["chip", "ay", "judge"] and read_choice_tables(w / "all") == ({sid: "chip-1"}, {sid: "chip-1"})
+              and "judged; 1 scores settled (0 by you, 1 by the judge), 0 to hear" in buf.getvalue(),
+              f"--auto --game alpha: the jobs, the judge's choice, the counts ({buf.getvalue()[-200:]!r})")
+        for bad, why in ((["--auto", "--game", "bravo"], "a game without scores"), (["--auto", "--game", "nobody"], "an unknown game")):
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = main([str(games), "-o", str(w)] + bad)
+            except SystemExit as e:
+                rc = e.code
+            check(rc not in (0, None), f"--auto: {why} fails")
 
         # -- the screen, in a pseudo-terminal: keys, a resize down to 3x10, quit
         import fcntl
@@ -5515,13 +6070,13 @@ Attributes = A_ prw-r--r--
         check(status is not None and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and "Traceback" not in jt,
               "jobs view: exit 0" + ("" if "Traceback" not in jt else ": " + jt[jt.find("Traceback"):][:600]))
         check("queued 3 jobs (1 AI, 1 SID, 1 AY): J shows them" in steps["g"], "jobs view: g says what it queued and that J shows it")
-        check(re.search(r"takes for Alpha: 1 \(best \d+% match to the original\)", steps["g"] + steps["wait"]) is not None,
+        check(re.search(r"takes for Alpha: 1 \(best closeness \d+%\)", steps["g"] + steps["wait"]) is not None,
               "jobs view: a finished takes job's result on the message line")
         jv = steps["jobs"]
         plain = re.sub(r"\x1b(\[[0-9;?]*[A-Za-z]|\([AB0])", "", jv)  # the colours out
         missing = [x for x in ("finished (5)", "done in", "SID takes", "AI takes", "AY takes", "learn the games",
-                               "reuse earlier learning", "best 42% match to the original", "Someone",
-                               "1 take written", "1 song skipped (48K beeper or CPC tunes)") if x not in plain]
+                               "reuse earlier learning", "best closeness 42%", "Someone",
+                               "1 take written", "song skipped (48K beeper or CPC tunes)") if x not in plain]
         missing += [x for x in ("cancel/stop",) if x not in re.sub(r"\x1b(\[[0-9;?]*[A-Za-z]|\([AB0])", "", jt)]
         check(not missing and re.search(r"\x1b\[3[1-6]m", jv) is not None,
               f"jobs view: each job, its state, what and game, its result, in colour; its keys (missing: {missing})")
@@ -5587,7 +6142,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--cache", metavar="DIR", help="tools/make-packages --cache DIR: another folder for the SDK files")
     ap.add_argument("--model", metavar="NAME", help="the generator for AI takes (tools/arrange-music generate --model)")
     ap.add_argument("--generate", metavar="METHODS", help="without the screen: mark and generate ai, sid, ay (comma-separated)")
-    ap.add_argument("--game", metavar="ID", action="append", help="with --generate: only this game (again for more)")
+    ap.add_argument("--auto", action="store_true",
+                    help="without the screen: find the C64 and Spectrum 128 versions, judge, choose where the judge is sure")
+    ap.add_argument("--game", metavar="ID", action="append", help="with --generate or --auto: only this game (again for more)")
     ap.add_argument("--assign", metavar="GAME=N", action="append",
                     help="without the screen: put the game in pack N (1 to 9; 0: in none); again for more")
     ap.add_argument("--auto-fill", action="store_true",

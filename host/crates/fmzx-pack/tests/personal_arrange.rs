@@ -500,7 +500,7 @@ fn chip(rec: &ScoreRecord) -> (String, Vec<ScoreEvent>, Vec<ScoreEvent>, (u32, u
         "game = \"looper\"\nname = \"looper\"\nkey = \"{}\"\nclock_hz = 3500000\nintro_t = {}\nloop_t = {}\nvoices = 3\n\
          roles = [\"lead\", \"bass\", \"pad\"]\ntake = \"chip-1\"\ngenerator = \"chip sid\"\ntimeline = \"own\"\n\
          own_intro_t = {oi}\nown_loop_t = {ol}\nsource = \"{CHIP_SOURCE}\"\nsid_file = \"M/Made_Up.sid\"\nsubtune = 2\n\n\
-         [metrics]\nmelody_match = 0.9\ntitle_match = 1.0\n",
+         [metrics]\ncloseness = 0.9\ntitle_match = 1.0\n",
         score_key(rec),
         rec.intro_t,
         rec.loop_t

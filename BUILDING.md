@@ -186,11 +186,23 @@ original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music gen
 the game's C64 tune, and **AY**, its Spectrum 128 tune ([music from other
 versions](#music-from-other-versions)). A game with no score plays FM from its code, or the
 beeper, and has nothing to arrange. Open a game to hear each score's candidates (the beeper, FM,
-each AI take with its figures, each C64 or Spectrum 128 take with its match to the original as a
-percentage, `73% match`, green from 50%, yellow from 20%, then its source)
-and choose one. What plays is `music-preview`'s render of what the FM-1 plays or, when that is
-not built, the renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay`
-or `aplay`.
+each AI take with its figures, each C64 or Spectrum 128 take with its source) and choose one.
+What plays is `music-preview`'s render of what the FM-1 plays or, when that is not built, the
+renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay` or `aplay`.
+
+The judge cuts down how much there is to hear. `m` on a game (`M` for every game) finds and
+converts its C64 and Spectrum 128 versions (SID and AY, no AI model), then runs
+[`tools/arrange-music judge --apply`](#arranged-music), which weighs every take of each score from
+its notes and chooses the take where it is sure and you have not chosen. Each take on the game
+screen then shows its place in the judge's order (`#1`, the judge's pick), its closeness to the
+original (`close 97%`: green from 50%, the same tune; yellow from 20%, part of it; dim under, another
+tune), its quality (`qual 62%`; polyphony, harmony and rhythm too on a wide screen) and its faults in
+red (`refused by the renderer: ...`, `plays only a fragment: ...`); each score says whether it is
+chosen by you or by the judge, or is to hear and why (`judge: chip-1 (low: close call)`). On the
+games list a game shows `?2` (yellow) for two scores to hear, `✓` when every score with takes is
+chosen, `m` when there are takes the judge has not chosen from yet; the header counts the games to
+hear and `n` jumps to the next. The choice is marked `*` when you made it, `j` when the judge did;
+the judge never changes yours.
 
 Which games go in which pack is yours to choose before a build: `1` to `9` put the game in that
 pack, `0` (or `x`) in none, `f` puts every game in no pack in the first pack with room for it (in
@@ -202,21 +214,24 @@ the same key again; that pack then shows red and no build starts. `p` lists the 
 games, where the same keys move a game. Sizes are the last learning's: after choosing a take the
 panel says so, and `r` measures again.
 
-Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `1`-`9`/`0` as above, `f`
-fills, `p` the packs, `a`/`s`/`y` mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g`
-generates what is marked, `J` lists the jobs, `r` learns again, `b` builds, `l` shows the log, `?`
-the full help, `q` quits. On a game: Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c` chooses it (at once; the chosen one is marked `*`), `a`/`s`/`y`/`g`
-as before, Left, `h` or Backspace goes back. Long steps run one at a time in the background, and
+Keys on the games screen: arrows or `j`/`k` move, Enter opens the game, `m`/`M` find and judge
+(above), `n` the next game to hear, `1`-`9`/`0` as above, `f` fills, `p` the packs, `a`/`s`/`y`
+mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g` generates what is marked, `J` lists the
+jobs, `r` learns again, `b` builds, `l` shows the log, `?` the full help, `q` quits. On a game:
+Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c`
+chooses it (at once, as your choice; the chosen one is marked `*`), `m` and `a`/`s`/`y`/`g` as
+before, Left, `h` or Backspace goes back. Long steps run one at a time in the background, and
 the bottom line of every screen is the one place their progress shows: a bar for the running job,
 `learning games ■■■■■■■■■■■□□□□□□□□□□□□□□□ 12/45  ~4 min  · job 1 of 4` (the games learned, the MB
-downloaded, an AI job's takes and passes, a SID or AY job's candidates checked, a build's packs;
+downloaded, an AI job's takes and passes, a SID or AY job's candidates checked, the scores judged, a build's packs;
 with nothing to count, no bar: a spinner and the time the step has run), yellow while it runs, green when the
 last job is done, red when one failed (`#` and `.` without UTF-8; on a narrow terminal the queue
 and then the figures go first). Messages take the key line above it for 3 s. `J`, on every screen, lists every job of the session: the one
 running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
 MB), those waiting in the order they run, and those finished with their result, read from
-`tools/arrange-music`'s summary line (`3 takes, best 73% match to the original (C64: …)`, `no C64 tune
-found by that name`, `0 takes, 4 songs skipped (48K beeper or CPC tunes)`); Enter shows a job's
+`tools/arrange-music`'s summary line (`3 takes, best closeness 73% (C64: …)`, `no C64 tune
+found by that name`, `0 takes, 4 songs skipped (48K beeper or CPC tunes)`, `12 scores: 3 chosen by the
+judge (2 in this run), 4 by you, 5 to hear`); Enter shows a job's
 own output, `o` opens its game to listen, `x` takes a waiting job off the queue or, after `y`,
 stops the running one. `g` says how many jobs it queued, and the games list marks a game whose
 takes are waiting or being made with `…`. The screen is in colour (`NO_COLOR` set: bold and
@@ -225,11 +240,14 @@ reverse only).
 Without the screen: `--assign ID=N` (again for more) puts a game in pack N (0: in none; a pack it
 would take over refuses it) and `--auto-fill` fills the packs as `f` does; `--generate` marks the
 methods named for every game with scores (or for the games `--game` names, by the ids `--status`
-shows) and runs the jobs `g` runs; choosing a take stays a choice by ear (the screen, or
-`tools/arrange-music pick W/all`). `--build` builds, `--status` prints (each game's pack and the
+shows) and runs the jobs `g` runs; `--auto` (with `--game`, or for every game with scores) does
+what `m` does: the SID and AY jobs, then the judge, which chooses where it is sure and prints the
+scores settled and those to hear (the rest is a choice by ear: the screen, or `tools/arrange-music
+pick W/all`). `--build` builds, `--status` prints (the scores settled, by you or the judge, and to
+hear; each score's state and the judge's verdict, each take's figures; each game's pack and the
 packs' fill among the rest), `--try [N]` serves pack N (1 unless given) in the browser test bench;
-given together they run in that order (assign, auto-fill, generate, build, status, try), and a step
-that fails stops the command.
+given together they run in that order (assign, auto-fill, generate, auto, build, status, try), and
+a step that fails stops the command.
 
 The workspace: `all/` the learning (`personal-games.toml`, which keeps your edits, the scores,
 their takes and `choices.toml`, the cache), `studio.toml` the methods marked and each game's pack,
@@ -482,7 +500,8 @@ chosen like any score's, and with none chosen the routine plays it live as befor
 goes into the pack as a score that plays in place of the routine's notes.
 
     tools/pack-studio ~/games --generate ai       # takes for every game's scores (a and g on the screen)
-    tools/arrange-music pick build/studio/games/all   # listen and choose on a page (or c on the screen)
+    tools/arrange-music judge build/studio/games/all --apply   # choose where the judge is sure
+    tools/arrange-music pick build/studio/games/all   # listen and choose the rest on a page (or c on the screen)
     tools/pack-studio ~/games --build             # the packs, with the chosen takes
 
 `tools/arrange-music` is the engine `tools/pack-studio` runs for AI, SID and AY takes, on its
@@ -520,15 +539,35 @@ once it is chosen, at the next build.
   takes 1 to N for its `score.toml` as it is; a changed `score.toml` gets new takes in place of the
   old ones (choose again), and an interrupted run resumes at the missing takes.
 - `tools/arrange-music pick DIR [--port P]` serves a page at `http://127.0.0.1:8765/` (or a free
-  port; only this computer can open it): per score, the original and each take, the take as the
-  FM-1 plays it and the whole arrangement the model wrote, with its figures (below); Save writes
-  `DIR/arrange/choices.toml`. `--set GAME/KEY=N` chooses take N without the page (0: the original),
-  and `--list` prints each score, its takes, what made them, their figures and the choice; other
-  choices in the file are kept. Both mark a shadow score `(replaces the live version when
-  chosen)`; its original is the routine playing live.
-- `tools/arrange-music selftest` checks `generate` (with `rules`), the files it writes, `pick
-  --set`, `--list` and the page's save in a temporary folder, with no model (and, once uv has
-  installed the packages, no network).
+  port; only this computer can open it): per score, the judge's verdict, the original and each
+  take, the take as the FM-1 plays it and the whole arrangement the model wrote, with its figures
+  (below) and the judge's (closeness, quality, its place in the judge's order, its faults); Save
+  writes `DIR/arrange/choices.toml`. `--set GAME/KEY=N` chooses take N without the page (0: the
+  original), and `--list` prints each score, its takes, what made them, their figures and the
+  choice (`(the judge)` after one the judge made); other choices in the file are kept, and a choice
+  made here is yours. Before the page or the list it judges the scores (quick once they are
+  judged) and warns of each faulty take (`warning: <game>/<key> chip-2: refused by the renderer:
+  ...`). Both mark a shadow score `(replaces the live version when chosen)`; its original is the
+  routine playing live.
+- `tools/arrange-music judge DIR [--game ID]... [--apply]` weighs each score's takes and its
+  original from their notes and prints a table per score: per take its closeness to the original's
+  tune (0 to 1, key, octave and tempo not counting, calibrated against 30 takes of other games),
+  its quality over the seconds the FM-1 plays of it (polyphony, harmony, rhythm, times a fault
+  multiplier), its faults in words (refused by the renderer, mostly silent, a silent gap, stuck
+  notes, extreme registers, plays only a fragment) and a score, quality x (0.3 + 0.7 x closeness),
+  closeness raised for the game's own period music; the highest is the judge's pick (the original
+  can win), with a confidence (high, medium, low) and the reasons. `--apply` writes the pick to
+  `choices.toml` for each score it is sure of (high) that you have not chosen, marked in a
+  `[judged]` table so it is told apart from yours and judged again later (changed, or taken back
+  when no longer sure); yours are never changed. The renderer check runs `music-preview`
+  (`FMZX_MUSIC_PREVIEW`, else `host/target/release/music-preview`); without it the check is skipped
+  and the judge says so. `generate`, `chip` and `ay` end by judging the scores they worked on
+  (without `--apply`). The figures go to `judge.toml` beside each `score.toml`, reused while the
+  score and its takes stay the same.
+- `tools/arrange-music selftest` checks `generate` (with `rules`), the files it writes, `chip`,
+  `ay`, `pick --set`, `--list`, the page's save and the judge (its measures on made-up tunes, the
+  renderer's refusals through a stand-in, the cache, `--apply`) in a temporary folder, with no model
+  (and, once uv has installed the packages, no network).
 
 The renders play General MIDI instruments through FluidSynth: they show the parts, not the FM-1's
 sound. To hear a take as the FM-1 plays it, render it with `music-preview` (below), or choose it,
@@ -557,10 +596,13 @@ exit 1, a take the pack would refuse `refused: <why>` and exit 3.
 
     choices.toml                     [choices] "<game>/<key>" = <take> (0 or absent: the original;
                                      "chip-<n>": a C64 take, "ay-<n>": a Spectrum 128 take,
-                                     see "Music from other versions")
+                                     see "Music from other versions"); [judged] the same keys
+                                     for the choices judge --apply made (fmzx-pack reads only
+                                     [choices])
     <game>/<key>/score.toml          the score's notes (fmzx-pack personal)
                  original.mid, original.wav   the score alone
                  takes.toml          the takes made, for which score.toml, by what, how long each took
+                 judge.toml          the judge's figures per take, its pick, confidence and reasons
                  take-<n>/arranged.toml       the take as the FM-1 plays it
                  take-<n>/fm1.mid, fm1.wav    the same, to listen to (the drum's level picks a drum)
                  take-<n>/full.mid, full.wav  the original with everything the model wrote
@@ -639,6 +681,7 @@ tune's own timeline (its own intro and loop), and stops when the beeper stops ma
 Spectrum tune (the game has moved on), as any score does.
 
     tools/pack-studio ~/games --generate sid,ay                       # candidates as chip-<n> and ay-<n> takes
+    tools/pack-studio ~/games --auto                                  # the same, then the judge chooses where sure
     cd host && cargo build --release -p fmzx-pack && cd ..          # or directly: the converter (SID and AY),
     tools/arrange-music chip build/studio/games/all --sid-dir ~/C64Music   # on collections you have
     tools/arrange-music ay build/studio/games/all --ay-dir ~/AY/music/ay
@@ -658,16 +701,15 @@ sound) is written only when `sidplayfp` is on the PATH.
 
 **Finding the tune.** `tools/arrange-music chip DIR --sid-dir PATH [--game ID]... [--max N]
 [--force]` looks, for each score, for SID files whose file name or header title is the game's
-name, or whose STIL entry names it (more so when the entry mentions the Spectrum), converts 60 s
-of each candidate subtune and compares its melody with the score's: `melody_match` is the share of
-melodic steps (runs of four intervals, so a transposition or an octave change does not matter)
-the two have in common. Unrelated tunes score about 0 to 0.1, the same tune arranged again 0.2 to
-0.9; ornamented melodies score low even when they are the same tune. Candidates are ranked by
-melody match, then by how well the title matches, and the best N (default 3) are converted for
-180 s and written as `DIR/arrange/<game>/<key>/chip-<n>/` (`arranged.toml`, `fm1.mid`, `fm1.wav`,
-and `chip.wav` when it can be made). Most C64 versions play a different piece than the Spectrum
-game, so many scores find nothing that matches; the melody match says which candidates are worth
-a listen.
+name, or whose STIL entry names it (more so when the entry mentions the Spectrum), converts 180 s
+of each candidate subtune and measures its closeness to the score's tune, as the judge does
+(above): about 1 for the same tune in another key, tempo or arrangement, under 0.2 for another
+tune. Candidates are ranked by closeness, then by how well the title matches, and the best N
+(default 3) are written as `DIR/arrange/<game>/<key>/chip-<n>/` (`arranged.toml`, `fm1.mid`,
+`fm1.wav`, and `chip.wav` when it can be made). Most C64 versions play a different piece than the
+Spectrum game, so many scores find nothing close; the judge then weighs how each take sounds and
+where it comes from (the game's own C64 music counts for more than a later remix), and says when
+it is not sure.
 
 **From a Spectrum 128 tune.** `tools/arrange-music ay DIR --ay-dir PATH [--game ID]... [--max N]
 [--force]` does the same with the `.ay` files at PATH: candidates are the files whose file name or
@@ -681,8 +723,9 @@ an Amstrad CPC or SAM Coupé song; the converter refuses those, and the tool ski
 line each and counts them. `ay.wav` (the Spectrum 128's own sound) is written only when `ffmpeg`
 reads `.ay` files (its libgme demuxer).
 
-**Choosing.** The `pick` page lists each chip take with its source (`C64: <title> by <author>
-(<released>), subtune N, <file>`) and each ay take with its own, with their melody match;
+**Choosing.** `tools/arrange-music judge DIR --apply` (`m` or `--auto` in the studio) chooses
+where the judge is sure. The `pick` page lists each chip take with its source (`C64: <title> by
+<author> (<released>), subtune N, <file>`) and each ay take with its own, with the judge's figures;
 choosing one saves `"<game>/<key>" = "chip-1"` (or `"ay-1"`) in `choices.toml`, and
 `tools/arrange-music pick DIR --set GAME/KEY=chip-1` does the same without the page (`--list`
 prints the chip and ay takes too). The next build packs the

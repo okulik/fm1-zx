@@ -72,17 +72,11 @@ version, from a collection of .ay files the owner has (ay, below).
       (0.8; 1.0 when the entry also mentions the Spectrum, as "[from the Spectrum game]" does).
       At most 12 (file, subtune) pairs a score are checked, a subtune of each file in turn (one
       STIL names first, then the start song, then the rest).
-      The melody check converts 60 s of each with `fmzx-pack chip-notes` (cached in
-      DIR/arrange/.chip-notes/) and compares the top lines: the score's lead voice (its loop
-      repeated to 60 s) and the chip tune's highest sounding pitch, each as the pitches held at
-      least 3 frames. melody_match is the share of interval 4-grams (intervals folded into -5..+6
-      semitones, so transposition and octave changes do not matter) the two have in common, over
-      the smaller set (at least 24, so a short jingle cannot match by chance): unrelated tunes score about 0-0.1, the same tune arranged
-      again 0.2-0.9; ornamented melodies score low even when they are the same tune, so listen.
-      pc_corr, the pitch-class histograms' correlation at the best transposition, is kept as a
-      weaker second measure. Rank: melody_match + 0.1 title_match + 0.1 for a STIL entry naming
-      the Spectrum.
-      The best N are converted for 180 s, each written as:
+      Each is converted for 180 s with `fmzx-pack chip-notes` (cached in
+      DIR/arrange/.chip-notes/) and checked for closeness to the score's tune (judge, below:
+      about 1.0 for the same tune in another key, tempo or arrangement, under 0.2 for another
+      tune). Rank: closeness + 0.1 title_match + 0.1 for a STIL entry naming the Spectrum. The
+      best N are written, each as:
         arranged.toml  the score's header, voices, roles and notes as a take's (the converter's
                        voices: 0 the lead, the highest SID voice on average; 1 the bass, the
                        lowest; 2 the pad; 3 the drum), with take = "chip-<n>", generator = "chip sid", timeline = "own"
@@ -91,12 +85,13 @@ version, from a collection of .ay files the owner has (ay, below).
                        loop; the score's intro_t and loop_t stay the fingerprint's), source
                        ("C64: <title> by <author> (<released>), subtune N, <file>"), sid_file,
                        subtune, stil (the STIL text that named the game, if any), and [metrics]
-                       melody_match, title_match, pc_corr, rank, stil_spectrum and notes a second
+                       closeness, title_match, rank, stil_spectrum and notes a second
         fm1.mid, fm1.wav  the notes on General MIDI instruments, rendered as the takes are
         chip.wav       the C64's own sound, when sidplayfp is on PATH (else skipped, with a note)
       The converter is --fmzx-pack PATH, else $FMZX_PACK, else host/target/release/fmzx-pack
       (cd host && cargo build --release -p fmzx-pack). generate never touches chip-<n>/, and
-      generate --force leaves them alone.
+      generate --force leaves them alone. generate, chip and ay end by judging the scores they
+      worked on (judge, below, without --apply), so judge.toml is there for tools/pack-studio.
 
   tools/arrange-music ay DIR --ay-dir PATH [--game ID]... [--max N] [--force]
                              [--fmzx-pack PATH] [--soundfont PATH]
@@ -113,7 +108,7 @@ version, from a collection of .ay files the owner has (ay, below).
       song) pairs a score are checked, a song of each file in turn (one named for the game first,
       then the first song, then the rest). Songs the converter refuses (48K beeper tunes,
       Amstrad CPC and SAM songs, files that need a special player) are skipped without a line
-      each and counted. The melody check, the rank (without STIL) and the takes are chip's, with
+      each and counted. The closeness check, the rank (without STIL) and the takes are chip's, with
       take = "ay-<n>", generator = "chip ay", source ("Spectrum 128: <title> by <author>, song N,
       <file>": the song's name, else the file's misc string), ay_file and subtune (the song,
       1-based). ay.wav, the Spectrum 128's own sound, is written when ffmpeg reads .ay files
@@ -128,30 +123,99 @@ version, from a collection of .ay files the owner has (ay, below).
           "<game>/<key>" = <take>     # 0 or absent: the original
           "<game>/<key>" = "chip-1"   # a chip take, by its folder
           "<game>/<key>" = "ay-1"     # an ay take, by its folder
-      --set writes choices without the page (N, chip-N or ay-N); --list prints every score, its
-      takes, their metrics, its chip and ay takes with their source and melody match, and the
-      choice. Choices
-      of other scores in the file are kept. The page and the list mark a shadow score "(replaces
-      the live version when chosen)"; its original is the live version.
+      --set writes choices without the page (N, chip-N or ay-N); --list prints every score, the
+      judge's verdict, its takes, their metrics, its chip and ay takes with their source, and
+      each take's judge figures (closeness, quality, its place in the judge's order, its faults),
+      and the choice ("(the judge)" after one the judge made). The page shows the same. Choices
+      of other scores in the file are kept, and a choice made here is the owner's (the judge's
+      mark on it goes). Before the list or the page it judges every score (judge, below, without
+      --apply; quick once judge.toml is there) and warns of each faulty take: "warning:
+      <game>/<key> chip-2: refused by the renderer: ...", "plays only a fragment: ...". The page
+      and the list mark a shadow score "(replaces the live version when chosen)"; its original is
+      the live version.
 
-  The summary line: generate, chip and ay each end with one line of key=value fields, kept
-  stable for tools/pack-studio's jobs view and for scripts (each on one line):
+  tools/arrange-music judge DIR [--game ID]... [--apply]
+      Weighs each score's takes (take-<n>, chip-<n>, ay-<n>) and its original (take 0) from their
+      notes, prints a table per score and, with --apply, chooses where it is sure. Per take:
+        closeness   how close it is to the original's tune, 0 to 1: the best Smith-Waterman
+                    local alignment of any of the original's melody lines (each voice's and the
+                    top line, ornaments and stray notes dropped, its first 160 notes) with any of
+                    the take's (over the seconds that can play, 150 s for a looping score, else
+                    1.4 x its length + 2 s), by pitch class under all 12 transpositions with a
+                    bonus where the notes' relative lengths agree (so key, octave and tempo do not
+                    count), per original note; then as a z against the null (below) and a
+                    logistic, 0.5 at z 3. The original is 1.
+        quality     (0.3 polyphony + 0.35 harmony + 0.35 rhythm) x the fault multiplier, over the
+                    seconds the FM-1 plays of it (60 s with the loop repeated for a looping score,
+                    else the score's length): polyphony, the voices sounding at once and whether
+                    they differ; harmony, the consonance of the voices sounding together, the
+                    key's fit, long minor-second clashes; rhythm, a moving bass under the lead,
+                    the drum, a steady pulse
+        faults      in words, each lowering the multiplier: refused by the renderer (music-preview
+                    exits 3: the pack would play the original), mostly silent, a silent gap of
+                    over 2 s, stuck notes, sound in extreme registers, plays only a fragment
+                    (shorter than what plays)
+        provenance  0 to 1 from the take's source: the game's own period C64 music, a games/ .ay
+                    file, a STIL entry naming the Spectrum tune count fully; later covers, demos
+                    and remixes little
+        score       quality x (0.3 + 0.7 x closeness), closeness raised to 0.6 x provenance (the
+                    original's 1): another tune must sound much better to win
+      The highest score is the judge's pick (the original can win). Its confidence: low on a
+      close call (the pick less than 15% ahead of the next) or when the original is too plain to
+      check closeness (itself under z 5) and another take wins, or the pick is refused; medium
+      with any flag (the winner not shown to be the same tune, closeness 0.5; a partial melodic
+      match, 0.2 to 0.8; fewer than 10 real controls in the null); else high.
+      The null: the alignments of 30 takes of other games (another family: an id's "-2", "-3",
+      "-ii" and the like left out; none from a file of this score's takes), sampled with the
+      score's id as the seed; when the workspace has fewer, other games' originals, then
+      controls built from the score itself, copies of the original with each voice's pitches
+      shuffled and made-up tunes, alternately (their spread taken as at least 0.4 x their mean,
+      as built controls vary less than real music).
+      The renderer check runs $FMZX_MUSIC_PREVIEW, else host/target/release/music-preview, for 2 s
+      of each take; without it the check is skipped and the judge says so.
+      DIR/arrange/<game>/<key>/judge.toml holds the figures: version, score (the score.toml's
+      digest, as takes.toml's), plays, search, checkable_z, null_real, null_built, null (the raw
+      alignments), renderer, pick, confidence, flags, margin, order (the takes, best first) and a
+      [[take]] per take (name, digest of its arranged.toml, closeness, z, raw, provenance,
+      quality, polyphony, harmony, rhythm, fault, faults, combined, rank, refused, rendered,
+      source). It is reused while the score is the same: a take's figures while its arranged.toml
+      and the renderer are, the null while it has 30 real controls or no more are there.
+      --apply writes the pick to choices.toml for each score the judge is sure of (high) that
+      has no choice of the owner's, and marks it in a [judged] table (fmzx-pack reads only
+      [choices]); a choice is the judge's while [judged] holds the same value, so the owner's
+      choices, made with pick, the page or tools/pack-studio, are never changed. The judge's
+      own choices are judged again: changed to another sure pick, or taken back (the score plays
+      the original) when it is no longer sure.
+
+  The summary line: generate, chip, ay and judge each end with one line of key=value fields,
+  kept stable for tools/pack-studio's jobs view and for scripts (each on one line):
       summary: kind=ai game=<ids|all> scores=N pending=N takes=N model=NAME seconds=S
       summary: kind=sid game=<ids|all> scores=N pending=N takes=N candidates=N checked=N refused=N best=M seconds=S source=...
-  kind is ai (generate), sid (chip) or ay (ay); game the --game ids, comma-separated, or all;
-  scores the scores found; pending those worked on (the others had their takes); takes the takes
-  written; candidates the (file, subtune) pairs that name the game; checked those converted and
-  compared; refused those the converter refused; best the melody match of the take written with
-  the best one (two decimals, or - with no take), and source that take's source line (absent with
-  no take); seconds the command's time. source comes last and runs to the end of the line; no
-  other value holds a space. A command that stops on an error prints no summary line.
+      summary: kind=judge game=<ids|all> tunes=N owner=N picked=N applied=N sure=N flagged=N faults=N renderer=checked|skipped seconds=S
+  kind is ai (generate), sid (chip), ay (ay) or judge; game the --game ids, comma-separated, or
+  all; scores the scores found; pending those worked on (the others had their takes); takes the
+  takes written; candidates the (file, subtune) pairs that name the game; checked those
+  converted and compared; refused those the converter refused; best the closeness of the take
+  written with the best one (two decimals, or - with no take), and source that take's source
+  line (absent with no take); seconds the command's time. For judge: tunes the scores with takes
+  judged; owner those with the owner's choice; picked those with the judge's choice; applied
+  the choices --apply wrote in this run; sure those without the owner's choice the judge is sure of; flagged
+  those with no choice it is not sure of (they need the owner's ear); faults the takes with a
+  fault; renderer whether the renderer check ran. source comes last and runs to the end of the
+  line; no other value holds a space. A command that stops on an error prints no summary line.
 
   tools/arrange-music selftest
       Checks generate (with the rules generator), the files it writes, chip (a small collection
       of made-up SID files and a stand-in converter, both written in the temporary folder), ay
       (made-up .ay files, through the same stand-in), the summary lines (a C64 tune found, none
       found by name, songs the converter refuses, scores that have their takes), pick --set and
-      --list, and the page's save, in a temporary folder; no network, no model, no Rust build.
+      --list, the page's save, and the judge: its measures without labels (a transposed copy,
+      a faster one in another key and the lead under a band close, an unrelated tune and the
+      pitches shuffled not; a full band above its lead alone; a pad a semitone off killing the
+      harmony; a stuck note, a long silence, a fragment and a refusal penalised), judge.toml,
+      the renderer's refusals (through a stand-in music-preview) and none without it, the
+      cache, and --apply on made-up games (sure of a cover, the owner's choices kept, its own
+      judged again), in a temporary folder; no network, no model, no Rust build.
 
 Metrics (arranged.toml [metrics], printed by generate and pick --list), for comparing generators:
 key and key_r (Krumhansl-Schmuckler estimate from the original's notes, and its correlation);
@@ -1220,6 +1284,7 @@ def cmd_generate(a: argparse.Namespace) -> int:
             for f in as_completed(futs):
                 made += f.result()["takes"]
     if pending:
+        judge_scores(d, pending)
         print(f"{PROG}: done; listen and choose with: {PROG} pick {d}")
     print(summary_line("ai", a.game, t0, scores=len(scores), pending=len(pending), takes=made, model=a.model), flush=True)
     return 0
@@ -1232,17 +1297,12 @@ def cmd_generate(a: argparse.Namespace) -> int:
 # DIR/arrange/.chip-index.json: every .sid's path, its PSID/RSID header (title, author, released,
 # songs, start song) and its STIL entries (DOCUMENTS/STIL.txt: the file's and each subtune's TITLE,
 # NAME, ARTIST, AUTHOR and COMMENT). A score's candidates are the files whose name, header title
-# or STIL text names the game; their subtunes are checked against the score's melody with the
+# or STIL text names the game; their subtunes are checked for closeness to the score's tune with the
 # converter's notes (fmzx-pack chip-notes), ranked, and the best become chip-<n>/ takes.
 
 CHIP_T_HZ = 3_500_000  # the converter's times and periods: Spectrum T-states
-CHIP_FRAME_T = 69888  # a 50 Hz frame, for the melody check
-CHIP_CHECK_S = 60  # seconds of each candidate converted for the melody check
-CHIP_FULL_S = 180  # seconds converted for a take
+CHIP_FULL_S = 180  # seconds converted for the closeness check and for a take
 CHIP_CANDIDATES = 12  # (file, subtune) pairs checked per score
-CHIP_NGRAM = 4
-CHIP_NGRAM_MIN = 24  # the overlap's denominator is at least this, so a short jingle whose few
-                     # 4-grams all occur in a long score does not score as the same tune
 CHIP_INDEX_VERSION = 1
 STIL_FIELDS = ("TITLE", "NAME", "ARTIST", "AUTHOR", "COMMENT")
 ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
@@ -1417,8 +1477,7 @@ class ChipCandidate:
     spectrum: bool = False
     stil: str = ""
     prior: float = 0.0
-    melody_match: float = 0.0
-    pc_corr: float = 0.0
+    closeness: float = 0.0  # to the score's tune (the judge's closeness)
     rank: float = 0.0
     error: str = ""
 
@@ -1466,88 +1525,9 @@ def chip_candidates(score: Score, idx: dict, limit: int = CHIP_CANDIDATES) -> li
     return out
 
 
-def frame_pitches(notes: list[tuple[int, int, int]], clock_hz: int, frames: int) -> list[list[int]]:
-    """Per 50 Hz frame, the MIDI pitches sounding: notes are (start_t, end_t, period_t)."""
-    out: list[list[int]] = [[] for _ in range(frames)]
-    scale = CHIP_T_HZ / clock_hz
-    for s, e, per in notes:
-        if per <= 0:
-            continue
-        m = int(round(midi_of_period(clock_hz, per)))
-        a, b = int(s * scale) // CHIP_FRAME_T, min(int(e * scale) // CHIP_FRAME_T, frames)
-        for k in range(max(a, 0), b):
-            out[k].append(m)
-    return out
-
-
-def score_lead_frames(score: Score, seconds: float = CHIP_CHECK_S) -> list[list[int]]:
-    """The score's lead voice over its first `seconds`, its loop repeated to fill them."""
-    mv = score.melody_voice()
-    lead = [(n.start_t, n.end_t, n.period_t) for n in score.tonal() if n.voice == mv]
-    intro, loop = int(score.header.get("intro_t", 0)), int(score.header.get("loop_t", 0))
-    end = score.tstate(seconds)
-    notes = list(lead)
-    if loop > 0:
-        k = 1
-        while intro + k * loop < end:
-            notes += [(s + k * loop, e + k * loop, p) for s, e, p in lead if s >= intro]
-            k += 1
-    frames = int(seconds * CHIP_T_HZ / CHIP_FRAME_T)
-    return frame_pitches(notes, score.clock_hz, frames)
-
-
-def melody_of(frames: list[list[int]]) -> list[int]:
-    """The top line as note pitches: the top pitch held at least 3 frames, a repeat of the last
-    one kept once (ornaments, arpeggio steps and vibrato drop out)."""
-    out: list[int] = []
-    run_p, run_n = None, 0
-    for f in frames + [[]]:
-        top = max(f) if f else None
-        if top is not None and top == run_p:
-            run_n += 1
-            continue
-        if run_p is not None and run_n >= 3 and (not out or out[-1] != run_p):
-            out.append(run_p)
-        run_p, run_n = top, 1
-    return out
-
-
-def interval_ngrams(m: list[int], n: int = CHIP_NGRAM) -> set[tuple[int, ...]]:
-    """The melody's n-grams of intervals folded into -5..+6 semitones (so octave jumps and the
-    register an arrangement chose still match), repeated notes left out."""
-    iv = [d - 12 if d > 6 else d for d in ((b - a) % 12 for a, b in zip(m, m[1:])) if d != 0]
-    return {tuple(iv[i:i + n]) for i in range(len(iv) - n + 1)}
-
-
-def pc_correlation(a: list[list[int]], b: list[list[int]]) -> float:
-    """The pitch-class histograms' correlation at the best transposition (frames sounding)."""
-    import numpy as np
-
-    ha, hb = np.zeros(12), np.zeros(12)
-    for f in a:
-        for m in f:
-            ha[m % 12] += 1
-    for f in b:
-        for m in f:
-            hb[m % 12] += 1
-    if ha.std() == 0 or hb.std() == 0:
-        return 0.0
-    return float(max(np.corrcoef(ha, np.roll(hb, -r))[0, 1] for r in range(12)))
-
-
-def melody_match(score_frames: list[list[int]], chip_frames: list[list[int]]) -> tuple[float, float]:
-    """(melody_match, pc_corr). melody_match: the share of interval 4-grams of the two top lines
-    in common, over the smaller set (at least CHIP_NGRAM_MIN): unrelated tunes score about 0-0.1,
-    the same tune in another arrangement 0.2-0.9. pc_corr: the pitch-class correlation, a weak
-    second measure (related keys score 0.7-0.9)."""
-    ga, gb = interval_ngrams(melody_of(score_frames)), interval_ngrams(melody_of(chip_frames))
-    mm = len(ga & gb) / max(min(len(ga), len(gb)), CHIP_NGRAM_MIN) if ga and gb else 0.0
-    return round(mm, 3), round(pc_correlation(score_frames, chip_frames), 3)
-
-
 def chip_rank(c: ChipCandidate) -> float:
-    """The melody check decides; a title match and a STIL entry naming the Spectrum break ties."""
-    return round(c.melody_match + 0.1 * c.title_match + (0.1 if c.spectrum else 0.0), 4)
+    """Closeness decides; a title match and a STIL entry naming the Spectrum break ties."""
+    return round(c.closeness + 0.1 * c.title_match + (0.1 if c.spectrum else 0.0), 4)
 
 
 def repo_root() -> Path:
@@ -1723,7 +1703,7 @@ def chip_dirs(score_dir: Path) -> list[tuple[int, Path]]:
 def write_own_take(kind: OwnKind, score: Score, n: int, c: ChipCandidate, notes_doc: dict, tune: Path, renderer: Renderer) -> dict:
     voices, own_intro, own_loop = chip_voices(score, notes_doc)
     secs = max(score.sec(own_intro + own_loop), 1e-6)
-    m = {"melody_match": c.melody_match, "title_match": c.title_match, "pc_corr": c.pc_corr, "rank": c.rank}
+    m = {"closeness": c.closeness, "title_match": c.title_match, "rank": c.rank}
     if kind is CHIP:
         m["stil_spectrum"] = c.spectrum
     for v, nm in ((0, "lead"), (1, "bass"), (2, "pad"), (3, "drums")):
@@ -1764,18 +1744,20 @@ class OwnResult:
     refused: set = field(default_factory=set)  # the (file, subtune) pairs the converter refused
     candidates: int = 0
     checked: int = 0  # candidates converted and compared
-    best: ChipCandidate | None = None  # the take written with the best melody match
+    best: ChipCandidate | None = None  # the take written with the best closeness
 
 
 def own_score(kind: OwnKind, d: Path, score: Score, cands: list[ChipCandidate], coll: Path, fp: str, keep: int, force: bool,
-              renderer: Renderer) -> OwnResult:
-    """The score's takes of this kind from its candidates."""
+              renderer: Renderer, jg: Judge | None = None) -> OwnResult:
+    """The score's takes of this kind from its candidates (jg: the run's judge, for the null)."""
     log = lambda msg: print(f"[{score.id}] {msg}", flush=True)  # noqa: E731
     res = OwnResult(candidates=len(cands))
     if own_dirs(score.dir, kind) and not force:
         return OwnResult()
     for _, p in own_dirs(score.dir, kind):
         shutil.rmtree(p)
+    if jg is not None:
+        jg.forget_takes()
     if score.melody_voice() is None:
         log("no notes: skipped")
         return res
@@ -1783,7 +1765,14 @@ def own_score(kind: OwnKind, d: Path, score: Score, cands: list[ChipCandidate], 
         log(f"{score.name}: no {kind.collection} file names the game")
         return res
     log(f"{score.name}: {len(cands)} candidates to check")
-    lead = score_lead_frames(score)
+    orig = rendition(read_toml(score.path), "0")
+    olines = {k: v[:J_ORIG_NOTES] for k, v in voice_lines(orig.notes, 6).items()}
+    if not olines:
+        log("  the original has no line long enough to compare with: closeness 0 for every candidate")
+    own_files = {c.file["path"] for c in cands} | {str(toml_head(p / "arranged.toml").get(k.file_key, ""))
+                                                   for k in OWN_KINDS for _, p in own_dirs(score.dir, k)}
+    null, real = score_null(jg or Judge(d, render_check=False), score, orig, olines, own_files)
+    srch = search_s(orig)
     checked = []
     refused = set()
 
@@ -1795,34 +1784,34 @@ def own_score(kind: OwnKind, d: Path, score: Score, cands: list[ChipCandidate], 
                 log(f"  {c.file['path']} #{c.subtune}: not converted ({why})")
         return doc
 
+    docs = {}
     for c in cands:
-        doc = convert(c, CHIP_CHECK_S)
-        if doc is None:
-            continue
-        tonal = [(int(n["start_t"]), int(n["end_t"]), int(n.get("period_t", 0)))
-                 for n in doc.get("note", []) if int(n["voice"]) < 3 and int(n.get("period_t", 0)) > 0]
-        if not tonal:
-            log(f"  {c.file['path']} #{c.subtune}: no notes in {CHIP_CHECK_S} s")
-            continue
-        tune = frame_pitches(tonal, CHIP_T_HZ, int(CHIP_CHECK_S * CHIP_T_HZ / CHIP_FRAME_T))
-        c.melody_match, c.pc_corr = melody_match(lead, tune)
-        c.rank = chip_rank(c)
-        log(f"  {c.file['path']} #{c.subtune}: melody match {c.melody_match:.2f}, title match {c.title_match:.2f}"
-            f"{', STIL: Spectrum' if c.spectrum else ''}, pitch classes {c.pc_corr:.2f}")
-        checked.append(c)
-    checked.sort(key=lambda c: (-c.rank, c.file["path"], c.subtune))
-    n = 0
-    for c in checked:
-        if n >= keep:
-            break
         doc = convert(c, CHIP_FULL_S)
         if doc is None:
             continue
+        r = own_rendition(score, doc, kind.prefix)
+        if not (r.notes[:, 0] < 3).any():
+            log(f"  {c.file['path']} #{c.subtune}: no notes in {CHIP_FULL_S} s")
+            continue
+        z = 0.0
+        if olines:
+            c.closeness, z = calibrated(best_align(olines, cut_lines(voice_lines(unrolled(r, J_CAND_S)), srch)), null, real)
+            c.closeness = round(c.closeness, 3)
+        c.rank = chip_rank(c)
+        log(f"  {c.file['path']} #{c.subtune}: closeness {c.closeness * 100:.0f}% (z {z:.1f}), title match {c.title_match:.2f}"
+            f"{', STIL: Spectrum' if c.spectrum else ''}")
+        docs[id(c)] = doc
+        checked.append(c)
+    checked.sort(key=lambda c: (-c.rank, c.file["path"], c.subtune))
+    n = 0
+    for c in checked[:keep]:
         n += 1
-        write_own_take(kind, score, n, c, doc, coll / c.file["path"], renderer)
-        log(f"{kind.prefix}-{n}: {kind.source(c)}; melody match {c.melody_match:.2f}")
-        if res.best is None or c.melody_match > res.best.melody_match:
+        write_own_take(kind, score, n, c, docs[id(c)], coll / c.file["path"], renderer)
+        log(f"{kind.prefix}-{n}: {kind.source(c)}; closeness {c.closeness * 100:.0f}%")
+        if res.best is None or c.closeness > res.best.closeness:
             res.best = c
+    if jg is not None:
+        jg.forget_takes()
     said = f", {len(refused)} refused by the converter" if refused else ""
     log(f"{score.name}: {len(cands)} candidates, {len(checked)} checked{said}, {n} {kind.prefix} takes")
     res.takes, res.refused, res.checked = n, refused, len(checked)
@@ -1847,13 +1836,13 @@ def own_pending(a: argparse.Namespace, kind: OwnKind) -> tuple[Path, list[Score]
 def own_summary(kind: OwnKind, a: argparse.Namespace, t0: float, scores: list[Score], pending: list[Score],
                 results: list[OwnResult]) -> str:
     """chip's or ay's summary line: the takes written, the candidates, those checked, the songs
-    the converter refused, and the best take's melody match and source."""
-    best = max((r.best for r in results if r.best), key=lambda c: c.melody_match, default=None)
+    the converter refused, and the best take's closeness and source."""
+    best = max((r.best for r in results if r.best), key=lambda c: c.closeness, default=None)
     refused = set().union(*(r.refused for r in results))
     return summary_line("sid" if kind is CHIP else "ay", a.game, t0, scores=len(scores), pending=len(pending),
                         takes=sum(r.takes for r in results), candidates=sum(r.candidates for r in results),
                         checked=sum(r.checked for r in results), refused=len(refused),
-                        best=f"{best.melody_match:.2f}" if best else "-", source=kind.source(best) if best else None)
+                        best=f"{best.closeness:.2f}" if best else "-", source=kind.source(best) if best else None)
 
 
 def cmd_chip(a: argparse.Namespace) -> int:
@@ -1872,7 +1861,9 @@ def cmd_chip(a: argparse.Namespace) -> int:
         print(f"{PROG}: {renderer.why_not()}")
     if not sid_renderer():
         print(f"{PROG}: no sidplayfp on PATH: no chip.wav (the C64's own sound); fm1.wav only")
-    results = [own_score(CHIP, d, s, chip_candidates(s, idx), sid_dir.resolve(), fp, a.max, a.force, renderer) for s in pending]
+    jg = Judge(d)
+    results = [own_score(CHIP, d, s, chip_candidates(s, idx), sid_dir.resolve(), fp, a.max, a.force, renderer, jg) for s in pending]
+    judge_scores(d, pending, jg=jg)
     print(f"{PROG}: {sum(r.takes for r in results)} chip takes; listen and choose with: {PROG} pick {d}")
     print(own_summary(CHIP, a, t0, scores, pending, results), flush=True)
     return 0
@@ -2010,12 +2001,894 @@ def cmd_ay(a: argparse.Namespace) -> int:
         print(f"{PROG}: {renderer.why_not()}")
     if not ay_renderer():
         print(f"{PROG}: no ffmpeg that reads .ay files (libgme): no ay.wav (the Spectrum 128's own sound); fm1.wav only")
-    results = [own_score(AY, d, s, ay_candidates(s, idx), ay_dir.resolve(), fp, a.max, a.force, renderer) for s in pending]
+    jg = Judge(d)
+    results = [own_score(AY, d, s, ay_candidates(s, idx), ay_dir.resolve(), fp, a.max, a.force, renderer, jg) for s in pending]
+    judge_scores(d, pending, jg=jg)
     k = len(set().union(*(r.refused for r in results)))
     said = (f" ({k} candidate song{'s' if k != 1 else ''} skipped: the converter refuses them, such as 48K beeper tunes"
             " and Amstrad CPC songs)") if k else ""
     print(f"{PROG}: {sum(r.takes for r in results)} ay takes{said}; listen and choose with: {PROG} pick {d}")
     print(own_summary(AY, a, t0, scores, pending, results), flush=True)
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
+# judge: which take a score plays, from the notes
+#
+# Per score, every take (and the original, take 0) is measured from its notes as the FM-1 plays
+# them: how close it is to the original's tune (closeness), how full and sound it is (quality:
+# polyphony, harmony, rhythm section) over the seconds the device can play, and its faults (the
+# renderer refuses it, silence, gaps, stuck notes, extreme registers, shorter than what plays).
+# combined = quality x fault multiplier x (0.3 + 0.7 x closeness), closeness raised to 0.6 x
+# provenance when the take's source is the game's own period music; the highest combined is
+# the judge's pick, and a confidence (high, medium, low) with the reasons says whether the owner
+# needs to listen. The figures go to judge.toml beside score.toml, kept while the score and its
+# takes stay the same.
+
+JUDGE_VERSION = 1
+JUDGE_FILE = "judge.toml"
+J_TICK = 0.01  # the quality measures' grid (10 ms)
+J_QUALITY_S = 60.0  # seconds of a take the quality measures look at (its loop repeated)
+J_CAND_S = 150.0  # seconds of a take the closeness search looks through
+J_ORIG_NOTES = 160  # notes of each original line aligned (its first pass)
+J_ORNAMENT_S = 0.045  # notes shorter than this are ornaments to a melody line
+J_NULL = 30  # unrelated controls each score's closeness is calibrated against
+J_NULL_MIN = 4  # fewer and closeness is not calibrated (0)
+J_SELF = 1.5  # a perfect copy's alignment score per note (match + rhythm bonus)
+J_SAME, J_PARTIAL = 0.5, 0.2  # closeness from which a take is shown to be the same tune, partly
+J_PARTIAL_TOP = 0.8  # below this a match is partial
+J_CLOSE_CALL = 0.15  # the pick's lead over the next, as a share of its combined, below which it is a close call
+J_CHECKABLE_Z = 5.0  # the original against itself, in null standard deviations: below, too plain to check
+J_FAULT_SHOWN = 0.05  # a fault's penalty from which it is named
+J_RENDER_S = "2"  # seconds music-preview renders to check that a take plays
+# graded consonance of an interval class (semitones mod 12) between two sounding voices
+J_CONS = (1.0, 0.0, 0.35, 0.85, 0.9, 0.7, 0.25, 1.0, 0.8, 0.85, 0.45, 0.1)
+
+
+@dataclass
+class Rendition:
+    """A take's notes as seconds: (voice, start, end, midi) rows, the drum's midi NaN."""
+    name: str  # "0", "take-1", "chip-1", "ay-2"
+    total: float  # seconds of its timeline (intro and one pass of the loop)
+    intro: float
+    loop: float  # seconds of a pass of the loop; 0: none
+    notes: object  # numpy (k, 4)
+    meta: dict = field(default_factory=dict)
+
+
+def rendition(doc: dict, name: str) -> Rendition:
+    """A score's or take's notes (the doc read from score.toml or arranged.toml), on its own
+    timeline for a take that has one."""
+    import numpy as np
+
+    clock = float(doc.get("clock_hz", 3500000))
+    if doc.get("timeline") == "own":
+        intro, loop = int(doc.get("own_intro_t", 0)), int(doc.get("own_loop_t", 0))
+    else:
+        intro, loop = int(doc.get("intro_t", 0)), int(doc.get("loop_t", 0))
+    rows = []
+    for n in doc.get("note", []):
+        p = int(n.get("period_t", 0))
+        v = int(n["voice"])
+        m = 69.0 + 12.0 * math.log2(clock / p / 440.0) if p > 0 and v < 3 else float("nan")
+        rows.append((v, int(n["start_t"]) / clock, int(n["end_t"]) / clock, m))
+    notes = np.array(rows, dtype=float).reshape(-1, 4)
+    total = (intro + loop) / clock
+    if total <= 0 and len(notes):
+        total = float(notes[:, 2].max())
+    return Rendition(name, total, intro / clock, loop / clock, notes, {k: v for k, v in doc.items() if k != "note"})
+
+
+def unrolled(r: Rendition, seconds: float):
+    """Its notes over `seconds`, the loop pass repeated as the device repeats it."""
+    import numpy as np
+
+    out = [r.notes]
+    if r.loop > 0:
+        lp = r.notes[r.notes[:, 1] >= r.intro - 1e-9]
+        k = 1
+        while r.intro + k * r.loop < seconds:
+            c = lp.copy()
+            c[:, 1:3] += k * r.loop
+            out.append(c)
+            k += 1
+    a = np.concatenate(out)
+    a = a[a[:, 1] < seconds]
+    a[:, 2] = np.minimum(a[:, 2], seconds)
+    return a[np.lexsort((a[:, 0], a[:, 1]))]
+
+
+def line_of(notes):
+    """A monophonic line (onset, ioi, midi): ornaments dropped, repeated pitches merged, stray
+    notes far from the line's register dropped."""
+    import numpy as np
+
+    if len(notes) == 0:
+        return np.zeros((0, 3))
+    n = notes[np.argsort(notes[:, 1], kind="stable")]
+    dur = n[:, 2] - n[:, 1]
+    n = n[dur >= min(J_ORNAMENT_S, 0.5 * float(np.median(dur)))]
+    out = []
+    for s, e, m in n[:, 1:4]:
+        p = int(round(m))
+        if out and out[-1][2] == p and s - out[-1][3] < 0.25:
+            out[-1][3] = e
+            continue
+        out.append([s, 0.0, p, e])
+    if not out:
+        return np.zeros((0, 3))
+    mid = float(np.median([o[2] for o in out]))
+    kept = [o for o in out if abs(o[2] - mid) <= 14]
+    if len(kept) >= 0.6 * len(out):
+        out = []
+        for o in kept:
+            if out and out[-1][2] == o[2] and o[0] - out[-1][3] < 0.25:
+                out[-1][3] = o[3]
+            else:
+                out.append(o)
+    a = np.array(out, dtype=float)
+    a[:-1, 1] = np.diff(a[:, 0])
+    a[-1, 1] = a[-1, 3] - a[-1, 0]
+    return a[:, :3]
+
+
+def skyline(notes):
+    """The top tonal pitch at each onset, as notes."""
+    import numpy as np
+
+    t = notes[notes[:, 0] < 3]
+    if len(t) == 0:
+        return np.zeros((0, 4))
+    onsets = np.unique(t[:, 1])
+    rows = []
+    for i, s in enumerate(onsets):
+        snd = t[(t[:, 1] <= s + 1e-9) & (t[:, 2] > s + 1e-9)]
+        if len(snd) == 0:
+            continue
+        top = snd[np.argmax(snd[:, 3])]
+        e = onsets[i + 1] if i + 1 < len(onsets) else top[2]
+        rows.append((-1, s, min(e, top[2]) if top[2] > s else e, top[3]))
+    return np.array(rows, dtype=float).reshape(-1, 4)
+
+
+def voice_lines(notes, min_notes: int = 8) -> dict:
+    """The melody lines to align: each tonal voice's and the top line's."""
+    out = {}
+    for v in (0, 1, 2):
+        ln = line_of(notes[notes[:, 0] == v])
+        if len(ln) >= min_notes:
+            out[f"v{v}"] = ln
+    sk = line_of(skyline(notes))
+    if len(sk) >= min_notes:
+        out["top"] = sk
+    return out
+
+
+def sw_align(a, b) -> float:
+    """Smith-Waterman local alignment of two lines by pitch class under all 12 transpositions,
+    with a bonus where the notes' lengths relative to their line's median agree: octave,
+    transposition and tempo do not count, an added or missing note costs a gap. The best score."""
+    import numpy as np
+
+    rel = lambda ln: np.log2(np.clip(ln[:, 1], 0.02, 4.0) / np.median(np.clip(ln[:, 1], 0.02, 4.0)))  # noqa: E731
+    pa, pb = a[:, 2].astype(int) % 12, b[:, 2].astype(int) % 12
+    ra, rb = rel(a), rel(b)
+    m = len(pb)
+    pbt = (pb[None, :] + np.arange(12)[:, None]) % 12
+    idx = np.arange(m, dtype=float)
+    H = np.zeros((12, m + 1))
+    best = np.zeros(12)
+    for i in range(len(pa)):
+        S = np.where(pbt == pa[i], 1.0 + 0.5 * (np.abs(rb - ra[i]) < 0.6), -1.0)
+        E = np.maximum(np.maximum(H[:, :-1] + S, H[:, 1:] - 1.0), 0.0)
+        Hn = np.maximum.accumulate(E + idx, axis=1) - idx
+        H = np.concatenate([np.zeros((12, 1)), Hn], axis=1)
+        best = np.maximum(best, Hn.max(axis=1))
+    return float(best.max())
+
+
+def cut_lines(lines: dict, seconds: float) -> dict:
+    return {k: v for k, v in ((k, v[v[:, 0] < seconds]) for k, v in lines.items()) if len(v) >= 8}
+
+
+def best_align(olines: dict, clines: dict) -> float:
+    """The best alignment of any original line against any of the take's, per original note."""
+    best = 0.0
+    for ol in olines.values():
+        for cl in clines.values():
+            best = max(best, sw_align(ol, cl) / len(ol))
+    return best
+
+
+def plays_s(orig: Rendition) -> float:
+    """Seconds of a take the device can play: a looping score goes on while the beeper agrees
+    (the quality window); one without a loop only for its own length."""
+    return J_QUALITY_S if orig.loop > 0 else min(J_QUALITY_S, orig.total)
+
+
+def search_s(orig: Rendition) -> float:
+    """Seconds of a take the closeness search looks through: what can play, with room for
+    another tempo."""
+    return J_CAND_S if orig.loop > 0 else min(J_CAND_S, 1.4 * orig.total + 2.0)
+
+
+def calibrate(raw: float, null: list[float]) -> tuple[float, float]:
+    """(closeness 0..1, z): the raw alignment against unrelated music's, as a logistic of its z
+    (0.5 at 3 standard deviations above their mean)."""
+    import numpy as np
+
+    if len(null) < J_NULL_MIN:
+        return 0.0, 0.0
+    mu, sd = float(np.mean(null)), max(float(np.std(null)), 0.03)
+    z = (raw - mu) / sd
+    return float(1.0 / (1.0 + math.exp(-(z - 3.0) / 0.7))), z
+
+
+def key_fit(hist) -> float:
+    import numpy as np
+
+    if hist.sum() <= 0 or hist.std() == 0:
+        return 0.0
+    return float(max(np.corrcoef(hist, np.roll(np.array(p), k))[0, 1] for p in (KS_MAJOR, KS_MINOR) for k in range(12)))
+
+
+def pulse_clarity(onset_sig) -> float:
+    """The onset signal's normalised autocorrelation peak at beat-like lags (0.25-1.5 s)."""
+    import numpy as np
+
+    x = onset_sig.astype(float)
+    if x.sum() < 8:
+        return 0.0
+    x = np.convolve(x, np.ones(3), mode="same")
+    x = x - x.mean()
+    n = len(x)
+    f = np.fft.rfft(x, 2 * n)
+    ac = np.fft.irfft(f * np.conj(f))[:n]
+    if ac[0] <= 0:
+        return 0.0
+    ac = ac / ac[0]
+    lo, hi = int(0.25 / J_TICK), min(int(1.5 / J_TICK), n - 1)
+    return float(max(ac[lo:hi].max(), 0.0)) if hi > lo else 0.0
+
+
+def clip01(x: float) -> float:
+    return float(min(1.0, max(0.0, x)))
+
+
+def quality(r: Rendition, window: float, refused: str = "") -> dict:
+    """Polyphony, harmony, rhythm and faults over the first `window` seconds (what the device
+    plays of it): quality = (0.3 polyphony + 0.35 harmony + 0.35 rhythm) x the fault multiplier.
+    faults: (plain words, penalty 0..1) each."""
+    import numpy as np
+
+    seconds = max(window, 1.0)
+    notes = unrolled(r, seconds)
+    n = int(seconds / J_TICK)
+    pitch = np.full((3, n), np.nan)
+    onsets = np.zeros((4, n))
+    for v, s, e, m in notes:
+        a, b = int(s / J_TICK), min(int(e / J_TICK), n)
+        if a >= n:
+            continue
+        if v < 3:
+            pitch[int(v), a:max(b, a + 1)] = m
+        onsets[int(v), a] += 1
+    snd = ~np.isnan(pitch)
+    nv = snd.sum(axis=0)
+    held = snd.copy()  # a staccato voice counts as sounding until its next onset within 0.4 s
+    for v in range(3):
+        on = np.flatnonzero(onsets[v])
+        for a, b in zip(on, on[1:]):
+            if b - a <= 40:
+                held[v, a:b] = True
+    active = held.any(axis=0)
+    act = float(active.mean()) if active.size else 0.0
+    q: dict = {}
+    mean_v = float(nv[active].mean()) if active.any() else 0.0
+    multi = nv >= 2
+    pcs = np.where(snd, np.round(np.nan_to_num(pitch)) % 12, -1)
+    distinct = np.array([len(set(pcs[snd[:, j], j])) for j in np.flatnonzero(multi)]) if multi.any() else np.zeros(0)
+    indep = float((distinct >= 2).mean()) if len(distinct) else 0.0
+    q["polyphony"] = clip01((mean_v - 1.0) / 1.5) * (0.5 + 0.5 * indep)
+    cons, pair_steps = 0.0, 0
+    clash_mask = np.zeros(n, dtype=bool)
+    for i in range(3):
+        for j in range(i + 1, 3):
+            both = snd[i] & snd[j]
+            if not both.any():
+                continue
+            ic = np.round(np.abs(pitch[i, both] - pitch[j, both])).astype(int) % 12
+            cons += np.array(J_CONS)[ic].sum()
+            pair_steps += int(both.sum())
+            cm = np.zeros_like(both)
+            cm[both] = (ic == 1) | (ic == 11)
+            clash_mask |= cm
+    long_clash, run = 0, 0  # minor-second clashes held 150 ms or more
+    for c in np.append(clash_mask, False):
+        if c:
+            run += 1
+        else:
+            if run >= 15:
+                long_clash += run
+            run = 0
+    clash = long_clash / max(int(active.sum()), 1)
+    hist = np.zeros(12)
+    for v in range(3):
+        m = pitch[v, snd[v]]
+        if len(m):
+            np.add.at(hist, np.round(m).astype(int) % 12, 1)
+    cons_s = clip01((cons / pair_steps - 0.5) / 0.35) if pair_steps else 0.0
+    q["harmony"] = (0.6 * cons_s + 0.4 * clip01((key_fit(hist) - 0.5) / 0.4)) * (1 - clip01(clash * 5))
+    lead_mean = np.nanmean(pitch[0]) if snd[0].any() else np.nan
+    bass_share = float(snd[1][active].mean()) if active.any() else 0.0
+    bass_low = bool(snd[1].any() and (math.isnan(lead_mean) or np.nanmean(pitch[1]) <= lead_mean - 5))
+    bass_notes = notes[notes[:, 0] == 1]
+    bass_pcs = len(set(np.round(bass_notes[:, 3]).astype(int) % 12)) if len(bass_notes) else 0
+    bass_nps = len(bass_notes) / seconds
+    bass = clip01(bass_share / 0.5) * clip01((bass_pcs - 1) / 3) * (1.0 if 0.3 <= bass_nps <= 10 else 0.4) * (1.0 if bass_low else 0.5)
+    drums = clip01(onsets[3].sum() / seconds / 2.0)
+    pulse = clip01((pulse_clarity(onsets.sum(axis=0)) - 0.3) / 0.5)
+    q["rhythm"] = 0.45 * bass + 0.25 * drums + 0.3 * pulse
+    gaps, run = [], 0
+    for a in np.append(active, True):
+        if not a:
+            run += 1
+        else:
+            if run:
+                gaps.append(run * J_TICK)
+            run = 0
+    max_gap = max(gaps) if gaps else 0.0
+    tonal = notes[notes[:, 0] < 3]
+    stuck = int(((tonal[:, 2] - tonal[:, 1]) > min(8.0, 0.5 * seconds)).sum()) if len(tonal) else 0
+    if len(tonal):
+        w = tonal[:, 2] - tonal[:, 1]
+        extreme = float(w[(tonal[:, 3] < 26) | (tonal[:, 3] > 100)].sum() / max(w.sum(), 1e-9))
+    else:
+        extreme = 1.0
+    covered = min(r.total if r.loop == 0 else float("inf"), seconds) / seconds
+    faults = []
+    if refused:
+        faults.append((f"refused by the renderer: {refused}", 1.0))
+    if act < 0.6:
+        faults.append((f"mostly silent: sounds {act * 100:.0f}% of the time", clip01((0.6 - act) / 0.5) * 0.6))
+    if max_gap > 2.0:
+        faults.append((f"a silent gap of {max_gap:.1f} s", clip01((max_gap - 2.0) / 8.0) * 0.3))
+    if stuck:
+        faults.append((f"{stuck} stuck note{'s' if stuck != 1 else ''} (held over {min(8.0, 0.5 * seconds):.0f} s)", min(0.5, 0.2 * stuck)))
+    if extreme > 0.05:
+        faults.append((f"{extreme * 100:.0f}% of its sound in extreme registers", clip01(extreme * 2) * 0.6))
+    if covered < 0.85:
+        faults.append((f"plays only a fragment: {r.total:.1f} s of the {seconds:.1f} s that play", clip01((0.85 - covered) / 0.85)))
+    mult = 1.0
+    for _, p in faults:
+        mult *= 1.0 - p
+    q["fault"] = mult
+    q["faults"] = faults
+    q["quality"] = (0.3 * q["polyphony"] + 0.35 * q["harmony"] + 0.35 * q["rhythm"]) * mult
+    return q
+
+
+def provenance(meta: dict) -> float:
+    """0..1: how likely a take is the game's own period music rather than a remix, a demo or a
+    later cover, from its source line, its file's folder and the title match. A STIL entry
+    naming the Spectrum counts fully."""
+    import re
+
+    mt = meta.get("metrics", {}) if isinstance(meta.get("metrics"), dict) else {}
+    if mt.get("stil_spectrum"):
+        return 1.0
+    src = str(meta.get("source", ""))
+    if not src:
+        return 0.0
+    tm = float(mt.get("title_match", 0.0) or 0.0)
+    title = 1.0 if tm >= 1.0 else 0.5 if tm >= 0.8 else 0.2
+    if src.startswith("Spectrum 128"):
+        era = 1.0 if str(meta.get("ay_file", "")).startswith("games/") else 0.2
+    else:
+        m = re.search(r"\((\d{3}[\d?])[ )]", src)
+        y = m.group(1) if m else ""
+        era = (1.0 if int(y) <= 1990 else 0.15) if y.isdigit() else 1.0 if y.startswith("198") else 0.4 if y.startswith("199") else 0.3
+        if "/DEMOS/" in "/" + str(meta.get("sid_file", "")):
+            era = min(era, 0.3)
+    return title * era
+
+
+def combined(closeness: float, prov: float, qual: float, original: bool) -> float:
+    """quality x (0.3 + 0.7 closeness), closeness raised to 0.6 x provenance: another tune has to
+    sound much better to win, the game's own period music less so."""
+    c = 1.0 if original else max(closeness, 0.6 * prov)
+    return qual * (0.3 + 0.7 * c)
+
+
+# The null: what unrelated music's alignment with the original looks like. Up to J_NULL takes of
+# other games (another family: "-2", "-3", "-ii" and the like stripped from the id; none from a
+# file the score's own takes come from), sampled with the score's id as the seed; then other
+# games' originals; then, to make up J_NULL, controls built from nothing but the score: copies of
+# the original with each voice's pitches shuffled (its rhythm and pitch classes kept) and made-up
+# tunes, alternately. Built controls vary less than real music, so with any of them the spread
+# is at least 0.4 x the mean (on 190 real takes that matched the real null's verdict on every one).
+
+J_BUILT_SPREAD = 0.4
+J_REAL_FOR_HIGH = 10  # fewer real controls and the judge does not claim high confidence
+J_MAJOR = (0, 2, 4, 5, 7, 9, 11)
+J_MINOR = (0, 2, 3, 5, 7, 8, 10)
+
+
+def family(game: str) -> str:
+    import re
+
+    return re.sub(r"-(\d+|ii|iii|iv|v|vi)$", "", game)
+
+
+def made_up_tune(rng: random.Random, seconds: float):
+    """A made-up tune: phrases of a lead on a scale, repeated with variations (A A' B A), over a
+    bass on chord roots."""
+    import numpy as np
+
+    beat = rng.uniform(0.25, 0.6)
+    tonic = rng.randrange(12)
+    scale = J_MAJOR if rng.random() < 0.6 else J_MINOR
+    base = 60 + tonic - (12 if tonic > 6 else 0)
+
+    def phrase(n: int) -> list[tuple[int, float]]:
+        out, deg = [], rng.randrange(0, 5)
+        for _ in range(n):
+            r = rng.random()
+            step = rng.choice((-1, 1)) * (rng.choice((3, 4, 5)) if r < 0.15 else rng.choice((1, 1, 2)) if r < 0.85 else 0)
+            deg = max(-3, min(10, deg + step))
+            out.append((deg, rng.choice((0.5, 0.5, 1, 1, 1, 1.5, 2))))
+        return out
+
+    n = rng.choice((6, 8, 8, 12))
+    a, b = phrase(n), phrase(n)
+    form = [a, a[:-3] + phrase(3), b, a]
+    rows, t, k = [], 0.0, 0
+    while t < seconds:
+        for deg, d in form[k % 4]:
+            o, i = divmod(deg, 7)
+            rows.append((0, t, t + d * beat * 0.9, float(base + 12 * o + scale[i])))
+            t += d * beat
+        k += 1
+    t = 0.0
+    while t < seconds:
+        rows.append((1, t, t + 2 * beat * 0.95, float(36 + tonic + scale[rng.choice((0, 0, 3, 4, 5))])))
+        t += 2 * beat
+    arr = np.array(rows, dtype=float)
+    arr = arr[arr[:, 1] < seconds]
+    return arr[np.lexsort((arr[:, 0], arr[:, 1]))]
+
+
+def shuffled_original(orig: Rendition, seconds: float, rng: random.Random):
+    """The original over `seconds`, each voice's pitches shuffled among its notes."""
+    import numpy as np
+
+    a = unrolled(orig, max(seconds, 1.0)).copy()
+    for v in (0, 1, 2):
+        idx = np.flatnonzero(a[:, 0] == v)
+        perm = idx.copy()
+        rng.shuffle(perm)
+        a[idx, 3] = a[perm, 3]
+    return a
+
+
+def toml_head(path: Path) -> dict:
+    """An arranged.toml's header fields, read up to its first note."""
+    lines = []
+    try:
+        with path.open(encoding="utf-8") as f:
+            for ln in f:
+                if ln.startswith("[[note]]"):
+                    break
+                lines.append(ln)
+        return tomllib.loads("".join(lines))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def judged_takes(score_dir: Path) -> list[tuple[str, Path]]:
+    """A score's takes the judge weighs, by name: take-<n>, chip-<n>, ay-<n>."""
+    out = [(f"take-{n}", p) for n, p in take_dirs(score_dir)]
+    for kind in OWN_KINDS:
+        out += [(f"{kind.prefix}-{n}", p) for n, p in own_dirs(score_dir, kind)]
+    return out
+
+
+def file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def music_preview_path() -> str:
+    """The renderer the refusal check runs: $FMZX_MUSIC_PREVIEW, else host/target/release/music-preview."""
+    return os.environ.get("FMZX_MUSIC_PREVIEW") or str(repo_root() / "host" / "target" / "release" / "music-preview")
+
+
+class Judge:
+    """One run of the judge over a workspace: what it reads once (the other games' takes as
+    unrelated music, the lines of each take) and the renderer it checks with."""
+
+    def __init__(self, d: Path, render_check: bool = True):
+        self.d = d
+        self.lines: dict[tuple, dict] = {}
+        self.nulls: dict[str, tuple[str, list[float], int]] = {}  # per score id: (its digest, null, real controls)
+        self.verdicts: dict[tuple[str, str, str], tuple[str, bool]] = {}  # (score id, take, digest): render()'s
+        self._pool: list[tuple[str, str, Path, str]] | None = None
+        self._origs: list[tuple[str, Path]] | None = None
+        mp = music_preview_path()
+        self.mp = mp if render_check and os.access(mp, os.X_OK) else None
+        self.mp_stamp = ""
+        if self.mp:
+            st = os.stat(self.mp)
+            self.mp_stamp = f"{st.st_mtime_ns}-{st.st_size}"
+        self.render_note = "music-preview" if self.mp else (f"not checked: no {mp} (cd host && cargo build --release -p music)"
+                                                            if render_check else "not checked")
+
+    def pool(self) -> list[tuple[str, str, Path, str]]:
+        """Every take of the workspace: (score id, take name, its arranged.toml, its tune's file)."""
+        if self._pool is None:
+            out = []
+            for sp in sorted((self.d / "arrange").glob("*/*/score.toml")):
+                sid = f"{sp.parent.parent.name}/{sp.parent.name}"
+                for name, p in judged_takes(sp.parent):
+                    h = toml_head(p / "arranged.toml")
+                    out.append((sid, name, p / "arranged.toml", str(h.get("sid_file") or h.get("ay_file") or "")))
+            self._pool = sorted(out, key=lambda x: (x[0], x[1]))
+        return self._pool
+
+    def forget_takes(self) -> None:
+        """The workspace's takes changed: read them again when next needed."""
+        self._pool = None
+
+    def originals(self) -> list[tuple[str, Path]]:
+        if self._origs is None:
+            self._origs = [(f"{p.parent.parent.name}/{p.parent.name}", p) for p in sorted((self.d / "arrange").glob("*/*/score.toml"))]
+        return self._origs
+
+    def take_lines(self, path: Path, name: str) -> dict:
+        """A take's (or an original's) melody lines over J_CAND_S, kept while its file is the same."""
+        st = path.stat()
+        k = (path, st.st_mtime_ns, st.st_size)
+        if k not in self.lines:
+            self.lines[k] = voice_lines(unrolled(rendition(read_toml(path), name), J_CAND_S))
+        return self.lines[k]
+
+    def null(self, score: Score, orig: Rendition, olines: dict, own_files: set[str]) -> tuple[list[float], int]:
+        """The unrelated alignments the score's closeness is calibrated against, and how many of
+        them are real music (the rest are built from the score)."""
+        fam = family(score.game)
+        srch = search_s(orig)
+        takes = [(sid, name, p) for sid, name, p, f in self.pool()
+                 if family(sid.split("/")[0]) != fam and f not in own_files and p.is_file()]
+        keys = random.Random(score.id).sample(takes, min(J_NULL, len(takes)))
+        null = [best_align(olines, cut_lines(self.take_lines(p, name), srch)) for _, name, p in keys]
+        if len(null) < J_NULL:
+            others = [(sid, p) for sid, p in self.originals() if family(sid.split("/")[0]) != fam]
+            for _, p in random.Random(score.id).sample(others, min(J_NULL - len(null), len(others))):
+                null.append(best_align(olines, cut_lines(self.take_lines(p, "0"), srch)))
+        real = len(null)
+        rng = random.Random(f"null/{score.id}")
+        while len(null) < J_NULL:
+            notes = shuffled_original(orig, srch, rng) if (len(null) - real) % 2 == 0 else made_up_tune(rng, J_CAND_S)
+            null.append(best_align(olines, cut_lines(voice_lines(notes), srch)))
+        return null, real
+
+    def real_controls(self, score: Score, own_files: set[str]) -> int:
+        """How many real controls the null could have (to know when a null built with fewer
+        would gain from more games)."""
+        fam = family(score.game)
+        n = sum(1 for sid, _, _, f in self.pool() if family(sid.split("/")[0]) != fam and f not in own_files)
+        if n < J_NULL:
+            n += sum(1 for sid, _ in self.originals() if family(sid.split("/")[0]) != fam)
+        return min(n, J_NULL)
+
+    def prefetch(self, scores: list[Score]) -> None:
+        """The renderer's verdicts for every take of the scores that needs one, as many at a time
+        as there are cores (the first of each game before the others: a game the renderer has
+        not learned is learned once)."""
+        if not self.mp:
+            return
+        from concurrent.futures import ThreadPoolExecutor
+
+        firsts, rest, seen = [], [], set()
+        for sc in scores:
+            for name, dg in render_todo(self, sc):
+                (rest if sc.game in seen else firsts).append((sc, name, dg))
+                seen.add(sc.game)
+        with ThreadPoolExecutor(max_workers=max(1, os.cpu_count() or 1)) as ex:
+            for batch in (firsts, rest):
+                for (sc, name, dg), got in zip(batch, ex.map(lambda x: self.render(x[0], x[1]), batch)):
+                    self.verdicts[(sc.id, name, dg)] = got
+
+    def render(self, score: Score, name: str) -> tuple[str, bool]:
+        """Whether music-preview plays the take: (its refusal, "" when it plays; whether it was
+        checked: False when the renderer could not run)."""
+        take = "0" if name == "0" else name.removeprefix("take-")
+        with tempfile.TemporaryDirectory(prefix="judge-render-") as tmp:
+            r = subprocess.run([self.mp, str(self.d), "--game", score.game, "--score", score.key, "--take", take,
+                                "--seconds", J_RENDER_S, "-o", str(Path(tmp) / "x.wav")], capture_output=True, text=True)
+        why = " ".join((r.stderr or r.stdout).split())
+        if r.returncode == 3:
+            return why.removeprefix("refused: ") or "refused", True
+        return "", r.returncode == 0
+
+
+def calibrated(raw: float, null: list[float], real: int) -> tuple[float, float]:
+    """calibrate(), the spread at least J_BUILT_SPREAD x the mean when the null has built controls."""
+    import numpy as np
+
+    if real >= len(null):
+        return calibrate(raw, null)
+    if len(null) < J_NULL_MIN:
+        return 0.0, 0.0
+    mu = float(np.mean(null))
+    sd = max(float(np.std(null)), 0.03, J_BUILT_SPREAD * mu)
+    z = (raw - mu) / sd
+    return float(1.0 / (1.0 + math.exp(-(z - 3.0) / 0.7))), z
+
+
+def choice_name(c: Choice) -> str:
+    """A choice as the judge names takes: "0", "take-<n>", "chip-<n>", "ay-<n>"."""
+    return c if isinstance(c, str) else "0" if c == 0 else f"take-{c}"
+
+
+def name_choice(name: str) -> Choice:
+    if name == "0":
+        return 0
+    return int(name[5:]) if name.startswith("take-") else name
+
+
+def score_null(jg: Judge, score: Score, orig: Rendition, olines: dict, own_files: set[str]) -> tuple[list[float], int]:
+    """The score's null and its real controls: judge.toml's while the score is the same (unless
+    it has built controls and more real ones are there), else this run's, else made."""
+    if not olines:
+        return [], 0
+    digest = score.digest()
+    old = read_toml(score.dir / JUDGE_FILE)
+    if old.get("version") == JUDGE_VERSION and old.get("score") == digest and old.get("null"):
+        real = int(old.get("null_real", 0))
+        if real >= J_NULL or jg.real_controls(score, own_files) <= real:
+            return [float(x) for x in old["null"]], real
+    got = jg.nulls.get(score.id)
+    if got and got[0] == digest:
+        return got[1], got[2]
+    null, real = jg.null(score, orig, olines, own_files)
+    jg.nulls[score.id] = (digest, null, real)
+    return null, real
+
+
+def own_rendition(score: Score, notes_doc: dict, name: str) -> Rendition:
+    """A converter's notes as the take chip_voices makes of them, on its own timeline."""
+    voices, intro, loop = chip_voices(score, notes_doc)
+    return rendition({"clock_hz": score.clock_hz, "timeline": "own", "own_intro_t": intro, "own_loop_t": loop,
+                      "note": [asdict(n) for v in voices.values() for n in v]}, name)
+
+
+def render_todo(jg: Judge, score: Score) -> list[tuple[str, str]]:
+    """The score's takes the renderer has to check: (name, digest of its arranged.toml) for each
+    that judge.toml holds no verdict on for this arranged.toml and this music-preview."""
+    old = read_toml(score.dir / JUDGE_FILE)
+    prev = ({t.get("name"): t for t in old.get("take", [])}
+            if old.get("version") == JUDGE_VERSION and old.get("score") == score.digest() else {})
+    out = []
+    for name, p in judged_takes(score.dir):
+        dg = file_digest(p / "arranged.toml")
+        pv = prev.get(name, {})
+        if not (pv.get("digest") == dg and pv.get("rendered") and (not jg.mp or pv.get("rendered") == jg.mp_stamp)):
+            out.append((name, dg))
+    return out
+
+
+def judge_score(jg: Judge, score: Score) -> dict | None:
+    """The judge's figures for the score's takes, written to judge.toml beside score.toml and
+    reused while the score, a take's arranged.toml and the renderer stay the same; None for a
+    score with no takes."""
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = score.dir / JUDGE_FILE
+    takes = judged_takes(score.dir)
+    if not takes:
+        path.unlink(missing_ok=True)
+        return None
+    old = read_toml(path)
+    digest = score.digest()
+    same = old.get("version") == JUDGE_VERSION and old.get("score") == digest
+    prev = {t.get("name"): t for t in old.get("take", [])} if same else {}
+    orig = rendition(read_toml(score.path), "0")
+    olines = {k: v[:J_ORIG_NOTES] for k, v in voice_lines(orig.notes, 6).items()}
+    heads = {name: toml_head(p / "arranged.toml") for name, p in takes}
+    own_files = {str(h.get("sid_file") or h.get("ay_file")) for h in heads.values() if h.get("sid_file") or h.get("ay_file")}
+    null, real = score_null(jg, score, orig, olines, own_files)
+    if null != [float(x) for x in old.get("null", [])]:
+        prev = {k: {"refused": v.get("refused", ""), "rendered": v.get("rendered", ""), "digest": v.get("digest")}
+                for k, v in prev.items()}  # another null: every closeness again, the renderer's verdicts kept
+    mu, sd = (float(np.mean(null)), max(float(np.std(null)), 0.03)) if null else (0.0, 0.03)
+    if null and real < len(null):
+        sd = max(sd, J_BUILT_SPREAD * mu)
+    checkable = (J_SELF - mu) / sd if null else 0.0
+    win, srch = plays_s(orig), search_s(orig)
+    entries = [("0", score.path, digest)] + [(n, p / "arranged.toml", file_digest(p / "arranged.toml")) for n, p in takes]
+    # the renderer's verdict: kept for an unchanged take while music-preview is the same (or not there)
+    verdict: dict[str, tuple[str, str]] = {}
+    to_check = []
+    for name, _, dg in entries[1:]:
+        pv = prev.get(name, {})
+        if pv.get("digest") == dg and pv.get("rendered") and (not jg.mp or pv.get("rendered") == jg.mp_stamp):
+            verdict[name] = (str(pv.get("refused", "")), str(pv["rendered"]))
+        elif jg.mp:
+            to_check.append(name)
+        else:
+            verdict[name] = ("", "")
+    digests = {name: dg for name, _, dg in entries}
+    checked = {n: jg.verdicts[(score.id, n, digests[n])] for n in to_check if (score.id, n, digests[n]) in jg.verdicts}
+    to_check = [n for n in to_check if n not in checked]
+    if to_check:
+        first, rest = to_check[0], to_check[1:]  # the first alone: a game the renderer has not learned is learned once
+        checked[first] = jg.render(score, first)
+        with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as ex:
+            checked.update(zip(rest, ex.map(lambda n: jg.render(score, n), rest)))
+    for name, (why, ok) in checked.items():
+        verdict[name] = (why, jg.mp_stamp if ok else "")
+    rows = []
+    for name, p, dg in entries:
+        refused, rendered = verdict.get(name, ("", ""))
+        pv = prev.get(name)
+        if pv and "combined" in pv and pv.get("digest") == dg and str(pv.get("refused", "")) == refused:
+            rows.append(dict(pv, rendered=rendered))
+            continue
+        r = orig if name == "0" else rendition(read_toml(p), name)
+        q = quality(r, win, refused)
+        z = None
+        if name == "0":
+            clo, raw = 1.0, J_SELF
+        elif olines:
+            raw = best_align(olines, cut_lines(jg.take_lines(p, name), srch))
+            clo, z = calibrated(raw, null, real)
+        else:
+            clo, raw, z = 0.0, 0.0, 0.0
+        h = heads.get(name, {})
+        prov = 1.0 if name == "0" else provenance(h)
+        row = {"name": name, "digest": dg, "closeness": round(clo, 3), "raw": round(raw, 3), "provenance": round(prov, 3),
+               "quality": round(q["quality"], 3), "polyphony": round(q["polyphony"], 3), "harmony": round(q["harmony"], 3),
+               "rhythm": round(q["rhythm"], 3), "fault": round(q["fault"], 3),
+               "faults": [w for w, pen in q["faults"] if pen >= J_FAULT_SHOWN or w.startswith("refused")],
+               "combined": round(combined(clo, prov, q["quality"], name == "0"), 4), "refused": refused, "rendered": rendered,
+               "source": "the original" if name == "0" else str(h.get("source") or h.get("generator") or "")}
+        if z is not None:
+            row["z"] = round(z, 2)
+        rows.append(row)
+    rows.sort(key=lambda t: (-t["combined"], t["name"]))
+    for i, t in enumerate(rows, 1):
+        t["rank"] = i
+    top = rows[0]
+    rel = (top["combined"] - rows[1]["combined"]) / max(top["combined"], 1e-6) if len(rows) > 1 else 1.0
+    flags = []
+    if rel < J_CLOSE_CALL:
+        flags.append("close call")
+    if checkable < J_CHECKABLE_Z:
+        flags.append("original too plain to check closeness")
+    if top["name"] != "0" and top["closeness"] < J_SAME:
+        flags.append("winner not shown to be the same tune")
+    if any(J_PARTIAL <= t["closeness"] < J_PARTIAL_TOP for t in rows if t["name"] != "0"):
+        flags.append("partial melodic match")
+    if real < J_REAL_FOR_HIGH:
+        flags.append(f"few other games to compare with ({real} real controls)")
+    if top["refused"]:
+        flags.append("the pick is refused by the renderer")
+    conf = ("low" if rel < J_CLOSE_CALL or (checkable < J_CHECKABLE_Z and top["name"] != "0") or top["refused"]
+            else "medium" if flags else "high")
+    doc = {"version": JUDGE_VERSION, "score": digest, "plays": round(win, 1), "search": round(srch, 1),
+           "checkable_z": round(checkable, 1), "null_real": real, "null_built": len(null) - real,
+           "null": [float(x) for x in null], "renderer": jg.render_note, "pick": top["name"], "confidence": conf,
+           "flags": flags, "margin": round(rel, 3), "order": [t["name"] for t in rows], "take": rows}
+    dump_toml(path, doc)
+    return doc
+
+
+def judge_scores(d: Path, scores: list[Score], log: bool = True, jg: Judge | None = None) -> dict[str, dict]:
+    """judge_score for each score with takes: {score id: its judge.toml} (jg: the run's judge,
+    whose nulls it reuses)."""
+    jg = jg or Judge(d)
+    if not jg.mp and any(judged_takes(s.dir) for s in scores):
+        print(f"{PROG}: renderer {jg.render_note}: takes it refuses are not found", flush=True)
+    out = {}
+    jg.prefetch(scores)
+    for s in scores:
+        doc = judge_score(jg, s)
+        if doc is not None:
+            out[s.id] = doc
+            if log:
+                print(f"[{s.id}] judged: {pick_words(doc)}", flush=True)
+    return out
+
+
+def pct(x: float) -> str:
+    return f"{float(x) * 100:.0f}%"
+
+
+def pick_words(doc: dict) -> str:
+    """"chip-1 (high)", "0 (low: close call; ...)"."""
+    flags = doc.get("flags", [])
+    return f"{label_of(doc['pick'])} ({doc['confidence']}{': ' + '; '.join(flags) if flags else ''})"
+
+
+def label_of(name: str) -> str:
+    return "original" if name == "0" else name
+
+
+def judge_table(e: str, doc: dict, choice: Choice | None, by_judge: bool) -> list[str]:
+    """A score's lines in judge's table."""
+    rows = doc.get("take", [])
+    ch = "-" if choice is None else f"{label_of(choice_name(choice))} ({'the judge' if by_judge else 'yours'})"
+    out = [f"{e}  plays {doc.get('plays')} s; original checkable z {doc.get('checkable_z')}; null {doc.get('null_real')} real"
+           + (f" + {doc.get('null_built')} built" if doc.get("null_built") else "") + " controls",
+           f"  judge: {pick_words(doc)}   choice: {ch}",
+           f"  {'take':9s} {'close':>5s} {'z':>5s} {'prov':>4s} {'qual':>4s} {'poly':>4s} {'harm':>4s} {'rhy':>4s} {'flt':>4s} {'score':>6s}  faults / source"]
+    for t in rows:
+        z = f"{t['z']:.1f}" if "z" in t else "-"
+        faults = "; ".join(t.get("faults", []))
+        out.append(f"  {label_of(t['name']):9s} {t['closeness']:5.2f} {z:>5s} {t['provenance']:4.2f} {t['quality']:4.2f} {t['polyphony']:4.2f} "
+                   f"{t['harmony']:4.2f} {t['rhythm']:4.2f} {t['fault']:4.2f} {t['combined']:6.3f}  "
+                   + (f"[{faults}] " if faults else "") + str(t.get("source", ""))[:90])
+    if choice is not None and not by_judge:
+        mine = next((t for t in rows if t["name"] == choice_name(choice)), None)
+        if mine and mine.get("faults"):
+            out.append(f"  your choice {label_of(mine['name'])}: " + "; ".join(mine["faults"])
+                       + ("; the pack plays the original in its place" if mine.get("refused") else ""))
+    return out
+
+
+def cmd_judge(a: argparse.Namespace) -> int:
+    t0 = time.time()
+    d = Path(a.dir)
+    if not (d / "arrange").is_dir():
+        die(f"no {d / 'arrange'}: learn the games first (tools/pack-studio; DIR is its W/all)")
+    scores = find_scores(d, a.game)
+    print(f"{PROG}: judging {len(scores)} scores", flush=True)
+    jg = Judge(d)
+    if not jg.mp:
+        print(f"{PROG}: renderer {jg.render_note}: takes it refuses are not found", flush=True)
+    else:
+        jg.prefetch(scores)
+    docs = {}
+    for s in scores:
+        doc = judge_score(jg, s)
+        if doc is not None:
+            docs[s.id] = doc
+            print(f"[{s.id}] judged: {pick_words(doc)}", flush=True)
+    choices, judged = read_choice_tables(d)
+    new = {}
+    gone = []
+    for sid, doc in docs.items():
+        by_judge = sid in judged and judged[sid] == choices.get(sid)
+        if sid in choices and not by_judge:
+            continue
+        if doc["confidence"] == "high":
+            c = name_choice(doc["pick"])
+            if not by_judge or choices.get(sid) != c:
+                new[sid] = c
+        elif by_judge:
+            gone.append(sid)
+    if a.apply and (new or gone):
+        write_choices(d, {}, judge=new, unjudge=gone)
+        choices, judged = read_choice_tables(d)
+    print()
+    for sid, doc in docs.items():
+        by_judge = sid in judged and judged[sid] == choices.get(sid)
+        print("\n".join(judge_table(sid, doc, choices.get(sid), by_judge)))
+        print()
+    owner = sum(1 for sid in docs if sid in choices and not (sid in judged and judged[sid] == choices[sid]))
+    picked = sum(1 for sid in docs if sid in choices and sid in judged and judged[sid] == choices[sid])
+    sure = sum(1 for sid, doc in docs.items() if doc["confidence"] == "high"
+               and not (sid in choices and not (sid in judged and judged[sid] == choices[sid])))
+    flagged = sum(1 for sid, doc in docs.items() if doc["confidence"] != "high" and sid not in choices)
+    faults = sum(1 for doc in docs.values() for t in doc["take"] if t["name"] != "0" and t.get("faults"))
+    if a.apply:
+        print(f"{PROG}: {len(new)} choices made by the judge, {len(gone)} of its earlier ones taken back (no longer sure); "
+              f"your own choices left alone")
+    elif sure - picked:
+        print(f"{PROG}: --apply would choose for {sure - picked} scores the judge is sure of")
+    print(summary_line("judge", a.game, t0, tunes=len(docs), owner=owner, picked=picked, applied=len(new) if a.apply else 0, sure=sure,
+                       flagged=flagged, faults=faults, renderer="checked" if jg.mp else "skipped"), flush=True)
     return 0
 
 
@@ -2046,43 +2919,95 @@ def parse_choice(v) -> Choice | None:
     return None
 
 
+def read_choice_tables(d: Path) -> tuple[dict[str, Choice], dict[str, Choice]]:
+    """choices.toml's [choices] and [judged] tables: every choice, and those the judge made (a
+    choice is the judge's while [judged] holds the same value for it; fmzx-pack reads only
+    [choices])."""
+    doc = read_toml(choices_path(d))
+    out = []
+    for table in ("choices", "judged"):
+        t = {}
+        for k, v in (doc.get(table) or {}).items():
+            c = parse_choice(v)
+            if c is not None:
+                t[str(k)] = c
+        out.append(t)
+    return out[0], out[1]
+
+
 def read_choices(d: Path) -> dict[str, Choice]:
-    out = {}
-    for k, v in read_toml(choices_path(d)).get("choices", {}).items():
-        c = parse_choice(v)
-        if c is not None:
-            out[str(k)] = c
-    return out
+    return read_choice_tables(d)[0]
 
 
-def write_choices(d: Path, update: dict[str, Choice]) -> dict[str, Choice]:
-    ch = read_choices(d)
-    ch.update(update)
+def write_choices(d: Path, update: dict[str, Choice], judge: dict[str, Choice] | None = None,
+                  unjudge: list[str] | None = None) -> dict[str, Choice]:
+    """Sets the owner's choices (update: no longer the judge's), the judge's (judge: marked in
+    [judged]) and takes back the judge's (unjudge: the score plays the original again); the
+    other choices kept. A [judged] entry whose choice the owner changed by hand is dropped."""
+    ch, judged = read_choice_tables(d)
+    for k, v in update.items():
+        ch[k] = v
+        judged.pop(k, None)
+    for k, v in (judge or {}).items():
+        ch[k] = judged[k] = v
+    for k in unjudge or []:
+        ch.pop(k, None)
+        judged.pop(k, None)
+    judged = {k: v for k, v in judged.items() if ch.get(k) == v}
     choices_path(d).parent.mkdir(parents=True, exist_ok=True)
-    dump_toml(choices_path(d), {"choices": dict(sorted(ch.items()))})
+    doc = {"choices": dict(sorted(ch.items()))}
+    if judged:
+        doc["judged"] = dict(sorted(judged.items()))
+    dump_toml(choices_path(d), doc)
     return ch
 
 
+def judge_of(doc: dict, name: str) -> dict:
+    """A take's figures in a judge.toml, for the list and the page: closeness, quality, rank,
+    faults; {} when the judge has not weighed it."""
+    t = next((t for t in doc.get("take", []) if t.get("name") == name), None)
+    if t is None:
+        return {}
+    return {"closeness": t.get("closeness", 0.0), "quality": t.get("quality", 0.0), "rank": t.get("rank", 0),
+            "faults": list(t.get("faults", [])), "pick": doc.get("pick") == name}
+
+
+def judge_line(j: dict, original: bool = False) -> str:
+    """"close 97%, quality 62%, #1 (the judge's pick); plays only a fragment: ..." for a take."""
+    if not j:
+        return "not judged"
+    text = ("" if original else f"close {pct(j['closeness'])}, ") + f"quality {pct(j['quality'])}, #{j['rank']}"
+    text += " (the judge's pick)" if j["pick"] else ""
+    return text + ("; " + "; ".join(j["faults"]) if j["faults"] else "")
+
+
 def score_entries(d: Path) -> list[dict]:
-    choices = read_choices(d)
+    choices, judged = read_choice_tables(d)
     out = []
     for s in find_scores(d):
+        jd = read_toml(s.dir / JUDGE_FILE)
         takes = []
         for n, p in take_dirs(s.dir):
             doc = read_toml(p / "arranged.toml")
             takes.append({"n": n, "generator": doc.get("generator", ""), "metrics": doc.get("metrics", {}),
-                          "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file()})
+                          "fm1": (p / "fm1.wav").is_file(), "full": (p / "full.wav").is_file(), "judge": judge_of(jd, f"take-{n}")})
         chips = []  # the takes on their own timeline: chip-<n>, then ay-<n>
         for kind in OWN_KINDS:
             for n, p in own_dirs(s.dir, kind):
                 doc = read_toml(p / "arranged.toml")
                 mt = doc.get("metrics", {})
-                chips.append({"name": f"{kind.prefix}-{n}", "label": kind.label, "source": doc.get("source", ""), "stil": doc.get("stil", ""),
-                              "melody_match": mt.get("melody_match", 0.0), "title_match": mt.get("title_match", 0.0),
+                name = f"{kind.prefix}-{n}"
+                chips.append({"name": name, "label": kind.label, "source": doc.get("source", ""), "stil": doc.get("stil", ""),
+                              "title_match": mt.get("title_match", 0.0), "judge": judge_of(jd, name),
                               "fm1": (p / "fm1.wav").is_file(), "own": kind.sound if (p / kind.sound).is_file() else "",
                               "own_label": kind.sound_label})
+        ch = choices.get(s.id, 0)
+        verdict = (f"{label_of(jd['pick'])} ({jd.get('confidence')}" + (f": {'; '.join(jd.get('flags', []))}" if jd.get("flags") else "")
+                   + ")") if jd.get("pick") is not None and (takes or chips) else ""
         out.append({"id": s.id, "game": s.game, "name": s.name, "key": s.key, "seconds": round(s.seconds, 1), "shadow": s.shadow,
-                    "original": (s.dir / "original.wav").is_file(), "takes": takes, "chips": chips, "choice": choices.get(s.id, 0)})
+                    "original": (s.dir / "original.wav").is_file(), "takes": takes, "chips": chips, "choice": ch,
+                    "by_judge": s.id in judged and judged[s.id] == choices.get(s.id), "verdict": verdict,
+                    "judge0": judge_of(jd, "0")})
     return out
 
 
@@ -2093,7 +3018,7 @@ def choice_ok(entry: dict, v: Choice) -> bool:
 
 
 def chip_line(c: dict) -> str:
-    return f"{c['source']} \u2014 melody match {float(c['melody_match']):.2f}"
+    return f"{c['source']} \u2014 {judge_line(c['judge'])}"
 
 
 def apply_set(d: Path, sets: list[str]) -> None:
@@ -2127,10 +3052,15 @@ def print_list(d: Path) -> None:
         original = " (the live version)" if e["shadow"] else " (original)"
         names = [str(t["n"]) for t in e["takes"]] + [c["name"] for c in e["chips"]]
         print(f"{e['id']}  ({e['name']}, {e['seconds']} s){shadow}  takes: {' '.join(names) or '-'}  "
-              f"choice: {ch}{original if ch == 0 else ''}")
+              f"choice: {ch}{original if ch == 0 else ''}{' (the judge)' if e['by_judge'] else ''}")
+        if e["verdict"]:
+            print(f"  judge: {e['verdict']}")
+            print(f"  original: {judge_line(e['judge0'], original=True)}")
         for t in e["takes"]:
             print(f"  take {t['n']}: {t['generator']}")
             print(f"    {metrics_line(t['metrics'])}")
+            if t["judge"]:
+                print(f"    {judge_line(t['judge'])}")
         for c in e["chips"]:
             print(f"  {c['name']}: {chip_line(c)}")
 
@@ -2139,8 +3069,8 @@ PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Arranged takes</title>
 <style>
-:root{--bg:#fafafa;--fg:#1d1d1f;--muted:#6e6e73;--line:#d9d9de;--card:#fff;--accent:#0a64d6}
-@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#f2f2f4;--muted:#9a9aa0;--line:#33333a;--card:#202024;--accent:#5aa2ff}}
+:root{--bg:#fafafa;--fg:#1d1d1f;--muted:#6e6e73;--line:#d9d9de;--card:#fff;--accent:#0a64d6;--bad:#c4302b}
+@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#f2f2f4;--muted:#9a9aa0;--line:#33333a;--card:#202024;--accent:#5aa2ff;--bad:#ff7b72}}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif}
 main{max-width:980px;margin:0 auto;padding:16px}
 h1{font-size:22px;margin:8px 0 4px}h2{font-size:18px;margin:28px 0 8px}
@@ -2157,6 +3087,7 @@ audio{height:32px;max-width:100%}
 .bar{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 0;display:flex;gap:12px;align-items:center}
 button{font:inherit;padding:7px 18px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
 #status{color:var(--muted)}
+.bad{color:var(--bad)}.judge{color:var(--muted);font-size:13px;margin:-4px 0 6px}
 @media (max-width:600px){.row{grid-template-columns:1fr}.m{grid-column:1}}
 </style></head><body><main>
 <h1>Arranged takes</h1>
@@ -2172,6 +3103,10 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const url = (e, f) => '/audio/' + encodeURIComponent(e.game) + '/' + encodeURIComponent(e.key) + '/' + f;
 const player = (src, label) => '<div>' + (label ? '<small>' + label + '</small>' : '') +
   '<audio controls preload="none" src="' + esc(src) + '"></audio></div>';
+const pct = x => Math.round((+x || 0) * 100) + '%';
+const jl = (j, orig) => !j || !Object.keys(j).length ? 'not judged' : (orig ? '' : 'close ' + pct(j.closeness) + ', ') +
+  'quality ' + pct(j.quality) + ', #' + j.rank + (j.pick ? " (the judge's pick)" : '');
+const faults = j => j && j.faults && j.faults.length ? ' <span class="bad">' + esc(j.faults.join('; ')) + '</span>' : '';
 const fmt = m => m && Object.keys(m).length ? 'consonance bass ' + (m.bass_consonance ?? 0).toFixed(2) + ', pad ' +
   (m.pad_consonance ?? 0).toFixed(2) + ' · in key bass ' + (m.bass_in_key ?? 0).toFixed(2) + ', pad ' +
   (m.pad_in_key ?? 0).toFixed(2) + ' · notes/s bass ' + m.bass_nps + ', pad ' + m.pad_nps + ', drums ' + m.drums_nps : '';
@@ -2181,22 +3116,25 @@ for (const e of DATA) {
   const name = 'c-' + e.id;
   html += '<div class="score"><h3>' + esc(e.key) + ' <span>' + e.seconds + ' s' +
     (e.shadow ? ' (replaces the live version when chosen)' : '') + '</span></h3>';
+  if (e.verdict) html += '<p class="judge">judge: ' + esc(e.verdict) + (e.by_judge ? ' · the choice below is the judge\'s' : '') + '</p>';
   html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="0"' + (e.choice === 0 ? ' checked' : '') +
-    '> ' + (e.shadow ? 'live version' : 'original') + '</label><div class="audios">' + (e.original ? player(url(e, 'original.wav')) : '<small>no render</small>') + '</div></div>';
+    '> ' + (e.shadow ? 'live version' : 'original') + '</label><div class="audios">' + (e.original ? player(url(e, 'original.wav')) : '<small>no render</small>') + '</div>' +
+    (e.verdict ? '<div class="m">' + esc(jl(e.judge0, true)) + faults(e.judge0) + '</div>' : '') + '</div>';
   for (const t of e.takes) {
     html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="' + t.n + '"' + (e.choice === t.n ? ' checked' : '') +
       '> take ' + t.n + '</label><div class="audios">' +
       (t.fm1 ? player(url(e, 'take-' + t.n + '/fm1.wav'), 'FM-1') : '<small>no render</small>') +
       (t.full ? player(url(e, 'take-' + t.n + '/full.wav'), 'full arrangement') : '') +
-      '</div><div class="m" title="' + esc(t.generator) + '">' + esc(fmt(t.metrics)) + '</div></div>';
+      '</div><div class="m" title="' + esc(t.generator) + '">' + esc(fmt(t.metrics)) + (t.judge && Object.keys(t.judge).length ?
+      ' · ' + esc(jl(t.judge)) + faults(t.judge) : '') + '</div></div>';
   }
   for (const c of e.chips) {
     html += '<div class="row"><label><input type="radio" name="' + esc(name) + '" value="' + esc(c.name) + '"' + (e.choice === c.name ? ' checked' : '') +
       '> ' + esc(c.name) + ' <small class="m">' + esc(c.label) + '</small></label><div class="audios">' +
       (c.fm1 ? player(url(e, c.name + '/fm1.wav'), 'FM-1') : '<small>no render</small>') +
       (c.own ? player(url(e, c.name + '/' + c.own), esc(c.own_label)) : '') +
-      '</div><div class="m"' + (c.stil ? ' title="' + esc(c.stil) + '"' : '') + '>' + esc(c.source) + ' \u2014 melody match ' +
-      (+c.melody_match).toFixed(2) + '</div></div>';
+      '</div><div class="m"' + (c.stil ? ' title="' + esc(c.stil) + '"' : '') + '>' + esc(c.source) + ' \u2014 ' +
+      esc(jl(c.judge)) + faults(c.judge) + '</div></div>';
   }
   if (!e.takes.length && !e.chips.length) html += '<p class="m">No takes yet: tools/arrange-music generate (or chip, or ay)</p>';
   html += '</div>';
@@ -2329,6 +3267,14 @@ def cmd_pick(a: argparse.Namespace) -> int:
         die(f"no {d / 'arrange'}: learn the games first (tools/pack-studio; DIR is its W/all)")
     if a.set:
         apply_set(d, a.set)
+    if a.list or not a.set:
+        scores = find_scores(d)
+        print(f"{PROG}: judging the takes of {len(scores)} scores (quick once they are judged)", flush=True)
+        docs = judge_scores(d, scores, log=False)
+        for sid, doc in docs.items():
+            for t in doc["take"]:
+                if t["name"] != "0" and t.get("faults"):
+                    print(f"{PROG}: warning: {sid} {t['name']}: {'; '.join(t['faults'])}", flush=True)
     if a.list:
         print_list(d)
     if a.set or a.list:
@@ -2490,6 +3436,78 @@ def selftest_collection(root: Path) -> Path:
     return c
 
 
+SELFTEST_PREVIEW = r"""
+import sys
+from pathlib import Path
+a = sys.argv[1:]
+here = Path(__file__).parent
+take = f"{a[a.index('--game') + 1]}/{a[a.index('--score') + 1]} {a[a.index('--take') + 1]}"
+with open(here / "calls.log", "a") as lg:
+    lg.write(take + "\n")
+if take in ((here / "refuse.txt").read_text().splitlines() if (here / "refuse.txt").is_file() else []):
+    print("refused: the replay: method B stops following it at frame 9, 3 frames in", file=sys.stderr)
+    sys.exit(3)
+Path(a[a.index("-o") + 1]).write_bytes(b"RIFF")
+"""
+
+
+def selftest_band(rng: random.Random, bars: int = 16, lead: bool = True, bass: bool = True, pad: bool = True, drums: bool = True,
+                  pad_shift: int = 0, beat: float = 0.5):
+    """A made-up band over C F G C: a lead on chord tones and the scale, a bass on roots and
+    fifths, a pad, a drum on each beat; (voice, start s, end s, midi) rows."""
+    import numpy as np
+
+    prog = ((0, 4, 7), (5, 9, 0), (7, 11, 2), (0, 4, 7))
+    rows = []
+    for bar in range(bars):
+        ch, t0 = prog[bar % 4], bar * 4 * beat
+        t = t0
+        while lead and t < t0 + 4 * beat - 1e-9:
+            d = beat if rng.random() < 0.5 else beat / 2
+            rows.append((0, t, t + d * 0.9, 72 + (rng.choice(ch) if rng.random() < 0.7 else rng.choice(J_MAJOR))))
+            t += d
+        for b in range(4):
+            tb = t0 + b * beat
+            if bass:
+                rows.append((1, tb, tb + beat * 0.9, 36 + (ch[0] if b % 2 == 0 else ch[2])))
+            if drums:
+                rows.append((3, tb, tb + 0.05, float("nan")))
+        if pad:
+            rows.append((2, t0, t0 + 4 * beat - 0.01, 60 + ch[1] + pad_shift))
+    a = np.array(rows, dtype=float)
+    return a[np.lexsort((a[:, 0], a[:, 1]))]
+
+
+def selftest_notes_doc(notes, clock: int = 3500000) -> list[dict]:
+    """(voice, start s, end s, midi) rows as score.toml's [[note]] tables, one note at a time per voice."""
+    out = []
+    last: dict[int, int] = {}
+    for v, s_, e, m in sorted(notes.tolist(), key=lambda n: (n[1], n[0])):
+        v, st, en = int(v), int(round(s_ * clock)), int(round(e * clock))
+        st = max(st, last.get(v, 0))
+        if en <= st:
+            continue
+        last[v] = en
+        out.append({"voice": v, "start_t": st, "end_t": en, "period_t": 0 if v == 3 else period_of_midi(clock, int(round(m))), "level": 120})
+    return sorted(out, key=lambda n: (n["start_t"], n["voice"]))
+
+
+def selftest_judge_game(root: Path, game: str, key: str, orig, total: float, takes: dict) -> None:
+    """A made-up game's score (orig: its notes, no loop) and takes on their own timeline (name ->
+    (notes, seconds, source, title match))."""
+    sd = root / "arrange" / game / key
+    sd.mkdir(parents=True, exist_ok=True)
+    head = {"game": game, "name": game.replace("-", " ").title(), "key": key, "clock_hz": 3500000,
+            "intro_t": int(total * 3500000), "loop_t": 0, "voices": 3, "roles": ["lead", "bass", "pad"]}
+    dump_toml(sd / "score.toml", dict(head, note=selftest_notes_doc(orig)))
+    for name, (notes, secs, source, tm) in takes.items():
+        (sd / name).mkdir(exist_ok=True)
+        dump_toml(sd / name / "arranged.toml", dict(head, take=name, generator="chip sid", timeline="own", own_intro_t=int(secs * 3500000),
+                                                    own_loop_t=0, source=source, sid_file=source.rsplit(", ", 1)[-1], subtune=1,
+                                                    metrics={"closeness": 0.0, "title_match": tm}, note=selftest_notes_doc(notes)))
+
+
+
 def selftest_summary(out: str) -> dict:
     """The summary line's fields in a command's output ({} without one)."""
     lines = [ln for ln in out.splitlines() if ln.startswith("summary: ")]
@@ -2524,6 +3542,11 @@ def cmd_selftest(a: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="arrange-selftest-") as tmp:
         d = Path(tmp)
+        mp = d / "mp" / "music-preview"  # a stand-in renderer: refuses the takes mp/refuse.txt lists
+        mp.parent.mkdir()
+        mp.write_text(f"#!{sys.executable}\n" + SELFTEST_PREVIEW)
+        mp.chmod(0o755)
+        os.environ["FMZX_MUSIC_PREVIEW"] = str(mp)
         keys = ["1234-0badc0de", "5678-12345678", "9ABC-0f0f0f0f"]
         for k in keys:
             selftest_score(d / "arrange" / "test-game" / k / "score.toml", "test-game", k, shadow=k == keys[2])
@@ -2607,20 +3630,18 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(rc == 0, "chip --max 2")
         sdirs = [d / "arrange" / "test-game" / k for k in keys]
         made = [read_toml(p / "arranged.toml") for sd in sdirs for _, p in chip_dirs(sd)]
-        top = max(made, key=lambda x: x["metrics"]["melody_match"]) if made else {}
+        top = max(made, key=lambda x: x["metrics"]["closeness"]) if made else {}
         check(sm.get("kind") == "sid" and sm.get("game") == "all" and sm.get("scores") == "3" and sm.get("pending") == "3"
-              and sm.get("takes") == str(len(made)) and sm.get("best") == f"{top['metrics']['melody_match']:.2f}"
+              and sm.get("takes") == str(len(made)) and sm.get("best") == f"{top['metrics']['closeness']:.2f}"
               and sm.get("source") == top.get("source") and int(sm.get("candidates", 0)) >= int(sm.get("checked", 0)) > 0,
-              f"chip: its summary line, the takes written and the best one's match and source ({sm})")
+              f"chip: its summary line, the takes written and the best one's closeness and source ({sm})")
         idx = json.loads((d / "arrange" / ".chip-index.json").read_text())
         check(idx["key"]["path"] == str(coll.resolve()) and len(idx["files"]) == 4, "chip: the collection indexed, with its key")
         check(any(f["path"] == "MUSICIANS/E/Example_Bob/Cover.sid" and "2" in f.get("stil", {}) for f in idx["files"]), "chip: the index has STIL entries by file")
         calls = (conv.parent / "calls.log").read_text().split("\n")[:-1]
-        checks60 = sorted(c for c in calls if c.endswith(" 60"))
-        check(checks60 == ["Cover.sid 2 60", "Test_Tune.sid 1 60", "Test_Tune.sid 1 60", "Test_Tune.sid 2 60"],
-              "chip: candidates by file name, title and STIL subtune; checked once each for three scores")
+        check(sorted(calls) == ["Cover.sid 2 180", "Test_Tune.sid 1 180", "Test_Tune.sid 1 180", "Test_Tune.sid 2 180"],
+              "chip: candidates by file name, title and STIL subtune; each converted once, for its check and its take, for three scores")
         check(not any(c.startswith("Another_Game") for c in calls), "chip: a STIL entry naming the Spectrum but not the game is no candidate")
-        check(sorted(c for c in calls if c.endswith(" 180")) == ["Cover.sid 2 180", "Test_Tune.sid 2 180"], "chip: the best 2 converted in full")
         sdir = d / "arrange" / "test-game" / keys[0]
         score = load_score(sdir / "score.toml")
         check([n for n, _ in chip_dirs(sdir)] == [1, 2], "chip: chip-1 and chip-2")
@@ -2629,9 +3650,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(c2.get("source", "").startswith("C64: Some Cover by Bob Example (1999 Example Group), subtune 2,") and "Spectrum" in c2.get("stil", ""),
               "chip-2: the STIL-named subtune, with its STIL text")
         m1, m2 = c1.get("metrics", {}), c2.get("metrics", {})
-        check(m1.get("melody_match", 0) == round(12 / CHIP_NGRAM_MIN, 3) and m2.get("melody_match", 0) == round(4 / CHIP_NGRAM_MIN, 3)
-              and m1.get("rank", 0) > m2.get("rank", 0),
-              "chip: ranked by the melody check (the whole tune transposed: its 12 distinct 4-grams; half of it an octave up: 4)")
+        check(m1.get("closeness", 0) >= J_PARTIAL_TOP and m2.get("closeness", 1) < m1.get("closeness", 0) and m1.get("rank", 0) > m2.get("rank", 0),
+              f"chip: ranked by closeness (the whole tune transposed: {m1.get('closeness')}; half of it an octave up: {m2.get('closeness')})")
         check(m1.get("title_match") == 1.0 and m2.get("title_match") == 1.0 and m2.get("stil_spectrum") is True, "chip: title match")
         for f in ("game", "name", "key", "clock_hz", "intro_t", "loop_t"):
             check(c1.get(f) == score.header[f], f"chip-1: {f} as the score's")
@@ -2668,7 +3688,7 @@ def cmd_selftest(a: argparse.Namespace) -> int:
               and [n for n, _ in chip_dirs(sdir)] == [1, 2, 3] and (sdir / "chip-1" / "arranged.toml").read_bytes() == chip1,
               "chip --force --max 3: the same takes again, and a third")
         c3 = read_toml(sdir / "chip-3" / "arranged.toml")
-        check(c3.get("sid_file") == "GAMES/S-Z/Test_Tune.sid" and c3.get("subtune") == 1 and c3["metrics"]["melody_match"] < 0.2,
+        check(c3.get("sid_file") == "GAMES/S-Z/Test_Tune.sid" and c3.get("subtune") == 1 and c3["metrics"]["closeness"] < J_PARTIAL,
               "chip: a tune the converter refuses is skipped; the unrelated subtune comes last")
         check(run("pick", str(d), "--set", f"test-game/{keys[0]}=2", f"test-game/{keys[1]}=0") == 0, "pick --set with two choices")
         ch = read_toml(choices_path(d)).get("choices", {})
@@ -2687,8 +3707,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(SHADOW_MARK in lines[f"test-game/{keys[2]}"] and "(the live version)" in lines[f"test-game/{keys[2]}"], "pick --list marks the shadow score")
         check(SHADOW_MARK not in lines[f"test-game/{keys[0]}"], "pick --list marks no other score")
         check(run("pick", str(d), "--set", f"test-game/{keys[2]}=1") == 0, "pick --set chooses a take of the shadow score")
-        check("  chip-1: C64: Test Tune by Ann Example (1985 Nobody Soft), subtune 2, GAMES/S-Z/Test_Tune.sid \u2014 melody match 0.50" in out
-              and "takes: 1 2 chip-1 chip-2 chip-3" in lines[f"test-game/{keys[0]}"], "pick --list shows chip takes with source and melody match")
+        check("  chip-1: C64: Test Tune by Ann Example (1985 Nobody Soft), subtune 2, GAMES/S-Z/Test_Tune.sid \u2014 close " in out
+              and "takes: 1 2 chip-1 chip-2 chip-3" in lines[f"test-game/{keys[0]}"], "pick --list shows chip takes with source and the judge's figures")
         check(run("pick", str(d), "--set", f"test-game/{keys[1]}=chip-1") == 0
               and read_toml(choices_path(d))["choices"][f"test-game/{keys[1]}"] == "chip-1", "pick --set GAME/KEY=chip-1")
         buf = io.StringIO()
@@ -2724,7 +3744,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             ch = read_toml(choices_path(d)).get("choices", {})
             check(ch.get(f"test-game/{keys[1]}") == 1 and ch.get(f"test-game/{keys[0]}") == 2 and ch.get("other-game/0000-00000000") == 3
                   and ch.get(f"test-game/{keys[2]}") == 1, "choices.toml after the page's save")
-            check("melody match" in page and '"name": "chip-1"' in page and "Ann Example" in page, "page lists the chip takes")
+            check('"closeness"' in page and '"name": "chip-1"' in page and "Ann Example" in page and '"verdict": "' in page,
+                  "page lists the chip takes, with the judge's figures and verdict")
             body = json.dumps({"choices": {f"test-game/{keys[0]}": "chip-2"}}).encode()
             req = urllib.request.Request(base + "/save", data=body, headers={"Content-Type": "application/json"})
             check(urllib.request.urlopen(req).status == 200 and read_toml(choices_path(d))["choices"].get(f"test-game/{keys[0]}") == "chip-2",
@@ -2760,10 +3781,9 @@ def cmd_selftest(a: argparse.Namespace) -> int:
               == ["games/Compilation.ay", "games/Test_Tune.ay", "games/Unrelated.ay", "misc/Test_Tune.ay"],
               "ay: the collection indexed (a file with no header and other files left out)")
         acalls = (conv.parent / "calls.log").read_text().splitlines()[calls_before:]
-        a60 = sorted(c for c in acalls if c.endswith(" 60"))
-        check(a60 == sorted(["Test_Tune.ay 1 60", "Test_Tune.ay 2 60", "Test_Tune.ay 1 60", "Compilation.ay 2 60"] * 1),
-              "ay: candidates by file name and song name; checked once each for three scores")
-        check(not any(c.startswith("Unrelated") for c in acalls) and not any(c == "Compilation.ay 1 60" for c in acalls),
+        check(sorted(acalls) == sorted(["Test_Tune.ay 1 180", "Test_Tune.ay 2 180", "Test_Tune.ay 1 180", "Compilation.ay 2 180"]),
+              "ay: candidates by file name and song name; each converted once for three scores")
+        check(not any(c.startswith("Unrelated") for c in acalls) and not any(c.startswith("Compilation.ay 1 ") for c in acalls),
               "ay: files and songs that do not name the game are no candidates")
         check("refused by the converter" in said and "48K beeper" in said and "beeper tune" not in said.replace("48K beeper tunes", ""),
               "ay: a song the converter refuses is skipped quietly, and counted")
@@ -2774,8 +3794,8 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         check(a2.get("source") == "Spectrum 128: Test Tune (128K) by Cy Example, song 2, games/Compilation.ay", "ay-2: named by its song")
         check(a1.get("take") == "ay-1" and a1.get("generator") == "chip ay" and a1.get("timeline") == "own"
               and a1.get("own_intro_t") == 0 and a1.get("own_loop_t") == loop_t and a1.get("voices") == 3, "ay-1: take, generator, own timeline")
-        check(a1["metrics"]["melody_match"] == round(12 / CHIP_NGRAM_MIN, 3) and a1["metrics"]["rank"] > a2["metrics"]["rank"],
-              "ay: ranked by the melody check")
+        check(a1["metrics"]["closeness"] >= J_PARTIAL_TOP and a1["metrics"]["rank"] > a2["metrics"]["rank"],
+              "ay: ranked by closeness")
         for f in ("game", "name", "key", "clock_hz", "intro_t", "loop_t"):
             check(a1.get(f) == score.header[f], f"ay-1: {f} as the score's")
         check(not (sdir / "ay-1" / "ay.wav").is_file() or bool(ay_renderer()), "ay-1: ay.wav only with an AY renderer")
@@ -2794,9 +3814,9 @@ def cmd_selftest(a: argparse.Namespace) -> int:
             main(["pick", str(d), "--list"])
         out = buf.getvalue()
         lines = {ln.split()[0]: ln for ln in out.splitlines() if ln.startswith("test-game/")}
-        check("  ay-1: Spectrum 128: In game by Ann Example, song 2, games/Test_Tune.ay \u2014 melody match 0.50" in out
+        check("  ay-1: Spectrum 128: In game by Ann Example, song 2, games/Test_Tune.ay \u2014 close " in out
               and "takes: 1 2 chip-1 ay-1 ay-2" in lines[f"test-game/{keys[0]}"] and "choice: ay-2" in lines[f"test-game/{keys[0]}"],
-              "pick --list shows ay takes with source and melody match, and an ay choice")
+              "pick --list shows ay takes with source and the judge's figures, and an ay choice")
         try:
             main(["pick", str(d), "--set", f"test-game/{keys[0]}=ay-9"])
             check(False, "pick --set of a missing ay take fails")
@@ -2816,6 +3836,137 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         finally:
             srv.shutdown()
             srv.server_close()
+        # the judge: label-free checks of its measures
+        import numpy as np
+
+        o_ = made_up_tune(random.Random(5), 20.0)
+        o = Rendition("0", 20.0, 20.0, 0.0, o_[o_[:, 0] == 0])  # a beeper tune's lead
+        ol = {k: v[:J_ORIG_NOTES] for k, v in voice_lines(o.notes, 6).items()}
+        srch = search_s(o)
+        rng = random.Random(9)
+        null = [best_align(ol, cut_lines(voice_lines(shuffled_original(o, srch, rng) if i % 2 == 0 else made_up_tune(rng, J_CAND_S)), srch))
+                for i in range(J_NULL)]
+        close = lambda a_: calibrated(best_align(ol, cut_lines(voice_lines(a_), srch)), null, 0)[0]  # noqa: E731
+        tr = o.notes.copy()
+        tr[:, 3] -= 7
+        tempo = o.notes.copy()
+        tempo[:, 1:3] *= 1.25
+        tempo[:, 3] += 2
+        moved = o.notes[o.notes[:, 0] == 0].copy()
+        moved[:, 0] = 2
+        under = selftest_band(random.Random(3), bars=10, lead=False)
+        shuf = o.notes.copy()
+        idx = np.flatnonzero(shuf[:, 0] == 0)
+        perm = idx.copy()
+        random.Random(4).shuffle(perm)
+        shuf[idx, 3] = o.notes[perm, 3]
+        c = {"transposed": close(tr), "tempo": close(tempo), "moved": close(np.concatenate([moved, under])),
+             "unrelated": close(made_up_tune(random.Random(77), 30.0)), "shuffled": close(shuf)}
+        check(c["transposed"] >= J_PARTIAL_TOP and c["tempo"] >= J_PARTIAL_TOP and c["moved"] >= J_PARTIAL_TOP,
+              f"judge: a transposed copy, a faster one a tone up, the lead on another voice under a band: the same tune ({c})")
+        check(c["unrelated"] < J_PARTIAL and c["shuffled"] < J_SAME, "judge: an unrelated tune and the pitches shuffled: not the same tune")
+        band = lambda **kw: Rendition("x", 32.0, 32.0, 0.0, selftest_band(random.Random(7), **kw))  # noqa: E731
+        full, alone, clash = quality(band(), 32.0), quality(band(bass=False, pad=False, drums=False), 32.0), quality(band(pad_shift=1), 32.0)
+        check(full["quality"] > alone["quality"] + 0.3 and full["polyphony"] > alone["polyphony"] and full["rhythm"] > alone["rhythm"],
+              f"judge: a full band sounds fuller than its lead alone ({full['quality']:.2f} > {alone['quality']:.2f})")
+        check(clash["harmony"] < 0.2 < full["harmony"] and clash["quality"] < full["quality"], "judge: a pad a semitone off kills the harmony")
+        nb = selftest_band(random.Random(7))
+        stuck = Rendition("x", 32.0, 32.0, 0.0, np.vstack([nb[nb[:, 0] != 2], [[2, 0.0, 30.0, 64.0]]]))
+        qs = quality(stuck, 32.0)
+        check(any("stuck note" in w for w, _ in qs["faults"]) and qs["fault"] < 1.0 and qs["quality"] < full["quality"], "judge: a stuck note is penalised")
+        gap = quality(Rendition("x", 32.0, 32.0, 0.0, nb[(nb[:, 1] < 8) | (nb[:, 1] > 24)]), 32.0)
+        frag = quality(Rendition("x", 8.0, 8.0, 0.0, nb[nb[:, 1] < 8]), 32.0)
+        refused = quality(band(), 32.0, "the replay stops")
+        check(any(w.startswith("a silent gap") for w, _ in gap["faults"]) and gap["fault"] < 0.8, "judge: a long silence is penalised")
+        check(any(w.startswith("plays only a fragment") for w, _ in frag["faults"]) and frag["quality"] < 0.5 * full["quality"],
+              "judge: a take shorter than what plays is penalised")
+        check(refused["quality"] == 0.0 and refused["faults"][0][0] == "refused by the renderer: the replay stops", "judge: a refused take scores 0")
+
+        # the judge on the takes above: judge.toml, the renderer's refusals, the cache
+        jd = read_toml(sdir / JUDGE_FILE)
+        check(jd.get("version") == JUDGE_VERSION and jd.get("score") == score.digest() and sorted(t["name"] for t in jd.get("take", []))
+              == sorted(["0", "take-1", "take-2", "chip-1", "ay-1", "ay-2"]) and jd.get("null_real") == 0 and jd.get("null_built") == J_NULL,
+              "judge: chip and ay wrote judge.toml (every take and the original; the null built from the score alone)")
+        check(jd.get("confidence") != "high" and any(f.startswith("few other games") for f in jd.get("flags", [])),
+              "judge: with no other game to compare with, never sure")
+        (mp.parent / "refuse.txt").write_text(f"test-game/{keys[0]} chip-1\n")
+        mp.write_text(mp.read_text() + "# another build\n")  # a rebuilt renderer: every take checked again
+        n_mp = len((mp.parent / "calls.log").read_text().splitlines())
+        choices_before = choices_path(d).read_bytes()
+        rc, sm, out = summed("judge", str(d))
+        jd = read_toml(sdir / JUDGE_FILE)
+        row = next((t for t in jd.get("take", []) if t["name"] == "chip-1"), {})
+        check(rc == 0 and sm.get("kind") == "judge" and sm.get("tunes") == "3" and sm.get("renderer") == "checked" and sm.get("applied") == "0"
+              and int(sm.get("faults", 0)) >= 1 and f"test-game/{keys[0]}  plays" in out, f"judge: the table and its summary line ({sm})")
+        check(row.get("refused", "").startswith("the replay: method B stops") and row.get("faults", [""])[0].startswith("refused by the renderer")
+              and row.get("quality") == 0.0 and jd.get("pick") != "chip-1", "judge: a take the renderer refuses is a fault, never the pick")
+        check(len((mp.parent / "calls.log").read_text().splitlines()) - n_mp == 3 * 5 and choices_path(d).read_bytes() == choices_before,
+              "judge: a changed renderer checks every take again; without --apply choices.toml is left alone")
+        before = (sdir / JUDGE_FILE).read_bytes()
+        n_mp = len((mp.parent / "calls.log").read_text().splitlines())
+        rc, sm2, _ = summed("judge", str(d))
+        check(rc == 0 and (sdir / JUDGE_FILE).read_bytes() == before and len((mp.parent / "calls.log").read_text().splitlines()) == n_mp,
+              "judge again: nothing changed, nothing checked or written again")
+        with (sdir / "ay-2" / "arranged.toml").open("a") as f:
+            f.write("# touched\n")
+        summed("judge", str(d), "--game", "test-game")
+        new_calls = (mp.parent / "calls.log").read_text().splitlines()[n_mp:]
+        check(new_calls == [f"test-game/{keys[0]} ay-2"], f"judge: a changed take alone is checked again ({new_calls})")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            main(["pick", str(d), "--list"])
+        check(f"warning: test-game/{keys[0]} chip-1: refused by the renderer" in buf.getvalue() and "judge: " in buf.getvalue(),
+              "pick --list warns of a refused take and shows the judge's verdict")
+        os.environ["FMZX_MUSIC_PREVIEW"] = str(d / "no-such-renderer")
+        rc, sm, out = summed("judge", str(d))
+        check(rc == 0 and sm.get("renderer") == "skipped" and "not checked: no " in out
+              and next(t for t in read_toml(sdir / JUDGE_FILE)["take"] if t["name"] == "chip-1")["refused"],
+              "judge without music-preview: says so, goes on, keeps the refusals found before")
+        os.environ["FMZX_MUSIC_PREVIEW"] = str(mp)
+
+        # judge --apply: sure of a tune with other games to compare with; the owner's choices kept
+        d3 = d / "judged"
+        tune = made_up_tune(random.Random(21), 20.0)
+        lead = tune[tune[:, 0] == 0]
+        cover = lead.copy()
+        cover[:, 1:3] *= 1.1
+        cover[:, 3] += 3
+        cover = np.concatenate([cover, selftest_band(random.Random(22), bars=12, beat=0.55, lead=False)])
+        other = selftest_band(random.Random(23), bars=12, beat=0.45)
+        selftest_judge_game(d3, "quest-for-tea", "8000-00000001", lead, 20.0, {
+            "chip-1": (cover, 24.0, "C64: Quest for Tea by Ann Example (1986 Nobody Soft), subtune 1, GAMES/Q/Quest_for_Tea.sid", 1.0),
+            "chip-2": (other, 21.6, "C64: Tea Remix by Bob Example (1999 Example Group), subtune 1, MUSICIANS/E/Tea_Remix.sid", 0.6)})
+        for k, g in enumerate(("moon-ferry", "brick-town", "owl-patrol", "cave-baker", "sky-plumber")):
+            r_ = random.Random(100 + k)
+            selftest_judge_game(d3, g, f"9000-0000000{k}", made_up_tune(r_, 18.0), 18.0, {
+                f"chip-{n}": (made_up_tune(r_, 20.0), 20.0, f"C64: Other {k}{n} by Cy Example (1987 Nobody Soft), subtune 1, GAMES/O/Other_{k}{n}.sid", 1.0)
+                for n in (1, 2)})
+        write_choices(d3, {"moon-ferry/9000-00000000": "chip-2"})
+        rc, sm, out = summed("judge", str(d3), "--apply")
+        ch, judged = read_choice_tables(d3)
+        jd = read_toml(d3 / "arrange" / "quest-for-tea" / "8000-00000001" / JUDGE_FILE)
+        check(rc == 0 and jd.get("pick") == "chip-1" and jd.get("confidence") == "high" and jd.get("null_real", 0) >= J_REAL_FOR_HIGH,
+              f"judge --apply: sure of the cover of the tune ({jd.get('pick')}, {jd.get('confidence')}, {jd.get('flags')})")
+        check(ch.get("quest-for-tea/8000-00000001") == "chip-1" and judged.get("quest-for-tea/8000-00000001") == "chip-1"
+              and ch.get("moon-ferry/9000-00000000") == "chip-2" and "moon-ferry/9000-00000000" not in judged
+              and int(sm.get("applied", 0)) >= 1 and sm.get("owner") == "1",
+              f"judge --apply: its choice written and marked as the judge's, the owner's left alone ({sm})")
+        check(all(judged.get(k) == v for k, v in ch.items() if k in judged) and set(judged) <= set(ch), "judge --apply: [judged] holds only the judge's choices")
+        run("pick", str(d3), "--set", "quest-for-tea/8000-00000001=chip-2")
+        ch, judged = read_choice_tables(d3)
+        summed("judge", str(d3), "--apply")
+        ch2, _ = read_choice_tables(d3)
+        check(ch.get("quest-for-tea/8000-00000001") == "chip-2" and "quest-for-tea/8000-00000001" not in judged
+              and ch2.get("quest-for-tea/8000-00000001") == "chip-2", "pick --set over the judge's choice makes it the owner's; --apply keeps it")
+        write_choices(d3, {}, unjudge=["quest-for-tea/8000-00000001"])
+        summed("judge", str(d3), "--apply")
+        shutil.rmtree(d3 / "arrange" / "quest-for-tea" / "8000-00000001" / "chip-1")
+        rc, sm, _ = summed("judge", str(d3), "--apply")
+        ch, judged = read_choice_tables(d3)
+        q = ch.get("quest-for-tea/8000-00000001")
+        check(q != "chip-1" and (q is None or judged.get("quest-for-tea/8000-00000001") == q),
+              f"judge --apply judges its own choices again: the take gone, its choice changed or taken back ({q})")
+
         # the summary when no file names the game
         d2 = d / "nomatch"
         selftest_score(d2 / "arrange" / "nothing-alike" / keys[0] / "score.toml", "nothing-alike", keys[0], name="Nothing Alike")
@@ -2868,9 +4019,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=8765, help="the page's port on 127.0.0.1 (default 8765, else a free one)")
     p.add_argument("--set", action="extend", nargs="+", metavar="GAME/KEY=N", help="choose take N (0: the original; chip-N, ay-N: a chip or ay take) without the page; several at once, or --set again")
     p.add_argument("--list", action="store_true", help="print the scores, their takes and choices")
-    sub.add_parser("selftest", help="check generate, chip, ay and pick in a temporary folder")
+    j = sub.add_parser("judge", help="weigh each score's takes from their notes; with --apply, choose where sure")
+    j.add_argument("dir")
+    j.add_argument("--game", action="append", help="only this game's scores (repeatable)")
+    j.add_argument("--apply", action="store_true", help="write the judge's pick to choices.toml where it is sure and you have not chosen")
+    sub.add_parser("selftest", help="check generate, chip, ay, judge and pick in a temporary folder")
     a = ap.parse_args(argv)
-    return {"generate": cmd_generate, "chip": cmd_chip, "ay": cmd_ay, "pick": cmd_pick, "selftest": cmd_selftest}[a.cmd](a)
+    return {"generate": cmd_generate, "chip": cmd_chip, "ay": cmd_ay, "pick": cmd_pick, "judge": cmd_judge,
+            "selftest": cmd_selftest}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -46,8 +46,8 @@ and the pack step, and are described here alongside.
 | 3. Recorded scores | Every heard routine whose `OUT` sounded in 100 frames or more (learned, built in or neither) has its music recorded: each stretch of at least 100 frames (2 s) from a trigger edge; a run per key for a menu of tunes; the same tune kept once; the loop found on the speaker edges (an intro and one pass of the loop); the notes transcribed from the speaker's sound (up to 3 voices, at least 8 notes over 3 pitches); encoded as a kind-2 record and verified by replaying the run through method B. A stretch the table (learned and built-in entries) claims at most a tenth of the sounding frames of is a *score*, packed; one it claims more of is a *shadow score*: verified with the precedence bit set, kept in the learner's result and cache, not packed. | `scores.rs`, `learn.rs`, `transcribe.rs`, `entry.rs` |
 | 4. `score.toml` | Every `fmzx-pack personal` run (`tools/pack-studio`'s learning and each pack's build) writes each recorded score's notes, decoded from the learned list, and each shadow score's (with `shadow = true`) to `DIR/arrange/<game>/<key>/score.toml`. | `host/crates/fmzx-pack/src/arrange.rs` (`export`), called from `personal.rs` |
 | 5. Generator | `tools/arrange-music generate DIR` runs a generator per take, reduces what it wrote to the FM-1's four voices, measures it and writes `take-<n>/` with MIDI and renders. | `tools/arrange-music` (`GENERATORS`, `arrange`, `metrics`) |
-| 5b. C64 takes | `tools/arrange-music chip DIR --sid-dir PATH` finds the game's SID files in the owner's collection (file names, header titles, STIL), converts each candidate subtune with `fmzx-pack chip-notes` (a 6502 and C64 model capturing the SID registers once per play call, turned into notes), ranks them by a melody check against the score, and writes the best as `chip-<n>/` takes on their own timeline. `tools/arrange-music ay DIR --ay-dir PATH` does the same with the owner's `.ay` files (file names, misc strings, song names), each song's Z80 player run in the Spectrum machine core (its AY registers captured once per frame), as `ay-<n>/` takes. | `tools/arrange-music` (`cmd_chip`, `cmd_ay`, `own_score`), `host/crates/chipmusic`, `fmzx-pack chip-notes` |
-| 6. Choice | The owner listens on `tools/arrange-music pick DIR` and chooses a take, a C64 or Spectrum 128 take, or the original. | `tools/arrange-music` (`cmd_pick`), `DIR/arrange/choices.toml` |
+| 5b. C64 takes | `tools/arrange-music chip DIR --sid-dir PATH` finds the game's SID files in the owner's collection (file names, header titles, STIL), converts each candidate subtune with `fmzx-pack chip-notes` (a 6502 and C64 model capturing the SID registers once per play call, turned into notes), ranks them by their closeness to the score's tune (the judge's, step 6), and writes the best as `chip-<n>/` takes on their own timeline. `tools/arrange-music ay DIR --ay-dir PATH` does the same with the owner's `.ay` files (file names, misc strings, song names), each song's Z80 player run in the Spectrum machine core (its AY registers captured once per frame), as `ay-<n>/` takes. | `tools/arrange-music` (`cmd_chip`, `cmd_ay`, `own_score`), `host/crates/chipmusic`, `fmzx-pack chip-notes` |
+| 6. Choice | `tools/arrange-music judge DIR` weighs every take and the original from their notes (closeness to the tune, quality, faults, provenance) and, with `--apply`, chooses where it is sure and the owner has not; the owner listens to the rest on `tools/arrange-music pick DIR` (or the studio) and chooses a take, a C64 or Spectrum 128 take, or the original. | `tools/arrange-music` (`judge_score`, `cmd_judge`, `cmd_pick`), `DIR/arrange/<game>/<key>/judge.toml`, `DIR/arrange/choices.toml` |
 | 7. Pack | The next build (`tools/pack-studio`'s `fmzx-pack personal` runs) checks each chosen take, turns its notes into the record's events in place of the score's (trigger and fingerprints kept), caps each frame's events, checks the size, has method B's decoder take the list and replays the run that recorded the score (the learner's cache keeps each score's run) to see that it still plays. A chosen C64 or Spectrum 128 take becomes a replacement record instead: the score's trigger and fingerprints, precedence set, and the take's events on its own sections. A shadow score's chosen take is added after the scores with the precedence bit set, within 8 packed scores and 128 KB, and verified the same way. | `arrange.rs` (`arrange`, `apply`), `soundlearn::scores::verify`, `soundlearn::replace_scores`, `soundlearn::append_score` |
 | 8. Device | FM: engines arms the score at its trigger edge, follows the beeper's edges against the recorded fingerprint, and plays the events on the FM synth with each voice's stored role (lead, bass, pad) and the FM drum. A score yields the frames a table entry claims; a score with precedence keeps them, the entry's voices unused there. | `core/sound/learned.c` (`snd_b_scores`), `core/sound/fm.c` |
 
@@ -200,10 +200,9 @@ The same file as an AI take's, in `chip-<n>/` (or `ay-<n>/`), with the score's h
     stil = "..."                  # the STIL text that named the game, if any
 
     [metrics]
-    melody_match = 0.41           # below
+    closeness = 0.97              # to the score's tune, as the judge measures it (below)
     title_match = 1.0
-    pc_corr = 0.83
-    rank = 0.51
+    rank = 1.07                   # closeness + 0.1 title_match + 0.1 for stil_spectrum
     stil_spectrum = false
     lead_nps = 4.1                # notes a second per voice, as an AI take's
 
@@ -225,31 +224,111 @@ the notes.
 take with its `generator`, `seconds` and the generator's `info` (JSON). A score has its takes when
 the digest matches and takes 1 to N are done; a changed `score.toml` gets new takes.
 
-### choices.toml (written by tools/arrange-music pick)
+### choices.toml (written by tools/arrange-music pick and judge --apply, and tools/pack-studio)
 
     [choices]
     "some-game/8951-1a2b3c4d" = 2           # the take; 0 or absent: the original
     "some-game/9A00-0b1c2d3e" = "chip-1"    # a C64 take, by its folder
     "other-game/3B10-1c2d3e4f" = "ay-1"     # a Spectrum 128 take, by its folder
 
-Any other value (a negative number, `"chip-0"`, `"ay-0"`, `"take-1"`, a float) fails the pack's run with the
-file and the key named.
+    [judged]
+    "some-game/9A00-0b1c2d3e" = "chip-1"    # a choice judge --apply made
 
-### The summary line (printed by tools/arrange-music generate, chip and ay)
+Any other value in `[choices]` (a negative number, `"chip-0"`, `"ay-0"`, `"take-1"`, a float) fails
+the pack's run with the file and the key named. fmzx-pack reads only `[choices]`. A choice is the
+judge's while `[judged]` holds the same value for its key: `judge --apply` changes or takes back
+only those, and a choice the owner makes (pick, its page, the studio's `c`) drops the key from
+`[judged]`; an entry whose value no longer matches (the owner edited the file) is dropped at the
+next write.
 
-Each of the three commands ends with one line of `key=value` fields, kept stable for
+### judge.toml (written by tools/arrange-music judge, per score)
+
+    version = 1
+    score = "1a2b3c4d5e6f7a8b"   # score.toml's digest, as takes.toml's
+    plays = 60.0                 # seconds the FM-1 plays of a take (the quality window)
+    search = 150.0               # seconds of a take the closeness search looks through
+    checkable_z = 16.2           # the original aligned with itself, in null standard deviations
+    null_real = 30               # controls from real music (other games' takes, then originals)
+    null_built = 0               # controls built from the score (pitches shuffled, made-up tunes)
+    null = [0.12, 0.08, ...]     # the controls' raw alignments
+    renderer = "music-preview"   # or "not checked: no <path> ..."
+    pick = "chip-1"              # "0": the original
+    confidence = "high"          # high, medium or low
+    flags = []                   # the reasons it is not high
+    margin = 0.42                # the pick's lead over the next, as a share of its combined
+    order = ["chip-1", "0", "chip-2"]
+
+    [[take]]
+    name = "chip-1"
+    digest = "..."               # its arranged.toml's (score.toml's for "0")
+    closeness = 0.998
+    z = 9.5                      # absent for the original
+    raw = 1.43
+    provenance = 1.0
+    quality = 0.89
+    polyphony = 0.93
+    harmony = 0.79
+    rhythm = 0.95
+    fault = 1.0                  # the fault multiplier
+    faults = []                  # in words: "refused by the renderer: ...", "plays only a fragment: ..."
+    combined = 0.888
+    rank = 1
+    refused = ""                 # music-preview's refusal; "" when it plays or was not checked
+    rendered = "..."             # the music-preview it was checked with; "": not checked
+    source = "C64: ..."
+
+The measures (`tools/arrange-music`'s docstring, "judge", has every constant):
+
+- **Closeness**: the best Smith-Waterman local alignment of any of the original's melody lines
+  (each tonal voice's and the top line, ornaments under 45 ms and stray notes over 14 semitones
+  from the line's middle dropped, repeated pitches merged, its first 160 notes) with any of the
+  take's (its loop repeated over the search window), by pitch class under all 12 transpositions,
+  1 a match, -1 a mismatch, 1 a gap, plus 0.5 where the notes' lengths over their line's median
+  agree within a factor of 1.5; per original note (a perfect copy about 1.5). As a z against the
+  null and a logistic, 0.5 at z 3.
+- **The null**: 30 takes of other games (another family, none from a file of the score's own
+  takes), sampled with the score's id as the seed; with fewer in the workspace, other games'
+  originals, then built controls, copies of the original with each voice's pitches shuffled and
+  made-up tunes (a lead of varied phrases on a scale over a bass), alternately, their spread taken
+  as at least 0.4 x their mean. Fewer than 10 real controls is a flag.
+- **Quality**, over the window the FM-1 plays (the loop repeated): polyphony (voices sounding at
+  once, 1 to 2.5, and whether they hold different pitch classes), harmony (graded consonance of
+  each pair of voices sounding together, the Krumhansl-Schmuckler key fit, minor-second clashes of
+  150 ms or more), rhythm (0.45 a moving bass below the lead, 0.25 drum hits a second, 0.3 the
+  onsets' autocorrelation at beat lags), combined 0.3 / 0.35 / 0.35, times the fault multiplier.
+- **Faults**, each a factor: refused by the renderer (0), mostly silent (sounding under 60% of
+  the time), a silent gap over 2 s, notes held over 8 s, sound below MIDI 26 or above 100, a take
+  shorter than 85% of the window (plays only a fragment).
+- **Provenance**: 1 for a STIL entry naming the Spectrum; else the title match (1, 0.5 from 0.8,
+  0.2) times the era (a C64 release year to 1990 1, later 0.15, a DEMOS file at most 0.3; a
+  Spectrum 128 file under games/ 1, else 0.2).
+- **Combined**: quality x (0.3 + 0.7 x max(closeness, 0.6 x provenance)); the original's
+  closeness is 1.
+- **Confidence**: low on a close call (the pick under 15% ahead of the next), or the original too
+  plain to check (checkable_z under 5) with another take winning, or a refused pick; medium with
+  any flag (the winner not shown to be the same tune, closeness under 0.5; a take with a partial
+  match, closeness 0.2 to 0.8; fewer than 10 real controls); else high.
+
+### The summary line (printed by tools/arrange-music generate, chip, ay and judge)
+
+Each of these commands ends with one line of `key=value` fields, kept stable for
 `tools/pack-studio`'s jobs view and for scripts:
 
     summary: kind=ai game=some-game scores=1 pending=1 takes=4 model=amt seconds=2172
     summary: kind=sid game=some-game scores=1 pending=1 takes=3 candidates=4 checked=3 refused=1 best=0.73 seconds=41 source=C64: <title> by <author> (<released>), subtune 1, <file>
+    summary: kind=judge game=all tunes=67 owner=20 picked=4 applied=4 sure=4 flagged=43 faults=46 renderer=checked seconds=153
 
 `kind` is `ai`, `sid` or `ay`; `game` the `--game` ids, comma-separated, or `all`; `scores` the
 scores found, `pending` those worked on (the others had their takes), `takes` the takes written;
 for `sid` and `ay`, `candidates` the (file, subtune) pairs that name the game, `checked` those
-converted and compared, `refused` those the converter refused, `best` the melody match of the
+converted and compared, `refused` those the converter refused, `best` the closeness of the
 take written with the best one (`-` with none) and `source` that take's source line, last and to
-the end of the line (absent with no take). No other value holds a space. A command that stops on
-an error prints none.
+the end of the line (absent with no take). For `judge`: `tunes` the scores with takes judged,
+`owner` those the owner chose for, `picked` those with the judge's choice, `applied` the
+choices `--apply` wrote in this run, `sure` those without the owner's choice the judge is sure of, `flagged` those
+with no choice it is not sure of (they need the owner's ear), `faults` the takes with a fault,
+`renderer` `checked` or `skipped`. No other value holds a space. A command that stops on an error
+prints none.
 
 ### The record
 
@@ -379,6 +458,9 @@ The two generators to compare against:
   `drums_nps` (notes a second); `generated` (notes the generator wrote). They catch failures (a
   chord part droning a wrong note, an empty voice, a runaway density); they do not say which take
   sounds best.
+- **The judge** (`tools/arrange-music judge DIR`, its table, and `judge.toml` above): which take
+  each score would play, from the notes alone, with the reasons when it is not sure. It ranks
+  takes; it does not replace listening where it says so.
 - **The selftest**, `tools/arrange-music selftest`: about 100 checks on two invented scores with
   `rules` (the files, the four voices, the drum rules, no overlaps, the lead copied, determinism,
   resuming, `pick --set`, `--list`, the page's save). It needs no network and no model; keep it
@@ -479,13 +561,25 @@ AY chip (Spectrum 128K rips, Amstrad CPC register dumps):
   another composer: "has a SID" does not mean "has the Spectrum tune". One game's tune is in the
   SID of its predecessor's C64 version (STIL says so); a few STIL entries name a Spectrum tune
   outright ("[from the Spectrum game]", a cover of a Spectrum title).
-- **The melody check.** The top pitch held at least 3 frames, as octave-folded intervals in runs
-  of four (so transpositions and octave changes do not count): unrelated pairs share 0-8% (rarely
-  12-17%), the same piece on two machines 21-86%. Pitch-class histograms are a weak second measure
-  (related keys score 0.7-0.9 too). Heavily ornamented melodies give few stable notes, so a low
-  match there does not mean another tune: listen. `tools/arrange-music chip` uses this measure,
-  with a floor of 24 four-interval runs so a short jingle cannot match by chance; on real pairs the
-  same tune scored up to 0.98, other pieces 0.00-0.17.
+- **Telling the same tune from another.** Closeness (the judge's alignment, above) against an
+  interval 4-gram overlap of the top lines, on synthetic changes of 42 recorded scores: a
+  transposition, a tempo change with another key, the tune after 6 s of other music, the lead
+  moved under another band, 15% of the notes dropped with octave slips and grace notes (all the
+  same tune); an unrelated score and the same notes with their pitches shuffled (not). Closeness
+  separates them with an AUC of 0.99 (the same tune scores about 1.0 in 90-95% of the cases), the
+  4-gram overlap 0.72 (0.2 or more in under half of them). Heavily ornamented or very plain
+  originals give little to align: the judge flags an original whose alignment with itself is
+  under 5 standard deviations above the null.
+- **The judge against the owner's choices.** On 20 scores the owner had chosen for (by ear,
+  among the original and up to three C64 takes), the judge's pick was the owner's in 13, as often
+  as always taking the first C64 take; where it was sure (high confidence) it agreed in 6 of 7,
+  the seventh the owner's choice of a take the renderer refuses (the pack plays the original in
+  its place), where the judge picks the original. It ranks well but does not replace the ear: hence
+  `--apply` only where it is sure and the owner has not chosen.
+- **Built controls for the null.** On 190 real takes, a null of built controls (half the
+  original with its pitches shuffled, half made-up tunes) with its spread taken as at least 0.4 x
+  its mean gave the same verdict (same tune or not) as the null of 30 real takes for every take;
+  without that floor it called 5 unrelated takes the same tune.
 - **AY sources.** AY sources exist for about half of the games (4 with a 128K AY rip, 13 with a
   CPC register dump, often closer to the Spectrum tune than the SID). The `.ay` path runs a
   Spectrum 128K rip's Z80 code in the Spectrum machine core and writes the same notes file

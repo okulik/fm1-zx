@@ -985,6 +985,19 @@ mod tests {
     }
 
     #[test]
+    fn choices_judged_table() {
+        // tools/arrange-music judge --apply marks its own choices in a [judged] table: the
+        // choices are [choices]'s alone, [judged] is not read
+        let dir = Tmp::new("choices-judged");
+        std::fs::write(
+            dir.0.join(CHOICES),
+            "[choices]\n\"g/8000-0a0b0c0d\" = \"chip-1\"\n\"h/1\" = 0\n\n[judged]\n\"g/8000-0a0b0c0d\" = \"chip-1\"\n\"x/2\" = \"ay-9\"\n",
+        )
+        .unwrap();
+        assert_eq!(read_choices(&dir.0), Ok(BTreeMap::from([("g/8000-0a0b0c0d".into(), Choice::Chip(1)), ("h/1".into(), Choice::Take(0))])));
+    }
+
+    #[test]
     fn choices_files() {
         let dir = Tmp::new("choices");
         assert_eq!(read_choices(&dir.0), Ok(BTreeMap::new()));
@@ -1021,7 +1034,7 @@ mod tests {
     fn chip(s: &ScoreRecord, take: &str, oi: i64, ol: i64, notes: &[(i64, i64, i64, i64, i64)]) -> String {
         let mut t = format!(
             "key = \"{}\"\nintro_t = {}\nloop_t = {}\ntake = {take}\ngenerator = \"chip sid\"\ntimeline = \"own\"\nown_intro_t = {oi}\nown_loop_t = {ol}\n\
-             source = \"C64: A Tune by Someone (1985 Nobody), subtune 2, X/A_Tune.sid\"\n[metrics]\nmelody_match = 0.5\n",
+             source = \"C64: A Tune by Someone (1985 Nobody), subtune 2, X/A_Tune.sid\"\n[metrics]\ncloseness = 0.5\n",
             score_key(s),
             s.intro_t,
             s.loop_t
