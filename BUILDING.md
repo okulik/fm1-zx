@@ -192,10 +192,14 @@ each AI take with its figures, each C64 or Spectrum 128 take with its source) an
 What plays is `music-preview`'s render of what the FM-1 plays or, when that is not built, the
 renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay` or `aplay`.
 
-The judge cuts down how much there is to hear. `m` on a game (`M` for every game) finds and
-converts its C64 and Spectrum 128 versions (SID and AY, no AI model), then runs
-[`tools/arrange-music judge --apply`](#arranged-music), which weighs every take of each score from
-its notes and chooses the take where it is sure and you have not chosen. Each take on the game
+The judge cuts down how much there is to hear. `m` on a game (`M` for every game) works game by
+game: it finds and converts the game's C64 and Spectrum 128 versions (SID and AY, no AI model),
+then runs [`tools/arrange-music judge --apply`](#arranged-music) for it, which weighs every take of
+each score from its notes and chooses the take where it is sure and you have not chosen, before
+the next game begins. A score's closeness is measured against other games' takes, so on more than
+one game each game's judge is provisional and a final pass (`judge --apply` over the same games;
+about a second when nothing changed, as it reuses every figure it can) leaves what one judge over
+them all leaves once every game's takes are there; a game it settles otherwise is said. Each take on the game
 screen then shows its place in the judge's order (`#1`, the judge's pick), its closeness to the
 original (`close 97%`: green from 50%, the same tune; yellow from 20%, part of it; dim under, another
 tune), its quality (`qual 62%`; polyphony, harmony and rhythm too on a wide screen) and its faults in
@@ -224,20 +228,28 @@ Enter or space plays the selected candidate and stops it when pressed again, Esc
 chooses it (at once, as your choice; the chosen one is marked `*`), `m` and `a`/`s`/`y`/`g` as
 before, Left, `h` or Backspace goes back. Long steps run one at a time in the background. Nothing
 a tool prints shows on the screen: every line goes to `W/studio.log` (below). What shows is
-progress, as bars of squares (`■` done, `□` to go; `#` and `.` without UTF-8): on the games list,
-each game with work in hand or waiting has a bar in place of its columns, with what is in hand
-(`learning`, `SID takes`, `judging`, `pack 2`, `waiting`), its share of all the work the studio
-knows of for it in the current activity (the jobs since the queue was last empty): each step a
-share, a step that reports how far it is (the learning's load, conversion, learning and check of
-each game, a SID or AY job's candidates, an AI job's takes and passes, the judge's takes checked
-and scores judged) by that measure, any other done or not; a game done shows its columns again, one
-whose step failed a red mark (`✗ SID takes failed (l: the log)`). The bottom line of every screen
-holds the bar of the whole activity, its games and its steps without a game (downloads, tool and
-device builds): `learning games ■■■■■■■■■■■□□□□□□□□□□□□□□□ 12 of 45 games  ~4 min  · job 1 of 4`;
-a step with nothing to count adds a spinner and the time it has run (`device build fm1 ⠹ 0:12
-■■■□□□ ...`), and a lone such step shows only those. It is yellow while the activity runs, green
-when it is done, red when a step failed (on a narrow terminal the queue and then the figures go
-first). Messages take the key line above it for 3 s. `J`, on every screen, lists every job of the session, each with its state and a bar: the one
+progress, as bars of squares (`■` done, `□` to go; `#` and `.` without UTF-8). `g`, `m` and `M`
+queue their work game by game (a game's AI, SID and AY jobs and its judge, then the next game's;
+a collection to download first), so games finish one at a time. On the games list, a game with
+work in hand has a bar in place of its columns, with what is in hand (`learning`, `SID takes`,
+`judging`, `pack 2`): its share of all the work the studio knows of for it in the current
+activity (the jobs since the queue was last empty), each step a share, a step that reports how
+far it is (the learning's load, conversion, learning and check of each game, a SID or AY job's
+candidates, an AI job's takes and passes, the judge's takes checked and scores judged) by that
+measure, any other done or not. A game with work to come but none in hand (not begun, or between
+its steps) shows its columns with `queued` (dim) in place of its tunes; a game done shows its
+columns again, one whose step failed a red mark (`✗ SID takes failed (l: the log)`). The bottom
+line of every screen holds the bar of the whole activity, its games and its steps without a
+game: what it does, never a game's name (`finding and judging`, `making AI takes`, `learning
+games`, `building pack 2 of 3`), the bar, its games finished of those in it, the time it has
+run, and the time left where it can be estimated (the learning's from the games it has learned;
+work done game by game from the average of three or more games finished): `finding and judging
+■■■■■■■■■■■□□□□□□□□□□□□□□□ 12 of 31 games  4:10  ~6 min`. A step without a game and with nothing
+to count (a download of unknown size, a tool or device build, the judge's final pass) shows its
+own label, a spinner and the time it has run (`device build fm1 ⠹ 0:12 ■■■□□□ ...`), and a lone
+such step shows only those. It is yellow while the activity runs, green when it is done, red when
+a step failed (on a narrow terminal the time left and then the figures go first). Messages take
+the key line above it for 3 s. `J`, on every screen, lists every job of the session, each with its state and a bar: the one
 running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
 MB), those waiting in the order they run, and those finished with their result, read from
 `tools/arrange-music`'s summary line (`3 takes, best closeness 73% (C64: …)`, `no C64 tune
@@ -260,18 +272,32 @@ Without the screen: `--assign ID=N` (again for more) puts a game in pack N (0: i
 would take over refuses it) and `--auto-fill` fills the packs as `f` does; `--generate` marks the
 methods named for every game with scores (or for the games `--game` names, by the ids `--status`
 shows) and runs the jobs `g` runs; `--auto` (with `--game`, or for every game with scores) does
-what `m` does: the SID and AY jobs, then the judge, which chooses where it is sure and prints the
-scores settled and those to hear (the rest is a choice by ear: the screen, or `tools/arrange-music
-pick W/all`). `--build` builds, `--status` prints (the scores settled, by you or the judge, and to
+what `m` and `M` do: game by game the SID and AY jobs and the judge, then the final pass, and
+prints the scores settled and those to hear (the rest is a choice by ear: the screen, or
+`tools/arrange-music pick W/all`). `--build` builds, `--status` prints (the scores settled, by you or the judge, and to
 hear; each score's state and the judge's verdict, each take's figures; each game's pack and the
 packs' fill among the rest), `--try [N]` serves pack N (1 unless given) in the browser test bench;
 given together they run in that order (assign, auto-fill, generate, auto, build, status, try), and
 a step that fails stops the command (exit 1) with its reason in a line and the log's path. On a
-terminal they draw the same bars in place while they run, a line per game in hand (at most four,
-those running first) and the whole's bar under them, then clear them for the result: `--generate`
-each takes job's result, `--auto` the scores settled and to hear (and the games skipped, with no
-score), `--build` the summary, each with the log's path last. Printed elsewhere (a pipe, a file),
-only those result lines: no bars, and never a tool's own output (that is in the log).
+terminal they draw a line per game as its work goes: a game's line appears when its work begins
+(its name, its bar, what is in hand) and is redrawn in place while it is worked on; when the game
+is done the line stays, its result in place of what was in hand, and scrolls up as any output:
+
+      Kettle Run         ■■■■■■■■■■■■ 3 C64, 1 128; chosen by you
+      Lamp Quest         ■■■■■■■■■■■■ 2 C64; 1 by the judge, 2 to hear
+      Mole Dig           ■■■■■■■■□□□□ judging 0/1 scores
+    finding and judging ■■■■□□□□□□□□□□□□□□□□□□□□□□□□□□□ 4 of 31 games  0:41  ~5 min
+
+(`--auto`: the C64 and Spectrum 128 versions found and what became of its tunes: chosen by the
+judge, chosen by you, to hear, or playing its own, with several tunes how many of each;
+`--generate`: each takes job's result; the
+learning: `learned in 12 s`, `left out: ...`; a failure its reason, in red). A game the learning
+takes from its cache gets no line; the games it works on at once each have a line of their own.
+Only the lines in hand and the whole's bar under them are redrawn; at the end the bar is cleared,
+the games' lines stay, and the result follows: `--auto` a line per game the final pass settled
+otherwise, the scores settled and to hear (and the games skipped, with no score), `--build` the
+summary, each with the log's path last. Printed elsewhere (a pipe, a file), only the result
+lines: no bars, and never a tool's own output (that is in the log).
 
 The workspace: `all/` the learning (`personal-games.toml`, which keeps your edits, the scores,
 their takes and `choices.toml`, the cache), `studio.toml` the methods marked and each game's pack,

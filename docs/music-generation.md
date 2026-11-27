@@ -251,6 +251,7 @@ next write.
     null_real = 30               # controls from real music (other games' takes, then originals)
     null_built = 0               # controls built from the score (pitches shuffled, made-up tunes)
     null = [0.12, 0.08, ...]     # the controls' raw alignments
+    null_provisional = true      # only when a judge --provisional made the null (below)
     renderer = "music-preview"   # or "not checked: no <path> ..."
     pick = "chip-1"              # "0": the original
     confidence = "high"          # high, medium or low
@@ -290,7 +291,12 @@ The measures (`tools/arrange-music`'s docstring, "judge", has every constant):
   takes), sampled with the score's id as the seed; with fewer in the workspace, other games'
   originals, then built controls, copies of the original with each voice's pitches shuffled and
   made-up tunes (a lead of varied phrases on a scale over a bass), alternately, their spread taken
-  as at least 0.4 x their mean. Fewer than 10 real controls is a flag.
+  as at least 0.4 x their mean. Fewer than 10 real controls is a flag. The null is kept while the
+  score is the same and it has 30 real controls or no more are there; one made by `judge
+  --provisional` is marked `null_provisional` and a judge without that option makes it again
+  from the takes there are then. `tools/pack-studio` judges game by game with it while the next
+  games' versions are still to be found, then once without it over the same games, so the
+  figures and choices are those one judge over every game leaves once all the takes are there.
 - **Quality**, over the window the FM-1 plays (the loop repeated): polyphony (voices sounding at
   once, 1 to 2.5, and whether they hold different pitch classes), harmony (graded consonance of
   each pair of voices sounding together, the Krumhansl-Schmuckler key fit, minor-second clashes of

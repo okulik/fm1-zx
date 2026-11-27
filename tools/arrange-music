@@ -134,7 +134,7 @@ version, from a collection of .ay files the owner has (ay, below).
       and the list mark a shadow score "(replaces the live version when chosen)"; its original is
       the live version.
 
-  tools/arrange-music judge DIR [--game ID]... [--apply]
+  tools/arrange-music judge DIR [--game ID]... [--apply] [--provisional]
       Weighs each score's takes (take-<n>, chip-<n>, ay-<n>) and its original (take 0) from their
       notes, prints a table per score and, with --apply, chooses where it is sure. Per take:
         closeness   how close it is to the original's tune, 0 to 1: the best Smith-Waterman
@@ -180,6 +180,12 @@ version, from a collection of .ay files the owner has (ay, below).
       quality, polyphony, harmony, rhythm, fault, faults, combined, rank, refused, rendered,
       source). It is reused while the score is the same: a take's figures while its arranged.toml
       and the renderer are, the null while it has 30 real controls or no more are there.
+      --provisional marks each null the run makes (null_provisional = true in judge.toml): a
+      judge without it does not reuse such a null but makes it again from the workspace's takes
+      as they are then (a run with it reuses it as any null). tools/pack-studio judges game by
+      game with it while it finds and converts the next games' versions, then runs one judge
+      without it over the same games: what that leaves is what one judge over them all, run
+      after every game's versions were found, leaves.
       --apply writes the pick to choices.toml for each score the judge is sure of (high) that
       has no choice of the owner's, and marks it in a [judged] table (fmzx-pack reads only
       [choices]); a choice is the judge's while [judged] holds the same value, so the owner's
@@ -2514,8 +2520,10 @@ class Judge:
     """One run of the judge over a workspace: what it reads once (the other games' takes as
     unrelated music, the lines of each take) and the renderer it checks with."""
 
-    def __init__(self, d: Path, render_check: bool = True):
+    def __init__(self, d: Path, render_check: bool = True, provisional: bool = False):
         self.d = d
+        self.provisional = provisional  # the nulls this run makes are marked provisional (judge --provisional)
+        self.made: set[str] = set()  # the scores whose null this run made
         self.lines: dict[tuple, dict] = {}
         self.nulls: dict[str, tuple[str, list[float], int]] = {}  # per score id: (its digest, null, real controls)
         self.verdicts: dict[tuple[str, str, str], tuple[str, bool]] = {}  # (score id, take, digest): render()'s
@@ -2655,12 +2663,14 @@ def name_choice(name: str) -> Choice:
 
 def score_null(jg: Judge, score: Score, orig: Rendition, olines: dict, own_files: set[str]) -> tuple[list[float], int]:
     """The score's null and its real controls: judge.toml's while the score is the same (unless
-    it has built controls and more real ones are there), else this run's, else made."""
+    it has built controls and more real ones are there, or it is provisional and this run is
+    not), else this run's, else made."""
     if not olines:
         return [], 0
     digest = score.digest()
     old = read_toml(score.dir / JUDGE_FILE)
-    if old.get("version") == JUDGE_VERSION and old.get("score") == digest and old.get("null"):
+    if (old.get("version") == JUDGE_VERSION and old.get("score") == digest and old.get("null")
+            and (jg.provisional or not old.get("null_provisional"))):
         real = int(old.get("null_real", 0))
         if real >= J_NULL or jg.real_controls(score, own_files) <= real:
             return [float(x) for x in old["null"]], real
@@ -2669,6 +2679,8 @@ def score_null(jg: Judge, score: Score, orig: Rendition, olines: dict, own_files
         return got[1], got[2]
     null, real = jg.null(score, orig, olines, own_files)
     jg.nulls[score.id] = (digest, null, real)
+    if jg.provisional:
+        jg.made.add(score.id)
     return null, real
 
 
@@ -2795,8 +2807,11 @@ def judge_score(jg: Judge, score: Score) -> dict | None:
             else "medium" if flags else "high")
     doc = {"version": JUDGE_VERSION, "score": digest, "plays": round(win, 1), "search": round(srch, 1),
            "checkable_z": round(checkable, 1), "null_real": real, "null_built": len(null) - real,
-           "null": [float(x) for x in null], "renderer": jg.render_note, "pick": top["name"], "confidence": conf,
-           "flags": flags, "margin": round(rel, 3), "order": [t["name"] for t in rows], "take": rows}
+           "null": [float(x) for x in null]}
+    if jg.provisional and (score.id in jg.made or (old.get("null_provisional") and null == [float(x) for x in old.get("null", [])])):
+        doc["null_provisional"] = True
+    doc.update({"renderer": jg.render_note, "pick": top["name"], "confidence": conf, "flags": flags, "margin": round(rel, 3),
+                "order": [t["name"] for t in rows], "take": rows})
     dump_toml(path, doc)
     return doc
 
@@ -2863,7 +2878,7 @@ def cmd_judge(a: argparse.Namespace) -> int:
         die(f"no {d / 'arrange'}: learn the games first (tools/pack-studio; DIR is its W/all)")
     scores = find_scores(d, a.game)
     print(f"{PROG}: judging {len(scores)} scores", flush=True)
-    jg = Judge(d)
+    jg = Judge(d, provisional=a.provisional)
     jg.plan_lines(scores)
     if not jg.mp:
         print(f"{PROG}: renderer {jg.render_note}: takes it refuses are not found", flush=True)
@@ -3991,6 +4006,25 @@ def cmd_selftest(a: argparse.Namespace) -> int:
         q = ch.get("quest-for-tea/8000-00000001")
         check(q != "chip-1" and (q is None or judged.get("quest-for-tea/8000-00000001") == q),
               f"judge --apply judges its own choices again: the take gone, its choice changed or taken back ({q})")
+        # judge --provisional: its nulls marked; a judge without it makes them again, one with it reuses them
+        bt = d3 / "arrange" / "brick-town" / "9000-00000001" / JUDGE_FILE
+        bt.unlink()
+        summed("judge", str(d3), "--game", "brick-town", "--provisional")
+        made = read_toml(bt)
+        tampered = dict(made, null=[x * 0.5 for x in made["null"]])
+        dump_toml(bt, tampered)
+        summed("judge", str(d3), "--game", "brick-town", "--provisional")
+        again = read_toml(bt)
+        summed("judge", str(d3), "--game", "brick-town")
+        final = read_toml(bt)
+        bt.unlink()
+        summed("judge", str(d3), "--game", "brick-town")
+        fresh = read_toml(bt)
+        check(made.get("null_provisional") is True and again.get("null_provisional") is True and again["null"] == tampered["null"]
+              and "null_provisional" not in final and final["null"] == made["null"] == fresh["null"]
+              and final == fresh,
+              "judge --provisional: its null marked; reused by another provisional run; made again by a judge without it, "
+              "which leaves what a judge from nothing leaves")
 
         # the summary when no file names the game
         d2 = d / "nomatch"
@@ -4048,6 +4082,8 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("dir")
     j.add_argument("--game", action="append", help="only this game's scores (repeatable)")
     j.add_argument("--apply", action="store_true", help="write the judge's pick to choices.toml where it is sure and you have not chosen")
+    j.add_argument("--provisional", action="store_true",
+                   help="mark the nulls this run makes provisional: a later judge without it makes them again")
     sub.add_parser("selftest", help="check generate, chip, ay, judge and pick in a temporary folder")
     a = ap.parse_args(argv)
     return {"generate": cmd_generate, "chip": cmd_chip, "ay": cmd_ay, "pick": cmd_pick, "judge": cmd_judge,
