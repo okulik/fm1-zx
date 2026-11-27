@@ -13,7 +13,8 @@ machine: it spots the instructions that drive the Spectrum's beeper and replaces
 real time, with FM-synthesised instruments. It boots on the real hardware.
 
 **Try it in your browser: <https://dev-gh.nisdom.com/fm1-zx/>**, with a set of freely licensed
-Spectrum games (the computer keyboard plays the FM-1's keys; the page lists them). Or build a
+Spectrum games whose title tunes play as FM instruments (the computer keyboard plays the FM-1's
+keys; the page lists them). Or build a
 package of your own games with `tools/pack-studio` ([your own games](BUILDING.md#your-own-games)),
 to run on the FM-1 or in a local copy of the browser page; it stays on your computer.
 
@@ -61,15 +62,17 @@ What works:
 - four screen modes in the HOME menu's Screen item: Crop (240 of the 256 columns),
   Fit and Fit smooth (all 256 columns, sharp or blended; Fit smooth is the default) and Border (the whole picture with a thin
   border, scaled down);
-- built-in games: freely licensed Spectrum games (Castaway, ZX Sopwith, Escape from Colony 8, ZX Dino, A World of One-Way) and test programs,
-  each with its own mapping of the FM-1's notes, buttons and encoders to Spectrum keys or a
+- built-in games: freely licensed Spectrum games (Castaway, Escape from Colony 8, Black Star, Micro
+  INC, Magic Tokens) and test programs, each with its own mapping of the FM-1's notes, buttons and encoders to Spectrum keys or a
   Kempston joystick ([controls](docs/controls.md));
 - FM music from the beeper, chosen in the HOME menu's Sound item (both with a 60 ms delay):
   - FM: engines (the default) recognises a game's music routine by its code, reads the notes from
     the game's memory and registers, checks them against the beeper's edges and plays them as FM.
     It knows some routines built in (Castaway, Colony 8, BASIC `BEEP` and three routines of games outside the repository); for
     your own games the pack builder learns each game's routine from its code
-    ([the music](BUILDING.md#your-own-games));
+    ([the music](BUILDING.md#your-own-games)), and the built-in pack carries its games' learned
+    music, Black Star's and Magic Tokens' tunes read exactly from their engines
+    ([the built-in games' music](BUILDING.md#the-built-in-games-music));
   - FM: sound guesses the notes from the beeper's edges alone, where it can be sure of them;
   - each voice plays an instrument by its part in the tune: bass, lead or pad (stored at pack
     build, or worked out live from the pitches; `[game.instruments]` overrides it);
@@ -127,11 +130,11 @@ See [BUILDING.md](BUILDING.md). In short, from the repository root:
 Each tool prints its usage when run without arguments or with `--help`; BUILDING.md has the detail.
 
 The studio opens on a start screen, a game's loading screen in ZX pixels, then lists the games
-with their sizes, packs and music (here the built-in pack's freely licensed games):
+with their sizes, packs and music, and marks the tunes left for your ear:
 
-![The studio's start screen: FM-1 ZX in tall letters over a sun, mountains and a piano keyboard, inside a striped border](docs/images/studio-start.png)
+<p align="center"><img src="docs/images/studio-start.png" width="560" alt="The studio's start screen: FM-1 ZX in tall letters over a sun, mountains and a piano keyboard, inside a striped border"></p>
 
-![The studio's games screen: five games with their sizes, pack and music, the keys along the bottom](docs/images/studio-games.png)
+<p align="center"><img src="docs/images/studio-games.png" width="800" alt="The studio's games screen: a folder of games with their sizes, the music methods tried for each, the chosen takes and the tunes to hear, the keys along the bottom"></p>
 
 Your own games (`W` is the workspace, `build/studio/<folder name>/`):
 
@@ -168,6 +171,8 @@ What the FM-1 plays, as a WAV (`cd host && cargo build --release -p music --bin 
 Packs and packages by hand (`cd host && cargo build --release -p fmzx-pack` first):
 
     host/target/release/fmzx-pack games games/games.toml -o pack.bin        # the built-in pack
+    tools/games-sound                                             # the built-in games' learned music, games/sound.toml
+    tools/games-sound --check                                     # is games/sound.toml what the learning gives now?
     host/target/release/fmzx-pack verify build/fm1/fmzx.fwsc                # check a package
     host/target/release/fmzx-pack chip-notes --info ~/C64Music/some.sid     # a SID or AY file's tunes
     host/target/release/fmzx-pack chip-notes some.ay --subtune 2 -o notes.toml

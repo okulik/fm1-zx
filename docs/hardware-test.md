@@ -69,21 +69,21 @@ with the divider shown on screen.
       pitch over a minute.
 - [ ] MASTER changes the volume smoothly, down to silence.
 - [ ] Castaway's effects sound right, at every LCD speed.
-- [ ] FM: engines with Effects: FM in ZX Sopwith or Castaway: no crackle at LCD speeds 4, 1 and 0, and
+- [ ] FM: engines with Effects: FM in Black Star (in play) or Castaway: no crackle at LCD speeds 4, 1 and 0, and
       the Effects row toggles (the reader runs from flash every frame; `fw_budget` cannot see flash
       wait states).
-- [ ] ZX Sopwith's effects (engine, shots, bombs, crashes) sound right, with no crackle, at every LCD speed.
+- [ ] Black Star's effects in play (shots, explosions, the alarm of its intro) sound right, with no crackle, at every LCD speed.
 - [ ] Escape from Colony 8's effects and title tune sound right, with no crackle, at every LCD speed.
-- [ ] ZX Dino's jump and crash sounds are clean and in time with the screen; nothing crackles while the dinosaur runs.
-- [ ] A World of One-Way's music plays without crackle, and its sound effects keep in time with the moves.
+- [ ] Micro INC's effects in play (the block's moves and pushes, the matches) are clean and in time with the screen.
+- [ ] FM: engines, the title tunes: Black Star's (its engine's two channels and kick drum) and Magic Tokens' (two channels and four drums) play as FM from the notes the pack carries, in tune and in time with the beeper's tune 60 ms earlier; Micro INC's plays as FM with three voices, as Escape from Colony 8's does.
 - [ ] FM music: in the HOME menu set Sound to "FM: sound" and resume. Castaway's title and Escape from Colony 8's title music play as FM voices, in tune and in time, with no wrong notes; everything is about 60 ms later than on the beeper.
 - [ ] Switching Sound between the three choices several times while music plays: a brief fade and gap when turning FM on, no clicks or pops in either direction.
-- [ ] In FM: sound, the effects in ZX Dino and ZX Sopwith stay on the beeper (their usual sound, only delayed), with no crackle.
+- [ ] In FM: sound, the effects of Black Star and Micro INC in play stay on the beeper (their usual sound, only delayed), with no crackle.
 - [ ] FM: engines: set Sound to "FM: engines" and start Castaway: its title tune plays as FM with two voices, in tune.
 - [ ] The Sound choice survives Reset game and starting another game from the picker (it is back to Beeper after power-off).
 - [ ] Screen modes: in Castaway, set Screen to each choice in turn and resume. Crop shows 240 of the 256 columns with no side border. Fit shows the whole width, sharp, with no colour other than the Spectrum's. Fit smooth shows the whole width with soft column edges. Border shows the whole picture smaller with a thin border at the sides, the border colour above and below, and no stretched or squashed shapes. In every choice the picture is complete at once after leaving the menu, with no leftover rows from the previous choice.
 - [ ] Border with a changing border: set Screen to Border and start the Border and tone test ("Border and tone test"). Its stripes cover many lines and blend into the side columns: check that the stripes look right, including the blended side columns, and that no row is left over from an earlier frame.
-- [ ] Device speed of the flash-run modes: Scroll test and ZX Sopwith in Screen: Border and in Screen: Fit smooth, at LCD speed 4, then 1, then 0: the picture keeps up as in Crop, and the sound has no crackle. (`fw_budget` counts instructions and cannot see flash wait states on the real silicon; this is where they show.)
+- [ ] Device speed of the flash-run modes: Scroll test and Black Star (in play) in Screen: Border and in Screen: Fit smooth, at LCD speed 4, then 1, then 0: the picture keeps up as in Crop, and the sound has no crackle. (`fw_budget` counts instructions and cannot see flash wait states on the real silicon; this is where they show.)
 - [ ] The HOME menu, the on-screen keyboard and PAUSED look the same in Border and Fit smooth as in Crop, and the game rows around the keyboard keep the chosen mode.
 - [ ] The Screen choice survives Reset game and starting another game from the picker (it is back to Crop after power-off).
 - [ ] Beeper tune test ("Beeper tune test"): a clean rising C major scale from C5 to C6, repeated, every note the same length and none cut short or clicking at the changes between notes; the screen shows eight static bars, which do not change with the notes.
@@ -98,10 +98,10 @@ ROM BEEP (BASIC `BEEP`) has no device check: the pack has no BASIC entry, so the
       Key map and Back to games work.
 - [ ] On-screen keyboard: the cursor moves, PLAY types, SAVE and REC give CAPS and SYMBOL SHIFT, OCT- moves it to the top of the screen and OCT+ back (in a text adventure, what you type shows on its bottom line with the keyboard at the top).
 - [ ] Encoders: no skipped or doubled detents when turned slowly and quickly.
-- [ ] ZX Sopwith: F4 (N) starts a game; F#3/G#3 and G3 pull the plane up and down, A3 and F3 raise and lower the throttle, C5 fires; the status bar and the plane move without tearing.
+- [ ] Black Star: C5 held a moment leaves the title, OCT- chooses keyboard control, C5 skips the intro; F3/A3 move the ship left and right, C5 fires; the ships and shots move without tearing.
 - [ ] Escape from Colony 8: OCT- chooses keyboard control at the title; F3/A3 walk left and right, F#3 and G3 go up and down, C5 shoots, and a held C5 charges a missile that leaves when released; the room scrolls without shifted rows.
-- [ ] ZX Dino: any button starts a run; F#3 or C5 jumps the cacti, G3 ducks under a bird; after a crash any key starts again.
-- [ ] A World of One-Way: OCT- starts from the menu, F3/A3/F#3/G3 slide the heroes left, right, up and down to the next wall, and the picture stays clean while they move.
+- [ ] Micro INC: OCT- leaves the title and OCT- again chooses keyboard control; F3/A3 move the block round the board, C5 pushes it in, B3 pauses.
+- [ ] Magic Tokens: C5 leaves the title; F3/A3/F#3/G3 move the cursor, C5 held with a direction swaps two tokens, C4 opens the game's menu.
 - [ ] Tape multi-load test ("Tape multi-load test"): about 4 to 5 seconds after you start it (the ROM autostarts the tape, then the program waits two seconds) the border turns green and a screen image appears from the third block; Reset game in the HOME menu loads the tape again from its first block and reaches green again.
 
 ### Saved game

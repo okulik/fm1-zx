@@ -69,8 +69,8 @@
  *     two halves of its chain measure periods within 1/128 plus 2 T).
  *
  * Notes and pitch changes. A note is a clean, full frame: a beep filling
- * less of its frame is no note (ZX Sopwith's 15 ms beeps 10 frames apart,
- * at two pitches, would make a "tune"; every frame of the pack's music fills
+ * less of its frame is no note (15 ms effect beeps 10 frames apart, at two
+ * pitches, would make a "tune"; every frame of the pack's music fills
  * 60% and more, and a burst tune's 9 ms bursts do not count either).
  * A frame whose voice drifts within it (any frame with voices of its own),
  * or a note that is the reference's voice moved by more than 1/128 (about

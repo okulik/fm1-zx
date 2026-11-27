@@ -76,6 +76,11 @@ file = "games/cave-runner.sna"
 "enc.K1.ccw" = "kempston.left"
 ```
 
+Besides `id`, `name`, `file` and `[game.keys]`, a game may have `crop` (0-16, the first of the 256
+screen columns the 240-wide LCD shows, 8 by default) and `demo` (the keys the firmware tests press:
+BUILDING.md, "Measured budgets"). The built-in games file also names its games' learned music with
+a top-level `sound = "sound.toml"` (BUILDING.md, "The built-in games' music").
+
 ## Key ids
 
 The ids fm1-emu (and the firmware's matrix scan) use, as in felucca-bsp's `FM1_KEYMAP`:

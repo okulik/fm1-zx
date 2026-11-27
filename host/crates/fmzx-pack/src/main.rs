@@ -12,6 +12,10 @@
 //!     (the personal pack, `tools/pack-studio`; `--app`: the images it goes with, at least
 //!     one, which set the room for it; `--plan`: `<dir>/plan.json` instead of the pack, which may
 //!     then be over the room)
+//! `fmzx-pack games-sound <games.toml> <work dir> [-o <sound.toml>]` (the built-in games' learned
+//!     music: the personal pack of the games file built in the work folder, and with `-o` the file
+//!     of its entry lists the built-in pack carries; `tools/games-sound` runs it:
+//!     [`fmzx_pack::games_sound`])
 //! `fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S] -o <notes.toml>` (a C64
 //!     SID tune's or a Spectrum 128 `.ay` song's notes for `tools/arrange-music`: the `chipmusic`
 //!     crate; `--subtune` (1-based) defaults to the file's start song, `--seconds` to 180)
@@ -39,6 +43,7 @@ const USAGE: &str = "usage: fmzx-pack games <manifest.toml> -o <pack.bin>
                       [--product FM-1_048] [--cache DIR] [--offline]
        fmzx-pack verify <pkg.fwsc> [--product FM-1_048]
        fmzx-pack personal <folder | games.toml> -o <dir> --app <app.bin> [--app <app.bin>]... [--plan]
+       fmzx-pack games-sound <games.toml> <work dir> [-o <sound.toml>]
        fmzx-pack chip-notes <file.sid | file.ay> [--subtune N] [--seconds S (default 180)] -o <notes.toml>
        fmzx-pack chip-notes --info <file.sid | file.ay>
        fmzx-pack engine-notes <W/all> --game ID --score KEY -o <notes.toml>
@@ -165,6 +170,17 @@ fn personal(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn games_sound(args: &[String]) -> Result<(), String> {
+    let o = opts(args, &["-o"], &[])?;
+    let [manifest, work] = &o.free[..] else { return Err(USAGE.to_string()) };
+    let out = o.get("-o");
+    print!("{}", fmzx_pack::games_sound::write(Path::new(manifest), Path::new(work), out.map(Path::new))?);
+    if let Some(out) = out {
+        println!("{out}: the built-in games' learned music");
+    }
+    Ok(())
+}
+
 fn chip_notes(args: &[String]) -> Result<(), String> {
     let o = opts(args, &["--subtune", "--seconds", "-o"], &["--info"])?;
     let [path] = &o.free[..] else { return Err(USAGE.to_string()) };
@@ -252,6 +268,7 @@ fn run(args: &[String]) -> Result<(), String> {
         [cmd, rest @ ..] if cmd == "fwsc" => fwsc(rest),
         [cmd, rest @ ..] if cmd == "verify" => verify(rest),
         [cmd, rest @ ..] if cmd == "personal" => personal(rest),
+        [cmd, rest @ ..] if cmd == "games-sound" => games_sound(rest),
         [cmd, rest @ ..] if cmd == "chip-notes" => chip_notes(rest),
         [cmd, rest @ ..] if cmd == "engine-notes" => engine_notes(rest),
         _ => Err(USAGE.to_string()),

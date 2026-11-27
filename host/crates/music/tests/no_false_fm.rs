@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! No FM on sound that is not music: zero confident decisions on the test
-//! programs (the border tone for 60 s, the scroll test, the tape test), on the pack's games with
-//! effects and no music (ZX Dino, A World of One-Way, ZX Sopwith) driven by their `games.toml`
-//! demos for 36 s (with presses that make sound added, and a minimum of frames with sound), on
-//! Castaway and Escape from Colony 8 in play after their demos start, on generated effect-like
+//! programs (the border tone for 60 s, the scroll test, the tape test), on the pack's games whose
+//! play has effects and no music (Black Star, Micro INC) played from their titles to 36 s and
+//! checked from the frame play starts (with a minimum of frames with sound), on Castaway and
+//! Escape from Colony 8 in play after their demos start, on generated effect-like
 //! signals: single pitch sweeps up and down of 50-300 ms, white-noise bursts, two-tone
 //! alternating sirens and a constant tone for 3 s, each as a square wave (speaker flips) and as
 //! short pulses (the pin-pulse style), and on sweeps and sirens right after time-slot and
@@ -149,7 +149,7 @@ struct Run {
 }
 
 /// Game `id` of `games/games.toml` from its start for `frames` frames (20 ms each), with its
-/// `demo` keys pressed through its key map as the firmware does, every key `delay_ms` later and
+/// `demo` keys, if it has a demo, pressed through its key map as the firmware does, every key `delay_ms` later and
 /// the steps `extra` (the `demo` syntax) added; with the music engine and the screen activity.
 fn demo_run(id: &str, frames: usize, delay_ms: u64, extra: &str) -> Run {
     let dir = repo().join("games");
@@ -165,7 +165,7 @@ fn demo_run(id: &str, frames: usize, delay_ms: u64, extra: &str) -> Run {
     }
     let mut km = KeyMapper::new();
     km.set_map(&encode_keymap(&game.keys).expect("key map"));
-    let mut steps = parse_demo(game.demo.as_deref().expect("a demo"));
+    let mut steps = parse_demo(game.demo.as_deref().unwrap_or(""));
     steps.extend(parse_demo(extra));
     let engine = Engine::of_file(&game.file);
     let mut beeper = Beeper::new(RATE.0, RATE.1);
@@ -193,23 +193,45 @@ fn demo_run(id: &str, frames: usize, delay_ms: u64, extra: &str) -> Run {
 }
 
 #[test]
-fn effects_games_demo() {
-    // effects, no music: the first 36 s of each demo, with presses added where the demo makes
-    // little sound: ZX Sopwith a shot every 0.6 s from 7 s (its sounds are its shots, bombs and
-    // crashes, a frame or two each: 24 frames with sound under the demo alone, 33 with the shots),
-    // A World of One-Way its shop from the menu (it moves in silence: 5 frames, 9 with the shop
-    // clicks). Each must make at least `min` frames with sound for the gate to mean anything
-    let shots: Vec<String> = (0..48).map(|k| format!("note.C5@{}+100", 7_000 + 600 * k)).collect();
-    let shots = shots.join(", ");
-    for (id, extra, min) in [("dino", "", 70), ("oneway", "button.OCT+@9000, button.OCT+@9500, button.OCT+@11000", 8), ("sopwith", shots.as_str(), 30)] {
-        let fr = demo_run(id, 1800, 0, extra).frames;
+fn effects_games_in_play() {
+    // effects, no music: each game played from its title to 36 s, checked from the frame play
+    // starts (its title tune, stopped by the keys, is before it). Each must make at least `min`
+    // frames with sound for the gate to mean anything
+    let (bs, mi) = (black_star_play(), micro_inc_play());
+    for (id, play, from, min) in [("blackstar", bs.as_str(), BLACK_STAR_PLAY_FROM, 100), ("microinc", mi.as_str(), MICRO_INC_PLAY_FROM, 100)] {
+        let fr = demo_run(id, 1800, 0, play).frames;
         let dec = decide(&fr);
-        let n = sounding(&fr, 0..fr.len());
-        println!("{id}: {n} frames with sound, {} speaker edges", speaker_edges(&fr).iter().sum::<usize>());
+        let n = sounding(&fr, from..fr.len());
+        println!("{id}: from frame {from}: {n} frames with sound, {} speaker edges", speaker_edges(&fr)[from..].iter().sum::<usize>());
         assert!(n >= min, "{id}: {n} frames with sound, the gate needs {min}");
-        gate(id, &fr, &dec, 0..dec.len());
+        gate(id, &fr, &dec, from..dec.len());
     }
 }
+
+/// Black Star played from its title: a key held through the title tune's pattern end (the engine
+/// reads the keys there) leaves the title, 1 chooses the keyboard, a key skips the intro, then from
+/// 12 s right, a shot, left and a shot every 1.5 s to 36 s. Play (effects, no music) from frame
+/// [`BLACK_STAR_PLAY_FROM`].
+fn black_star_play() -> String {
+    let mut s = vec!["note.C5@5000+3000".to_string(), "button.OCT-@9000+300".into(), "note.C5@10500".into()];
+    for t in (12_000..36_000).step_by(1500) {
+        s.extend([format!("note.A3@{t}+400"), format!("note.C5@{}+100", t + 500), format!("note.F3@{}+400", t + 700), format!("note.C5@{}+100", t + 1200)]);
+    }
+    s.join(", ")
+}
+const BLACK_STAR_PLAY_FROM: usize = 600;
+
+/// Micro INC played from its title: a key leaves the title, 1 chooses the keyboard, then from 9 s
+/// a step of the block every 0.8 s (four right, four left) and a push after each, to 36 s. Play
+/// (effects, no music) from frame [`MICRO_INC_PLAY_FROM`].
+fn micro_inc_play() -> String {
+    let mut s = vec!["button.OCT-@5000".to_string(), "button.OCT-@7000".into()];
+    for (k, t) in (9_000..36_000).step_by(800).enumerate() {
+        s.extend([format!("note.{}@{t}+150", if (k / 4) % 2 == 0 { "A3" } else { "F3" }), format!("note.C5@{}+100", t + 400)]);
+    }
+    s.join(", ")
+}
+const MICRO_INC_PLAY_FROM: usize = 400;
 
 /// The pack's game `id` with music on its title, its demo's keys `delay_ms` later: the music
 /// plays in FM until its engine stops for good (the keys start the game, which is then played:

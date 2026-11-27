@@ -43,7 +43,7 @@ Each game's data follows the entry table, padded so the next starts on a 4-byte 
 
 ## Sound section (version 2)
 
-The section follows the last game's data, starts on a 4-byte boundary, lies inside `total_len` and is covered by the CRC. `fmzx-pack` writes none (`sound_offset` and `sound_len` 0) unless the personal pack builder attaches one (`attach_sound`). A pack with no section is a valid version 2 pack.
+The section follows the last game's data, starts on a 4-byte boundary, lies inside `total_len` and is covered by the CRC. `fmzx-pack games` writes one when its manifest names a sound file (`sound = "sound.toml"`: the built-in pack, whose games' lists `tools/games-sound` writes there, BUILDING.md, "The built-in games' music"), and the personal pack builder attaches the lists it learns (`attach_sound`); otherwise `sound_offset` and `sound_len` are 0. A pack with no section is a valid version 2 pack.
 
 | Offset | Size | Field | Notes |
 |---|---|---|---|

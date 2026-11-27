@@ -1,0 +1,61 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 FM-1 ZX contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Write games/sound.toml, the built-in games' learned music, which `fmzx-pack games` puts in the
+# built-in pack's sound section (BUILDING.md, "The built-in games' music"):
+#   tools/games-sound            write games/sound.toml
+#   tools/games-sound --check    write build/games-sound/sound.toml and compare it with games/sound.toml
+#
+# In the work folder build/games-sound/ (emptied first): fmzx-pack games-sound builds the personal
+# pack of games/games.toml (each game's music learned, its tunes recorded as scores), then
+# tools/arrange-music engine reads each score whose game plays a known beeper engine (ntropic,
+# Tritone, Stocker) exactly from the engine, every such engine take is chosen, and fmzx-pack
+# games-sound builds the pack again with those takes and writes each game's entry list. The same
+# games give the same file. It runs in under a minute; tools/arrange-music needs uv (its packages
+# are fetched on its first run; UV_OFFLINE=1 uses the cached ones only).
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+check=0
+case "${1:-}" in
+    "") ;;
+    --check) check=1 ;;
+    *) echo "usage: tools/games-sound [--check]" >&2; exit 2 ;;
+esac
+
+cd "$root/host"
+cargo build --quiet --release -p fmzx-pack
+pack="$root/host/target/release/fmzx-pack"
+games="$root/games/games.toml"
+work="$root/build/games-sound"
+
+rm -rf "$work"
+mkdir -p "$work"
+"$pack" games-sound "$games" "$work"
+"$root/tools/arrange-music" engine "$work"
+# every engine take plays: the game's own notes, read from its engine
+{
+    echo "[choices]"
+    for take in "$work"/arrange/*/*/engine-1; do
+        [ -d "$take" ] || continue
+        score=${take%/engine-1}
+        echo "\"${score#"$work"/arrange/}\" = \"engine-1\""
+    done
+} > "$work/arrange/choices.toml"
+
+if [ "$check" = 1 ]; then
+    out="$work/sound.toml"
+else
+    out="$root/games/sound.toml"
+fi
+"$pack" games-sound "$games" "$work" -o "$out"
+if [ "$check" = 1 ]; then
+    if cmp -s "$out" "$root/games/sound.toml"; then
+        echo "games/sound.toml: up to date"
+    else
+        diff -u "$root/games/sound.toml" "$out" | head -40 >&2 || true
+        echo "games/sound.toml differs from what tools/games-sound writes now ($out): run tools/games-sound" >&2
+        exit 1
+    fi
+fi

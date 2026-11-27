@@ -3,6 +3,8 @@
 #
 # The built-in game pack: `fmzx-pack games games/games.toml -o pack.bin`.
 # Syntax and the default key map: docs/controls.md. Licences: third_party/games/<id>/README.md.
+# The games' learned music, the pack's sound section: sound.toml, written by tools/games-sound.
+sound = "sound.toml"
 
 # Our test programs (`fmzx-pack testprogs games/test`; host/crates/fmzx-pack/src/testprogs.rs).
 [[game]]
@@ -39,27 +41,6 @@ demo = "button.OCT-@12000, button.OCT-@14500, note.F3@16000+300, note.A3@16600+2
 "note.G5" = "key.SPACE"
 "note.B3" = "key.H"                     # pause
 
-# ZX Sopwith: Q/A pull up and down, O/P throttle down and up, SPACE fire, F flip, B bomb, H fly home,
-# M sound, 1 abandon. The default Kempston notes fly and fire the same way (F#3/G#3 up, F3/G3/A3
-# down, C#5 throttle down, D#5 throttle up, C5-G5 fire); F4 (N) starts a novice game, and the keys below add
-# the rest: A#3 = F, B3 = B, C4 = H, C#4 = C (against the computer), D#4 = E (expert), LFO = M.
-# demo: N starts a novice game, four throttle-up steps, then every few seconds a pull-up, a shot, a
-# dive, a bomb and a flip: 30 s with the plane and the status bar moving (a crash only starts the
-# next of five planes).
-[[game]]
-id = "sopwith"
-name = "ZX Sopwith"
-file = "../third_party/games/sopwith/sopwith.sna"
-demo = "note.F4@2500+200, note.D#5@4500+150, note.D#5@5000+150, note.D#5@5500+150, note.D#5@6000+150, note.F#3@8000+700, note.C5@9400+200, note.G3@10300+400, note.F#3@11400+500, note.C5@12600+200, note.B3@13500+150, note.A#3@14350+150, note.G3@15200+300, note.F#3@16200+700, note.C5@17600+200, note.G3@18500+400, note.F#3@19600+500, note.C5@20800+200, note.B3@21700+150, note.A#3@22550+150, note.G3@23400+300, note.F#3@24400+700, note.C5@25800+200, note.G3@26700+400, note.F#3@27800+500, note.C5@29000+200, note.B3@29900+150, note.A#3@30750+150, note.G3@31600+300"
-
-[game.keys]
-"note.A#3" = "key.F"                    # flip
-"note.B3" = "key.B"                     # bomb
-"note.C4" = "key.H"                     # fly home
-"note.C#4" = "key.C"                    # start against the computer
-"note.D#4" = "key.E"                    # start an expert game
-"button.LFO" = "key.M"                  # sound on and off
-
 # Escape from Colony 8: press 1 for keyboard control (OCT-). O/P left/right, Q/A up/down, SPACE fire
 # (hold to charge a missile, release to launch it), H pause; CAPS SHIFT + 0 (SEQ + ARP) leaves
 # the game. Option 1 reads keys, so the default Kempston notes (F#3/G#3 up, G3 down) are remapped.
@@ -84,39 +65,59 @@ demo = "button.OCT-@5000, button.OCT-@7000, note.A3@9000+1000, note.G3@10000+800
 "note.G5" = "key.SPACE"
 "note.B3" = "key.H"                     # pause
 
-# ZX Dino: any key starts a run (and restarts after a crash), SPACE or Q jumps, A or CAPS SHIFT ducks
-# under low birds. The game reads keys only, so the default Kempston notes are remapped: F#3/G#3 jump
-# (Q), C5-G5 jump (SPACE), G3 duck (A); SEQ is CAPS SHIFT and the other buttons start a run.
-# demo: OCT- starts a run past the title, then a jump every 1.1 s until 36 s (the report window ends
-# at 36 s); a crash only waits for the next jump to start a new run.
+# Black Star: any key leaves the title, then 1 chooses keyboard control (OCT-; 2 is Kempston,
+# 3 Sinclair, 4 redefines the keys) and any key skips the intro. O/P left/right, SPACE fire; CAPS
+# SHIFT + 0 (SEQ + ARP) ends the game. The title waits for a key, so the notes below are keys: F3 = O,
+# A3 = P, C5-G5 = SPACE.
+# no demo: the title tune (the ntropic engine) plays on the title screen until a key is pressed,
+# and the game itself has no music, so the report window stays on the title with its tune.
 [[game]]
-id = "dino"
-name = "ZX Dino"
-file = "../third_party/games/dino/dino.tap"
-demo = "button.OCT-@7000, note.F#3@9000+200, note.F#3@10100+200, note.F#3@11200+200, note.F#3@12300+200, note.F#3@13400+200, note.F#3@14500+200, note.F#3@15600+200, note.F#3@16700+200, note.F#3@17800+200, note.F#3@18900+200, note.F#3@20000+200, note.F#3@21100+200, note.F#3@22200+200, note.F#3@23300+200, note.F#3@24400+200, note.F#3@25500+200, note.F#3@26600+200, note.F#3@27700+200, note.F#3@28800+200, note.F#3@29900+200, note.F#3@31000+200, note.F#3@32100+200, note.F#3@33200+200, note.F#3@34300+200, note.F#3@35400+200"
+id = "blackstar"
+name = "Black Star"
+file = "../third_party/games/blackstar/blackstr-noscreen.tap"
 
 [game.keys]
-"note.F#3" = "key.Q"                    # jump
-"note.G#3" = "key.Q"
-"note.C5" = "key.SPACE"                 # jump
+"note.F3" = "key.O"                     # left
+"note.A3" = "key.P"                     # right
+"note.C5" = "key.SPACE"                 # fire
 "note.D5" = "key.SPACE"
 "note.E5" = "key.SPACE"
 "note.F5" = "key.SPACE"
 "note.G5" = "key.SPACE"
-"note.G3" = "key.A"                     # duck
 
-# A World of One-Way: Q/A/O/P move (each move slides to a wall). CAPS SHIFT + ENTER restarts the
-# level or returns to the menu, and the shop takes 1 and 2. The game reads keys only, so the default Kempston notes are remapped: F3 = O (left), A3 = P (right),
-# F#3/G#3 = Q (up), G3 = A (down); OCT- and OCT+ are 1 and 2 (menu start, shop), SEQ + C4 is
-# CAPS SHIFT + ENTER.
-# demo: OCT- (1) at 8 s, 10 s and 12 s passes the title (any key) and starts the game from the menu
-# (a later press is only a Sinclair move), then every 1.2 s from 14 s a move left, up, right and down
-# until 36 s (the report window ends at 36 s), so the heroes keep sliding in the first level.
+# Micro INC: any key leaves the title, then 1 chooses keyboard control (OCT-; 2 is Kempston,
+# 3 Sinclair, 4 redefines the keys). O/P move the block round the board, SPACE pushes it in, H
+# pauses; CAPS SHIFT + 0 (SEQ + ARP) leaves the game. The pack maps F3 = O, A3 = P, C5-G5 = SPACE,
+# B3 = H.
+# no demo: the title tune (played live by the firmware's built-in entry, the same routine as
+# Escape from Colony 8's) plays on the title screen until a key is pressed, and the game itself
+# has no music, so the report window stays on the title with its tune.
 [[game]]
-id = "oneway"
-name = "A World of One-Way"
-file = "../third_party/games/oneway/Wow.tap"
-demo = "button.OCT-@8000, button.OCT-@10000, button.OCT-@12000, note.F3@14000+150, note.F#3@15200+150, note.A3@16400+150, note.G3@17600+150, note.F3@18800+150, note.F#3@20000+150, note.A3@21200+150, note.G3@22400+150, note.F3@23600+150, note.F#3@24800+150, note.A3@26000+150, note.G3@27200+150, note.F3@28400+150, note.F#3@29600+150, note.A3@30800+150, note.G3@32000+150, note.F3@33200+150, note.F#3@34400+150"
+id = "microinc"
+name = "Micro INC"
+file = "../third_party/games/microinc/microInc.tap"
+
+[game.keys]
+"note.F3" = "key.O"                     # left
+"note.A3" = "key.P"                     # right
+"note.C5" = "key.SPACE"                 # push the block
+"note.D5" = "key.SPACE"
+"note.E5" = "key.SPACE"
+"note.F5" = "key.SPACE"
+"note.G5" = "key.SPACE"
+"note.B3" = "key.H"                     # pause
+
+# Magic Tokens: fire (M) leaves the title; Q/A/O/P move the cursor, and fire held with a direction
+# swaps two tokens; ENTER (C4) opens the game's menu (restart the level, sound off; it also
+# pauses). The game reads the keyboard, Kempston, Sinclair and cursor keys at once; the pack maps
+# F3 = O, A3 = P, F#3/G#3 = Q, G3 = A, C5-G5 = M.
+# no demo: the title tune (the Stocker engine) plays once, about 67 s, on the animated title
+# screen, and the game itself has only short jingles, so the report window stays on the title
+# with its tune.
+[[game]]
+id = "magictokens"
+name = "Magic Tokens"
+file = "../third_party/games/magictokens/magic_tokens.tap"
 
 [game.keys]
 "note.F3" = "key.O"                     # left
@@ -124,6 +125,11 @@ demo = "button.OCT-@8000, button.OCT-@10000, button.OCT-@12000, note.F3@14000+15
 "note.F#3" = "key.Q"                    # up
 "note.G#3" = "key.Q"
 "note.G3" = "key.A"                     # down
+"note.C5" = "key.M"                     # fire (hold it with a direction to swap)
+"note.D5" = "key.M"
+"note.E5" = "key.M"
+"note.F5" = "key.M"
+"note.G5" = "key.M"
 
 # Multi-load test: a tape that loads a screen image from its third block while it runs
 # (`fmzx-pack testprogs`). No keys.

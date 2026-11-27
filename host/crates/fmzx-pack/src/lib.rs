@@ -10,6 +10,7 @@
 pub mod arrange;
 pub mod engine_notes;
 pub mod fwsc;
+pub mod games_sound;
 pub mod inputs;
 pub mod keymaps;
 pub mod keys;

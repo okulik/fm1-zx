@@ -19,7 +19,7 @@
 //! Beeper (the default; the mixer still runs both methods every frame for their look-ahead), FM:
 //! sound and FM: engines; and in the other Screen choices (Fit, Fit smooth, Border) with FM:
 //! engines (screen work and sound work are independent and add up, so not every pair is run;
-//! the worst unmeasured pair, estimated, is Border with Sopwith under FM: sound, about 2.37M). Besides the pack's games, three test programs (testprogs, in a pack of their
+//! the worst unmeasured pair, estimated, is Border with Black Star under FM: sound, about 2.60M). Besides the pack's games, three test programs (testprogs, in a pack of their
 //! own, never committed): `noise.sna` gives the decoder its busiest sound, 250 speaker edges a
 //! frame at pseudo-random spacings; `sites.sna` and `sites-var.sna` drive the speaker from four
 //! OUT addresses a frame that match no engine, method B's matching worst case: in `sites.sna`
@@ -224,7 +224,7 @@ fn cpu_per_frame_and_audio_isr() {
     let mut snd_worst = vec![(0u64, String::new()); cases.len()];
     // per case: the mixer's most in sites.sna and sites-var.sna
     let mut sites = vec![(0u64, 0u64); cases.len()];
-    for ((id, ..), (case, r)) in games.iter().cycle().zip(&runs) {
+    for ((id, demo, ..), (case, r)) in games.iter().cycle().zip(&runs) {
         let (run, cable) = case;
         let mode = case_name(*case);
         let (max, avg) = (*r.cpu.iter().max().unwrap_or(&0), r.cpu.iter().sum::<u64>() / r.cpu.len().max(1) as u64);
@@ -262,12 +262,10 @@ fn cpu_per_frame_and_audio_isr() {
             r.frames
         );
         assert!(r.snd.len() + 2 >= r.frames as usize, "{id} ({mode}): the mixer ran {} times for {} frames", r.snd.len(), r.frames);
-        // (border.sna, tape.tap, tune.sna and the test programs are static once the border has
-        // been drawn / the image has loaded: they compose no bands)
-        assert!(
-            matches!(id.as_str(), "border" | "tape" | "tune" | "noise" | "sites" | "sites-var") || r.lcd.bands > 0,
-            "{id} ({mode}): no LCD bands composed"
-        );
+        // (a game with no demo stays where it starts, which may be static and compose no bands:
+        // border.sna, tape.tap, tune.sna and the test programs once the border has been drawn /
+        // the image has loaded, and the title screens Black Star and Micro INC play their tunes on)
+        assert!(demo.is_empty() || r.lcd.bands > 0, "{id} ({mode}): no LCD bands composed");
         assert!(!r.isr.is_empty(), "{id} ({mode}): the audio ISR never ran");
         if max > CPU_PER_FRAME {
             bad.push(format!("{id} ({mode}): {max} > {CPU_PER_FRAME}"));

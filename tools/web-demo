@@ -160,6 +160,7 @@ cp "$root/docs/third-party/AC79-SDK-Apache-2.0.txt" "$out/licenses/"
     third_party/Z80InsnClock/LICENSE-0BSD platform/fm1/bsp/LICENSE \
     platform/fm1/bsp/NOTICE third_party/zx-rom/README.md third_party/games/*/LICENSE* \
     third_party/games/*/COPYING* third_party/games/*/gpl-3.0.txt third_party/games/*/README*; do
+    [ -e "$f" ] || continue   # a pattern no game's folder matches
     mkdir -p "$out/licenses/$(dirname "$f")"
     cp "$f" "$out/licenses/$f"
 done)

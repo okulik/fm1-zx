@@ -68,7 +68,9 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
     v[at..at + 4].copy_from_slice(&x.to_le_bytes());
 }
 
-/// Builds the pack image from a manifest file; game files are resolved against its directory.
+/// Builds the pack image from a manifest file; game files are resolved against its directory. A
+/// manifest that names a sound file (`sound = "..."`, [`crate::games_sound`]) gets its lists as
+/// the pack's sound section ([`attach_sound`]).
 pub fn build_pack(manifest_path: &Path) -> Result<Vec<u8>, String> {
     let text = std::fs::read_to_string(manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     let manifest = parse_manifest(&text).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
@@ -123,6 +125,7 @@ pub fn build_pack(manifest_path: &Path) -> Result<Vec<u8>, String> {
     put32(&mut pack, H_TOTAL, total);
     let crc = crc32fast::hash(&pack[PACK_HEADER_SIZE..]);
     put32(&mut pack, H_CRC, crc);
+    attach_sound(&mut pack, &crate::games_sound::lists(manifest_path, &manifest)?)?;
     Ok(pack)
 }
 

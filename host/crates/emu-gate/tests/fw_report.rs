@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The display frame-rate report: for every game in `games/games.toml`, at LCD dividers 4, 2
-//! and 1 (RGB444), 20 s of play after the game is loaded and past its menus (the manifest's
-//! `demo` keys pressed throughout): display frames per second (`50 * row_sends /
+//! and 1 (RGB444), 20 s after the game is loaded: play past its menus for a game with a `demo`
+//! (its keys pressed throughout), else where the game starts, untouched (a title screen with its
+//! tune, for the games whose music plays only there): display frames per second (`50 * row_sends /
 //! pending_frames_sum`), LCD bytes per frame and the longest a row waited. Writes
 //! `<build>/fmzx-report.json` and prints a table. Needs the device build (`FMZX_FM1_BUILD`).
 //! Run: `cargo test --release -p emu-gate --test fw_report -- --nocapture`.
@@ -163,9 +164,10 @@ fn display_fps() {
                     c.m.rows_per_second
                 );
             }
-            // (a static screen, border.sna's, tune.sna's or tape.tap's once loaded, sends nothing: no frame
-            // rate to speak of)
-            assert!(matches!(id.as_str(), "border" | "tape" | "tune") || c.m.lcd.row_sends > 0, "{id} at divider {d}: nothing was sent");
+            // (a game with no demo stays where it starts, and a static screen there sends nothing: no
+            // frame rate to speak of: border.sna's, tune.sna's or tape.tap's once loaded, or a title
+            // screen that plays the game's tune, such as Black Star's or Micro INC's)
+            assert!(demo_of(id).is_empty() || c.m.lcd.row_sends > 0, "{id} at divider {d}: nothing was sent");
         }
     }
     let fps_of = |id: &str, d: u8| {

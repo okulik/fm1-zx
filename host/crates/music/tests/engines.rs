@@ -564,6 +564,31 @@ fn engine_written_over_unknown_out() {
     }
 }
 
+/// Black Star played from its title: a key held through the title tune's pattern end (the engine
+/// reads the keys there) leaves the title, 1 chooses the keyboard, a key skips the intro, then from
+/// 12 s right, a shot, left and a shot every 1.5 s to 36 s. Play (effects, no music) from frame
+/// [`BLACK_STAR_PLAY_FROM`].
+fn black_star_play() -> String {
+    let mut s = vec!["note.C5@5000+3000".to_string(), "button.OCT-@9000+300".into(), "note.C5@10500".into()];
+    for t in (12_000..36_000).step_by(1500) {
+        s.extend([format!("note.A3@{t}+400"), format!("note.C5@{}+100", t + 500), format!("note.F3@{}+400", t + 700), format!("note.C5@{}+100", t + 1200)]);
+    }
+    s.join(", ")
+}
+const BLACK_STAR_PLAY_FROM: usize = 600;
+
+/// Micro INC played from its title: a key leaves the title, 1 chooses the keyboard, then from 9 s
+/// a step of the block every 0.8 s (four right, four left) and a push after each, to 36 s. Play
+/// (effects, no music) from frame [`MICRO_INC_PLAY_FROM`].
+fn micro_inc_play() -> String {
+    let mut s = vec!["button.OCT-@5000".to_string(), "button.OCT-@7000".into()];
+    for (k, t) in (9_000..36_000).step_by(800).enumerate() {
+        s.extend([format!("note.{}@{t}+150", if (k / 4) % 2 == 0 { "A3" } else { "F3" }), format!("note.C5@{}+100", t + 400)]);
+    }
+    s.join(", ")
+}
+const MICRO_INC_PLAY_FROM: usize = 400;
+
 /// One step of a `demo` script: inputs (KmInput bits) held from `at` for `hold` ms.
 struct Step {
     button: u32,
@@ -587,8 +612,8 @@ fn parse_demo(s: &str) -> Vec<Step> {
         .collect()
 }
 
-/// Game `id` of `games/games.toml` under its demo (keys `delay_ms` later, the steps `extra`
-/// added) for `frames` frames, with B (the firmware's table) fed: B's decisions, whether the
+/// Game `id` of `games/games.toml` under its demo, if it has one (keys `delay_ms` later, the
+/// steps `extra` added) for `frames` frames, with B (the firmware's table) fed: B's decisions, whether the
 /// game's music engine runs at each frame's end (`truth.rs`) and the frames with speaker edges.
 fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>, Vec<bool>, Vec<bool>) {
     let dir = repo().join("games");
@@ -604,7 +629,7 @@ fn demo_b(id: &str, frames: usize, delay_ms: u64, extra: &str) -> (Vec<SndFrame>
     }
     let mut km = KeyMapper::new();
     km.set_map(&encode_keymap(&game.keys).expect("key map"));
-    let mut steps = parse_demo(game.demo.as_deref().expect("a demo"));
+    let mut steps = parse_demo(game.demo.as_deref().unwrap_or(""));
     steps.extend(parse_demo(extra));
     let engine = Engine::of_file(&game.file);
     let mut beeper = Beeper::new(RATE.0, RATE.1);
@@ -646,22 +671,24 @@ fn outside_music(dec: &[SndFrame], eng: &[bool], sound: &[bool]) -> Vec<usize> {
 
 #[test]
 fn effects_not_b() {
-    let shots: Vec<String> = (0..48).map(|k| format!("note.C5@{}+100", 7_000 + 600 * k)).collect();
-    let shots = shots.join(", ");
+    // the games with effects and no music in play, from the frame play starts (their title tunes,
+    // which B plays, stopped by the keys), and Castaway and Colony 8 under their demos
+    let (bs, mi) = (black_star_play(), micro_inc_play());
     let runs = [
-        ("dino", 1800, 0, ""),
-        ("oneway", 1800, 0, "button.OCT+@9000, button.OCT+@9500, button.OCT+@11000"),
-        ("sopwith", 1800, 0, shots.as_str()),
-        ("castaway", 1800, 0, ""),
-        ("colony8", 2050, 5_000, ""),
+        ("blackstar", 1800, 0, bs.as_str(), BLACK_STAR_PLAY_FROM),
+        ("microinc", 1800, 0, mi.as_str(), MICRO_INC_PLAY_FROM),
+        ("castaway", 1800, 0, "", 0),
+        ("colony8", 2050, 5_000, "", 0),
     ];
     let mut bad = Vec::new();
-    for (id, frames, delay, extra) in runs {
+    for (id, frames, delay, extra, from) in runs {
         let (dec, eng, sound) = demo_b(id, frames, delay, extra);
+        let (dec, eng, sound) = (&dec[from..], &eng[from..], &sound[from..]);
         let claimed = dec.iter().filter(|d| d.confident != 0).count();
-        let out = outside_music(&dec, &eng, &sound);
+        let out: Vec<usize> = outside_music(dec, eng, sound).into_iter().map(|i| i + from).collect();
         let sound = sound.iter().filter(|&&s| s).count();
-        println!("{id}: {sound} frames with edges, {} with the engine running, B claims {claimed}, outside the music {out:?}", eng.iter().filter(|&&e| e).count());
+        println!("{id}: from frame {from}: {sound} frames with edges, {} with the engine running, B claims {claimed}, outside the music {out:?}", eng.iter().filter(|&&e| e).count());
+        assert!(sound >= 100, "{id}: {sound} frames with edges in play, the check needs 100");
         if !out.is_empty() {
             bad.push(format!("{id}: {out:?}"));
         }

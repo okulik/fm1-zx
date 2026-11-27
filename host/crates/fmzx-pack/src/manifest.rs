@@ -22,6 +22,16 @@
 //! "C694" = ["lead"]
 //! "881F" = ["bass", "lead"]
 //! ```
+//!
+//! The built-in games file names its games' learned music, a file beside it that
+//! `fmzx-pack games-sound` writes ([`crate::games_sound`]), with a top-level `sound` key:
+//!
+//! ```toml
+//! sound = "sound.toml"
+//! ```
+//!
+//! A personal games file may have it too; the personal pack learns its games' music itself and
+//! does not read it.
 
 use serde::Deserialize;
 use soundlearn::report::ROLES;
@@ -75,6 +85,9 @@ pub struct Game {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Manifest {
     pub game: Vec<Game>,
+    /// The learned music's file (`sound = "..."`), relative to the manifest; see
+    /// [`crate::games_sound`].
+    pub sound: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -96,6 +109,7 @@ struct RawGame {
 struct RawManifest {
     #[serde(default)]
     game: Vec<RawGame>,
+    sound: Option<String>,
 }
 
 fn valid_id(id: &str) -> bool {
@@ -148,7 +162,12 @@ fn parse(text: &str, absolute_ok: bool) -> Result<Manifest, String> {
     if game.is_empty() {
         return Err("manifest: no games".to_string());
     }
-    Ok(Manifest { game })
+    if let Some(f) = &raw.sound {
+        if f.is_empty() || (!absolute_ok && (Path::new(f).is_absolute() || f.starts_with('/') || f.starts_with('\\'))) {
+            return Err(format!("sound {f:?} must be a file relative to the manifest"));
+        }
+    }
+    Ok(Manifest { game, sound: raw.sound })
 }
 
 /// A `[game.instruments]` table: each key 4 hex digits (once, whatever its case), each value 1-3

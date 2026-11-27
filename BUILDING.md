@@ -90,6 +90,34 @@ image (`zx_bench.bin`) is 45,320 bytes.
 The first image build can take several minutes (the toolchain and Rust are
 downloaded; on Apple silicon the image runs under amd64 emulation).
 
+## The built-in games' music
+
+The built-in pack carries its games' learned music in its sound section (docs/pack-format.md), as a
+personal pack does, so that FM: engines plays every game's tune: Castaway's, Escape from Colony 8's
+and Micro INC's through the firmware's built-in entries (the pack adds their channels' roles),
+Black Star's (the ntropic engine) and Magic Tokens' (Stocker) as recorded scores whose notes are
+read exactly from the games' engines ([below](#the-games-own-music-read-exactly)). Building the
+pack learns nothing: `games/games.toml` names the file that holds the music,
+`sound = "sound.toml"`, and `fmzx-pack games` puts each of its entry lists in the pack at its
+game. `tools/games-sound` writes that file:
+
+    tools/games-sound               # write games/sound.toml
+    tools/games-sound --check       # write build/games-sound/sound.toml and compare it with games/sound.toml
+
+It builds the personal pack of `games/games.toml` in `build/games-sound/` (`fmzx-pack games-sound`:
+each game's music learned and its tunes recorded, as `fmzx-pack personal` does it), reads every
+score whose game plays a known engine exactly from that engine (`tools/arrange-music engine`),
+chooses every such engine take, builds the pack again with them and writes each game's entry list,
+in hex, with the learner's line for the game and what the list holds. The test programs
+(`games/test/`) get none: the tests pin how the firmware plays them with its built-in entries alone.
+The same games give the same bytes, and a run takes about half a minute; `tools/arrange-music`
+needs [uv](https://docs.astral.sh/uv/), which fetches its packages on the first run
+(`UV_OFFLINE=1` uses the cached ones). Run it again after changing a game, the learner or the engine
+reader; `--check` says whether the file is still what they
+give. `fmzx-pack games` refuses a sound file whose game is not in the games file, whose game file
+has another CRC-32 than the one its list was learned from, or whose list the firmware's decoder
+rejects; `fmzx-pack`'s test `games_sound` checks that the built-in pack carries the file's lists.
+
 ## Browser demo
 
     tools/web-demo                  # build into build/web, serve on http://127.0.0.1:8642
@@ -993,84 +1021,88 @@ Both need the device build (see Firmware above) and run in fm1-emu:
 `fw_budget` measures the CPU per frame in the two heaviest Sound and Screen pairs by default (FM: sound in
 Crop, FM: engines in Border; about 8 minutes), each with the USB cable out and in (a host enumerates the
 firmware and polls it while the game runs). `FMZX_BUDGET_FULL=1` runs the full matrix (about 25
-minutes, estimated): before a release, or after a change to per-frame code that only one mode runs. In full it runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with ZX Sopwith under FM: sound at about 2.37M, or Border scroll at about 2.50M, both well under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), the flash driver's SRAM code (`.ram_flash`) in the RAM region with `.data` and `.bss` (<= 65,536 bytes), image + game pack
+minutes, estimated): before a release, or after a change to per-frame code that only one mode runs. In full it runs every game, and a generated fixture pack (`build/fm1/fixture-pack`, never committed: `noise.sna`, which stresses the decoder, and two programs with 4 unknown OUT sites per frame), in Crop with each of the three sound modes (Beeper, FM: sound and FM: engines) and in the other screen modes (Fit, Fit smooth and Border) with FM: engines (screen and sound work are independent and add up, so not every pair is run; the worst unmeasured pair, estimated from the tables below, is Border with Black Star under FM: sound at about 2.60M, or Border scroll at about 2.49M, both under the 3,600,000 cap), and checks RAMTEXT (`.ram_text` <= 49,152 bytes), the flash driver's SRAM code (`.ram_flash`) in the RAM region with `.data` and `.bss` (<= 65,536 bytes), image + game pack
 <= 0x8DFBC bytes, POOL below the user stack, the audio interrupt (`fm1_alnk0_irq` <= 8,000
 instructions per block) and the CPU per Spectrum frame (`game_frame` plus every
 `lcd_compose_band` call of that frame <= 3,600,000 instructions, 75% of a 20 ms frame at 240 MHz).
-`fw_report` (about 5 to 6 minutes (318 s measured), the 27 runs in parallel) boots every game in `games/games.toml`
+`fw_report` (about 5 to 6 minutes (337 s measured), the 27 runs in parallel) boots every game in `games/games.toml`
 at LCD dividers 4, 2 and 1 in RGB444, plays the manifest's `demo` (`demo = "<key>@<ms>[+<hold ms>],..."`,
 keys as in the key syntax plus `PLAY`/`HOME`, ms after the game started), measures 20 s from
-second 16 on and prints the table below. It also checks that each game with a demo is being
+second 16 on and prints the table below. A game with no demo is measured where it starts,
+untouched: the test programs, and Black Star, Micro INC and Magic Tokens on their title screens,
+where their tunes play (the only music they have), so the window measures their FM music; such a
+game may show a static screen and send nothing. It also checks that each game with a demo is being
 played: rows must go out in at least 90% of the 1-second sub-windows (at least 8 rows each; gameplay
 sends 45-90 rows a second, a title, menu or game-over screen sends none, though a blinking menu can still pass the share check, so the games' demos have also been checked by eye on the frames), and a second test
 (`title_screens_are_not_gameplay`) shows that Castaway at its title menu fails it. It writes `build/fm1/fmzx-report.json` and asserts:
 scroll 20-23 fps at divider 4 and >= 49 at divider 1; every game with a changing screen >= 45
 fps at divider 1. fps is `50 * row_sends / pending_frames_sum` (how often a changed row reaches
 the panel; 50 = every changed row goes out in the frame that changed it); a static screen
-(`border`) sends nothing and has no rate.
+(`border`, Black Star's and Micro INC's titles) sends nothing and has no rate.
 
 The report (20 s windows; CPU at divider 1; the instruction counts are what the
 emulator counts, one per instruction, interrupts excluded):
 
 | game | divider | fps | LCD bytes per frame | worst row age (frames) |
 | --- | --- | --- | --- | --- |
-| scroll | 4 | 21.4 | 29,641 | 4 |
-| scroll | 2 | 35.9 | 49,881 | 2 |
-| scroll | 1 | 50.0 | 69,384 | 1 |
+| scroll | 4 | 21.2 | 29,349 | 4 |
+| scroll | 2 | 35.5 | 49,104 | 3 |
+| scroll | 1 | 49.3 | 68,033 | 2 |
 | border | 4, 2, 1 | static | 0 | 0 |
-| castaway | 4, 2, 1 | 50.0 | 1,488 | 1 |
-| sopwith | 4, 2, 1 | 50.0 | 2,090 | 1 |
-| colony8 | 4, 2, 1 | 50.0 | 1,222 | 1 |
-| dino | 4, 2, 1 | 50.0 | 16,122 | 1 |
-| oneway | 4, 2, 1 | 50.0 | 7,165 | 1 |
+| castaway | 4, 2, 1 | 49.9 | 1,501 | 2 |
+| colony8 | 4, 2, 1 | 49.9 | 1,240 | 2 |
+| blackstar | 4, 2, 1 | static | 0 | 0 |
+| microinc | 4, 2, 1 | static | 0 | 0 |
+| magictokens | 4, 2, 1 | 50.0 | 436 | 1 |
 | tape | 4, 2, 1 | static | 0 | 0 |
 | tune | 4, 2, 1 | static | 0 | 0 |
 
 | game | Beeper max | Beeper avg | FM: sound max | FM: sound avg | FM: engines max | FM: engines avg |
 | --- | --- | --- | --- | --- | --- | --- |
-| scroll | 1,470,140 | 1,452,158 | 1,582,199 | 1,564,189 | 1,582,198 | 1,564,188 |
-| border | 1,379,646 | 1,373,714 | 1,491,705 | 1,485,745 | 1,491,704 | 1,485,744 |
-| castaway | 1,500,531 | 467,992 | 1,386,204 | 574,740 | 1,612,506 | 579,271 |
-| sopwith | 1,507,011 | 1,232,085 | 1,618,987 | 1,344,116 | 1,569,667 | 1,356,075 |
-| colony8 | 1,494,749 | 394,987 | 1,606,808 | 507,018 | 1,606,807 | 507,008 |
-| dino | 1,550,940 | 889,847 | 1,662,916 | 1,001,878 | 1,662,567 | 1,001,542 |
-| oneway | 693,673 | 616,982 | 805,732 | 729,013 | 805,648 | 729,020 |
-| tape | 807,047 | 801,194 | 919,106 | 913,225 | 919,105 | 913,224 |
-| tune | 1,160,417 | 950,105 | 1,307,041 | 1,096,735 | 1,272,477 | 1,062,138 |
-| noise | 1,739,934 | 1,316,336 | 1,851,881 | 1,428,367 | 1,851,880 | 1,428,366 |
-| sites (4 unknown OUT sites, code unchanged) | 201,725 | 195,901 | 313,784 | 307,932 | 313,783 | 307,931 |
-| sites-var (4 unknown OUT sites, code changing every frame) | 807,569 | 801,771 | 919,628 | 913,803 | 919,627 | 913,802 |
+| scroll | 1,470,787 | 1,440,247 | 1,579,316 | 1,546,828 | 1,608,089 | 1,576,367 |
+| border | 1,397,848 | 1,391,917 | 1,506,377 | 1,500,427 | 1,561,183 | 1,555,218 |
+| castaway | 1,274,528 | 460,733 | 1,609,357 | 576,774 | 1,411,785 | 601,452 |
+| colony8 | 1,498,892 | 388,933 | 1,603,612 | 503,778 | 1,636,194 | 528,481 |
+| blackstar | 2,438,820 | 2,133,594 | 2,596,252 | 2,317,216 | 2,602,898 | 2,335,377 |
+| microinc | 2,306,171 | 1,880,774 | 2,563,625 | 2,101,084 | 2,587,407 | 2,109,535 |
+| magictokens | 1,535,789 | 1,355,909 | 1,684,204 | 1,469,307 | 1,760,324 | 1,581,490 |
+| tape | 807,310 | 801,457 | 915,839 | 909,967 | 944,612 | 938,727 |
+| tune | 1,174,094 | 964,395 | 1,335,607 | 1,124,911 | 1,337,431 | 1,130,736 |
+| noise | 1,885,892 | 1,462,841 | 1,994,307 | 1,571,351 | 1,994,308 | 1,571,352 |
+| sites (4 unknown OUT sites, code unchanged) | 202,604 | 196,780 | 311,133 | 305,290 | 311,134 | 305,291 |
+| sites-var (4 unknown OUT sites, code changing every frame) | 808,459 | 802,661 | 916,988 | 911,171 | 916,989 | 911,172 |
 
 (Crop.) The other screen modes, with FM: engines:
 
 | game | Fit max | Fit avg | Fit smooth max | Fit smooth avg | Border max | Border avg |
 | --- | --- | --- | --- | --- | --- | --- |
-| scroll | 1,546,318 | 1,528,308 | 1,830,478 | 1,812,468 | 2,497,596 | 2,478,295 |
-| border | 1,491,704 | 1,485,744 | 1,491,704 | 1,485,744 | 1,498,550 | 1,492,590 |
-| castaway | 1,606,920 | 578,395 | 1,710,938 | 598,425 | 1,892,263 | 631,456 |
-| sopwith | 1,559,202 | 1,353,933 | 1,860,252 | 1,364,422 | 2,324,954 | 1,418,852 |
-| colony8 | 1,602,403 | 506,403 | 1,710,187 | 522,659 | 1,912,307 | 555,895 |
-| dino | 1,650,602 | 993,698 | 1,769,645 | 1,065,477 | 2,143,331 | 1,280,515 |
-| oneway | 799,630 | 725,383 | 963,710 | 825,984 | 1,233,919 | 991,872 |
-| tape | 919,105 | 913,224 | 919,105 | 913,224 | 926,143 | 920,262 |
-| tune | 1,272,477 | 1,062,138 | 1,272,477 | 1,062,138 | 1,279,323 | 1,068,984 |
-| noise | 1,851,880 | 1,428,366 | 1,851,880 | 1,428,366 | 1,858,778 | 1,435,268 |
-| sites | 313,783 | 307,931 | 313,783 | 307,931 | 320,821 | 314,969 |
-| sites-var | 919,627 | 913,802 | 919,627 | 913,802 | 926,665 | 920,840 |
+| scroll | 1,571,873 | 1,541,983 | 1,856,033 | 1,818,173 | 2,523,147 | 2,465,306 |
+| border | 1,561,183 | 1,555,218 | 1,561,183 | 1,555,218 | 1,568,029 | 1,562,064 |
+| castaway | 1,640,047 | 609,408 | 1,728,968 | 619,037 | 1,917,835 | 656,375 |
+| colony8 | 1,627,941 | 533,762 | 1,735,725 | 551,094 | 1,941,609 | 577,674 |
+| blackstar | 2,602,898 | 2,335,377 | 2,602,898 | 2,335,377 | 2,609,744 | 2,342,223 |
+| microinc | 2,587,407 | 2,109,535 | 2,587,407 | 2,109,535 | 2,594,253 | 2,116,381 |
+| magictokens | 1,757,306 | 1,581,272 | 1,827,413 | 1,586,330 | 1,939,467 | 1,600,762 |
+| tape | 944,612 | 938,727 | 944,612 | 938,727 | 951,650 | 945,765 |
+| tune | 1,337,431 | 1,130,736 | 1,337,431 | 1,130,806 | 1,344,277 | 1,137,582 |
+| noise | 1,994,308 | 1,571,352 | 1,994,308 | 1,571,397 | 2,001,206 | 1,578,255 |
+| sites | 311,134 | 305,291 | 311,134 | 305,291 | 318,172 | 312,329 |
+| sites-var | 916,989 | 911,172 | 916,989 | 911,172 | 924,027 | 918,210 |
 
 Fit, Fit smooth and Border compose from flash (`app/pixmodes.c`, XIP); Crop stays on its SRAM path.
 A Border row costs about 18,000 instructions when its source lines are not flat, against about
 4,500 for a Crop row; a run of 17 columns of one colour in every source line takes a short cut
 (exact: every pixel of it is the column's blend). scroll, every paper line changing every frame,
-is the worst Border frame. A screen of fine detail that changes everywhere every frame, or a border
+is the costliest Border screen (Black Star's worst frame is costlier, its music's, on a static title). A screen of fine detail that changes everywhere every frame, or a border
 that changes on every line every frame (loading stripes), would cost more in Border: at LCD speed 0
 up to all 240 rows can be redrawn each frame (about 205 at speed 1); none of the games does. Going
 over the cap does not slow the game: game frames run first whenever the audio buffer is low
 (`platform/fm1/main.c`) and each LCD band is at most 8 rows, so the picture updates fewer rows a
 second while the game's speed and the sound hold.
 
-(CPU per frame, max and average, from `fw_budget`; the cap is 3,600,000. In Crop the noise
-program is the worst frame in every sound mode (Fit was measured with FM: engines only, where it is also the worst); in Fit smooth it is ZX Sopwith, in Border scroll. Method B remembers the OUT addresses that matched no
+(CPU per frame, max and average, from `fw_budget`; the cap is 3,600,000. Black Star's title,
+its ntropic tune playing (the mixer up to 1,163,638 of it), is the worst frame in every sound mode and every screen mode; of the
+test programs, noise is the worst in Crop and scroll in Border. Method B remembers the OUT addresses that matched no
 entry and looks them up again only when the code around them changes; a lookup costs about 152,000
 instructions. The reachable worst case is about 7 lookups of unknown, changing addresses in one
 frame, about 2.9M estimated, under the cap.)
@@ -1078,7 +1110,6 @@ frame, about 2.9M estimated, under the cap.)
 The LCD compose path uses about 3 KB of the 8 KB user stack, measured from the disassembly: `pix_compose_rows` has a frame of 2,524 bytes plus its callees, and is called only from the main loop.
 
 Audio interrupt, max 1,574 instructions per block. RAMTEXT 49,108 of 49,152 bytes. The flash
-driver 2,932 bytes in the RAM region, which holds 30,708 of 65,536 bytes. Image
-+ pack 216,768 of 581,564 (0x8DFBC) bytes. POOL 275,800 bytes, 92,840 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
-platform, out of the crawler's reach, so the energy does not run out; ZX Sopwith flies and
-crashes through its five planes; Escape from Colony 8's player walks and shoots in the first room; ZX Dino jumps and restarts after each crash; A World of One-Way's heroes keep sliding in the first level.
+driver 3,448 bytes in the RAM region, which holds 31,460 of 65,536 bytes. Image
++ pack 245,152 of 581,564 (0x8DFBC) bytes (the pack 102,080 of them, its sound section 8,676). POOL 276,136 bytes, 92,504 below the stack guard. The demos play the whole 20 s window: Castaway's player steps left and right on the ship's
+platform, out of the crawler's reach, so the energy does not run out; Escape from Colony 8's player walks and shoots in the first room. Black Star, Micro INC and Magic Tokens have no demo: the window stays on their title screens, where their tunes play as FM (Magic Tokens' title is animated, the other two are static).
