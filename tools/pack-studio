@@ -176,6 +176,10 @@ else of its own: run it as tools/pack-studio (through uv) or python3 tools/pack-
       b              build the firmware: the packages (fmzx.fwsc, fmzx-preview.fwsc) of each pack,
                      with each game's chosen music, in W/pack-<n>/
       l              the log (W/studio.log); ? this text; q quit (asks when jobs are running)
+  The studio opens on a start screen for a moment: a game's loading screen drawn in ZX pixels
+  (the border's stripes while the picture loads by rows, then PRESS ANY KEY flashing); a key
+  ends it and still acts on the games screen; FMZX_SPLASH=0 starts at the games screen. The
+  border is a Spectrum's in proportion from 94x27 up, narrower below; under 72x20, no start screen.
   Colours (bold, dim and reverse only on a terminal without them, or with NO_COLOR set): names and
   titles bold, the chosen candidate green (blue when the judge chose it), marked methods AI
   magenta, SID cyan, AY yellow (dim when not), errors, refusals and a take's faults red, scores
@@ -416,6 +420,7 @@ import contextlib
 import io
 import json
 import os
+import random
 import re
 import shlex
 import shutil
@@ -612,6 +617,21 @@ def read_toml(path: Path) -> dict:
         return {}
 
 
+def read_toml_head(path: Path) -> dict:
+    """A take's arranged.toml without its notes: the keys and tables before the first [[...]]
+    (the notes are most of the file, and the screens need only what comes before them)."""
+    try:
+        with path.open(encoding="utf-8") as f:
+            head = []
+            for line in f:
+                if line.startswith("[["):
+                    break
+                head.append(line)
+        return tomllib.loads("".join(head))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return read_toml(path)
+
+
 def parse_choice(v) -> int | str | None:
     if isinstance(v, bool):
         return None
@@ -795,19 +815,19 @@ def score_candidates(all_dir: Path, gid: str, sc: Score | None) -> list[Candidat
                      "take 0: the live version (the routine)" if sc.shadow else "take 0: the original",
                      d / "original.wav", d / "score.toml", judge=rows.get("0"))]
     for n, p in numbered(d, "take-"):
-        doc = read_toml(p / "arranged.toml")
+        doc = read_toml_head(p / "arranged.toml")
         gen = str(doc.get("generator", "")).split(" ")[0]
         out.append(Candidate(f"AI take-{n}" + (f" ({gen})" if gen else ""), str(n), n,
                              metrics_line(doc.get("metrics", {})), p / "fm1.wav", p / "arranged.toml", judge=rows.get(f"take-{n}")))
     for n, p in numbered(d, "chip-"):
-        doc = read_toml(p / "arranged.toml")
+        doc = read_toml_head(p / "arranged.toml")
         out.append(Candidate(f"SID chip-{n}", f"chip-{n}", f"chip-{n}", str(doc.get("source", "?")), p / "fm1.wav",
                              p / "arranged.toml", judge=rows.get(f"chip-{n}")))
         if (p / "chip.wav").is_file():
             out.append(Candidate(f"C64 original (chip-{n})", f"c64-{n}", None, "the C64's own sound (sidplayfp)",
                                  p / "chip.wav", direct=True))
     for n, p in numbered(d, "ay-"):
-        doc = read_toml(p / "arranged.toml")
+        doc = read_toml_head(p / "arranged.toml")
         out.append(Candidate(f"AY ay-{n}", f"ay-{n}", f"ay-{n}", str(doc.get("source", "?")), p / "fm1.wav",
                              p / "arranged.toml", judge=rows.get(f"ay-{n}")))
         if (p / "ay.wav").is_file():
@@ -4009,6 +4029,197 @@ def color_wanted(env: dict, has_colors: bool) -> bool:
     return has_colors and not env.get("NO_COLOR")
 
 
+# The start screen: a game's loading screen, drawn as ZX pixels (two to a character cell, in
+# half blocks) in the Spectrum's eight colours: 0 black, 1 blue, 2 red, 3 magenta, 4 green,
+# 5 cyan, 6 yellow, 7 white.
+SPLASH_FONT = {
+    "F": ("#####", "#    ", "#### ", "#    ", "#    "),
+    "M": ("#   #", "## ##", "# # #", "#   #", "#   #"),
+    "-": ("   ", "   ", "###", "   ", "   "),
+    "1": (" # ", "## ", " # ", " # ", "###"),
+    "Z": ("#####", "   # ", "  #  ", " #   ", "#####"),
+    "X": ("#   #", " # # ", "  #  ", " # # ", "#   #"),
+}
+SPLASH_NOTE = ("..##.", "..#.#", "..#..", "..#..", "###..", "###..")
+SPLASH_W, SPLASH_ROWS = 68, 18  # the paper in cells: 17 rows of picture (68 x 34 pixels), a line of text
+SPLASH_BORDER = (13, 4, 5)  # the border in cells: each side, above, below (cut to the terminal)
+SPLASH_MIN = (SPLASH_W + 4, SPLASH_ROWS + 2)  # columns, rows: a smaller terminal gets no start screen
+SPLASH_PILOT, SPLASH_DATA, SPLASH_FLASH = 5, 18, 5  # ticks: the pilot stripes, the picture loading, a flash's half
+SPLASH_SUBTITLE = "P A C K   S T U D I O"
+SPLASH_KEY = " PRESS ANY KEY "
+
+
+def splash_picture() -> list[list[int]]:
+    """The picture's pixels (rows of colours): the name in tall letters over a night sky, a
+    striped sun between mountains, notes in the air, a piano keyboard along the bottom with
+    the four-colour flash at its end."""
+    W, H = SPLASH_W, (SPLASH_ROWS - 1) * 2
+    px = [[0] * W for _ in range(H)]
+
+    def dot(x: int, y: int, c: int) -> None:
+        if 0 <= x < W and 0 <= y < H:
+            px[y][x] = c
+    rnd = random.Random(48)
+    for _ in range(46):  # the stars
+        dot(rnd.randrange(W), rnd.randrange(20), rnd.choice((7, 7, 5, 6, 1)))
+    for y in range(17, 26):  # the sun: yellow, red, magenta, with gaps towards the horizon
+        if y in (22, 24):
+            continue
+        for x in range(W):
+            if (x - 34) ** 2 + (y - 26) ** 2 <= 81:
+                dot(x, y, 6 if y < 20 else 2 if y < 23 else 3)
+    for cx, top in ((9, 18), (21, 21), (48, 22), (59, 19)):  # the mountains, lit from the left
+        for y in range(top, 26):
+            half = (y - top) * 3 // 2
+            for x in range(cx - half, cx + half + 1):
+                dot(x, y, 5 if x <= cx - half + 1 else 1)
+    for x in range(W):  # the ground
+        dot(x, 26, 3)
+        dot(x, 27, 1 if x % 4 < 2 else 0)
+    for y in range(28, H):  # the keyboard, and the case's end
+        for x in range(54):
+            k, at = divmod(x + 2, 4)
+            black = y < 31 and x >= 2 and at < 3 and k % 7 in (1, 2, 4, 5, 6)
+            dot(x, y, 0 if black or x % 4 == 3 else 7)
+        for i, c in enumerate((2, 6, 4, 5)):  # the flash
+            for d in (0, 1):
+                dot(54 + i * 2 + d + (H - 1 - y), y, c)
+    for x0, y0, c in ((4, 13, 4), (60, 12, 5), (47, 13, 6)):  # the notes
+        for j, row in enumerate(SPLASH_NOTE):
+            for i, ch in enumerate(row):
+                if ch == "#":
+                    dot(x0 + i, y0 + j, c)
+    # the name: letters twice the font's size, a blue shadow, bands of colour down them
+    x, spots = 2, []
+    for ch, gap in zip("FM-1ZX", (1, 1, 1, 2, 1, 0)):
+        g = SPLASH_FONT[ch]
+        for j, row in enumerate(g):
+            for i, bit in enumerate(row):
+                if bit == "#":
+                    spots += [(x + (i * 2) + dx, 2 + j * 2 + dy) for dx in (0, 1) for dy in (0, 1)]
+        x += (len(g[0]) + gap) * 2
+    for sx, sy in spots:
+        dot(sx + 1, sy + 1, 1)
+    bands = (7, 6, 6, 6, 2, 2, 3, 3, 5, 5)
+    for sx, sy in spots:
+        dot(sx, sy, bands[sy - 2])
+    return px
+
+
+def splash_cells(w: int, h: int, tick: int, utf8: bool, color: bool = True) -> list[tuple[int, int, str, tuple[int, int]]]:
+    """The start screen at a tick, as (row, column, text, (ink, paper)) runs drawn in order.
+    The border: wide red and cyan stripes (the pilot tone), then thin blue and yellow ones
+    while the picture loads a row at a time, then black; it is SPLASH_BORDER wide where the
+    terminal has the room, and what is outside it is black. Each cell holds two pixels, one over
+    the other: a half block in the upper one's colour on the lower one's, or (without colour)
+    the block that shows which are lit. Under the picture, "PRESS ANY KEY" flashes once it has
+    loaded. Empty when the terminal is smaller than SPLASH_MIN."""
+    if w < SPLASH_MIN[0] or h < SPLASH_MIN[1]:
+        return []
+    cells: list[tuple[int, int, str, tuple[int, int]]] = []
+    loaded = tick >= SPLASH_PILOT + SPLASH_DATA
+    if tick < SPLASH_PILOT:
+        border = [2 if ((y + tick) // 2) % 2 else 5 for y in range(h)]
+    elif not loaded:
+        rnd = random.Random(tick)
+        border = []
+        while len(border) < h:
+            border += [1 if rnd.random() < 0.5 else 6] * rnd.choice((1, 1, 1, 2))
+    else:
+        border = [0] * h
+    # the border as wide as a Spectrum's beside its picture (48 pixels a side by 256, 48 above and
+    # 56 below by 192), or what the terminal has room for; the rest of the terminal black
+    left, top, bottom = SPLASH_BORDER
+    px0 = (w - SPLASH_W) // 2
+    py0 = top + (h - top - SPLASH_ROWS - bottom) // 2 if h >= top + SPLASH_ROWS + bottom else (h - SPLASH_ROWS) // 2
+    x0, x1 = max(0, px0 - left), min(w, px0 + SPLASH_W + left)
+    y0, y1 = max(0, py0 - top), min(h, py0 + SPLASH_ROWS + bottom)
+    for y in range(h):
+        cells.append((y, x0, " " * (x1 - x0), (0, border[y])) if y0 <= y < y1 else (y, 0, " " * w, (0, 0)))
+    for y in range(SPLASH_ROWS):
+        cells.append((py0 + y, px0, " " * SPLASH_W, (7, 0)))
+    pic = splash_picture()
+    shown = max(0, min(SPLASH_ROWS - 1, (tick - SPLASH_PILOT + 1) * (SPLASH_ROWS - 1) // SPLASH_DATA)) if tick >= SPLASH_PILOT else 0
+    up, down, full = ("▀", "▄", "█") if utf8 else ('"', "_", "#")
+    for cy in range(shown):
+        top, bot = pic[cy * 2], pic[cy * 2 + 1]
+        x = 0
+        while x < SPLASH_W:
+            t, b = top[x], bot[x]
+            n = 1
+            while x + n < SPLASH_W and (top[x + n], bot[x + n]) == (t, b):
+                n += 1
+            if color and (utf8 or t == b):
+                text, ink = (" ", (7, t)) if t == b else (up, (t, b))
+            elif color:  # no half block to draw: the lit pixel's colour
+                text, ink = (full if t and b else up if t else down), (t or b, 0)
+            else:
+                text, ink = (full if t and b else up if t else down if b else " "), (7, 0)
+            if (t, b) != (0, 0):
+                cells.append((py0 + cy, px0 + x, text * n, ink))
+            x += n
+    if shown > 7:
+        cells.append((py0 + 7, px0 + (SPLASH_W - len(SPLASH_SUBTITLE)) // 2, SPLASH_SUBTITLE, (7, 0)))
+    if loaded:
+        lit = ((tick - SPLASH_PILOT - SPLASH_DATA) // SPLASH_FLASH) % 2 == 0
+        cells.append((py0 + SPLASH_ROWS - 1, px0 + (SPLASH_W - len(SPLASH_KEY)) // 2, SPLASH_KEY, (0, 7) if lit else (7, 0)))
+    for y in range(y0, y1):
+        if x0 > 0:
+            cells.append((y, 0, " " * x0, (0, 0)))
+        if x1 < w:
+            cells.append((y, x1, " " * (w - x1), (0, 0)))
+    return cells
+
+
+def run_splash(scr, curses, utf8: bool, colors: bool, seconds: float = 3.0) -> None:
+    """Shows the start screen for a moment (FMZX_SPLASH=0: not at all); a key ends it and
+    still does what it does on the games screen."""
+    if os.environ.get("FMZX_SPLASH", "1") == "0":
+        return
+    zx = (curses.COLOR_BLACK, curses.COLOR_BLUE, curses.COLOR_RED, curses.COLOR_MAGENTA, curses.COLOR_GREEN,
+          curses.COLOR_CYAN, curses.COLOR_YELLOW, curses.COLOR_WHITE)
+    bright = 8 if colors and getattr(curses, "COLORS", 8) >= 16 else 0  # the Spectrum's BRIGHT colours
+    pairs: dict[tuple[int, int], int] = {}
+
+    def attr(ink: int, paper: int) -> int:
+        if not colors:
+            return curses.A_REVERSE if paper in (1, 2, 7) else curses.A_BOLD if ink == 7 and paper == 0 else 0
+        if (ink, paper) not in pairs:
+            n = 20 + len(pairs)
+            try:
+                curses.init_pair(n, zx[ink] + (bright if ink else 0), zx[paper] + (bright if paper else 0))
+            except (curses.error, ValueError):
+                return 0
+            pairs[(ink, paper)] = n
+        return curses.color_pair(pairs[(ink, paper)]) | (0 if bright else curses.A_BOLD)
+    end = time.monotonic() + seconds
+    tick = 0
+    scr.timeout(70)
+    try:
+        while time.monotonic() < end:
+            h, w = scr.getmaxyx()
+            cells = splash_cells(w, h, tick, utf8, colors)
+            if not cells:
+                return
+            scr.erase()
+            for y, x, text, (ink, paper) in cells:
+                with contextlib.suppress(curses.error):
+                    scr.addstr(y, x, text[:w - x - (1 if y == h - 1 else 0)], attr(ink, paper))
+            scr.refresh()
+            tick += 1
+            try:
+                ch = scr.getch()
+            except KeyboardInterrupt:
+                return
+            if ch != -1 and ch != curses.KEY_RESIZE:
+                with contextlib.suppress(curses.error):
+                    curses.ungetch(ch)
+                return
+    finally:
+        scr.timeout(200)
+        scr.erase()
+
+
 def run_ui(st: Studio) -> None:
     import curses
     import locale
@@ -4024,7 +4235,9 @@ def run_ui(st: Studio) -> None:
         if color_wanted(os.environ, curses.has_colors()):
             with contextlib.suppress(curses.error):
                 curses.start_color()
-        UI(scr, st, curses).loop()
+        ui = UI(scr, st, curses)
+        run_splash(scr, curses, ui.utf8, color_wanted(os.environ, curses.has_colors()))
+        ui.loop()
     finally:
         scr.keypad(False)
         curses.echo()
@@ -5609,6 +5822,7 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
         if not cond:
             failures.append(what)
 
+    os.environ["FMZX_SPLASH"] = "0"  # the screens under test start at the games list
     with tempfile.TemporaryDirectory(prefix="pack-studio-") as t:
         t = Path(t).resolve()
         fakes = t / "fakes"
@@ -5841,6 +6055,40 @@ def cmd_selftest(_a: argparse.Namespace) -> int:
               and colored["ai"] != colored["sid"] != colored["ay"] and colored["err"] & 0xff00 == 3 << 8 and len(fc.pairs) == 7
               and all(p[2] == -1 for p in fc.pairs[:6]) and fc.pairs[6][1:] == (fc.COLOR_BLACK, fc.COLOR_CYAN) and colored["keycap"] == (7 << 8) | 1,
               "colours: bold/dim/reverse without colour; green chosen, AI/SID/AY apart, red errors, keys on cyan")
+
+        # -- the start screen: the border's stripes, the picture loading a row at a time, the flash
+        end = SPLASH_PILOT + SPLASH_DATA
+        sp0, sp1, mid, done, done2 = (splash_cells(80, 24, k, True) for k in (0, 1, SPLASH_PILOT + 8, end, end + SPLASH_FLASH))
+        inside = lambda cells: all(0 <= y < 24 and 0 <= x and x + len(tx) <= 80 for y, x, tx, _ in cells)
+        border = lambda cells: {c[3][1] for c in cells[:24]}
+        pic_rows = lambda cells: {c[0] for c in cells[24 + SPLASH_ROWS:] if c[2][0] in " \u2580" and c[2] != SPLASH_KEY and c[3] != (0, 0)}
+        pic = splash_picture()
+        check(inside(sp0) and inside(mid) and inside(done) and border(sp0) == {2, 5} and sp0[:24] != sp1[:24]
+              and border(mid) == {1, 6} and border(done) == {0} and not pic_rows(sp0) and 0 < len(pic_rows(mid)) < len(pic_rows(done)) == 17
+              and len(pic) == 34 and all(len(r) == 68 for r in pic) and {c for r in pic for c in r} == set(range(8))
+              and any(c[2] == SPLASH_SUBTITLE for c in done) and not any(c[2] == SPLASH_KEY for c in mid)
+              and [c[3] for c in done if c[2] == SPLASH_KEY] == [(0, 7)] and [c[3] for c in done2 if c[2] == SPLASH_KEY] == [(7, 0)]
+              and any(c[2][0] == "\u2580" and c[3][0] != c[3][1] for c in done),
+              "start screen: red/cyan then blue/yellow stripes, the picture in all eight colours loading by rows, the key line flashing")
+        big = splash_cells(120, 40, SPLASH_PILOT + 8, True)
+        striped = [c for c in big[:40] if c[3][1] in (1, 6)]
+        check(len(striped) == 27 and all((c[1], len(c[2])) == (13, 94) for c in striped) and striped[0][0] == 6
+              and all(c[3] == (0, 0) and len(c[2]) == 120 for c in big[:40] if c not in striped)
+              and [c[0] for c in big[40:58]] == list(range(10, 28)) and big[40][1] == 26
+              and sum(c[3] == (0, 0) and len(c[2]) == 13 for c in big[58:]) == 54,
+              "start screen on a large terminal: a Spectrum's border round the picture (13 a side, 4 above, 5 below), black outside it")
+        plain = splash_cells(80, 24, end, False, False)
+        check(splash_cells(71, 24, 0, True) == [] and splash_cells(80, 19, 0, True) == []
+              and all(ord(ch) < 128 for c in plain for ch in c[2]) and {c[3] for c in plain[24:] if c[2] != SPLASH_KEY} == {(7, 0)}
+              and any("#" in c[2] for c in plain),
+              "start screen: none on a small terminal; without colour or UTF-8, in ASCII blocks")
+        heads = t / "heads"
+        heads.mkdir()
+        (heads / "a.toml").write_text('source = "C64: Tune"\ngenerator = "chip sid"\n\n[metrics]\nx = 1\n\n[[note]]\nt = 0\n\n[[note]]\nt = 1\n')
+        (heads / "b.toml").write_text('source = "plain"\n')
+        check(read_toml_head(heads / "a.toml") == {"source": "C64: Tune", "generator": "chip sid", "metrics": {"x": 1}}
+              and read_toml_head(heads / "b.toml") == {"source": "plain"} and read_toml_head(heads / "none.toml") == {},
+              "a take's file read without its notes: the keys and tables before them")
 
         # -- --status, which learns first (the stand-in fmzx-pack)
         games = t / "My Games"

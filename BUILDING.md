@@ -246,7 +246,8 @@ judge (2 in this run), 4 by you, 5 to hear`); a failed one its reason in a line 
 (`exit 1: no music-preview here (the rest in studio.log: l)`); Enter shows a job's lines from the
 log, `o` opens its game to listen, `x` takes a waiting job off the queue or, after `y`,
 stops the running one. `g` says how many jobs it queued. The screen is in colour (`NO_COLOR` set: bold and
-reverse only).
+reverse only). It opens on a start screen for a moment, a game's loading screen in ZX pixels; a key ends it
+(`FMZX_SPLASH=0`: no start screen).
 
 `W/studio.log` reads on its own and with `tail -f`: a dated line per session (its command line),
 then a line per event, each `HH:MM:SS <tag> <text>`, the tag the job's number, kind and game
