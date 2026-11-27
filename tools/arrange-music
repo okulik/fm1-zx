@@ -204,6 +204,14 @@ version, from a collection of .ay files the owner has (ay, below).
   fault; renderer whether the renderer check ran. source comes last and runs to the end of the
   line; no other value holds a space. A command that stops on an error prints no summary line.
 
+  The progress lines: judge (and generate, chip and ay as they end by judging) say how far they
+  are, for tools/pack-studio's bars, each on a line of its own:
+      progress: score <game>/<key> renders=N    before the work: each score with takes, N its
+                                                takes the renderer checks (0 without it)
+      progress: rendered <game>/<key> <take>    a take checked by the renderer
+      [<game>/<key>] judged: <pick> (<confidence>)   a score judged
+  A score's share done is (its takes rendered + 1 when judged) / (N + 1).
+
   tools/arrange-music selftest
       Checks generate (with the rules generator), the files it writes, chip (a small collection
       of made-up SID files and a stand-in converter, both written in the temporary folder), ay
@@ -2580,7 +2588,7 @@ class Judge:
             n += sum(1 for sid, _ in self.originals() if family(sid.split("/")[0]) != fam)
         return min(n, J_NULL)
 
-    def prefetch(self, scores: list[Score]) -> None:
+    def prefetch(self, scores: list[Score], progress: bool = True) -> None:
         """The renderer's verdicts for every take of the scores that needs one, as many at a time
         as there are cores (the first of each game before the others: a game the renderer has
         not learned is learned once)."""
@@ -2597,6 +2605,15 @@ class Judge:
             for batch in (firsts, rest):
                 for (sc, name, dg), got in zip(batch, ex.map(lambda x: self.render(x[0], x[1]), batch)):
                     self.verdicts[(sc.id, name, dg)] = got
+                    if progress:
+                        print(f"progress: rendered {sc.id} {name}", flush=True)
+
+    def plan_lines(self, scores: list[Score]) -> None:
+        """The progress lines' plan: "progress: score <game>/<key> renders=N" for each score with
+        takes, N its takes the renderer checks first (0 without the renderer)."""
+        for sc in scores:
+            if judged_takes(sc.dir):
+                print(f"progress: score {sc.id} renders={len(render_todo(self, sc)) if self.mp else 0}", flush=True)
 
     def render(self, score: Score, name: str) -> tuple[str, bool]:
         """Whether music-preview plays the take: (its refusal, "" when it plays; whether it was
@@ -2791,7 +2808,9 @@ def judge_scores(d: Path, scores: list[Score], log: bool = True, jg: Judge | Non
     if not jg.mp and any(judged_takes(s.dir) for s in scores):
         print(f"{PROG}: renderer {jg.render_note}: takes it refuses are not found", flush=True)
     out = {}
-    jg.prefetch(scores)
+    if log:
+        jg.plan_lines(scores)
+    jg.prefetch(scores, progress=log)
     for s in scores:
         doc = judge_score(jg, s)
         if doc is not None:
@@ -2845,6 +2864,7 @@ def cmd_judge(a: argparse.Namespace) -> int:
     scores = find_scores(d, a.game)
     print(f"{PROG}: judging {len(scores)} scores", flush=True)
     jg = Judge(d)
+    jg.plan_lines(scores)
     if not jg.mp:
         print(f"{PROG}: renderer {jg.render_note}: takes it refuses are not found", flush=True)
     else:
@@ -3902,6 +3922,11 @@ def cmd_selftest(a: argparse.Namespace) -> int:
               and row.get("quality") == 0.0 and jd.get("pick") != "chip-1", "judge: a take the renderer refuses is a fault, never the pick")
         check(len((mp.parent / "calls.log").read_text().splitlines()) - n_mp == 3 * 5 and choices_path(d).read_bytes() == choices_before,
               "judge: a changed renderer checks every take again; without --apply choices.toml is left alone")
+        plan = [ln for ln in out.splitlines() if ln.startswith("progress: score ")]
+        rendered = [ln for ln in out.splitlines() if ln.startswith("progress: rendered ")]
+        check(len(plan) == 3 and f"progress: score test-game/{keys[0]} renders=5" in plan and len(rendered) == 15
+              and out.index(plan[-1]) < out.index(rendered[0]) < out.index("] judged: "),
+              f"judge: the progress lines, the plan, each take rendered, then each score judged ({plan})")
         before = (sdir / JUDGE_FILE).read_bytes()
         n_mp = len((mp.parent / "calls.log").read_text().splitlines())
         rc, sm2, _ = summed("judge", str(d))

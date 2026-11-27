@@ -174,9 +174,8 @@ game even when they are too many for one pack) and lists each game with how it w
 packed size and its music. A first learning takes minutes (three minutes of play per game,
 emulated, several games at a time): the games list is there from the start, each game with a
 glyph for its state as `fmzx-pack personal` reports them on stderr (`·` waiting, `▸` converting or
-learning, `✓` learned, `✗` left out, with why), and the progress bar (below) shows how far the
-learning is and the time left; the games open when the learning is done (`--status` and `--build` print the same
-lines as they come). Before a workspace's first learning, the learned music of other personal packs
+learning, `✓` learned, `✗` left out, with why) and its own bar while it is in hand (below); the
+games open when the learning is done. Before a workspace's first learning, the learned music of other personal packs
 under `build/` (each `sound-cache/` beside a `personal-games.toml` or `converted/manifest.toml`) is
 copied into `W/all/sound-cache/` where that lacks it: a cache file names its game by content (the
 converted file's CRC, its key script and overrides, the learner's version), so those games are not
@@ -185,7 +184,10 @@ learned again (`reused 27 learned games from build/zx-tunes` in the log). Per ga
 original); **AI**, takes [arranged](#arranged-music) by `tools/arrange-music generate`; **SID**,
 the game's C64 tune, and **AY**, its Spectrum 128 tune ([music from other
 versions](#music-from-other-versions)). A game with no score plays FM from its code, or the
-beeper, and has nothing to arrange. Open a game to hear each score's candidates (the beeper, FM,
+beeper, and has nothing to arrange; one where no music was found says `no music` on the list
+(`m`, `M` and `--auto` skip it, the log says so) and on its screen whether it makes any sound of
+its own: a render that is silent is not played (`silent: this game makes no sound in its first
+40 s`, the entry marked silent; the same for any silent take). Open a game to hear each score's candidates (the beeper, FM,
 each AI take with its figures, each C64 or Spectrum 128 take with its source) and choose one.
 What plays is `music-preview`'s render of what the FM-1 plays or, when that is not built, the
 renders `tools/arrange-music` wrote, through `afplay` (macOS), `ffplay`, `paplay` or `aplay`.
@@ -220,22 +222,38 @@ mark AI/SID/AY for it, `A`/`S`/`Y` for every game, `g` generates what is marked,
 jobs, `r` learns again, `b` builds, `l` shows the log, `?` the full help, `q` quits. On a game:
 Enter or space plays the selected candidate and stops it when pressed again, Esc stops, `c`
 chooses it (at once, as your choice; the chosen one is marked `*`), `m` and `a`/`s`/`y`/`g` as
-before, Left, `h` or Backspace goes back. Long steps run one at a time in the background, and
-the bottom line of every screen is the one place their progress shows: a bar for the running job,
-`learning games ■■■■■■■■■■■□□□□□□□□□□□□□□□ 12/45  ~4 min  · job 1 of 4` (the games learned, the MB
-downloaded, an AI job's takes and passes, a SID or AY job's candidates checked, the scores judged, a build's packs;
-with nothing to count, no bar: a spinner and the time the step has run), yellow while it runs, green when the
-last job is done, red when one failed (`#` and `.` without UTF-8; on a narrow terminal the queue
-and then the figures go first). Messages take the key line above it for 3 s. `J`, on every screen, lists every job of the session: the one
+before, Left, `h` or Backspace goes back. Long steps run one at a time in the background. Nothing
+a tool prints shows on the screen: every line goes to `W/studio.log` (below). What shows is
+progress, as bars of squares (`■` done, `□` to go; `#` and `.` without UTF-8): on the games list,
+each game with work in hand or waiting has a bar in place of its columns, with what is in hand
+(`learning`, `SID takes`, `judging`, `pack 2`, `waiting`), its share of all the work the studio
+knows of for it in the current activity (the jobs since the queue was last empty): each step a
+share, a step that reports how far it is (the learning's load, conversion, learning and check of
+each game, a SID or AY job's candidates, an AI job's takes and passes, the judge's takes checked
+and scores judged) by that measure, any other done or not; a game done shows its columns again, one
+whose step failed a red mark (`✗ SID takes failed (l: the log)`). The bottom line of every screen
+holds the bar of the whole activity, its games and its steps without a game (downloads, tool and
+device builds): `learning games ■■■■■■■■■■■□□□□□□□□□□□□□□□ 12 of 45 games  ~4 min  · job 1 of 4`;
+a step with nothing to count adds a spinner and the time it has run (`device build fm1 ⠹ 0:12
+■■■□□□ ...`), and a lone such step shows only those. It is yellow while the activity runs, green
+when it is done, red when a step failed (on a narrow terminal the queue and then the figures go
+first). Messages take the key line above it for 3 s. `J`, on every screen, lists every job of the session, each with its state and a bar: the one
 running (an AI job's take, pass and time left, a SID or AY job's candidates checked, a download's
 MB), those waiting in the order they run, and those finished with their result, read from
 `tools/arrange-music`'s summary line (`3 takes, best closeness 73% (C64: …)`, `no C64 tune
 found by that name`, `0 takes, 4 songs skipped (48K beeper or CPC tunes)`, `12 scores: 3 chosen by the
-judge (2 in this run), 4 by you, 5 to hear`); Enter shows a job's
-own output, `o` opens its game to listen, `x` takes a waiting job off the queue or, after `y`,
-stops the running one. `g` says how many jobs it queued, and the games list marks a game whose
-takes are waiting or being made with `…`. The screen is in colour (`NO_COLOR` set: bold and
+judge (2 in this run), 4 by you, 5 to hear`); a failed one its reason in a line and where the rest is
+(`exit 1: no music-preview here (the rest in studio.log: l)`); Enter shows a job's lines from the
+log, `o` opens its game to listen, `x` takes a waiting job off the queue or, after `y`,
+stops the running one. `g` says how many jobs it queued. The screen is in colour (`NO_COLOR` set: bold and
 reverse only).
+
+`W/studio.log` reads on its own and with `tail -f`: a dated line per session (its command line),
+then a line per event, each `HH:MM:SS <tag> <text>`, the tag the job's number, kind and game
+(`#4 sid alpha`) or `studio`: each job queued, its start with its command line, every line it
+prints (after `| `), its end with its state, exit code and time, and the studio's own events (the
+keys that start work, the choices made, the messages). Past 4 MB it moves to `studio.log.1` (the
+one there goes) and another starts. `l` shows it in a pager.
 
 Without the screen: `--assign ID=N` (again for more) puts a game in pack N (0: in none; a pack it
 would take over refuses it) and `--auto-fill` fills the packs as `f` does; `--generate` marks the
@@ -247,11 +265,17 @@ pick W/all`). `--build` builds, `--status` prints (the scores settled, by you or
 hear; each score's state and the judge's verdict, each take's figures; each game's pack and the
 packs' fill among the rest), `--try [N]` serves pack N (1 unless given) in the browser test bench;
 given together they run in that order (assign, auto-fill, generate, auto, build, status, try), and
-a step that fails stops the command.
+a step that fails stops the command (exit 1) with its reason in a line and the log's path. On a
+terminal they draw the same bars in place while they run, a line per game in hand (at most four,
+those running first) and the whole's bar under them, then clear them for the result: `--generate`
+each takes job's result, `--auto` the scores settled and to hear (and the games skipped, with no
+score), `--build` the summary, each with the log's path last. Printed elsewhere (a pipe, a file),
+only those result lines: no bars, and never a tool's own output (that is in the log).
 
 The workspace: `all/` the learning (`personal-games.toml`, which keeps your edits, the scores,
 their takes and `choices.toml`, the cache), `studio.toml` the methods marked and each game's pack,
-`studio.log` every step's output, `previews/` the renders. A build (`b`, or `--build`) learns again
+`studio.log` every step's output and the studio's events, `previews/` the renders (each with its
+level measured beside it, `.level`). A build (`b`, or `--build`) learns again
 (choices change the sizes) and builds exactly the packs you filled, each in `pack-<n>/` under its
 own number (a game in no pack is not built; a pack over its room stops the build before it
 starts). With no game in a pack, it splits the games in name order into packs filled to the room
@@ -259,8 +283,8 @@ less 2% instead, and a pack of that split that does not fit gives its last game 
 Each pack is built from its own games file, those games' entries from `all/personal-games.toml` as
 written there: `fmzx-pack personal` on that file (the pack and its table), then
 `tools/make-packages`' steps for its packages and their verify (`FMZX_PACKAGES_PACK`,
-`FMZX_PACKAGES_OUT`). The summary lists each pack's games and its package, and the games in no
-pack. The first SID job downloads the High Voltage SID Collection (about 85 MB; its address
+`FMZX_PACKAGES_OUT`). The summary lists each pack's games, its room (`used 312.4 of 428.2 KB, 115.8 KB
+free`, from `fmzx-pack`) and its package, and the games in no pack. The first SID job downloads the High Voltage SID Collection (about 85 MB; its address
 from hvsc.c64.org) into `build/hvsc/<version>/`; bsdtar (macOS's `tar`) or 7-Zip lists its members
 first (one whose path would land outside, a link or a device refuses the archive) and unpacks it.
 The first AY job downloads the chris-y/AY collection on GitHub (Spectrum AY music; about 30 MB, its

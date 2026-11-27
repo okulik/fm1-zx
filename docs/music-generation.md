@@ -309,6 +309,19 @@ The measures (`tools/arrange-music`'s docstring, "judge", has every constant):
   any flag (the winner not shown to be the same tune, closeness under 0.5; a take with a partial
   match, closeness 0.2 to 0.8; fewer than 10 real controls); else high.
 
+### The progress lines (printed by tools/arrange-music judge, and by generate, chip and ay as they end by judging)
+
+For `tools/pack-studio`'s bars, the judge says how far it is, each on a line of its own:
+
+    progress: score some-game/1A2B-3c4d5e6f renders=3
+    progress: rendered some-game/1A2B-3c4d5e6f chip-1
+    [some-game/1A2B-3c4d5e6f] judged: chip-1 (high)
+
+First a `progress: score` line for each score with takes, `renders` its takes the renderer
+checks (0 without `music-preview`, or when its verdicts are kept), then a `progress: rendered`
+line as each is checked, then the `judged` line as each score is judged: a score's share done is
+its takes rendered, plus 1 once judged, of `renders` + 1.
+
 ### The summary line (printed by tools/arrange-music generate, chip, ay and judge)
 
 Each of these commands ends with one line of `key=value` fields, kept stable for
